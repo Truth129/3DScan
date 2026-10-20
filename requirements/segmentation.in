@@ -1,0 +1,9 @@
+-r core.in
+# AMD build URLs keep the resolver away from NVIDIA and CPU torch wheels.
+torch @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torch-2.8.0%2Brocm7.2.4.lw.gitd618db82-cp312-cp312-linux_x86_64.whl
+torchvision @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/torchvision-0.23.0%2Brocm7.2.4.git824e8c87-cp312-cp312-linux_x86_64.whl
+triton @ https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2.4/triton-3.4.0%2Brocm7.2.4.git0cace8d2-cp312-cp312-linux_x86_64.whl
+nnunetv2==2.8.1
+TotalSegmentator==2.18.0
+nnInteractive==2.6.0
+

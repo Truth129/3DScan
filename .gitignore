@@ -1,0 +1,14 @@
+.venv/
+.tools/
+.cache/
+.runtime/
+data/
+test_data/
+__pycache__/
+*.pyc
+.pytest_cache/
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+*.egg-info/

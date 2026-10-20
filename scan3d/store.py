@@ -1,0 +1,433 @@
+"""SQLite records are committed only after their filesystem artifacts are complete."""
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import re
+import sqlite3
+import uuid
+
+from .relationships import INDEPENDENT, relationship_dirty
+
+
+class ReviewConflict(ValueError):
+    """The reviewer must reload state before retrying a stale mutation."""
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def identifier():
+    return uuid.uuid4().hex
+
+
+def safe_id(value):
+    if not re.fullmatch(r"[a-f0-9]{32}", value):
+        raise ValueError("Invalid record identifier")
+    return value
+
+
+class Store:
+    def __init__(self, directory: Path):
+        self.directory = directory
+        directory.mkdir(parents=True, exist_ok=True)
+        self.db = directory / "scan3d.sqlite3"
+        with self.connection() as connection:
+            connection.executescript("""
+                PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS cases(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS revisions(id TEXT PRIMARY KEY, case_id TEXT NOT NULL, data TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS revision_case ON revisions(case_id);
+                CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, case_id TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS job_status ON jobs(status);
+                CREATE TABLE IF NOT EXISTS review_sessions(id TEXT PRIMARY KEY, case_id TEXT NOT NULL, data TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS review_case ON review_sessions(case_id);
+                PRAGMA user_version=2;
+            """)
+
+    @contextmanager
+    def connection(self):
+        con = sqlite3.connect(self.db, timeout=30)
+        con.row_factory = sqlite3.Row
+        try:
+            yield con
+            con.commit()
+        except BaseException:
+            con.rollback()
+            raise
+        finally:
+            con.close()
+
+    def get(self, table, record_id):
+        if table not in ("cases", "revisions", "jobs", "review_sessions"):
+            raise ValueError("Unknown record type")
+        safe_id(record_id)
+        with self.connection() as con:
+            row = con.execute(f"SELECT data FROM {table} WHERE id=?", (record_id,)).fetchone()
+        if row is None:
+            raise KeyError(f"{table[:-1].capitalize()} not found")
+        record = json.loads(row["data"])
+        return self._upgrade_review(record) if table == "review_sessions" else record
+
+    def save(self, table, record):
+        safe_id(record["id"])
+        encoded = json.dumps(record, allow_nan=False)
+        with self.connection() as con:
+            if table == "cases":
+                con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (record["id"], encoded))
+            elif table == "revisions":
+                con.execute("INSERT OR REPLACE INTO revisions VALUES (?,?,?)", (record["id"], record["case_id"], encoded))
+            elif table == "jobs":
+                con.execute("INSERT OR REPLACE INTO jobs VALUES (?,?,?,?)", (record["id"], record["case_id"], record["status"], encoded))
+            elif table == "review_sessions":
+                con.execute("INSERT OR REPLACE INTO review_sessions VALUES (?,?,?)", (record["id"], record["case_id"], encoded))
+            else:
+                raise ValueError("Unknown record type")
+        return record
+
+    def list(self, table, case_id=None):
+        if table not in ("cases", "revisions", "jobs", "review_sessions"):
+            raise ValueError("Unknown record type")
+        with self.connection() as con:
+            if case_id:
+                rows = con.execute(f"SELECT data FROM {table} WHERE case_id=? ORDER BY rowid DESC", (case_id,)).fetchall()
+            else:
+                rows = con.execute(f"SELECT data FROM {table} ORDER BY rowid DESC").fetchall()
+        return [json.loads(row["data"]) for row in rows]
+
+    def case_dir(self, case_id):
+        path = self.directory / "cases" / safe_id(case_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def revision(self, case_id, revision_id):
+        revision = self.get("revisions", revision_id)
+        if revision["case_id"] != case_id:
+            raise KeyError("Revision does not belong to this case")
+        return revision
+
+    def activate(self, case_id, revision_id):
+        self.revision(case_id, revision_id)
+        case = self.get("cases", case_id)
+        case["active_revision_id"] = revision_id
+        case["status"] = "ready"
+        acquisition = self.revision(case_id, revision_id).get("acquisition")
+        case.update(selected_series_uid=acquisition.get("series_uid") if acquisition else None,
+                    phase=acquisition.get("phase") if acquisition else None)
+        return self.save("cases", case)
+
+    def commit_revision(self, revision, job=None, expected_active_revision_id=None, review_guard=None):
+        """Revision visibility, case activation and job completion are one transaction."""
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM cases WHERE id=?", (revision["case_id"],)).fetchone()
+            case = json.loads(row["data"])
+            if expected_active_revision_id is not None and case.get("active_revision_id") != expected_active_revision_id:
+                conflict = ReviewConflict if review_guard else ValueError
+                raise conflict("The active revision changed; start from the current revision")
+            review = None
+            if review_guard:
+                row = con.execute("SELECT data FROM review_sessions WHERE id=? AND case_id=?",
+                                  (review_guard["session_id"], revision["case_id"])).fetchone()
+                if row is None:
+                    raise KeyError("Review session not found")
+                review = json.loads(row["data"])
+                if (not job or review["generation"] != review_guard["generation"]
+                        or review["status"] != "accepting" or review.get("job_id") != job["id"]
+                        or review["revision_id"] != revision.get("parent_id")
+                        or not review.get("candidate")
+                        or review["candidate"]["generation"] != review["generation"]):
+                    raise ReviewConflict("The correction draft changed; review the current candidate before accepting")
+                if case.get("active_revision_id") != review["revision_id"]:
+                    raise ReviewConflict("The active revision changed; start a review from the current revision")
+            case.update(active_revision_id=revision["id"], status="ready")
+            if revision.get("acquisition"):
+                case.update(selected_series_uid=revision["acquisition"].get("series_uid"), phase=revision["acquisition"].get("phase"))
+            con.execute("INSERT INTO revisions VALUES (?,?,?)", (revision["id"], revision["case_id"], json.dumps(revision, allow_nan=False)))
+            con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case), case["id"]))
+            if job:
+                current = json.loads(con.execute("SELECT data FROM jobs WHERE id=?", (job["id"],)).fetchone()["data"])
+                if current.get("cancel_requested"):
+                    raise InterruptedError("Processing cancelled before activation")
+                job.update(current)
+                job.update(status="completed", stage="Complete", revision_id=revision["id"], completed_at=now())
+                con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job["id"]))
+            if review is not None:
+                review.update(status="accepted", accepted_revision_id=revision["id"], error=None, updated_at=now())
+                con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), review["id"]))
+
+    @staticmethod
+    def _upgrade_review(review):
+        if review.get("schema_version", 1) < 2:
+            review["prompts"] = [dict(prompt, kind=prompt.get("kind", "point")) for prompt in review["prompts"]]
+            review["options"] = {"autozoom": True, "start_empty": False}
+            review["batches"] = ([dict(end=i + 1, autozoom=True, full_refine=False, legacy=True)
+                                  for i in range(len(review["prompts"]))] if review.get("candidate") else [])
+            if review.get("candidate"):
+                review["candidate"].setdefault("prompts_snapshot", review["prompts"])
+                review["candidate"].setdefault("options", review["options"])
+                review["candidate"].setdefault("batches_snapshot", review["batches"])
+            review["schema_version"] = 2
+        review.setdefault("options", {"autozoom": True, "start_empty": False})
+        review.setdefault("batches", [])
+        review.setdefault("relationship", dict(INDEPENDENT))
+        review.setdefault("initial_relationship", dict(INDEPENDENT))
+        return review
+
+    @staticmethod
+    def _review_row(con, session_id, case_id=None):
+        safe_id(session_id)
+        row = con.execute("SELECT data FROM review_sessions WHERE id=?", (session_id,)).fetchone()
+        if row is None:
+            raise KeyError("Review session not found")
+        review = json.loads(row["data"])
+        if case_id is not None and review["case_id"] != case_id:
+            raise KeyError("Review session does not belong to this case")
+        return Store._upgrade_review(review)
+
+    @staticmethod
+    def _review_generation(review, generation):
+        if review["generation"] != generation:
+            raise ReviewConflict("The correction draft changed; reload its current prompts")
+        if review["status"] in ("accepted", "discarded"):
+            raise ReviewConflict("This correction session is closed")
+
+    def change_review(self, case_id, session_id, generation, prompts=None, discard=False, options=None, relationship=None):
+        """Replace a prompt generation and invalidate work in the same transaction."""
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            review = self._review_row(con, session_id, case_id)
+            self._review_generation(review, generation)
+            if review["status"] == "accepting" and not discard:
+                raise ReviewConflict("Wait for acceptance to finish or cancel it before editing")
+            if review.get("job_id"):
+                row = con.execute("SELECT data FROM jobs WHERE id=?", (review["job_id"],)).fetchone()
+                if row:
+                    job = json.loads(row["data"])
+                    if job["status"] in ("queued", "running"):
+                        job["cancel_requested"] = True
+                        if job["status"] == "queued":
+                            job.update(status="cancelled", stage="Cancelled", completed_at=now())
+                        con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job["id"]))
+            previous = review["prompts"]
+            next_prompts = previous if prompts is None else prompts
+            next_options = review["options"] if options is None else options
+            next_relationship = review["relationship"] if relationship is None else relationship
+            common = 0
+            for first, second in zip(previous, next_prompts):
+                if first != second:
+                    break
+                common += 1
+            options_changed = next_options != review["options"]
+            batches = [] if options_changed or discard else [batch for batch in review["batches"] if batch["end"] <= common]
+            candidate = review.get("candidate")
+            if (discard or options_changed or not candidate
+                    or candidate.get("batches_snapshot") != batches
+                    or next_prompts[:len(candidate.get("prompts_snapshot", []))] != candidate.get("prompts_snapshot")):
+                candidate = None
+            elif (next_prompts == candidate["prompts_snapshot"]
+                  and next_relationship == candidate.get("relationship", INDEPENDENT)):
+                # Undoing only unapplied marks restores the exact saved result,
+                # with a fresh immutable alias and no inference work.
+                candidate = {**candidate, "generation": generation + 1,
+                             "revision_id": f"review-{session_id}-{generation + 1}"}
+                review.setdefault("candidates", {})[str(generation + 1)] = candidate
+            review.update(generation=generation + 1, candidate=candidate, job_id=None, error=None,
+                          prompts=next_prompts, options=next_options, batches=batches,
+                          relationship=next_relationship,
+                          status="discarded" if discard else "ready" if candidate and candidate["generation"] == generation + 1 else "draft",
+                          updated_at=now())
+            con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
+        return review
+
+    def enqueue_review(self, case_id, session_id, generation, kind, full_refine=False):
+        if kind not in ("review_predict", "review_accept"):
+            raise ValueError("Unknown interactive review operation")
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            review = self._review_row(con, session_id, case_id)
+            self._review_generation(review, generation)
+            if review.get("job_id"):
+                row = con.execute("SELECT status FROM jobs WHERE id=?", (review["job_id"],)).fetchone()
+                if row and row["status"] in ("queued", "running"):
+                    raise ReviewConflict("This correction session already has a queued or running job")
+            if kind == "review_predict":
+                applied = review["batches"][-1]["end"] if review["batches"] else 0
+                policy_only = relationship_dirty(review) and len(review["prompts"]) <= applied and not full_refine
+                reusable = review.get("candidate")
+                if policy_only and reusable and (reusable.get("prompts_snapshot") != review["prompts"]
+                        or reusable.get("options") != review["options"] or reusable.get("batches_snapshot") != review["batches"]):
+                    reusable = None
+                if policy_only and not reusable and review["prompts"]:
+                    policy_only = False
+                if len(review["prompts"]) <= applied and not full_refine and not policy_only:
+                    raise ReviewConflict("Add or edit a prompt before applying again")
+                if not review["prompts"] and not full_refine and not policy_only:
+                    raise ValueError("Add a positive or negative prompt before applying")
+                if str(generation) in review.get("candidates", {}):
+                    generation += 1
+                    review["generation"] = generation
+            else:
+                candidate = review.get("candidate")
+                if not candidate or candidate["generation"] != generation:
+                    raise ReviewConflict("Generate and inspect a candidate before accepting")
+                if not candidate["summary"]["after_voxels"]:
+                    raise ValueError("An empty candidate cannot be accepted; revise the prompts")
+                if not candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]) and not candidate.get("relationship_changed"):
+                    raise ValueError("The candidate is unchanged; no correction is needed")
+                case = json.loads(con.execute("SELECT data FROM cases WHERE id=?", (case_id,)).fetchone()["data"])
+                if case.get("active_revision_id") != review["revision_id"]:
+                    raise ReviewConflict("The active revision changed; start a review from the current revision")
+            payload = {key: review[key] for key in ("revision_id", "structure_id", "prompts", "generation", "options", "batches", "relationship")}
+            if kind == "review_predict":
+                if policy_only:
+                    payload["relationship_only"] = True
+                    payload["reuse_candidate_revision_id"] = reusable["revision_id"] if reusable else None
+                else:
+                    payload["batches"] = [*review["batches"], dict(end=len(review["prompts"]),
+                        autozoom=review["options"]["autozoom"], full_refine=full_refine)]
+            payload["session_id"] = session_id
+            if kind == "review_accept":
+                payload["candidate_revision_id"] = review["candidate"]["revision_id"]
+            job = dict(id=identifier(), case_id=case_id, kind=kind, status="queued", stage="Queued", error=None,
+                       revision_id=None, created_at=now(), payload=payload, cancel_requested=False,
+                       review_session_id=session_id)
+            con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
+            review.update(status="predicting" if kind == "review_predict" else "accepting", job_id=job["id"],
+                          error=None, updated_at=now())
+            con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
+        return job
+
+    def publish_review_candidate(self, job, candidate):
+        """A cancelled or superseded inference can never become the current draft."""
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            current = json.loads(con.execute("SELECT data FROM jobs WHERE id=?", (job["id"],)).fetchone()["data"])
+            if current.get("cancel_requested") or current["status"] != "running":
+                raise InterruptedError("Interactive prediction cancelled before publication")
+            review = self._review_row(con, job["payload"]["session_id"], job["case_id"])
+            if (review["generation"] != job["payload"]["generation"] or review["status"] != "predicting"
+                    or review.get("job_id") != job["id"]):
+                raise InterruptedError("Interactive prediction superseded by newer prompts")
+            generation = str(review["generation"])
+            if generation in review.get("candidates", {}):
+                raise ValueError("A candidate already exists for this immutable generation")
+            review.setdefault("candidates", {})[generation] = candidate
+            review.update(candidate=candidate, batches=job["payload"]["batches"], status="ready", error=None, updated_at=now())
+            current.update(status="completed", stage="Candidate ready for review", completed_at=now(), revision_id=None)
+            con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), review["id"]))
+            con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (current["status"], json.dumps(current), current["id"]))
+        return review
+
+    def reconcile_review(self, case_id, session_id):
+        """Restore editable drafts after cancellation, failure or a worker restart."""
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            review = self._review_row(con, session_id, case_id)
+            if review["status"] in ("predicting", "accepting") and review.get("job_id"):
+                row = con.execute("SELECT data FROM jobs WHERE id=?", (review["job_id"],)).fetchone()
+                job = json.loads(row["data"]) if row else None
+                if job is None or job["status"] in ("failed", "cancelled"):
+                    error = (job.get("error") or "Correction job cancelled; your prompts are saved"
+                             if job else "Correction job unavailable; your prompts are saved")
+                    review.update(status="ready" if review.get("candidate") else "draft",
+                                  error=error, updated_at=now())
+                    con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
+        return review
+
+    def record_detailed_export(self, case_id, revision_id, report, seconds):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
+            if row is None:
+                raise KeyError("Revision not found")
+            revision = json.loads(row["data"])
+            revision.setdefault("mesh_statistics", {})["detailed"] = report
+            revision.setdefault("processing_timings", {})["detailed_export_seconds"] = seconds
+            con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
+            from .service import atomic_json
+            atomic_json(Path(revision["directory"]) / "revision.json", revision)
+
+    def set_review_status(self, case_id, revision_id, status):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
+            if row is None:
+                raise KeyError("Revision not found")
+            revision = json.loads(row["data"])
+            revision["review_status"] = status
+            con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
+            from .service import atomic_json
+            atomic_json(Path(revision["directory"]) / "revision.json", revision)
+        return revision
+
+    def attach_surface_assets(self, case_id, revision_id, assets):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
+            if row is None:
+                raise KeyError("Revision not found")
+            revision = json.loads(row["data"])
+            revision["surface_assets"] = [{k: asset[k] for k in ("id", "key", "triangles")} for asset in assets]
+            revision["model_manifest_url"] = f"/api/cases/{case_id}/revisions/{revision_id}/model-manifest"
+            con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
+            from .service import atomic_json
+            atomic_json(Path(revision["directory"]) / "revision.json", revision)
+        return revision
+
+    def enqueue(self, case_id, kind, payload):
+        self.get("cases", case_id)
+        job = dict(id=identifier(), case_id=case_id, kind=kind, status="queued", stage="Queued", error=None,
+                   revision_id=None, created_at=now(), payload=payload, cancel_requested=False)
+        return self.save("jobs", job)
+
+    def claim(self):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM jobs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
+            if not row:
+                return None
+            job = json.loads(row["data"])
+            job.update(status="running", stage="Starting", started_at=now())
+            con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job["id"]))
+            return job
+
+    def update_job(self, job_id, **changes):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise KeyError("Job not found")
+            job = json.loads(row["data"])
+            job.update(changes)
+            con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job_id))
+        return job
+
+    def recover(self):
+        for job in self.list("jobs"):
+            if job["status"] == "running":
+                self.update_job(job["id"], status="failed", stage="Interrupted", error="Worker restarted. Retry to reuse completed stages.")
+        for review in self.list("review_sessions"):
+            self.reconcile_review(review["case_id"], review["id"])
+
+
+def public_case(record):
+    result = {k: v for k, v in record.items() if k not in ("source_dir", "references")}
+    result["series"] = [{k: v for k, v in series.items() if k != "files"} for series in record.get("series", [])]
+    return result
+
+
+def public_revision(record):
+    result = {k: v for k, v in record.items() if k not in ("ct_file", "directory", "inference_manifest")}
+    result["structures"] = [{k: v for k, v in s.items() if k != "mask_file"} for s in record["structures"]]
+    manifest = record.get("inference_manifest")
+    if manifest:
+        result["model_provenance"] = {k: manifest[k] for k in ("engine", "engine_version", "nnunet_version", "resolution", "started_at", "finished_at") if k in manifest}
+        result["model_provenance"]["tasks"] = [t["task"] for t in manifest.get("tasks", [])]
+        result["model_provenance"]["model_fingerprint_digest"] = manifest.get("model_fingerprint", {}).get("digest")
+    return result
+
+
+def public_job(record):
+    return {k: v for k, v in record.items() if k not in ("payload", "cancel_requested", "measurements")}

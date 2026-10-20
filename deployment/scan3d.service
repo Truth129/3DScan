@@ -1,0 +1,21 @@
+[Unit]
+Description=3DScan local CT reconstruction and review
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/3DScan
+ExecStart=%h/Projects/3DScan/scripts/run.sh
+Environment=SCAN3D_HOST=127.0.0.1
+Environment=SCAN3D_PORT=9010
+Environment=SCAN3D_DEVICE=gpu
+Environment=SCAN3D_ALLOWED_HOSTS=127.0.0.1,localhost,scan3d-host.example.ts.net
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+UMask=0077
+
+[Install]
+WantedBy=default.target
+
