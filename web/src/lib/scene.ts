@@ -4,11 +4,13 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { colorCss, rasToScene, sceneToRas } from './geometry';
 import { surfaceOpacity, type SurfaceMaterial } from './material';
 import { AnatomyTransparency } from './transparency';
-import type { CameraView, Geometry, InteractivePrompt, Point, Structure, StructureDisplay, SurfaceManifest } from '../types';
+import type { CameraView, Geometry, InteractivePrompt, Point, SliceMeta, Structure, StructureDisplay, SurfaceManifest } from '../types';
 import type { CTFrame } from './ct-renderer';
 import { intersectReviewPlane, intersectReviewSurface, reviewPlaneGesture, reviewSurfacePoint, type SceneReviewState } from './review3d';
 import { Review3DPlane } from './review3d-plane';
 import { Review3DMarkers } from './review3d-markers';
+import type { GPUOverlaySources, GPUVolumeSource } from './gpu-volume-data';
+import type { GPUOverlayColor } from './gpu-ct-plane';
 
 declare global { interface Window { __SCAN3D_RENDER_READY__?: boolean } }
 type Pick = (id: string, point: Point) => void;
@@ -20,6 +22,7 @@ interface SurfaceLoadOptions { signal?: AbortSignal; onProgress?: (progress: Sur
 export interface SceneCTPlaneState {
   geometry: Geometry;
   frame?: CTFrame;
+  gpuMeta?: SliceMeta;
   window: number;
   level: number;
   visible: boolean;
@@ -34,6 +37,8 @@ const directions: Record<CameraView, [number, number, number]> = {
 export class AnatomyScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
+  onGPUCTInvalidated?: (reason?: string) => void;
+  onGPUCTRestored?: () => void;
   readonly camera = new THREE.OrthographicCamera(-0.3, 0.3, 0.3, -0.3, 0.001, 20);
   controls: OrbitControls;
   private model?: THREE.Group;
@@ -71,6 +76,11 @@ export class AnatomyScene {
   constructor(private element: HTMLElement, private onPick: Pick, onError: (message: string) => void, private onView?: (name: string) => void, private onOrientation?: (axes: OrientationAxis[]) => void, private onGesture?: (prompt: InteractivePrompt) => void) {
     this.onError = onError;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+    this.renderer.debug.onShaderError = (gl, _program, _vertex, fragment) => {
+      const gpuCT = gl.getShaderSource(fragment)?.includes('float huAt(vec3 point)');
+      if (gpuCT) queueMicrotask(() => { if (this.disposed) return; this.clearGPUCT(); this.onGPUCTInvalidated?.('This GPU could not render the CT volume. Using local slice rendering.'); });
+      else this.onError('This GPU could not compile a 3D rendering shader.');
+    };
     this.contextExtension = this.renderer.getContext().getExtension('WEBGL_lose_context');
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.setClearColor(0x101217, 0);
@@ -104,8 +114,8 @@ export class AnatomyScene {
     this.view('oblique');
   }
 
-  private contextLost = (event: Event) => { event.preventDefault(); window.__SCAN3D_RENDER_READY__ = false; this.onError('The graphics context was lost. Reload the model to restore 3D. CT review remains available.'); };
-  private contextRestored = () => { this.onError(''); this.requestRender(); };
+  private contextLost = (event: Event) => { event.preventDefault(); window.__SCAN3D_RENDER_READY__ = false; this.clearGPUCT(); this.onGPUCTInvalidated?.(); this.onError('The graphics context was lost. Reload the model to restore 3D. CT review remains available.'); };
+  private contextRestored = () => { this.onError(''); this.onGPUCTRestored?.(); this.requestRender(); };
   /** OrbitControls captures camera.up in its constructor; rebuild through public APIs when it changes. */
   private refreshControlsUp() {
     if (this.controlsUp.distanceToSquared(this.camera.up) < 1e-16) return;
@@ -139,7 +149,9 @@ export class AnatomyScene {
   private get reviewReady() {
     const review = this.review;
     if (!review || review.disabled || !review.targetId || review.tool === 'navigate') return false;
-    if (review.mode === 'plane') return review.showPlane !== false && this.reviewPlaneValid && !!review.frame && review.frame === this.reviewPlane.frame;
+    if (review.mode === 'plane') return review.showPlane !== false && this.reviewPlaneValid && (review.gpuMeta
+      ? this.reviewPlane.gpuActive && this.reviewPlane.gpuReady && review.gpuMeta === this.reviewPlane.meta
+      : !!review.frame && review.frame === this.reviewPlane.frame);
     return review.tool === 'point' && !!this.meshes.get(review.targetId)?.some(mesh => {
       let node: THREE.Object3D | null = mesh; while (node) { if (!node.visible) return false; node = node.parent; }
       const material = mesh.material as SurfaceMaterial; return material.visible && material.opacity > .02;
@@ -157,7 +169,8 @@ export class AnatomyScene {
       if (!ras) return;
       this.gesture = { pointerId: event.pointerId, state, pixels: [], surface: ras };
     } else {
-      const hit = intersectReviewPlane(ray.ray, state.frame!.meta); if (!hit) return;
+      const meta = state.gpuMeta ?? state.frame?.meta; if (!meta) return;
+      const hit = intersectReviewPlane(ray.ray, meta); if (!hit) return;
       this.gesture = { pointerId: event.pointerId, state, pixels: [hit.pixel] };
     }
     this.renderer.domElement.setPointerCapture(event.pointerId); this.gestureDirty = true; this.updateReviewData(); this.requestRender();
@@ -166,8 +179,9 @@ export class AnatomyScene {
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    if (gesture.surface || !gesture.state.frame) return;
-    const hit = intersectReviewPlane(this.ray(event).ray, gesture.state.frame.meta); if (!hit) return;
+    const meta = gesture.state.gpuMeta ?? gesture.state.frame?.meta;
+    if (gesture.surface || !meta) return;
+    const hit = intersectReviewPlane(this.ray(event).ray, meta); if (!hit) return;
     if (gesture.state.tool === 'bbox') gesture.pixels = [gesture.pixels[0], hit.pixel];
     else {
       const previous = gesture.pixels.at(-1)!;
@@ -205,7 +219,9 @@ export class AnatomyScene {
   private updateReviewData() {
     const data = this.renderer.domElement.dataset, review = this.review;
     const plane = this.reviewPlane, planeVisible = plane.mesh.visible;
-    data.ctPlaneReady = String(planeVisible && !!plane.frame);
+    data.ctPlaneReady = String(planeVisible && !!plane.meta);
+    data.ctPlaneMode = plane.gpuActive ? 'gpu-volume' : 'slice';
+    data.ctGpuReady = String(plane.gpuReady); data.ctGpuBytes = String(plane.gpuBytes);
     data.ctPlaneAxis = planeVisible ? String(plane.meta?.native?.axis ?? '') : '';
     data.ctPlaneIndex = planeVisible ? String(plane.meta?.native?.index ?? '') : '';
     data.ctPlaneWidth = planeVisible ? String(plane.meta?.width ?? '') : '';
@@ -231,7 +247,7 @@ export class AnatomyScene {
     const old = this.review;
     if (!state || !old || state.contextKey !== old.contextKey || state.mode !== old.mode || state.targetId !== old.targetId
         || state.tool !== old.tool || state.include !== old.include || state.radiusMm !== old.radiusMm
-        || state.disabled !== old.disabled || state.frame !== old.frame || state.showPlane !== old.showPlane) this.cancelReviewGesture();
+        || state.disabled !== old.disabled || state.frame !== old.frame || state.gpuMeta !== old.gpuMeta || state.showPlane !== old.showPlane) this.cancelReviewGesture();
     const oldLayout = this.planeLayout;
     this.review = state;
     if (oldLayout !== this.planeLayout) this.resize();
@@ -253,6 +269,12 @@ export class AnatomyScene {
     // Review owns the shared plane while active; its exact-frame edit gate is unchanged.
     if (!this.review) { this.syncCTPlane(); this.updateReviewData(); this.requestRender(); }
   }
+  get gpuCTReady() { return this.reviewPlane.gpuReady; }
+  get gpuCTKey() { return this.reviewPlane.gpuKey; }
+  get gpuCTBytes() { return this.reviewPlane.gpuBytes; }
+  async prepareGPUCT(source: GPUVolumeSource, signal?: AbortSignal) { await this.reviewPlane.prepareGPUCT(source, signal); this.updateReviewData(); }
+  async prepareGPUOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[], signal?: AbortSignal) { await this.reviewPlane.prepareGPUOverlays(sources, colors, signal); this.updateReviewData(); }
+  clearGPUCT() { this.reviewPlane.clearGPUCT(); this.updateReviewData(); this.requestRender(); }
   private get planeLayout() { return !!this.review || !!this.ctPlane?.visible; }
   private syncCTPlane() {
     const review = this.review, state = review ?? this.ctPlane;
@@ -262,13 +284,18 @@ export class AnatomyScene {
     if (this.planeGeometry && this.planeGeometry !== state.geometry
         && (JSON.stringify(this.planeGeometry.shape) !== JSON.stringify(state.geometry.shape)
           || JSON.stringify(this.planeGeometry.affine_ras) !== JSON.stringify(state.geometry.affine_ras))) { this.reviewPlane.clear(); this.planeContext = ''; }
-    if (state.frame) {
+    if (state.gpuMeta && this.reviewPlane.gpuReady) {
+      try { this.reviewPlane.setGPUFrame(state.gpuMeta, state.geometry); this.planeGeometry = state.geometry; this.planeContext = state.contextKey ?? ''; this.reviewPlaneValid = !!review; }
+      catch (reason) { this.onError(reason instanceof Error ? reason.message : 'The GPU CT plane could not be displayed.'); }
+    } else if (state.frame) {
       try { this.reviewPlane.setFrame(state.frame, state.geometry); this.planeGeometry = state.geometry; this.planeContext = state.contextKey ?? ''; this.reviewPlaneValid = !!review; }
       catch (reason) { this.onError(reason instanceof Error ? reason.message : 'The 3D CT plane could not be displayed.'); }
     }
     this.reviewPlane.setWindow(state.window, state.level);
     const visible = review ? (review.showPlane ?? review.mode === 'plane') : this.ctPlane!.visible;
-    this.reviewPlane.mesh.visible = visible && !!this.reviewPlane.frame;
+    // A missing new exact overlay set must never leave an old GPU presentation editable.
+    if (!state.gpuMeta && this.reviewPlane.gpuActive) this.reviewPlane.clear();
+    this.reviewPlane.mesh.visible = visible && !!this.reviewPlane.meta;
   }
   reviewPatientToCanvas(point: Point): [number, number] {
     this.camera.updateMatrixWorld();

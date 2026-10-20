@@ -1,15 +1,16 @@
 import { acceptChunk, allocateVolume, probeVolume, resliceVolume } from './ct-reslice';
 import type { ResidentOverlay, ResidentVolume, VolumeDescriptor } from './ct-reslice';
 import type { Plane, Point } from '../types';
+import { copyGPUVolumeSlab } from './gpu-volume-data';
 
-// The volume has one owner. Only small completed slice buffers leave this worker.
+// The volume has one owner. Only completed slices or bounded upload slabs leave.
 let ct: ResidentVolume | null = null;
 let overlays: ResidentOverlay[] = [];
 let masks = new Map<string, { volume: ResidentVolume; loaded: Set<number> }>();
 let ctVersion = 0, overlayVersion = 0;
 interface Command {
   id: number;
-  type: 'ct' | 'overlay' | 'chunk' | 'slice' | 'probe';
+  type: 'ct' | 'overlay' | 'chunk' | 'slice' | 'probe' | 'gpu-slab';
   ctVersion: number;
   overlayVersion?: number;
   descriptor?: VolumeDescriptor;
@@ -25,6 +26,10 @@ interface Command {
   position?: number;
   ras?: Point;
   native?: { axis: 0 | 1 | 2; index: number };
+  consumer?: 'ct' | 'model-review';
+  volumeKey?: string;
+  zStart?: number;
+  depth?: number;
 }
 const scope = globalThis as unknown as {
   onmessage: ((event: MessageEvent<Command>) => void) | null;
@@ -86,6 +91,15 @@ scope.onmessage = ({ data: command }) => {
         }
         transfer.push(...buffers);
       } else if (command.type === 'probe') result = probeVolume(ct, command.ras!);
+      else if (command.type === 'gpu-slab') {
+        if (command.slot !== 'ct' && command.overlayVersion !== overlayVersion) throw new Error('Superseded local CT overlay');
+        const mask = command.slot === 'mask' ? masks.get(command.volumeKey!) : null;
+        const volume = command.slot === 'ct' ? ct : mask?.volume;
+        if (!volume || volume.descriptor.key !== command.volumeKey) throw new Error('Superseded local GPU volume');
+        if (mask && mask.loaded.size !== volume.descriptor.chunks.length) throw new Error('Local CT overlay is incomplete');
+        result = copyGPUVolumeSlab(volume, command.zStart!, command.depth!);
+        transfer.push(result as ArrayBuffer);
+      }
     }
     scope.postMessage({ id: command.id, result }, transfer);
   } catch (error) {

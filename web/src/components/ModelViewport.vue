@@ -2,8 +2,9 @@
 import { computed, nextTick, ref, shallowRef, onMounted, onBeforeUnmount, watch } from 'vue';
 import type { CameraView, Geometry, InteractivePrompt, InteractiveTool, Plane, Point, Structure, StructureDisplay, SurfaceManifest } from '../types';
 import { AnatomyScene, type OrientationAxis, type SurfaceProgress } from '../lib/scene';
-import { colorCTOverlays, type CTOverlaySelection } from '../lib/ct-overlays';
+import { colorCTOverlays, ctOverlayColor, type CTOverlaySelection } from '../lib/ct-overlays';
 import type { LocalCTSession } from '../lib/ct-volume';
+import { nativeSliceMetadata } from '../lib/ct-reslice';
 import { revisionUrl } from '../lib/api';
 import { moveNativeSlice, nativeSliceFor } from '../lib/interactive-review';
 import { ModelReviewFrames, modelReviewFrameKey, modelReviewFrameFamilyKey, type ModelReviewFrame, type ModelReviewFrameRequest } from '../lib/model-review-frame';
@@ -30,6 +31,7 @@ const reviewMode = ref<'surface' | 'plane'>('surface'), reviewPlane = ref<Plane>
 const planeFrame = shallowRef<ModelReviewFrame>();
 const planeFrameFamily = ref('');
 const planeLoading = ref(false), planeError = ref('');
+const gpuFamilyReady = ref(''), gpuPreparing = ref(false), gpuFallback = ref('');
 const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!props.revisionId && !!props.point);
 const controlsVisible = computed(() => !!props.reviewActive || planeAvailable.value);
 const planeLayout = computed(() => !!props.reviewActive || (planeAvailable.value && showPlane.value));
@@ -45,9 +47,23 @@ const planeRequest = computed<ModelReviewFrameRequest | undefined>(() => {
 });
 const desiredPlaneContext = computed(() => planeRequest.value ? modelReviewFrameKey(planeRequest.value) : '');
 const desiredPlaneFamily = computed(() => planeRequest.value ? modelReviewFrameFamilyKey(planeRequest.value) : '');
+// Axis/index do not affect resident data. Revisions and overlay selections do.
+const gpuFamily = computed(() => planeRequest.value ? JSON.stringify([
+  planeRequest.value.base, planeRequest.value.overlays, planeRequest.value.compare,
+  planeRequest.value.geometry.shape, planeRequest.value.geometry.affine_ras,
+  props.overlays?.map(item => [item.id, item.color]),
+]) : '');
 const needsPlane = computed(() => planeAvailable.value && props.viewportActive !== false && showPlane.value);
+const gpuActive = computed(() => needsPlane.value && !!gpuFamilyReady.value && gpuFamilyReady.value === gpuFamily.value);
+const gpuMeta = computed(() => {
+  const descriptor = props.localSession?.descriptor, request = planeRequest.value;
+  if (gpuActive.value && descriptor && request) return nativeSliceMetadata(descriptor, request.plane, request.native);
+});
 const currentPlane = computed(() => planeFrameFamily.value === desiredPlaneFamily.value ? planeFrame.value : undefined);
-const exactPlaneReady = computed(() => !!currentPlane.value && currentPlane.value.quality === 'full' && currentPlane.value.context === desiredPlaneContext.value && !planeError.value);
+const exactPlaneReady = computed(() => !!gpuMeta.value || (!!currentPlane.value && currentPlane.value.quality === 'full' && currentPlane.value.context === desiredPlaneContext.value && !planeError.value));
+const planeReady = computed(() => !!gpuMeta.value || !!currentPlane.value);
+const displayedMeta = computed(() => gpuMeta.value ?? currentPlane.value?.frame.meta);
+const displayedContext = computed(() => gpuMeta.value ? desiredPlaneContext.value : currentPlane.value?.context ?? '');
 const coloredPlaneFrame = computed(() => currentPlane.value ? colorCTOverlays(currentPlane.value.frame, props.overlays) : undefined);
 const reviewReady = computed(() => !!props.reviewActive && !!target.value && !props.reviewDisabled &&
   (reviewMode.value === 'plane' ? showPlane.value && exactPlaneReady.value : hasTargetSurface.value && hasModel.value && !loading.value && props.reviewTool === 'point'));
@@ -55,8 +71,11 @@ const reviewHint = computed(() => {
   if (planeError.value && needsPlane.value) return planeError.value;
   if (!props.reviewActive) {
     if (!showPlane.value) return '';
+    if (gpuActive.value) return 'GPU volume · local navigation. Drag to rotate; scroll to zoom.';
     if (!currentPlane.value) return 'Preparing CT plane…';
     if (planeLoading.value) return `Updating… Showing slice ${(currentPlane.value.frame.meta.native?.index ?? 0) + 1}.`;
+    if (gpuPreparing.value) return 'Preparing GPU volume · local slice navigation remains available.';
+    if (gpuFallback.value) return `Local slice navigation. ${gpuFallback.value}`;
     return `${currentPlane.value.quality === 'preview' ? 'Local preview · full CT preloading.' : 'Full CT · local navigation.'} Drag to rotate; scroll to zoom.`;
   }
   if (!hasTargetSurface.value && reviewMode.value === 'surface') return 'This segment has no saved surface. Mark its CT plane to create it.';
@@ -64,8 +83,8 @@ const reviewHint = computed(() => {
     ? `Click the ${target.value?.name || 'selected'} surface to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point. Right drag rotates.`
     : 'Choose Point for surface marks, or use a CT plane for drawn regions.';
   if (!showPlane.value) return 'Show the CT plane to mark it.';
-  if (planeLoading.value) return currentPlane.value ? 'Updating CT plane… Previous slice remains visible.' : 'Preparing CT plane…';
-  if (reviewMode.value === 'plane' && currentPlane.value?.quality === 'preview') return 'Local preview · marking waits for full-resolution CT.';
+  if (!gpuActive.value && planeLoading.value) return currentPlane.value ? 'Updating CT plane… Previous slice remains visible.' : 'Preparing CT plane…';
+  if (!gpuActive.value && reviewMode.value === 'plane' && currentPlane.value?.quality === 'preview') return 'Local preview · marking waits for full-resolution CT.';
   if (props.reviewDisabled) return 'Editing paused while the current operation finishes.';
   return props.reviewTool === 'navigate' ? 'Choose a marking tool above. Drag to rotate; right drag to pan.' : 'Draw directly on the CT plane. Right drag rotates; scroll zooms.';
 });
@@ -73,6 +92,9 @@ let scene: AnatomyScene | undefined;
 let controller: AbortController | undefined;
 let loadId = 0, planeLoadId = 0, disposed = false, requestFrame = 0, faceWhenReady = false, requestedFamily = '';
 let exactPlaneTimer = 0;
+let gpuController: AbortController | undefined, gpuSession: LocalCTSession | undefined, gpuPendingFamily = '';
+let gpuBaseTimer = 0;
+let gpuBaseRetryFamily = '', gpuBaseRetries = 0;
 let reviewControlsObserver: ResizeObserver | undefined;
 const reviewFrames = new ModelReviewFrames();
 async function observeReviewControls() {
@@ -85,8 +107,9 @@ async function observeReviewControls() {
 function syncReview() {
   if (!scene || disposed) return;
   scene.setCTPlane(!props.reviewActive && planeAvailable.value ? {
-    visible: needsPlane.value, geometry: props.geometry!, frame: coloredPlaneFrame.value,
-    window: props.window || 400, level: props.level ?? 40, contextKey: currentPlane.value?.context,
+    visible: needsPlane.value, geometry: props.geometry!, frame: gpuMeta.value ? undefined : coloredPlaneFrame.value,
+    gpuMeta: gpuMeta.value,
+    window: props.window || 400, level: props.level ?? 40, contextKey: displayedContext.value,
   } : undefined);
   if (!props.reviewActive || !props.geometry || !target.value) { scene.setReview(undefined); return; }
   const contextKey = JSON.stringify([props.caseId, props.revisionId, target.value.id,
@@ -95,12 +118,68 @@ function syncReview() {
     targetId: target.value.id, geometry: props.geometry, tool: props.reviewTool || 'navigate',
     include: props.reviewInclude !== false, radiusMm: props.reviewRadius || 3,
     disabled: !reviewReady.value, prompts: props.reviewPrompts || [], contextKey,
-    frame: coloredPlaneFrame.value,
+    frame: gpuMeta.value ? undefined : coloredPlaneFrame.value, gpuMeta: gpuMeta.value,
     window: props.window || 400, level: props.level ?? 40 });
+}
+/** Upload immutable data once; native navigation below changes metadata only. */
+async function prepareGPUPlane() {
+  clearTimeout(gpuBaseTimer);
+  const session = props.localSession, family = gpuFamily.value;
+  if (gpuSession !== session) {
+    gpuController?.abort(); gpuPendingFamily = ''; gpuFamilyReady.value = ''; gpuFallback.value = '';
+    gpuSession = session;
+    gpuBaseRetryFamily = ''; gpuBaseRetries = 0;
+  }
+  if (gpuBaseRetryFamily !== family) { gpuBaseRetryFamily = family; gpuBaseRetries = 0; }
+  if (gpuFamilyReady.value && gpuFamilyReady.value !== family) gpuFamilyReady.value = '';
+  if (!scene || disposed || !needsPlane.value || !session || !props.localReady || !props.fullResolution || !family) {
+    if (!needsPlane.value || !session || !props.fullResolution) {
+      gpuController?.abort(); gpuPendingFamily = ''; gpuPreparing.value = false;
+    }
+    return;
+  }
+  if (gpuFamilyReady.value === family && scene.gpuCTReady) return;
+  if (gpuPendingFamily === family && gpuController && !gpuController.signal.aborted) return;
+  gpuController?.abort(); const controller = new AbortController(); gpuController = controller;
+  gpuPendingFamily = family; gpuPreparing.value = true; gpuFallback.value = '';
+  const request = planeRequest.value!;
+  const identityCurrent = () => !disposed && !controller.signal.aborted && props.localSession === session && gpuFamily.value === family;
+  const current = () => identityCurrent() && session.revisionBase === request.base;
+  try {
+    // The parent rebinds this shared worker on immutable-alias changes. Never
+    // interpret its previous mask descriptors as the new candidate's evidence.
+    await nextTick();
+    if (!identityCurrent()) return;
+    if (session.revisionBase !== request.base) {
+      if (gpuBaseRetries++ < 3) gpuBaseTimer = window.setTimeout(() => { if (identityCurrent() && needsPlane.value) void prepareGPUPlane(); }, 50);
+      return;
+    }
+    gpuBaseRetries = 0;
+    const source = await session.getGPUVolume(controller.signal);
+    if (!current()) return;
+    await scene.prepareGPUCT(source, controller.signal);
+    if (!current()) return;
+    const masks = await session.getGPUOverlays(request.overlays, request.compare, controller.signal);
+    if (!current()) return;
+    await scene.prepareGPUOverlays(masks, (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })), controller.signal);
+    if (!current()) return;
+    gpuFamilyReady.value = family; planeError.value = ''; planeLoading.value = false;
+    reviewFrames.cancel(); clearTimeout(exactPlaneTimer); planeLoadId++;
+    syncReview();
+    if (faceWhenReady) { faceWhenReady = false; scene.focusReviewPlane(); }
+  } catch (reason) {
+    if (!current()) return;
+    gpuFamilyReady.value = '';
+    gpuFallback.value = reason instanceof Error ? reason.message : 'GPU volume unavailable; using local slices.';
+    queueReviewPlane();
+  } finally {
+    if (gpuController === controller) { gpuPreparing.value = false; gpuPendingFamily = ''; }
+  }
 }
 async function loadReviewPlane(exact = false) {
   const request = planeRequest.value, id = ++planeLoadId;
   if (!needsPlane.value || !request || disposed) { reviewFrames.cancel(); planeLoading.value = false; syncReview(); return; }
+  if (gpuActive.value) { planeLoading.value = false; syncReview(); return; }
   planeLoading.value = true; planeError.value = ''; syncReview();
   const family = modelReviewFrameFamilyKey(request);
   const present = (value: ModelReviewFrame) => {
@@ -143,6 +222,11 @@ function queueReviewPlane() {
   planeLoading.value = needsPlane.value && currentPlane.value?.context !== desiredPlaneContext.value;
   planeError.value = '';
   if (!needsPlane.value && !previousFamily) return;
+  if (gpuActive.value) {
+    reviewFrames.cancel(); planeLoading.value = false; syncReview();
+    if (faceWhenReady) { faceWhenReady = false; scene?.focusReviewPlane(); }
+    return;
+  }
   syncReview();
   if (!needsPlane.value) return;
   if (requestFrame) return;
@@ -161,7 +245,7 @@ function reviewGesture(prompt: InteractivePrompt) {
   if (!reviewReady.value || !props.reviewActive || disposed) return;
   if (reviewMode.value === 'surface' && prompt.kind && prompt.kind !== 'point') return;
   if (reviewMode.value === 'plane' && 'vertices' in prompt) {
-    const native = planeFrame.value?.frame.meta.native;
+    const native = displayedMeta.value?.native;
     if (!native || prompt.axis !== native.axis || prompt.index !== native.index) return;
   }
   emit('gesture', prompt);
@@ -197,15 +281,19 @@ async function load() {
   finally { if (id === loadId) { loading.value = false; transparencyWarning.value = scene.transparencyWarning; syncReview(); } }
 }
 onMounted(() => {
-  try { scene = new AnatomyScene(surface.value!, (id, point) => { if (!props.reviewActive || props.reviewTool === 'navigate') emit('pick', id, point); }, message => { error.value = message; }, name => { view.value = name; }, axes => { orientation.value = axes; }, reviewGesture); load(); syncReview(); queueReviewPlane(); void observeReviewControls(); }
+  try { scene = new AnatomyScene(surface.value!, (id, point) => { if (!props.reviewActive || props.reviewTool === 'navigate') emit('pick', id, point); }, message => { error.value = message; }, name => { view.value = name; }, axes => { orientation.value = axes; }, reviewGesture);
+    scene.onGPUCTInvalidated = reason => { gpuController?.abort(); gpuFamilyReady.value = ''; gpuPendingFamily = ''; gpuPreparing.value = false; gpuFallback.value = reason || 'GPU volume was released; using local slices.'; queueReviewPlane(); };
+    scene.onGPUCTRestored = () => { if (!disposed) void prepareGPUPlane(); };
+    load(); syncReview(); queueReviewPlane(); void prepareGPUPlane(); void observeReviewControls(); }
   catch { error.value = 'WebGL is unavailable. You can still review CT slices and export the segmentation.'; loading.value = false; }
 });
-onBeforeUnmount(() => { disposed = true; loadId++; planeLoadId++; cancelAnimationFrame(requestFrame); clearTimeout(exactPlaneTimer); reviewControlsObserver?.disconnect(); reviewFrames.dispose(); controller?.abort(); scene?.dispose(); });
+onBeforeUnmount(() => { disposed = true; loadId++; planeLoadId++; gpuController?.abort(); clearTimeout(gpuBaseTimer); cancelAnimationFrame(requestFrame); clearTimeout(exactPlaneTimer); reviewControlsObserver?.disconnect(); reviewFrames.dispose(); controller?.abort(); scene?.dispose(); });
 watch(() => [props.manifestUrl, props.modelUrl, props.modelData], load);
 watch(() => [props.display, props.selected], () => scene?.display(props.display, props.selected), { deep: true });
 watch(() => props.point, point => { if (props.viewportActive !== false) scene?.setPoint(point); }, { deep: true });
 watch(() => props.viewportActive, active => { if (active !== false) scene?.setPoint(props.point); syncReview(); });
 watch(() => [desiredPlaneContext.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution, props.reviewActive, reviewMode.value], queueReviewPlane);
+watch(() => [gpuFamily.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution], () => { void prepareGPUPlane(); });
 watch(() => [props.reviewActive, props.reviewTarget, props.reviewTool, props.reviewPrompts, props.reviewDisabled,
   props.reviewInclude, props.reviewRadius, props.window, props.level, props.overlays, reviewMode.value, showPlane.value], syncReview, { deep: true });
 watch(() => [props.caseId, props.geometry], () => { planeFrame.value = undefined; planeFrameFamily.value = ''; reviewFrames.clear(); planeError.value = ''; queueReviewPlane(); });
@@ -225,17 +313,17 @@ defineExpose({ focus: () => scene?.focus(), screenshot: () => scene?.screenshot(
 <template>
   <div class="model-viewport" :class="{ 'model-review': reviewActive, 'model-plane': !reviewActive && planeLayout }" :data-review-mode="reviewMode"
     :style="planeLayout ? { '--review-scene-top': `${reviewSceneTop}px` } : undefined"
-    :data-ct-plane-visible="needsPlane" :data-ct-plane-quality="currentPlane?.quality || ''"
-    :data-review-ready="reviewReady" :data-review-context="planeFrame?.context || ''"
-    :data-review-pending-context="desiredPlaneContext" :data-review-native-axis="planeFrame?.frame.meta.native?.axis"
-    :data-review-native-index="planeFrame?.frame.meta.native?.index">
+    :data-ct-plane-visible="needsPlane" :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"
+    :data-review-ready="reviewReady" :data-review-context="displayedContext"
+    :data-review-pending-context="desiredPlaneContext" :data-review-native-axis="displayedMeta?.native?.axis"
+    :data-review-native-index="displayedMeta?.native?.index">
     <div ref="surface" class="model-canvas"></div>
     <div class="viewport-caption">3D anatomy <span class="divider">·</span> <span>{{ view }}</span></div>
     <div v-if="controlsVisible" ref="reviewControls" class="model-review-controls" :class="{ 'main-plane-controls': !reviewActive, 'plane-off': !reviewActive && !showPlane }">
       <div class="model-review-row">
         <label v-if="reviewActive">Mark on <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode"><option value="surface">Surface point</option><option value="plane">CT plane</option></select></label>
         <label class="model-plane-toggle"><input type="checkbox" aria-label="Show CT plane" v-model="showPlane" /> CT plane</label>
-        <button v-if="showPlane" class="text-button" :disabled="!currentPlane" @click="scene?.focusReviewPlane()">Face plane</button>
+        <button v-if="showPlane" class="text-button" :disabled="!planeReady" @click="scene?.focusReviewPlane()">Face plane</button>
       </div>
       <div v-if="showPlane || (reviewActive && reviewMode === 'plane')" class="model-review-row model-plane-navigation">
         <select aria-label="3D CT plane" :value="reviewPlane" @change="changePlane"><option value="axial">Native k</option><option value="coronal">Native j</option><option value="sagittal">Native i</option></select>

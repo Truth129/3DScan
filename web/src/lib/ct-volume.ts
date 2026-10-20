@@ -1,5 +1,7 @@
 import type { LocalSlice, VolumeChunk, VolumeDescriptor } from './ct-reslice';
 import { validateDescriptor } from './ct-reslice';
+import { gpuVolumeSlabRange } from './gpu-volume-data';
+import type { GPUOverlaySources, GPUVolumeSource } from './gpu-volume-data';
 import type { Plane, Point } from '../types';
 
 export type { CTOverlay, LocalSlice, VolumeDescriptor } from './ct-reslice';
@@ -40,6 +42,7 @@ interface SliceRequest {
   position: number;
   generation: number;
   overlay: number;
+  consumer: 'ct' | 'model-review';
   native?: { axis: 0 | 1 | 2; index: number };
   resolve: (slice: LocalSlice) => void;
   reject: (error: Error) => void;
@@ -53,6 +56,18 @@ function selectedIds(selection: CTSelection): string[] {
   const unique = [...new Set(ids)];
   if (unique.length > 128) throw new Error('CT review supports at most 128 selected structures');
   return unique;
+}
+
+/** Abort only this consumer; a GPU upload never cancels shared CT preloading. */
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new LocalCTSupersededError());
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', abort);
+    const abort = () => { cleanup(); reject(new LocalCTSupersededError()); };
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+  });
 }
 
 /** One CT buffer and bounded selected overlays, shared by all three view planes.
@@ -229,9 +244,73 @@ export class LocalCTSession {
       // share one worker/volume without superseding each other's frames.
       const key = `${consumer}:${plane}`;
       this.slices.get(key)?.reject(new LocalCTSupersededError());
-      this.slices.set(key, { plane, position, generation, overlay, native, resolve, reject });
+      this.slices.set(key, { plane, position, generation, overlay, native, consumer, resolve, reject });
       void this.drainSlices();
     });
+  }
+
+  /** Upload from the resident worker CT without fetching or copying the full scan. */
+  async getGPUVolume(signal?: AbortSignal): Promise<GPUVolumeSource> {
+    this.ensureActive();
+    if (this.quality !== 'full') throw new LocalCTUnsupportedError('GPU volume rendering requires the full-resolution local CT.');
+    const baseVersion = this.baseVersion;
+    await abortable(this.ready, signal);
+    this.ensureActive();
+    if (signal?.aborted || baseVersion !== this.baseVersion || !this.descriptor) throw new LocalCTSupersededError();
+    return this.gpuSource(this.descriptor, undefined, signal);
+  }
+
+  /** Selected immutable cropped masks share one source when current/parent match. */
+  async getGPUOverlays(selection: CTSelection, compare = false, signal?: AbortSignal): Promise<GPUOverlaySources> {
+    this.ensureActive();
+    if (signal?.aborted) throw new LocalCTSupersededError();
+    if (this.quality !== 'full') throw new LocalCTUnsupportedError('GPU volume rendering requires full-resolution masks.');
+    const ids = selectedIds(selection), baseVersion = this.baseVersion;
+    await abortable(this.setOverlay(ids, compare), signal);
+    const version = this.overlayVersion;
+    await abortable(this.ready, signal);
+    this.ensureActive();
+    if (signal?.aborted || baseVersion !== this.baseVersion) throw new LocalCTSupersededError();
+    const sources = new Map<string, GPUVolumeSource>();
+    const source = (descriptor: VolumeDescriptor) => {
+      let result = sources.get(descriptor.key);
+      if (!result) { result = this.gpuSource(descriptor, version, signal); sources.set(descriptor.key, result); }
+      return result;
+    };
+    const overlays = ids.map(id => {
+      const entry = this.maskDescriptors.get(id);
+      if (!entry || (compare && !entry.compared)) throw new LocalCTSupersededError();
+      return { id, current: source(entry.current), parent: compare && entry.parent ? source(entry.parent) : null };
+    });
+    if (version !== this.overlayVersion) throw new LocalCTSupersededError();
+    return { overlays };
+  }
+
+  private gpuSource(descriptor: VolumeDescriptor, overlayVersion?: number, lifetimeSignal?: AbortSignal): GPUVolumeSource {
+    if (descriptor.quality === 'preview') throw new LocalCTUnsupportedError('GPU volume rendering requires full-resolution data.');
+    const version = this.ctVersion, key = descriptor.key;
+    const assertCurrent = () => {
+      this.ensureActive();
+      if (lifetimeSignal?.aborted || version !== this.ctVersion || !this.descriptor
+          || (overlayVersion === undefined ? this.descriptor.key !== key : overlayVersion !== this.overlayVersion)) {
+        throw new LocalCTSupersededError();
+      }
+    };
+    // Metadata is small. Isolate it from caller mutation while keeping native
+    // voxels and the authoritative descriptor under worker/session ownership.
+    const snapshot = structuredClone(descriptor);
+    return { descriptor: snapshot, readSlab: async (zStart, depth, signal) => {
+      assertCurrent();
+      if (signal?.aborted) throw new LocalCTSupersededError();
+      const range = gpuVolumeSlabRange(descriptor, zStart, depth);
+      const bytes = await this.rpc({ type: 'gpu-slab', ctVersion: version, overlayVersion,
+        slot: overlayVersion === undefined ? 'ct' : 'mask', volumeKey: key, zStart, depth }, [],
+      [lifetimeSignal, signal].filter((value): value is AbortSignal => !!value)) as ArrayBuffer;
+      assertCurrent();
+      if (signal?.aborted) throw new LocalCTSupersededError();
+      if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== range.byteLength) throw new Error('GPU volume slab has an unexpected byte count');
+      return bytes;
+    } };
   }
 
   async probe(ras: Point): Promise<{ hu: number | null; voxel?: Point }> {
@@ -353,13 +432,18 @@ export class LocalCTSession {
     });
   }
 
-  private rpc(command: Record<string, unknown>, transfer: Transferable[] = []): Promise<unknown> {
+  private rpc(command: Record<string, unknown>, transfer: Transferable[] = [], signals: readonly AbortSignal[] = []): Promise<unknown> {
     this.ensureActive();
+    if (signals.some(signal => signal.aborted)) return Promise.reject(new LocalCTSupersededError());
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const uniqueSignals = [...new Set(signals)];
+      const cleanup = () => { for (const signal of uniqueSignals) signal.removeEventListener('abort', abort); };
+      const abort = () => { this.pending.delete(id); cleanup(); reject(new LocalCTSupersededError()); };
+      for (const signal of uniqueSignals) signal.addEventListener('abort', abort, { once: true });
+      this.pending.set(id, { resolve: result => { cleanup(); resolve(result); }, reject: error => { cleanup(); reject(error); } });
       try { this.worker.postMessage({ ...command, id }, transfer); }
-      catch (error) { this.pending.delete(id); reject(error); }
+      catch (error) { this.pending.delete(id); cleanup(); reject(error); }
     });
   }
 
@@ -372,7 +456,7 @@ export class LocalCTSession {
         this.slices.delete(plane);
         try {
           const result = await this.rpc({ type: 'slice', ctVersion: this.ctVersion, overlayVersion: request.overlay,
-            plane: request.plane, position: request.position, native: request.native }) as LocalSlice;
+            plane: request.plane, position: request.position, native: request.native, consumer: request.consumer }) as LocalSlice;
           // A completed frame is useful during continuous dragging. Only
           // unstarted requests are coalesced; dropping every in-flight result
           // whenever another position is queued would starve the display.

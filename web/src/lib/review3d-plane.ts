@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import type { CTFrame, CTOverlay } from './ct-renderer';
 import type { Geometry, SliceMeta } from '../types';
-import { reviewPlaneCorners, validateReviewPlane } from './review3d';
+import { reviewPlaneCorners, validateReviewPlane, validateReviewPlaneMeta } from './review3d';
+import { GPUCTVolume, type GPUOverlayColor } from './gpu-ct-plane';
+import type { GPUOverlaySources, GPUVolumeSource } from './gpu-volume-data';
 
 const fragmentShader = `
 precision highp float;
@@ -81,6 +83,9 @@ export class Review3DPlane {
   private textures: THREE.Texture[] = [];
   private currentFrame?: CTFrame;
   private currentGeometry?: Geometry;
+  private currentMeta?: SliceMeta;
+  private cpuMaterial: THREE.ShaderMaterial;
+  private gpuVolume: GPUCTVolume;
   private frameKey = '';
   private currentMasks: readonly Uint8Array[] = [];
   private parentMasks: readonly Uint8Array[] = [];
@@ -97,18 +102,27 @@ export class Review3DPlane {
       fragmentShader, side: THREE.DoubleSide, depthTest: true, depthWrite: true, transparent: false, toneMapped: false,
     });
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), material); this.mesh.name = 'review-native-CT-plane';
+    this.cpuMaterial = material; this.gpuVolume = new GPUCTVolume(renderer);
     this.mesh.visible = false; this.mesh.userData.reviewCTPlane = true;
   }
   get frame() { return this.currentFrame; }
-  get meta(): SliceMeta | undefined { return this.currentFrame?.meta; }
-  get textureCount() { return this.textures.length; }
+  get meta(): SliceMeta | undefined { return this.currentMeta; }
+  get gpuReady() { return this.gpuVolume.ready; }
+  get gpuKey() { return this.gpuVolume.key; }
+  get gpuBytes() { return this.gpuVolume.bytes; }
+  get gpuActive() { return this.mesh.material === this.gpuVolume.material; }
+  get textureCount() { return this.textures.length + this.gpuVolume.textureCount; }
+  prepareGPUCT(source: GPUVolumeSource, signal?: AbortSignal) { return this.gpuVolume.prepare(source, signal); }
+  prepareGPUOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[], signal?: AbortSignal) { return this.gpuVolume.prepareOverlays(sources, colors, signal); }
+  clearGPUCT() { this.gpuVolume.clear(); if (this.gpuActive) { this.mesh.visible = false; this.mesh.material = this.cpuMaterial; this.currentMeta = undefined; this.currentFrame = undefined; } }
   setWindow(window: number, level: number) {
     if (Number.isFinite(window) && window > 0 && Number.isFinite(level)) {
-      this.mesh.material.uniforms.uWindow.value = window; this.mesh.material.uniforms.uLevel.value = level;
+      this.cpuMaterial.uniforms.uWindow.value = window; this.cpuMaterial.uniforms.uLevel.value = level;
+      this.gpuVolume.setWindow(window, level);
     }
   }
   setFrame(frame: CTFrame, geometry: Geometry) {
-    if (frame === this.currentFrame && geometry === this.currentGeometry) return;
+    if (frame === this.currentFrame && geometry === this.currentGeometry && !this.gpuActive) return;
     validateReviewPlane(frame, geometry);
     const { width, height } = frame.meta, count = width * height;
     const layers: CTOverlay[] = frame.overlays ?? [{ id: 'selected', current: frame.current, parent: frame.parent }];
@@ -158,16 +172,33 @@ export class Review3DPlane {
       geometry.computeBoundingSphere(); this.frameKey = key;
     }
     this.textures.forEach(texture => { if (!nextTextures.includes(texture as THREE.DataTexture)) texture.dispose(); }); this.textures = nextTextures;
-    const uniforms = this.mesh.material.uniforms;
+    this.mesh.material = this.cpuMaterial;
+    const uniforms = this.cpuMaterial.uniforms;
     ['uHU', 'uCurrent', 'uParent', 'uPalette'].forEach((name, index) => { uniforms[name].value = nextTextures[index]; });
     uniforms.uLayers.value = layers.length; uniforms.uSize.value.set(width, height);
-    this.currentFrame = frame; this.currentGeometry = geometry; this.currentMasks = currentMasks; this.parentMasks = parentMasks;
+    this.currentFrame = frame; this.currentMeta = frame.meta; this.currentGeometry = geometry; this.currentMasks = currentMasks; this.parentMasks = parentMasks;
+  }
+  setGPUFrame(meta: SliceMeta, geometry: Geometry) {
+    validateReviewPlaneMeta(meta, geometry); this.gpuVolume.setMeta(meta, geometry);
+    const key = JSON.stringify([meta.width, meta.height, meta.pixel_to_ras]);
+    if (key !== this.frameKey) {
+      const corners = reviewPlaneCorners(meta), display = this.mesh.geometry;
+      const position = display.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (position) { (position.array as Float32Array).set(corners.flat()); position.needsUpdate = true; }
+      else {
+        display.setAttribute('position', new THREE.Float32BufferAttribute(corners.flat(), 3));
+        display.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2)); display.setIndex([0, 1, 2, 0, 2, 3]);
+      }
+      display.computeBoundingSphere(); this.frameKey = key;
+    }
+    this.currentFrame = undefined; this.currentMeta = meta; this.currentGeometry = geometry; this.mesh.material = this.gpuVolume.material;
   }
   clear() {
-    this.mesh.visible = false; this.currentFrame = undefined; this.currentGeometry = undefined;
+    this.mesh.visible = false; this.currentFrame = undefined; this.currentMeta = undefined; this.currentGeometry = undefined;
+    this.mesh.material = this.cpuMaterial;
     this.currentMasks = []; this.parentMasks = [];
     this.textures.forEach(texture => texture.dispose()); this.textures = [];
-    for (const name of ['uHU', 'uCurrent', 'uParent', 'uPalette']) this.mesh.material.uniforms[name].value = null;
+    for (const name of ['uHU', 'uCurrent', 'uParent', 'uPalette']) this.cpuMaterial.uniforms[name].value = null;
   }
-  dispose() { this.clear(); this.mesh.removeFromParent(); this.mesh.geometry.dispose(); this.mesh.material.dispose(); }
+  dispose() { this.clear(); this.gpuVolume.dispose(); this.mesh.removeFromParent(); this.mesh.geometry.dispose(); this.cpuMaterial.dispose(); }
 }

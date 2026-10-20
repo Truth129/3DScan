@@ -18,6 +18,8 @@ export interface SceneReviewState {
   prompts: InteractivePrompt[];
   contextKey: string;
   frame?: CTFrame;
+  /** Exact native geometry for the resident GPU volume; no extracted HU frame. */
+  gpuMeta?: SliceMeta;
   window: number;
   level: number;
   showPlane?: boolean;
@@ -32,12 +34,19 @@ export function reviewPlaneCorners(meta: SliceMeta): Point[] {
 
 /** Reject stale/foreign grids; native display pixels can oversample anisotropic source voxels. */
 export function validateReviewPlane(frame: CTFrame, geometry: Geometry) {
-  const { meta } = frame, native = meta.native;
+  const { meta } = frame, count = meta.width * meta.height;
+  if (frame.hu.length !== count || frame.current.length !== count || (frame.parent && frame.parent.length !== count))
+    throw new Error('3D CT plane dimensions or geometry are invalid');
+  validateReviewPlaneMeta(meta, geometry);
+}
+
+/** Geometry-only validation shared by volume shaders and physical picking. */
+export function validateReviewPlaneMeta(meta: SliceMeta, geometry: Geometry) {
+  const native = meta.native;
   if (!native || ![0, 1, 2].includes(native.axis) || !Number.isInteger(native.index)
       || native.index < 0 || native.index >= geometry.shape[native.axis]) throw new Error('3D drawing requires a native CT plane');
-  const { width, height } = meta, count = width * height;
+  const { width, height } = meta;
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width > 4096 || height > 4096
-      || frame.hu.length !== count || frame.current.length !== count || (frame.parent && frame.parent.length !== count)
       || meta.pixel_to_ras.length !== 4 || meta.pixel_to_ras.some(row => row.length !== 4 || row.some(value => !Number.isFinite(value))))
     throw new Error('3D CT plane dimensions or geometry are invalid');
   const [u, v] = [0, 1, 2].filter(axis => axis !== native.axis), inverse = inverseAffine(geometry.affine_ras);
@@ -90,8 +99,9 @@ export function reviewSurfacePoint(ras: Point, geometry: Geometry): Point | unde
 }
 
 export function reviewPlaneGesture(state: SceneReviewState, pixels: [number, number][], id?: string) {
-  if (state.disabled || state.mode !== 'plane' || !state.frame || state.showPlane === false) return;
-  return createReviewGesture(state.geometry, state.frame.meta, state.tool, state.include, pixels, state.radiusMm, id);
+  const meta = state.gpuMeta ?? state.frame?.meta;
+  if (state.disabled || state.mode !== 'plane' || !meta || state.showPlane === false) return;
+  return createReviewGesture(state.geometry, meta, state.tool, state.include, pixels, state.radiusMm, id);
 }
 
 /** Patient vertices for all persisted native drawings, including prompts on other planes. */

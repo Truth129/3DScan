@@ -13,8 +13,7 @@ or validate TotalSegmentator.
 Install the native prerequisites on CachyOS:
 
 ```bash
-sudo pacman -S --needed rocm-hip-runtime rocminfo rocm-ml-libraries hipsparselt rocm-smi-lib
-paru -S dcm2niix
+sudo pacman -S --needed rocm-hip-runtime rocminfo rocm-ml-libraries hipsparselt rocm-smi-lib base-devel cmake pkgconf openjpeg2 zlib
 ```
 
 Provision the isolated environment and frontend:
@@ -33,6 +32,12 @@ Open **http://127.0.0.1:9010**. The production build and API share one origin.
 See [setup and GPU diagnostics](docs/SETUP.md) for native ROCm details, dependency
 pins, allowed hostnames and private access. `scripts/bootstrap.sh core` installs
 basic CT review/demo tools without the inference packages.
+Full setup builds a pinned native dcm2niix in `.tools/bin/` with JPEG 2000 and
+JPEG-LS decoding. Some AUR builds omit these decoders and cannot import compressed
+CT scans. To upgrade an existing checkout's converter, run
+`scripts/build_dcm2niix.sh`; the system package stays available independently.
+Known compressed-frame parsing failures use GDCM to create temporary uncompressed
+copies before retrying conversion, preserving original scans and voxel values.
 
 ### Enable assisted correction
 
@@ -219,6 +224,11 @@ Source hashes record the exact processing code and downloaded model checkpoints.
   full-resolution slicing and HU inspection. Until it is ready, navigation stays
   local and exact detail follows after movement stops. Downloads can be cancelled
   or retried. WebGL handles window/level locally.
+  The optional CT plane in the 3D view uploads the full native CT and selected
+  masks to the client GPU once; moving its slider then changes shader parameters
+  without extracting or uploading slice pixels. This shares the anatomy renderer
+  and the existing CT download. Clients outside its texture or memory limits use
+  the existing local slice path, with a visible status.
   Segmentation, corrections and mesh generation remain on the workstation.
 - Mask preparation shares one decode between measurements/QC and surface
   extraction, with memory-aware CPU concurrency (up to four structures by

@@ -6,6 +6,7 @@ import sys
 import shutil
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import zipfile
 
 import nibabel as nib
@@ -16,7 +17,8 @@ from scipy import ndimage as ndi
 from scipy.spatial import cKDTree
 import pydicom
 from pydicom.dataset import FileDataset, FileMetaDataset
-from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
+from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, JPEG2000Lossless, generate_uid
+from pydicom.encaps import encapsulate
 import pytest
 
 from scan3d import dicom, imaging, segmentation, slicer_io, surfaces
@@ -412,6 +414,220 @@ def test_dicom_duplicate_positions_are_not_silently_merged(tmp_path):
         dicom.convert_series(record["files"], tmp_path / "converted")
 
 
+def conversion_sources(tmp_path, syntax=None):
+    source = tmp_path / "dicom"
+    source.mkdir()
+    series, frame = generate_uid(), generate_uid()
+    for index in range(2):
+        path = source / f"{index}.dcm"
+        write_dicom(path, series, frame, index)
+        if syntax:
+            ds = pydicom.dcmread(path)
+            ds.file_meta.TransferSyntaxUID = syntax
+            ds.save_as(path, enforce_file_format=True)
+    return dicom.index_dicom(source)[0]["files"]
+
+
+@pytest.mark.parametrize("syntax", ["1.2.840.10008.1.2.4.90", "1.2.840.10008.1.2.4.91"])
+def test_dicom_unsupported_jpeg2000_explains_installed_decoder_and_keeps_private_log(tmp_path, monkeypatch, syntax):
+    files = conversion_sources(tmp_path, syntax)
+    output = tmp_path / "converted"
+    output.mkdir()
+    log = output / "dcm2niix.log"
+    log.write_text("old log")
+    log.chmod(0o644)
+    patient_details = b"Patient: PRIVATE_NAME, source /private/patient/source.dcm"
+    monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
+    monkeypatch.setattr(dicom.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=2, stdout=b"Warning: Unsupported transfer syntax: " + syntax.encode() + b"\n" + patient_details,
+        stderr=b"No valid DICOM images were found"))
+    with pytest.raises(RuntimeError, match="JPEG 2000.*OpenJPEG") as error:
+        dicom.convert_series(files, output)
+    assert "verify the selected" not in str(error.value)
+    assert "PRIVATE_NAME" not in str(error.value) and "/private/" not in str(error.value)
+    assert "dcm2niix.log" in str(error.value)
+    assert patient_details.decode() in log.read_text()
+    assert "exit code: 2" in log.read_text()
+    assert log.stat().st_mode & 0o777 == 0o600
+    assert not (output / "reference.nii.gz").exists()
+    assert not list(output.glob(".dicom-*"))
+
+
+def test_dicom_unknown_unsupported_compression_never_exposes_converter_metadata(tmp_path, monkeypatch):
+    files = conversion_sources(tmp_path)
+    monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
+    monkeypatch.setattr(dicom.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=2, stdout="Unsupported transfer syntax: PRIVATE_UNKNOWN_SYNTAX /private/patient",
+        stderr=""))
+    with pytest.raises(RuntimeError, match="installed DICOM converter.*required decoder") as error:
+        dicom.convert_series(files, tmp_path / "converted")
+    assert "PRIVATE_UNKNOWN_SYNTAX" not in str(error.value) and "/private" not in str(error.value)
+
+
+@pytest.mark.parametrize("returncode,output_count", [(0, 0), (0, 2), (2, 0), (8, 1)])
+def test_dicom_missing_multiple_or_partially_failed_converter_outputs_are_never_accepted(
+        tmp_path, monkeypatch, returncode, output_count):
+    files = conversion_sources(tmp_path)
+    output = tmp_path / "converted"
+    monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
+
+    def convert(command, **kwargs):
+        target = Path(command[command.index("-o") + 1])
+        for index in range(output_count):
+            # A nonzero converter result must fail before even trying to load a
+            # partial output, regardless of whether the file looks like NIfTI.
+            (target / f"reference{index}.nii.gz").write_bytes(b"partial output")
+        return SimpleNamespace(returncode=returncode, stdout=b"source /private/patient", stderr=b"conversion details")
+
+    monkeypatch.setattr(dicom.subprocess, "run", convert)
+    message = ("exactly one" if not returncode else "no readable CT images" if returncode == 2 else "exit 8")
+    with pytest.raises((ValueError, RuntimeError), match=message) as error:
+        dicom.convert_series(files, output)
+    assert "/private" not in str(error.value)
+    assert "dcm2niix.log" in str(error.value)
+    assert (output / "dcm2niix.log").exists()
+    assert not (output / "reference.nii.gz").exists()
+
+
+def test_dicom_timeout_keeps_partial_private_diagnostics(tmp_path, monkeypatch):
+    files = conversion_sources(tmp_path)
+    output = tmp_path / "converted"
+    monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
+
+    def timeout(command, **kwargs):
+        raise dicom.subprocess.TimeoutExpired(command, 600, output=b"/private/patient", stderr=b"partial decoder output")
+
+    monkeypatch.setattr(dicom.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="timed out after 10 minutes.*dcm2niix.log") as error:
+        dicom.convert_series(files, output)
+    assert "/private" not in str(error.value)
+    assert "partial decoder output" in (output / "dcm2niix.log").read_text()
+    assert (output / "dcm2niix.log").stat().st_mode & 0o777 == 0o600
+
+
+def compressed_conversion_sources(tmp_path):
+    from PIL import features
+    from pydicom.pixels.decoders import JPEG2000LosslessDecoder
+    if not features.check_codec("jpg_2000") or "gdcm" not in JPEG2000LosslessDecoder.available_plugins:
+        pytest.skip("Independent JPEG 2000 fixture encoding/GDCM decoding is unavailable")
+    files = conversion_sources(tmp_path, str(JPEG2000Lossless))
+    angle = np.deg2rad(23)
+    for index, name in enumerate(files):
+        ds = pydicom.dcmread(name)
+        ds.Rows = ds.Columns = 64
+        ds.InstanceNumber = index + 1
+        ds.ImageOrientationPatient = [np.cos(angle), np.sin(angle), 0, -np.sin(angle), np.cos(angle), 0]
+        ds.ImagePositionPatient = [10, 20, 30 + index * 1.5]
+        ds.SliceThickness = 1.5
+        ds.SamplesPerPixel = 1
+        ds.PhotometricInterpretation = "MONOCHROME2"
+        ds.BitsAllocated = ds.BitsStored = 16
+        ds.HighBit = 15
+        ds.PixelRepresentation = 0
+        ds.RescaleSlope = 2
+        ds.RescaleIntercept = -1024
+        ds.RescaleType = "HU"
+        ds.LossyImageCompression = "00"
+        values = (np.arange(64 * 64).reshape(64, 64) + index * 100).astype(np.uint16)
+        encoded = BytesIO()
+        Image.fromarray(values).save(encoded, format="JPEG2000", no_jp2=True, irreversible=False)
+        ds.PixelData = encapsulate([encoded.getvalue()])
+        ds["PixelData"].VR = "OB"
+        ds["PixelData"].is_undefined_length = True
+        ds.save_as(name, enforce_file_format=True)
+    return files
+
+
+@pytest.mark.skipif(not shutil.which("dcm2niix"), reason="Native dcm2niix is not installed")
+def test_dicom_codec_fallback_preserves_original_bytes_hu_and_oblique_geometry(tmp_path, monkeypatch):
+    files = compressed_conversion_sources(tmp_path)
+    original_hashes = [hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files]
+    native_run = dicom.subprocess.run
+    calls = []
+
+    def convert(command, **kwargs):
+        source = Path(command[-1])
+        target = Path(command[command.index("-o") + 1])
+        calls.append((source, target))
+        if len(calls) == 1:
+            assert all((source / f"{index:06d}.dcm").stat().st_ino == Path(name).stat().st_ino
+                       for index, name in enumerate(files))
+            (target / "native-partial.nii.gz").write_bytes(b"must never be accepted")
+            return SimpleNamespace(returncode=1, stdout=b"OpenJPEG failed to read the header /private/patient", stderr=b"")
+        assert source != calls[0][0] and target != calls[0][1]
+        assert not list(target.iterdir())
+        for index, name in enumerate(files):
+            normalized = source / f"{index:06d}.dcm"
+            assert normalized.stat().st_ino != Path(name).stat().st_ino
+            before, after = pydicom.dcmread(name), pydicom.dcmread(normalized)
+            assert after.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
+            for key in ("SOPInstanceUID", "FrameOfReferenceUID", "ImagePositionPatient", "ImageOrientationPatient",
+                        "PixelSpacing", "RescaleSlope", "RescaleIntercept", "LossyImageCompression"):
+                assert getattr(after, key) == getattr(before, key)
+            before.pixel_array_options(decoding_plugin="gdcm")
+            np.testing.assert_array_equal(after.pixel_array, before.pixel_array)
+        return native_run(command, **kwargs)
+
+    monkeypatch.setattr(dicom.subprocess, "run", convert)
+    output = tmp_path / "converted"
+    converted = dicom.convert_series(files, output)
+    assert len(calls) == 2
+    assert [hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in files] == original_hashes
+    result = nib.load(converted)
+    values = result.get_fdata()
+    for name in files:
+        ds = pydicom.dcmread(name)
+        ds.pixel_array_options(decoding_plugin="gdcm")
+        expected = ds.pixel_array.astype(float) * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+        rows, columns = np.indices(expected.shape)
+        orientation = np.asarray(ds.ImageOrientationPatient, float)
+        lps = (np.asarray(ds.ImagePositionPatient, float)[:, None, None]
+               + orientation[:3, None, None] * columns * float(ds.PixelSpacing[1])
+               + orientation[3:, None, None] * rows * float(ds.PixelSpacing[0]))
+        locations = nib.affines.apply_affine(np.linalg.inv(result.affine),
+                                             np.moveaxis(lps * np.array([-1, -1, 1])[:, None, None], 0, -1))
+        np.testing.assert_allclose(locations, np.rint(locations), rtol=0, atol=1e-4)
+        np.testing.assert_array_equal(values[tuple(np.moveaxis(np.rint(locations).astype(int), -1, 0))], expected)
+    manifest = json.loads((output / "conversion.json").read_text())
+    assert manifest["primary_exit_code"] == 1 and manifest["final_exit_code"] == 0
+    assert manifest["normalizer"]["name"] == "pydicom-gdcm"
+    assert manifest["normalizer"]["decoded_slice_count"] == 2
+    assert manifest["normalizer"]["resampled"] is manifest["normalizer"]["recompressed"] is False
+    assert "/private" not in json.dumps(manifest)
+    assert "OpenJPEG failed" in (output / "dcm2niix.log").read_text()
+    assert "Normalized retry" in (output / "dcm2niix.log").read_text()
+
+
+@pytest.mark.parametrize("native_message,expected_calls", [(b"generic conversion error", 1),
+                                                          (b"Failed to decode frame", 2)])
+@pytest.mark.parametrize("retry_exit,retry_outputs", [(0, 0), (1, 1)])
+def test_dicom_fallback_is_targeted_and_failed_or_empty_retry_never_uses_primary_partial_output(
+        tmp_path, monkeypatch, native_message, expected_calls, retry_exit, retry_outputs):
+    files = compressed_conversion_sources(tmp_path)
+    calls = []
+    monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
+
+    def convert(command, **kwargs):
+        target = Path(command[command.index("-o") + 1])
+        calls.append(target)
+        if len(calls) == 1:
+            (target / "native-partial.nii.gz").write_bytes(b"must not be accepted")
+            return SimpleNamespace(returncode=1, stdout=native_message, stderr=b"")
+        assert target != calls[0] and not list(target.iterdir())
+        if retry_outputs:
+            (target / "retry-partial.nii.gz").write_bytes(b"must not be accepted")
+        return SimpleNamespace(returncode=retry_exit, stdout=b"retry diagnostic", stderr=b"")
+
+    monkeypatch.setattr(dicom.subprocess, "run", convert)
+    output = tmp_path / "converted"
+    with pytest.raises((ValueError, RuntimeError)):
+        dicom.convert_series(files, output)
+    assert len(calls) == expected_calls
+    assert not (output / "reference.nii.gz").exists()
+    assert not (output / "conversion.json").exists()
+    assert not list(output.glob(".dicom-*"))
+
+
 def test_gpu_selection_uses_discrete_r9700_and_never_silently_falls_back(monkeypatch):
     available = True
     names = ["AMD Radeon 610M", "AMD Radeon AI PRO R9700"]
@@ -587,6 +803,7 @@ def test_real_dcm2niix_preserves_patient_coordinates_and_rescaled_hu(tmp_path):
         ds.save_as(path, enforce_file_format=True)
     record = dicom.index_dicom(source)[0]
     converted = dicom.convert_series(record["files"], tmp_path / "converted")
+    assert (converted.parent / "dcm2niix.log").stat().st_mode & 0o777 == 0o600
     # DICOM source pixel column=3,row=4,slice=2 is LPS=(2.1,3.2,13).
     result = imaging.probe(converted, [-2.1, -3.2, 13])
     assert result["hu"] == (4 * 10 + 3 + 2 * 100) * 2 - 1024

@@ -37,6 +37,7 @@ fi
 .tools/bin/uv pip check --python .venv/bin/python
 .venv/bin/python scripts/configure_totalseg.py
 if [[ "$mode" == full ]]; then
+  scripts/build_dcm2niix.sh
   if ! .venv/bin/python -c 'import torch; assert torch.version.hip, "Expected the pinned AMD ROCm torch build"'; then
     echo 'Python packages are installed, but native ROCm libraries are incomplete.' >&2
     echo 'Run: sudo pacman -S --needed rocm-ml-libraries hipsparselt rocm-smi-lib' >&2

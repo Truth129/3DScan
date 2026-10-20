@@ -4,7 +4,7 @@ import type { Geometry, InteractivePrompt, Point } from '../src/types';
 import type { CTFrame } from '../src/lib/ct-renderer';
 import { nativeSliceMetadata, inverseAffine, transformPoint, type VolumeDescriptor } from '../src/lib/ct-reslice';
 import { pixelToRas, rasToScene, sceneToRas } from '../src/lib/geometry';
-import { intersectReviewPlane, intersectReviewSurface, reviewPlaneCorners, reviewPlaneGesture, reviewPromptPoints, reviewSurfacePoint, validateReviewPlane, type SceneReviewState } from '../src/lib/review3d';
+import { intersectReviewPlane, intersectReviewSurface, reviewPlaneCorners, reviewPlaneGesture, reviewPromptPoints, reviewSurfacePoint, validateReviewPlane, validateReviewPlaneMeta, type SceneReviewState } from '../src/lib/review3d';
 import { Review3DPlane } from '../src/lib/review3d-plane';
 import { reviewStrokeGeometry } from '../src/lib/review3d-markers';
 
@@ -74,6 +74,21 @@ describe('3D correction geometry and isolated targets', () => {
     locked.visible = false; expect(intersectReviewSurface(ray, [locked])).toBeUndefined(); locked.visible = true;
     (locked.material as THREE.Material).opacity = .01; expect(intersectReviewSurface(ray, [locked])).toBeUndefined();
     locked.geometry.dispose(); foreground.geometry.dispose(); (locked.material as THREE.Material).dispose(); (foreground.material as THREE.Material).dispose();
+  });
+  it('uses exact GPU plane metadata for the same physical gestures without extracting HU pixels', () => {
+    for (const axis of [0, 1, 2] as const) {
+      const frame = frameFor(geometry, axis), pixels: [number, number][] = [[4, 5], [12, 7], [9, 15]];
+      validateReviewPlaneMeta(frame.meta, geometry);
+      for (const tool of ['point', 'scribble', 'bbox', 'lasso'] as const) {
+        const original = { ...stateFor(frame), tool };
+        const gpu = { ...original, frame: undefined, gpuMeta: frame.meta };
+        expect(reviewPlaneGesture(gpu, pixels, 'same')).toEqual(reviewPlaneGesture(original, pixels, 'same'));
+        expect(reviewPlaneGesture({ ...gpu, disabled: true }, pixels)).toBeUndefined();
+        expect(reviewPlaneGesture({ ...gpu, showPlane: false }, pixels)).toBeUndefined();
+      }
+      const wrongIndex = { ...frame.meta, native: { axis, index: 7 } };
+      expect(() => validateReviewPlaneMeta(wrongIndex, geometry)).toThrow('reference grid');
+    }
   });
   it('only clamps surface seeds within the half-voxel isosurface border', () => {
     const ras = (voxel: Point) => transformPoint(geometry.affine_ras, voxel);
