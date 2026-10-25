@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 from collections import OrderedDict
 from functools import lru_cache
-import base64
 import json
 import math
 from pathlib import Path
@@ -12,15 +11,37 @@ import uuid
 import zipfile
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from . import __version__
 from .config import Settings
 from .service import Service, extract_zip, safe_relative
 from .store import ReviewConflict, public_case, public_job, public_revision
+from .portable_export import ExportRequest
+from .acquisition import CardiacPhase, StudyProfile
+
+
+class ViewerStaticFiles(StaticFiles):
+    """Revalidate viewer entry points while retaining immutable build assets."""
+
+    _hashed_asset = re.compile(r"^assets/(?:[^/]+/)*[^/]+-[A-Za-z0-9_-]{8}\.(?:js|css)$")
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 206, 304):
+            resource = path.replace("\\", "/").strip("/")
+            if resource in ("", ".", "index.html", "offline-viewer.js", "offline-viewer.css"):
+                # Include conditional 304 responses: clients must revalidate
+                # mutable entry points after every deployment.
+                response.headers["Cache-Control"] = "no-cache"
+            elif self._hashed_asset.fullmatch(resource):
+                response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+        return response
 
 
 class Input(BaseModel):
@@ -34,8 +55,22 @@ class ImportLocal(Input):
 
 class Process(Input):
     series_uid: str
-    profile: Literal["chest", "abdomen", "chest_abdomen"] = "chest_abdomen"
+    profile: StudyProfile = "chest_abdomen"
     phase: str = Field(min_length=1, max_length=80)
+    cardiac_phase: CardiacPhase | None = None
+    rr_percent: float | None = Field(default=None, ge=0, le=100, strict=True)
+
+
+class Segment(Input):
+    revision_id: str
+    task: str = Field(default="total", min_length=1, max_length=80)
+    robust_crop: bool = False
+    body_seg: bool = False
+    remove_small_blobs: bool = False
+
+
+class TotalSegmentatorLicense(Input):
+    license_key: SecretStr = Field(max_length=128)
 
 
 class Operation(Input):
@@ -97,6 +132,17 @@ class InteractiveLasso(InteractiveDrawing):
     vertices: list[tuple[float, float]] = Field(min_length=3, max_length=2048)
 
 
+class InteractiveScissors(Input):
+    id: str = Field(min_length=1, max_length=80)
+    kind: Literal["scissors"]
+    include: Literal[False] = False
+    operation: Literal["erase_inside", "erase_outside"]
+    shape: Literal["freehand", "rectangle", "circle"]
+    vertices: list[tuple[float, float]] = Field(min_length=3, max_length=2048)
+    ras_to_clip: tuple[tuple[float, float, float, float], tuple[float, float, float, float],
+                       tuple[float, float, float, float], tuple[float, float, float, float]]
+
+
 class InteractiveOptions(Input):
     autozoom: bool = True
     start_empty: bool = False
@@ -112,6 +158,7 @@ class InteractiveCreate(Input):
     revision_id: str
     structure_id: str
     relationship: InteractiveRelationship | None = None
+    method: Literal["direct", "nninteractive"] = "nninteractive"
 
 
 class InteractiveNewStructure(Input):
@@ -120,11 +167,12 @@ class InteractiveNewStructure(Input):
     group: str = Field(default="Custom", min_length=1, max_length=64)
     color: str = Field(default="#e3a35d", pattern=r"^#[a-fA-F0-9]{6}$")
     relationship: InteractiveRelationship | None = None
+    method: Literal["direct", "nninteractive"] = "nninteractive"
 
 
 class InteractiveUpdate(Input):
     expected_generation: int = Field(ge=0)
-    prompts: list[InteractivePrompt | InteractiveBox | InteractiveScribble | InteractiveLasso] = Field(max_length=128)
+    prompts: list[InteractivePrompt | InteractiveBox | InteractiveScribble | InteractiveLasso | InteractiveScissors] = Field(max_length=128)
     options: InteractiveOptions | None = None
     relationship: InteractiveRelationship | None = None
 
@@ -183,6 +231,15 @@ def create_app(settings: Settings | None = None):
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(service.settings.allowed_hosts))
 
+    @app.exception_handler(RequestValidationError)
+    async def safe_validation_error(request, exc):
+        # Pydantic's ordinary error details include the submitted input, even for
+        # malformed JSON, incorrect types and forbidden extra fields.
+        if request.url.path == "/api/totalsegmentator/license":
+            return JSONResponse(status_code=422, content={"detail": "Invalid license request. Enter a license key only."},
+                                headers={"Cache-Control": "no-store"})
+        return await request_validation_exception_handler(request, exc)
+
     @app.exception_handler(ValueError)
     async def bad_request(request, exc):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
@@ -202,7 +259,8 @@ def create_app(settings: Settings | None = None):
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
             from urllib.parse import urlsplit
             if urlsplit(origin).netloc != request.headers.get("host"):
-                return JSONResponse(status_code=403, content={"detail": "Cross-origin mutations are not allowed"})
+                headers = {"Cache-Control": "no-store"} if request.url.path == "/api/totalsegmentator/license" else None
+                return JSONResponse(status_code=403, content={"detail": "Cross-origin mutations are not allowed"}, headers=headers)
         return await call_next(request)
 
     @app.get("/api/health")
@@ -230,13 +288,13 @@ def create_app(settings: Settings | None = None):
     def interactive_create(case_id: str, body: InteractiveCreate):
         from .review import public_review
         return public_review(service.reviews.create(case_id, body.revision_id, body.structure_id,
-            relationship=body.relationship.model_dump(exclude_none=True) if body.relationship else None))
+            relationship=body.relationship.model_dump(exclude_none=True) if body.relationship else None, method=body.method))
 
     @app.post("/api/cases/{case_id}/reviews/new-structure")
     def interactive_new_structure(case_id: str, body: InteractiveNewStructure):
         from .review import public_review
         return public_review(service.reviews.create_structure(case_id, body.revision_id, body.name, body.group, body.color,
-            relationship=body.relationship.model_dump(exclude_none=True) if body.relationship else None))
+            relationship=body.relationship.model_dump(exclude_none=True) if body.relationship else None, method=body.method))
 
     @app.get("/api/cases/{case_id}/reviews/{session_id}")
     def interactive_review(case_id: str, session_id: str):
@@ -314,7 +372,53 @@ def create_app(settings: Settings | None = None):
 
     @app.post("/api/cases/{case_id}/process")
     def process(case_id: str, body: Process):
-        return public_job(service.process(case_id, body.series_uid, body.profile, body.phase))
+        return public_job(service.process(case_id, body.series_uid, body.profile, body.phase,
+            cardiac_phase=body.cardiac_phase, rr_percent=body.rr_percent))
+
+    @app.get("/api/segmentation-options")
+    def segmentation_options():
+        from .segmentation_options import segmentation_catalog
+        return segmentation_catalog()
+
+    @app.get("/api/totalsegmentator/license")
+    def total_segmentator_license_status(response: Response):
+        from .totalsegmentator_license import LicenseError, license_status
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return license_status()
+        except LicenseError as exc:
+            raise HTTPException(exc.status_code, str(exc), headers={"Cache-Control": "no-store"}) from None
+
+    def change_total_segmentator_license(change):
+        from .totalsegmentator_license import LicenseError
+        # TotalSegmentator rewrites its config during inference. Keep license
+        # changes outside all queued/running work; the write transaction also
+        # prevents a worker claim or new enqueue while validation is in flight.
+        with service.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if con.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone():
+                raise HTTPException(409, "Wait for queued and running jobs to finish before changing the license.",
+                                    headers={"Cache-Control": "no-store"})
+            try:
+                return change()
+            except LicenseError as exc:
+                raise HTTPException(exc.status_code, str(exc), headers={"Cache-Control": "no-store"}) from None
+
+    @app.put("/api/totalsegmentator/license")
+    def set_total_segmentator_license(body: TotalSegmentatorLicense, response: Response):
+        from .totalsegmentator_license import save_license
+        response.headers["Cache-Control"] = "no-store"
+        return change_total_segmentator_license(lambda: save_license(body.license_key.get_secret_value()))
+
+    @app.delete("/api/totalsegmentator/license")
+    def delete_total_segmentator_license(response: Response):
+        from .totalsegmentator_license import remove_license
+        response.headers["Cache-Control"] = "no-store"
+        return change_total_segmentator_license(remove_license)
+
+    @app.post("/api/cases/{case_id}/segment")
+    def segment(case_id: str, body: Segment):
+        return public_job(service.segment_case(case_id, **body.model_dump()))
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str):
@@ -349,7 +453,19 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}")
     def revision(case_id: str, revision_id: str):
-        return public_revision(service.store.revision(case_id, revision_id))
+        result = public_revision(ct_revision(case_id, revision_id))
+        return JSONResponse(result, headers={"Cache-Control": "private, no-store"}) if revision_id.startswith("review-") else result
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/cinematic-reference")
+    def cinematic_reference(case_id: str, revision_id: str):
+        from .cinematic import reference_values
+        # Statistics apply to an immutable saved revision, never an unsaved
+        # candidate. Ownership is checked before cached statistics are read.
+        if revision_id.startswith("review-"):
+            raise KeyError("Save the segmentation before measuring cinematic references")
+        selected = service.store.revision(case_id, revision_id)
+        result = reference_values(selected, service.settings.data_dir / "cinematic-cache")
+        return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
     @app.post("/api/cases/{case_id}/refinements")
     def refine(case_id: str, body: Refine):
@@ -368,22 +484,29 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/model.glb")
     def model(case_id: str, revision_id: str, detail: bool = False):
+        if revision_id.startswith("review-"):
+            raise KeyError("Candidate models are available through their surface manifest")
         revision = service.store.revision(case_id, revision_id)
+        if not revision["structures"]:
+            raise ValueError("This CT has no segmentation surfaces yet")
         target = service.ensure_detailed(case_id, revision_id) if detail else Path(revision["directory"]) / "model.glb"
         return FileResponse(target, media_type="model/gltf-binary")
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/model-manifest")
     def model_manifest(case_id: str, revision_id: str):
-        revision = service.store.revision(case_id, revision_id)
+        revision = ct_revision(case_id, revision_id)
+        if revision_id.startswith("review-") and not revision.get("preview_3d_ready"):
+            raise KeyError("This candidate has no prepared 3D preview")
         prefix = f"/api/cases/{case_id}/revisions/{revision_id}/surfaces"
-        return {"schema_version": 1, "structures": [
+        result = {"schema_version": 1, "structures": [
             {"id": asset["id"], "key": asset["key"], "url": f"{prefix}/{asset['key']}.glb"}
             for asset in revision.get("surface_assets", [])]}
+        return JSONResponse(result, headers={"Cache-Control": "private, no-store"}) if revision_id.startswith("review-") else result
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/surfaces/{key}.glb")
     def surface(case_id: str, revision_id: str, key: str):
         from .surfaces import surface_asset_path
-        revision = service.store.revision(case_id, revision_id)
+        revision = ct_revision(case_id, revision_id)
         if key not in {asset["key"] for asset in revision.get("surface_assets", [])}:
             raise KeyError("Surface does not belong to this revision")
         target = surface_asset_path(service.surface_cache, key)
@@ -406,7 +529,7 @@ def create_app(settings: Settings | None = None):
         revision = ct_revision(case_id, revision_id)
         return ct_volume(revision["ct_file"], review_cache, quality)
 
-    def review_mask(case_id, revision_id, structure_id, parent=False, quality="full"):
+    def review_mask(case_id, revision_id, structure_id, parent=False, quality="full", margin_mm=0):
         from .review_volume import mask_volume
         revision = ct_revision(case_id, revision_id)
         if structure_id not in {s["id"] for s in revision["structures"]}:
@@ -417,7 +540,7 @@ def create_app(settings: Settings | None = None):
                 return None
             selected = ct_revision(case_id, revision["parent_id"])
         structure = next((s for s in selected["structures"] if s["id"] == structure_id), None)
-        return mask_volume(revision["ct_file"], structure["mask_file"], review_cache, quality) if structure else None
+        return mask_volume(revision["ct_file"], structure["mask_file"], review_cache, quality, margin_mm=margin_mm) if structure else None
 
     def with_chunk_urls(descriptor, prefix, query=""):
         return {**descriptor, "chunks": [
@@ -449,13 +572,15 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/mask-volume")
     def mask_volume_manifest(case_id: str, revision_id: str, structure_id: str, compare: bool = False,
-                             quality: Literal["preview", "full"] = "full"):
+                             quality: Literal["preview", "full"] = "full",
+                             margin_mm: float = Query(0, ge=0, le=5)):
         from urllib.parse import urlencode
         prefix = f"/api/cases/{case_id}/revisions/{revision_id}/mask-volume"
-        current = review_mask(case_id, revision_id, structure_id, quality=quality)
-        parent = review_mask(case_id, revision_id, structure_id, True, quality) if compare else None
+        current = review_mask(case_id, revision_id, structure_id, quality=quality, margin_mm=margin_mm)
+        parent = review_mask(case_id, revision_id, structure_id, True, quality, margin_mm) if compare else None
         def descriptor(value, is_parent):
-            query = "?" + urlencode({"structure_id": structure_id, "parent": str(is_parent).lower(), "quality": quality})
+            query = "?" + urlencode({"structure_id": structure_id, "parent": str(is_parent).lower(), "quality": quality,
+                                     **({"margin_mm": margin_mm} if margin_mm else {})})
             return with_chunk_urls(value, prefix, query) if value else None
         return JSONResponse({"schema_version": 1, "current": descriptor(current, False),
                              "parent": descriptor(parent, True)}, headers={"Cache-Control": "private, no-store"})
@@ -463,8 +588,9 @@ def create_app(settings: Settings | None = None):
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/mask-volume/{key}/chunks/{index}")
     def mask_volume_chunk(case_id: str, revision_id: str, key: str, index: int,
                           structure_id: str, parent: bool = False,
-                          quality: Literal["preview", "full"] = "full"):
-        return volume_chunk(review_mask(case_id, revision_id, structure_id, parent, quality), key, index)
+                          quality: Literal["preview", "full"] = "full",
+                          margin_mm: float = Query(0, ge=0, le=5)):
+        return volume_chunk(review_mask(case_id, revision_id, structure_id, parent, quality, margin_mm), key, index)
 
     frame_cache = _FrameCache()
 
@@ -595,6 +721,8 @@ def create_app(settings: Settings | None = None):
     def slicer_bundle(case_id: str, revision_id: str):
         from . import slicer_io
         revision = service.store.revision(case_id, revision_id)
+        if not revision["structures"]:
+            raise ValueError("Run segmentation before exporting a Slicer segmentation bundle")
         target = Path(revision["directory"]) / "slicer.zip"
         slicer_io.export_bundle(Path(revision["ct_file"]), revision["structures"], target)
         return FileResponse(target, filename=f"Scan3D-{case_id[:8]}-Slicer.zip")
@@ -615,26 +743,29 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/export.html")
     def export(case_id: str, revision_id: str):
+        return portable_export(case_id, revision_id, ExportRequest(), legacy=True)
+
+    @app.post("/api/cases/{case_id}/revisions/{revision_id}/export.html")
+    def export_layers(case_id: str, revision_id: str, body: ExportRequest):
+        return portable_export(case_id, revision_id, body)
+
+    def portable_export(case_id: str, revision_id: str, body: ExportRequest, *, legacy=False):
+        from .portable_export import ExportTooLarge, prepare_export
         revision = service.store.revision(case_id, revision_id)
-        bundle = service.settings.web_dir / "offline-viewer.js"
-        if not bundle.exists():
-            raise HTTPException(503, "Build the frontend before exporting: cd web && npm run build")
-        portable = public_revision(revision)
-        for key in ("case_id", "id", "parent_id", "model_url", "model_manifest_url", "surface_assets", "acquisition", "operation"):
-            portable.pop(key, None)
-        portable["label"] = f"Scan3D case {case_id[:8]}"
-        manifest = json.dumps(portable, allow_nan=False).replace("<", "\\u003c")
-        script = re.sub(r"</script", r"<\\/script", bundle.read_text(), flags=re.I)
-        css_file = service.settings.web_dir / "offline-viewer.css"
-        css = css_file.read_text() if css_file.exists() else ""
-        encoded = base64.b64encode((Path(revision["directory"]) / "model.glb").read_bytes()).decode("ascii")
-        document = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<meta name="referrer" content="no-referrer"><title>3DScan anatomy</title><style>{css}</style></head><body><div id="app"></div>'
-            f'<script>{script}</script><script>Scan3DOffline.initOffline({manifest},"{encoded}");</script></body></html>')
-        return HTMLResponse(document, headers={"Content-Disposition": f'attachment; filename="Scan3D-{case_id[:8]}.html"'})
+        try:
+            plan = prepare_export(revision, case_id, service.settings, body, legacy=legacy)
+        except ExportTooLarge as exc:
+            raise HTTPException(413, str(exc)) from None
+        except FileNotFoundError:
+            raise HTTPException(503, "A required viewer artifact is unavailable; prepare the case and build the portable viewer before exporting") from None
+        return StreamingResponse(plan.chunks(), media_type="text/html", headers={
+            "Content-Disposition": f'attachment; filename="Scan3D-{case_id[:8]}.html"',
+            "Content-Length": str(plan.byte_length), "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
 
     if service.settings.web_dir.is_dir():
-        app.mount("/", StaticFiles(directory=service.settings.web_dir, html=True), name="web")
+        app.mount("/", ViewerStaticFiles(directory=service.settings.web_dir, html=True), name="web")
     else:
         @app.get("/", response_class=HTMLResponse)
         def build_notice():

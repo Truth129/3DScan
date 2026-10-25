@@ -244,8 +244,71 @@ def ct_volume(ct_path, cache_dir, quality="full"):
                       source=(ct_path, source_digest))
 
 
-def mask_volume(ct_path, mask_path, cache_dir, quality="full"):
+def display_margin(value):
+    """Canonical display-only margin; zero retains the exact measurement mask."""
+    value = float(value)
+    if not math.isfinite(value) or not 0 <= value <= 5:
+        raise ValueError("Display mask margin must be between 0 and 5 mm")
+    return math.floor(value * 1000 + .5) / 1000
+
+
+def volume_mask_alias(structure_id, margin_mm):
+    margin_mm = display_margin(margin_mm)
+    text = f"{margin_mm:.3f}".rstrip("0").rstrip(".")
+    return f"volume-margin:{text}:{structure_id}" if margin_mm else structure_id
+
+
+def _margin_crop(values, affine, margin_mm):
+    """Dilate in patient millimetres in a bounded ROI, without editing values.
+
+    Tiled EDT uses a physical halo, bounding temporary distances to one tile.
+    A sheared grid uses its exact affine metric rather than an axis-spacing EDT.
+    """
+    bounds = imaging._foreground_bounds(values)
+    if bounds is None:
+        return np.zeros(3, dtype=int), np.zeros((1, 1, 1), dtype=bool)
+    matrix = np.asarray(affine)[:3, :3]
+    padding = np.ceil(margin_mm * np.linalg.norm(np.linalg.inv(matrix), axis=1) + 1e-7).astype(int)
+    origin = np.maximum(0, bounds[0] - padding)
+    high = np.minimum(np.asarray(values.shape), bounds[1] + padding + 1)
+    region = tuple(slice(int(a), int(b)) for a, b in zip(origin, high))
+    source = values[region]
+    output = np.zeros(source.shape, dtype=bool)
+    spacing = np.linalg.norm(matrix, axis=0)
+    orthogonal = np.allclose(matrix.T @ matrix, np.diag(spacing ** 2), rtol=1e-6, atol=1e-8)
+    kernel = None
+    if not orthogonal:
+        kernel_shape = padding * 2 + 1
+        if int(np.prod(kernel_shape)) > 65536:
+            raise ValueError("This sheared grid needs too large a display-margin kernel; reduce the margin")
+        offsets = np.indices(kernel_shape).reshape(3, -1).T - padding
+        kernel = (np.linalg.norm(offsets @ matrix.T, axis=1) <= margin_mm + 1e-7).reshape(kernel_shape)
+        if source.size * int(kernel.sum()) > 2_000_000_000:
+            raise ValueError("This sheared grid needs too much display-margin work; reduce the margin")
+    # Keep distance-transform temporaries near 16 MiB plus a small physical halo.
+    block = np.minimum(np.asarray(source.shape), [128, 128, 128])
+    if int(np.prod(np.minimum(source.shape, block + 2 * padding))) > 8 * 1024 ** 2:
+        raise ValueError("This voxel spacing needs too much display-margin working memory; reduce the margin")
+    for i in range(0, source.shape[0], block[0]):
+        for j in range(0, source.shape[1], block[1]):
+            for k in range(0, source.shape[2], block[2]):
+                low = np.asarray([i, j, k]); end = np.minimum(low + block, source.shape)
+                halo_low = np.maximum(0, low - padding); halo_high = np.minimum(source.shape, end + padding)
+                tile = source[tuple(slice(int(a), int(b)) for a, b in zip(halo_low, halo_high))]
+                if not tile.any():
+                    continue
+                if orthogonal:
+                    expanded = ndi.distance_transform_edt(~tile, sampling=spacing) <= margin_mm + 1e-7
+                else:
+                    expanded = ndi.binary_dilation(tile, structure=kernel)
+                inner = tuple(slice(int(a), int(b)) for a, b in zip(low - halo_low, end - halo_low))
+                output[tuple(slice(int(a), int(b)) for a, b in zip(low, end))] = expanded[inner]
+    return origin, output
+
+
+def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0):
     """Return a binary crop in the chosen native or matched preview grid."""
+    margin_mm = display_margin(margin_mm)
     image, affine = imaging._image(Path(ct_path))
     geometry, reference, step, grid_origin = _review_grid(image, affine, quality)
     target_affine = np.asarray(geometry["affine_ras"])
@@ -253,7 +316,8 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full"):
     source_digest = _file_digest(mask_path)
     key = _identity({"implementation": _IMPLEMENTATION, "kind": "mask",
                      "source": source_digest, "reference_geometry": reference,
-                     "quality": quality, "geometry": geometry})
+                     "quality": quality, "geometry": geometry,
+                     **({"display_margin_mm": margin_mm, "margin_implementation": "physical-mask-margin-v1"} if margin_mm else {})})
     cached = _read_cached(cache_dir, key)
     if cached is not None:
         return cached
@@ -262,8 +326,11 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full"):
         if cached is not None:
             return cached
         values, _, _ = imaging._binary(mask_path, image, affine)
+        native_origin = np.zeros(3, dtype=int)
+        if margin_mm:
+            native_origin, values = _margin_crop(values, affine, margin_mm)
         if quality == "preview":
-            values = ndi.affine_transform(values, np.diag(step), grid_origin,
+            values = ndi.affine_transform(values, np.diag(step), grid_origin - native_origin,
                                           output_shape=tuple(geometry["shape"]), output=bool,
                                           order=0, mode="constant", cval=0, prefilter=False)
         bounds = imaging._foreground_bounds(values)
@@ -273,13 +340,16 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full"):
         else:
             origin, high = bounds
             cropped = values[tuple(slice(int(a), int(b) + 1) for a, b in zip(origin, high))]
+            if quality == "full":
+                origin = origin + native_origin
         cropped_affine = target_affine.copy()
         cropped_affine[:3, 3] = imaging._world(target_affine, origin)
         descriptor = {"schema_version": 1, "key": key, "kind": "mask", "dtype": "uint8",
                       "shape": list(cropped.shape), "origin_ijk": origin.tolist(),
                       "affine_ras": cropped_affine.tolist(), "slope": 1.0, "intercept": 0.0,
                       "quality": quality, "reference_geometry": reference,
-                      "geometry": geometry, "empty": bounds is None}
+                      "geometry": geometry, "empty": bounds is None,
+                      **({"display_margin_mm": margin_mm} if margin_mm else {})}
         return _write(cache_dir, descriptor, cropped, source=(mask_path, source_digest))
 
 

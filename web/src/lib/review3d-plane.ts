@@ -110,11 +110,22 @@ export class Review3DPlane {
   get gpuReady() { return this.gpuVolume.ready; }
   get gpuKey() { return this.gpuVolume.key; }
   get gpuBytes() { return this.gpuVolume.bytes; }
+  get gpuBinding() { return this.gpuVolume.binding; }
+  get gpuMaskBinding() { return this.gpuVolume.maskBinding; }
   get gpuActive() { return this.mesh.material === this.gpuVolume.material; }
   get textureCount() { return this.textures.length + this.gpuVolume.textureCount; }
   prepareGPUCT(source: GPUVolumeSource, signal?: AbortSignal) { return this.gpuVolume.prepare(source, signal); }
-  prepareGPUOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[], signal?: AbortSignal) { return this.gpuVolume.prepareOverlays(sources, colors, signal); }
+  prepareGPUOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[], signal?: AbortSignal,
+                    maskSources?: GPUOverlaySources) { return this.gpuVolume.prepareOverlays(sources, colors, signal, maskSources); }
   clearGPUCT() { this.gpuVolume.clear(); if (this.gpuActive) { this.mesh.visible = false; this.mesh.material = this.cpuMaterial; this.currentMeta = undefined; this.currentFrame = undefined; } }
+  /** Release GL-generation callbacks while lost; retain CPU data for restoration. */
+  releaseContextResources() {
+    // CPU fallback textures can remain allocated after returning to the GPU
+    // plane. Disposing them only on a later revision would invoke old-context
+    // WebGL deletion callbacks after the context had already been restored.
+    this.textures.forEach(texture=>texture.dispose());
+    this.mesh.geometry.dispose();this.cpuMaterial.dispose();this.gpuVolume.material.dispose();
+  }
   setWindow(window: number, level: number) {
     if (Number.isFinite(window) && window > 0 && Number.isFinite(level)) {
       this.cpuMaterial.uniforms.uWindow.value = window; this.cpuMaterial.uniforms.uLevel.value = level;

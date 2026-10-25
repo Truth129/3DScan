@@ -173,6 +173,7 @@ class Store:
         review.setdefault("batches", [])
         review.setdefault("relationship", dict(INDEPENDENT))
         review.setdefault("initial_relationship", dict(INDEPENDENT))
+        review.setdefault("method", "nninteractive")
         return review
 
     @staticmethod
@@ -233,6 +234,21 @@ class Store:
                 candidate = {**candidate, "generation": generation + 1,
                              "revision_id": f"review-{session_id}-{generation + 1}"}
                 review.setdefault("candidates", {})[str(generation + 1)] = candidate
+            if review["method"] == "direct" and candidate is None and not discard:
+                # Applied paint/erase undo can restore an exact immutable
+                # checkpoint immediately; no model or dense replay is needed.
+                for previous_candidate in reversed(list(review.get("candidates", {}).values())):
+                    if (previous_candidate.get("prompts_snapshot") == next_prompts
+                            and previous_candidate.get("options") == next_options
+                            and previous_candidate.get("batches_snapshot") == batches
+                            and previous_candidate.get("relationship", INDEPENDENT) == next_relationship):
+                        candidate = {**previous_candidate, "generation": generation + 1,
+                                     "revision_id": f"review-{session_id}-{generation + 1}"}
+                        review.setdefault("candidates", {})[str(generation + 1)] = candidate
+                        break
+            if candidate and candidate["generation"] == generation + 1 and candidate.get("preview_3d_ready"):
+                candidate["model_manifest_url"] = (
+                    f"/api/cases/{case_id}/revisions/{candidate['revision_id']}/model-manifest")
             review.update(generation=generation + 1, candidate=candidate, job_id=None, error=None,
                           prompts=next_prompts, options=next_options, batches=batches,
                           relationship=next_relationship,
@@ -248,12 +264,21 @@ class Store:
             con.execute("BEGIN IMMEDIATE")
             review = self._review_row(con, session_id, case_id)
             self._review_generation(review, generation)
+            if review["method"] == "direct":
+                if full_refine:
+                    raise ValueError("Whole-object AI refinement is unavailable in direct editing")
+                if any(prompt.get("kind") not in {"scribble", "scissors"} for prompt in review["prompts"]):
+                    raise ValueError("Direct editing supports paint and erase strokes or 3D scissors only")
+            elif any(prompt.get("kind") == "scissors" for prompt in review["prompts"]):
+                raise ValueError("3D scissors are only available in direct editing")
             if review.get("job_id"):
                 row = con.execute("SELECT status FROM jobs WHERE id=?", (review["job_id"],)).fetchone()
                 if row and row["status"] in ("queued", "running"):
                     raise ReviewConflict("This correction session already has a queued or running job")
             if kind == "review_predict":
                 applied = review["batches"][-1]["end"] if review["batches"] else 0
+                direct_replay = (review["method"] == "direct" and bool(review["prompts"])
+                                 and not review.get("candidate"))
                 policy_only = relationship_dirty(review) and len(review["prompts"]) <= applied and not full_refine
                 reusable = review.get("candidate")
                 if policy_only and reusable and (reusable.get("prompts_snapshot") != review["prompts"]
@@ -261,7 +286,7 @@ class Store:
                     reusable = None
                 if policy_only and not reusable and review["prompts"]:
                     policy_only = False
-                if len(review["prompts"]) <= applied and not full_refine and not policy_only:
+                if len(review["prompts"]) <= applied and not full_refine and not policy_only and not direct_replay:
                     raise ReviewConflict("Add or edit a prompt before applying again")
                 if not review["prompts"] and not full_refine and not policy_only:
                     raise ValueError("Add a positive or negative prompt before applying")
@@ -272,21 +297,23 @@ class Store:
                 candidate = review.get("candidate")
                 if not candidate or candidate["generation"] != generation:
                     raise ReviewConflict("Generate and inspect a candidate before accepting")
-                if not candidate["summary"]["after_voxels"]:
+                if (not candidate["summary"]["after_voxels"]
+                        and not (review["method"] == "direct" and not review.get("new_structure"))):
                     raise ValueError("An empty candidate cannot be accepted; revise the prompts")
                 if not candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]) and not candidate.get("relationship_changed"):
                     raise ValueError("The candidate is unchanged; no correction is needed")
                 case = json.loads(con.execute("SELECT data FROM cases WHERE id=?", (case_id,)).fetchone()["data"])
                 if case.get("active_revision_id") != review["revision_id"]:
                     raise ReviewConflict("The active revision changed; start a review from the current revision")
-            payload = {key: review[key] for key in ("revision_id", "structure_id", "prompts", "generation", "options", "batches", "relationship")}
+            payload = {key: review[key] for key in ("revision_id", "structure_id", "prompts", "generation", "options", "batches", "relationship", "method")}
             if kind == "review_predict":
                 if policy_only:
                     payload["relationship_only"] = True
                     payload["reuse_candidate_revision_id"] = reusable["revision_id"] if reusable else None
                 else:
-                    payload["batches"] = [*review["batches"], dict(end=len(review["prompts"]),
-                        autozoom=review["options"]["autozoom"], full_refine=full_refine)]
+                    payload["batches"] = (review["batches"] if direct_replay and len(review["prompts"]) <= applied else
+                        [*review["batches"], dict(end=len(review["prompts"]),
+                            autozoom=review["options"]["autozoom"], full_refine=full_refine)])
             payload["session_id"] = session_id
             if kind == "review_accept":
                 payload["candidate_revision_id"] = review["candidate"]["revision_id"]
@@ -356,6 +383,8 @@ class Store:
             if row is None:
                 raise KeyError("Revision not found")
             revision = json.loads(row["data"])
+            if not revision["structures"]:
+                raise ValueError("This CT has no segmentation to review")
             revision["review_status"] = status
             con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
             from .service import atomic_json
@@ -420,11 +449,13 @@ def public_case(record):
 
 def public_revision(record):
     result = {k: v for k, v in record.items() if k not in ("ct_file", "directory", "inference_manifest")}
+    result.setdefault("kind", "segmentation" if record["structures"] else "ct")
     result["structures"] = [{k: v for k, v in s.items() if k != "mask_file"} for s in record["structures"]]
     manifest = record.get("inference_manifest")
     if manifest:
         result["model_provenance"] = {k: manifest[k] for k in ("engine", "engine_version", "nnunet_version", "resolution", "started_at", "finished_at") if k in manifest}
         result["model_provenance"]["tasks"] = [t["task"] for t in manifest.get("tasks", [])]
+        result["model_provenance"]["options"] = manifest.get("options")
         result["model_provenance"]["model_fingerprint_digest"] = manifest.get("model_fingerprint", {}).get("digest")
     return result
 

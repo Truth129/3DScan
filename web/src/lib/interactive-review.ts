@@ -1,6 +1,11 @@
-import type { Geometry, InteractivePoint, InteractivePrompt, InteractiveReview, InteractiveTool, Point, SegmentRelationship, SliceMeta, Structure } from '../types';
+import type { Geometry, InteractiveMethod, InteractivePoint, InteractivePrompt, InteractiveReview, InteractiveTool, Point, SegmentRelationship, SliceMeta, Structure } from '../types';
 import { pixelToRas, planeAxis, rasToPixel } from './geometry';
 import { inverseAffine, transformPoint } from './ct-reslice';
+
+/** Existing saved reviews predate direct editing and retain their AI semantics. */
+export function reviewMethod(review?: Pick<InteractiveReview, 'method'>): InteractiveMethod {
+  return review?.method === 'direct' ? 'direct' : 'nninteractive';
+}
 
 /** Only explicit IDs carry relationship meaning; display names are never inferred. */
 export function normalizeRelationship(value?: SegmentRelationship): SegmentRelationship {
@@ -8,8 +13,8 @@ export function normalizeRelationship(value?: SegmentRelationship): SegmentRelat
   return { kind: value.kind, ...(value.parent_id ? { parent_id: value.parent_id } : {}),
     exclusive_with: value.kind === 'subdivision' ? [...new Set(value.exclusive_with ?? [])].sort() : [] };
 }
-export function reviewCandidateHasChanges(candidate: InteractiveReview['candidate']): boolean {
-  return !!candidate && candidate.summary.after_voxels !== 0
+export function reviewCandidateHasChanges(candidate: InteractiveReview['candidate'], allowEmpty = false): boolean {
+  return !!candidate && (allowEmpty || candidate.summary.after_voxels !== 0)
     && ((candidate.total_changed_voxels ?? candidate.summary.changed_voxels) > 0 || !!candidate.relationship_changed);
 }
 export function relationshipError(value: SegmentRelationship, targetId: string, structures: readonly Structure[]): string {
@@ -81,7 +86,7 @@ export function newReviewPrompt(ras: Point, include: boolean): InteractivePrompt
 /** Drawing gestures remain in one native plane; patient-MPR drawings are rejected. */
 export function createReviewGesture(geometry: Geometry, meta: SliceMeta, tool: InteractiveTool, include: boolean,
     pixels: [number, number][], radius = 3, id: string = crypto.randomUUID()): InteractivePrompt | undefined {
-  if (!pixels.length || tool === 'navigate') return;
+  if (!pixels.length || tool === 'navigate' || tool === 'scissors') return;
   if (tool === 'point') return { id, kind: 'point', include, ras: pixelToRas(meta.pixel_to_ras, ...pixels[0]) };
   if (!meta.native) throw new Error('Drawings require a native CT slice');
   if ((tool === 'bbox' && (pixels.length < 2 || Math.abs(pixels[0][0] - pixels.at(-1)![0]) < .01 || Math.abs(pixels[0][1] - pixels.at(-1)![1]) < .01)) || (tool === 'lasso' && pixels.length < 3)) return;

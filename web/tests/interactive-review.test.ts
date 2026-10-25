@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { createReviewGesture, moveNativeSlice, nativeSliceFor, reviewCandidateRevision, visibleReviewPrompts } from '../src/lib/interactive-review';
+import { createReviewGesture, moveNativeSlice, nativeSliceFor, reviewCandidateRevision, reviewMethod, visibleReviewPrompts } from '../src/lib/interactive-review';
 import { pixelToRas } from '../src/lib/geometry';
 import { allocateVolume, inverseAffine, nativeSliceMetadata, resliceVolume, transformPoint } from '../src/lib/ct-reslice';
 import type { VolumeDescriptor } from '../src/lib/ct-reslice';
 import type { Geometry, InteractiveReview, SliceMeta } from '../src/types';
 
 describe('interactive CT review geometry and generations', () => {
+  it('keeps legacy drafts as AI and recognizes explicit direct drafts', () => {
+    expect(reviewMethod()).toBe('nninteractive'); expect(reviewMethod({})).toBe('nninteractive');
+    expect(reviewMethod({ method: 'direct' })).toBe('direct'); expect(reviewMethod({ method: 'nninteractive' })).toBe('nninteractive');
+  });
   const review: InteractiveReview = { id: 'draft', case_id: 'case', revision_id: 'base', structure_id: 'total:liver', generation: 3, status: 'ready', prompts: [], candidate: { generation: 3, revision_id: 'review-draft-3', summary: { changed_voxels: 2, added_voxels: 1, removed_voxels: 1, before_volume_ml: 9, after_volume_ml: 9 } } };
   it('shows only a candidate for the current live draft generation', () => {
     expect(reviewCandidateRevision(review)).toBe('review-draft-3');

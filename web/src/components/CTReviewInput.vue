@@ -5,6 +5,7 @@ import { rasToPixel } from '../lib/geometry';
 import { transformPoint } from '../lib/ct-reslice';
 import CTReviewMarkers from './CTReviewMarkers.vue';
 import { createReviewGesture } from '../lib/interactive-review';
+import { reviewInputContext } from '../lib/review-input-context';
 const props = defineProps<{ meta: SliceMeta; geometry: Geometry; prompts: InteractivePrompt[]; tool: InteractiveTool; include: boolean; radius: number; disabled: boolean }>();
 const emit = defineEmits<{ gesture: [prompt: InteractivePrompt] }>();
 const svg = ref<SVGSVGElement>(), stroke = ref<[number, number][]>([]), hover = ref<[number, number]>();
@@ -19,7 +20,7 @@ function screen(event: PointerEvent): [number, number] | undefined {
   return [Math.max(0, Math.min(props.meta.width - 1, x)), Math.max(0, Math.min(props.meta.height - 1, y))];
 }
 function down(event: PointerEvent) {
-  if (props.disabled || props.tool === 'navigate' || event.button !== 0) return;
+  if (props.disabled || props.tool === 'navigate' || props.tool === 'scissors' || event.button !== 0) return;
   const point = screen(event); if (!point) return;
   event.preventDefault(); pointer = event.pointerId; svg.value?.setPointerCapture(pointer); stroke.value = [point];
 }
@@ -45,12 +46,12 @@ function pointsFor(prompt: InteractiveDrawing) {
 function path(points: number[][], close = false) { return points.map((point, index) => `${index ? 'L' : 'M'} ${point[0]} ${point[1]}`).join(' ') + (close ? ' Z' : ''); }
 function box(points: number[][]) { const a = points[0], b = points.at(-1)!; return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), width: Math.abs(a[0] - b[0]), height: Math.abs(a[1] - b[1]) }; }
 const mmPerPixel = computed(() => Math.hypot(...props.meta.pixel_to_ras.slice(0, 3).map(row => row[0])));
-watch(() => [props.meta, props.tool, props.disabled], () => { stroke.value = []; pointer = -1; });
+watch(() => [reviewInputContext(props.geometry, props.meta), props.tool, props.disabled], () => { stroke.value = []; pointer = -1; });
 </script>
 
 <template>
   <CTReviewMarkers :meta="meta" :prompts="prompts" :geometry="geometry" :tolerance=".5" />
-  <svg ref="svg" class="ct-gesture-layer" :class="{ active: tool !== 'navigate', blocked: disabled }" :viewBox="`0 0 ${meta.width} ${meta.height}`" preserveAspectRatio="xMidYMid meet" :data-tool="tool" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="stroke = []; pointer = -1" @pointerleave="hover = undefined">
+  <svg ref="svg" class="ct-gesture-layer" :class="{ active: tool !== 'navigate' && tool !== 'scissors', blocked: disabled }" :viewBox="`0 0 ${meta.width} ${meta.height}`" preserveAspectRatio="xMidYMid meet" :data-tool="tool" @pointerdown="down" @pointermove="move" @pointerup="up" @pointercancel="stroke = []; pointer = -1" @pointerleave="hover = undefined">
     <g v-for="prompt in drawing" :key="prompt.id" :class="prompt.include ? 'include' : 'exclude'">
       <rect v-if="prompt.kind === 'bbox'" v-bind="box(pointsFor(prompt))" class="gesture-box" vector-effect="non-scaling-stroke" />
       <path v-else :d="path(pointsFor(prompt), prompt.kind === 'lasso')" :class="prompt.kind" :stroke-width="prompt.kind === 'scribble' ? (prompt.radius_mm ?? 3) * 2 / mmPerPixel : 1.5" :vector-effect="prompt.kind === 'scribble' ? undefined : 'non-scaling-stroke'" />

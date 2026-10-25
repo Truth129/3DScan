@@ -5,6 +5,8 @@ from pathlib import Path
 
 
 def main():
+    from .acquisition import CARDIAC_PHASE_IDS, PROFILE_IDS
+
     parser = argparse.ArgumentParser(description="3DScan local CT anatomy pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve")
@@ -19,11 +21,20 @@ def main():
     imp = sub.add_parser("import")
     imp.add_argument("path")
     imp.add_argument("--label")
-    process = sub.add_parser("process")
+    process = sub.add_parser("process", help="Prepare a selected CT series for viewing without segmentation")
     process.add_argument("case")
     process.add_argument("--series", required=True)
-    process.add_argument("--profile", choices=["chest", "abdomen", "chest_abdomen"], default="chest_abdomen")
+    process.add_argument("--profile", choices=PROFILE_IDS, default="chest_abdomen", help="Scan region/study label; does not crop the CT or select inference tasks")
     process.add_argument("--phase", required=True)
+    process.add_argument("--cardiac-phase", choices=CARDIAC_PHASE_IDS, help="Optional cardiac reconstruction timing label")
+    process.add_argument("--rr-percent", type=float, help="Optional cardiac reconstruction position within the R–R interval (0–100)")
+    segment = sub.add_parser("segment", help="Run a selected TotalSegmentator task on a prepared CT")
+    segment.add_argument("case")
+    segment.add_argument("--revision", help="Input revision (defaults to the active revision)")
+    segment.add_argument("--task", default="total")
+    segment.add_argument("--robust-crop", action="store_true")
+    segment.add_argument("--body-seg", action="store_true")
+    segment.add_argument("--remove-small-blobs", action="store_true")
     refine = sub.add_parser("refine")
     refine.add_argument("case")
     refine.add_argument("--revision", required=True)
@@ -56,7 +67,14 @@ def main():
         print(json.dumps(service.optimize_assets(args.case), indent=2))
     else:
         if args.command == "process":
-            job = service.process(args.case, args.series, args.profile, args.phase)
+            job = service.process(args.case, args.series, args.profile, args.phase,
+                cardiac_phase=args.cardiac_phase, rr_percent=args.rr_percent)
+        elif args.command == "segment":
+            revision_id = args.revision or service.store.get("cases", args.case).get("active_revision_id")
+            if not revision_id:
+                raise ValueError("Prepare a CT with process before requesting segmentation")
+            job = service.segment_case(args.case, revision_id, args.task, args.robust_crop,
+                                       args.body_seg, args.remove_small_blobs)
         elif args.command == "include-all":
             job = service.include_all_outputs(args.case)
         else:

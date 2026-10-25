@@ -11,13 +11,18 @@ import { Review3DPlane } from './review3d-plane';
 import { Review3DMarkers } from './review3d-markers';
 import type { GPUOverlaySources, GPUVolumeSource } from './gpu-volume-data';
 import type { GPUOverlayColor } from './gpu-ct-plane';
+import { CTVolumeRenderer } from './ct-volume-renderer';
+import type { CTVolumeSettings } from './volume-presets';
+import { transformPoint } from './ct-reslice';
+import type { PortableCamera } from './portable-viewer';
+import { captureScissors, createScissorsPrompt, scissorsCaptureMatches, scissorsPath, scissorsPolygon, scissorsProjection, scissorsProjectionMatches, scissorsScreenPoint, type ScissorsCapture } from './scissors';
 
 declare global { interface Window { __SCAN3D_RENDER_READY__?: boolean } }
 type Pick = (id: string, point: Point) => void;
 export interface OrientationAxis { label: string; x: number; y: number; front: boolean }
 export interface SurfaceProgress { completed: number; total: number; reused: number }
 interface CachedSurface { key: string; object: THREE.Group; meshes: THREE.Mesh[] }
-interface SurfaceLoadOptions { signal?: AbortSignal; onProgress?: (progress: SurfaceProgress) => void }
+interface SurfaceLoadOptions { signal?: AbortSignal; onProgress?: (progress: SurfaceProgress) => void; preserveView?: boolean }
 /** Display-only state: independent of review targets, drafts and editing tools. */
 export interface SceneCTPlaneState {
   geometry: Geometry;
@@ -27,6 +32,10 @@ export interface SceneCTPlaneState {
   level: number;
   visible: boolean;
   contextKey?: string;
+}
+export interface SceneCTVolumeState {
+  visible: boolean; geometry: Geometry; settings: CTVolumeSettings;
+  mask?: { mode: 'off' | 'inside' | 'outside'; ids: readonly string[]; ready: boolean };
 }
 const directions: Record<CameraView, [number, number, number]> = {
   anterior: [0, 0, 1], posterior: [0, 0, -1], right: [-1, 0, 0],
@@ -39,12 +48,15 @@ export class AnatomyScene {
   readonly scene = new THREE.Scene();
   onGPUCTInvalidated?: (reason?: string) => void;
   onGPUCTRestored?: () => void;
+  onCTVolumeError?: (reason: string) => void;
   readonly camera = new THREE.OrthographicCamera(-0.3, 0.3, 0.3, -0.3, 0.001, 20);
   controls: OrbitControls;
   private model?: THREE.Group;
   private meshes = new Map<string, THREE.Mesh[]>();
   private surfaces = new Map<string, CachedSurface>();
   private states: StructureDisplay = {};
+  private segmentationLayer={visible:true,opacity:1};
+  private viewportControlsReserved=false;
   private observer: ResizeObserver;
   private frame = 0;
   private disposed = false;
@@ -66,17 +78,31 @@ export class AnatomyScene {
   private planeContext = '';
   private planeRenderCount = 0;
   private reviewPlane: Review3DPlane;
+  private volumeRenderer?: CTVolumeRenderer;
+  private ctVolume?: SceneCTVolumeState;
+  private volumeDisabled = false;
+  private volumeSettleTimer = 0;
+  private surfaceHeight?: number;
+  private surfaceView?: { position: THREE.Vector3; quaternion: THREE.Quaternion; up: THREE.Vector3;
+    target: THREE.Vector3; zoom: number; name: string; hadSurfaces: boolean };
+  private currentViewName = 'oblique';
   private reviewMarkers = new Review3DMarkers();
   private gestureMarkers = new Review3DMarkers();
   private reviewPlaneValid = false;
-  private gesture?: { pointerId: number; state: SceneReviewState; pixels: [number, number][]; surface?: Point };
+  private gesture?: { pointerId: number; state: SceneReviewState; pixels: [number, number][]; surface?: Point; scissors?: ScissorsCapture };
   private gestureDirty = false;
   private controlsUp = new THREE.Vector3(0, 1, 0);
+  private scissorsOverlay?: SVGSVGElement;
+  private scissorsGroup?: SVGGElement;
+  private scissorsOverlayKey = '';
 
   constructor(private element: HTMLElement, private onPick: Pick, onError: (message: string) => void, private onView?: (name: string) => void, private onOrientation?: (axes: OrientationAxis[]) => void, private onGesture?: (prompt: InteractivePrompt) => void) {
     this.onError = onError;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
     this.renderer.debug.onShaderError = (gl, _program, _vertex, fragment) => {
+      if (gl.getShaderSource(fragment)?.includes('SCAN3D_CT_VOLUME_RAYMARCH')) {
+        queueMicrotask(() => this.failVolume('CT volume rendering is unavailable on this GPU. CT slice review remains available.')); return;
+      }
       const gpuCT = gl.getShaderSource(fragment)?.includes('float huAt(vec3 point)');
       if (gpuCT) queueMicrotask(() => { if (this.disposed) return; this.clearGPUCT(); this.onGPUCTInvalidated?.('This GPU could not render the CT volume. Using local slice rendering.'); });
       else this.onError('This GPU could not compile a 3D rendering shader.');
@@ -92,11 +118,18 @@ export class AnatomyScene {
     this.renderer.domElement.addEventListener('webglcontextlost', this.contextLost);
     this.renderer.domElement.addEventListener('webglcontextrestored', this.contextRestored);
     element.appendChild(this.renderer.domElement);
+    this.scissorsOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    this.scissorsOverlay.classList.add('scissors-overlay'); this.scissorsOverlay.setAttribute('viewBox', '-1 -1 2 2');
+    this.scissorsOverlay.setAttribute('preserveAspectRatio', 'none'); this.scissorsOverlay.setAttribute('aria-label', '3D scissors outlines');
+    this.scissorsOverlay.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:hidden;z-index:2';
+    this.scissorsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g'); this.scissorsGroup.setAttribute('transform', 'scale(1,-1)');
+    this.scissorsOverlay.appendChild(this.scissorsGroup); element.appendChild(this.scissorsOverlay);
+    document.addEventListener('keydown', this.scissorsKeyboard, true);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
     this.controls.minZoom = 0.25;
     this.controls.maxZoom = 20;
-    this.controls.addEventListener('change', this.requestRender);
+    this.controls.addEventListener('change', this.controlChange);
     this.controls.addEventListener('start', this.orbitStart);
     // The reference viewer used legacy Three lighting. Modern Phong lights are
     // expressed as irradiance, so PI preserves its intended diffuse brightness.
@@ -114,14 +147,45 @@ export class AnatomyScene {
     this.view('oblique');
   }
 
-  private contextLost = (event: Event) => { event.preventDefault(); window.__SCAN3D_RENDER_READY__ = false; this.clearGPUCT(); this.onGPUCTInvalidated?.(); this.onError('The graphics context was lost. Reload the model to restore 3D. CT review remains available.'); };
-  private contextRestored = () => { this.onError(''); this.onGPUCTRestored?.(); this.requestRender(); };
+  private contextLost = (event: Event) => {
+    event.preventDefault(); window.__SCAN3D_RENDER_READY__ = false;
+    this.cancelReviewGesture();
+    // Remove disposal listeners belonging to the lost GL generation before
+    // restoration. The ray marcher borrows CT storage and releases only its
+    // own target, LUT and programs here; the shared owner releases CT below.
+    clearTimeout(this.volumeSettleTimer); this.volumeRenderer?.dispose(); this.volumeRenderer = undefined;
+    this.transparency.dispose();
+    this.reviewPlane.releaseContextResources();
+    // Retained meshes/markers may be replaced after restoration. Drop their
+    // previous-generation GL listeners while the context is lost, retaining
+    // CPU geometry/material data for lazy upload by the restored renderer.
+    const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>(), textures = new Set<THREE.Texture>();
+    this.scene.traverse(object => {
+      const drawable = object as THREE.Mesh;
+      if (drawable.geometry instanceof THREE.BufferGeometry) geometries.add(drawable.geometry);
+      for (const material of Array.isArray(drawable.material) ? drawable.material : drawable.material ? [drawable.material] : []) materials.add(material);
+    });
+    for (const material of materials) {
+      for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value);
+      if (material instanceof THREE.ShaderMaterial)
+        for (const uniform of Object.values(material.uniforms)) if (uniform.value instanceof THREE.Texture) textures.add(uniform.value);
+    }
+    for (const texture of textures) texture.dispose();
+    for (const material of materials) material.dispose();
+    for (const geometry of geometries) geometry.dispose();
+    this.clearGPUCT(); this.onGPUCTInvalidated?.();
+    this.onError('The graphics context was lost. Reload the model to restore 3D. CT review remains available.');
+  };
+  private contextRestored = () => {
+    this.transparency = new AnatomyTransparency(this.renderer);
+    this.onError(''); this.onGPUCTRestored?.(); this.requestRender();
+  };
   /** OrbitControls captures camera.up in its constructor; rebuild through public APIs when it changes. */
   private refreshControlsUp() {
     if (this.controlsUp.distanceToSquared(this.camera.up) < 1e-16) return;
     this.cancelReviewGesture();
     const old = this.controls, target = old.target.clone(), position = this.camera.position.clone(), rotation = this.camera.quaternion.clone(), zoom = this.camera.zoom;
-    old.removeEventListener('change', this.requestRender); old.removeEventListener('start', this.orbitStart); old.dispose();
+    old.removeEventListener('change', this.controlChange); old.removeEventListener('start', this.orbitStart); old.dispose();
     const controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.camera.position.copy(position); this.camera.quaternion.copy(rotation); this.camera.zoom = zoom; this.camera.updateProjectionMatrix();
     Object.assign(controls, {
@@ -135,10 +199,23 @@ export class AnatomyScene {
       mouseButtons: { ...old.mouseButtons }, touches: { ...old.touches },
     });
     controls.target.copy(target); controls.cursor.copy(old.cursor);
-    controls.addEventListener('change', this.requestRender); controls.addEventListener('start', this.orbitStart);
+    controls.addEventListener('change', this.controlChange); controls.addEventListener('start', this.orbitStart);
     this.controls = controls; this.controlsUp.copy(this.camera.up); controls.update();
   }
-  private orbitStart = () => { this.cancelReviewGesture(); this.onView?.('Free orbit'); };
+  private nameView(name: string) { this.currentViewName = name; this.onView?.(name); }
+  private orbitStart = () => { this.cancelReviewGesture(); this.nameView('Free orbit'); };
+  private controlChange = () => {
+    if (this.gesture?.scissors && !scissorsCaptureMatches(this.gesture.scissors, this.camera, this.renderer.domElement.getBoundingClientRect())) this.cancelReviewGesture();
+    if (this.volumePresentation) this.volumeInteraction(); this.requestRender();
+  };
+  private volumeInteraction() {
+    if (!this.volumePresentation) return;
+    this.volumeRenderer!.setInteracting(true); clearTimeout(this.volumeSettleTimer);
+    this.volumeSettleTimer = window.setTimeout(() => {
+      if (this.disposed) return;
+      this.volumeRenderer?.setInteracting(false); this.requestRender();
+    }, 150);
+  }
   private ray(event: PointerEvent) {
     this.scene.updateMatrixWorld(true); this.camera.updateMatrixWorld();
     const bounds = this.renderer.domElement.getBoundingClientRect();
@@ -149,6 +226,7 @@ export class AnatomyScene {
   private get reviewReady() {
     const review = this.review;
     if (!review || review.disabled || !review.targetId || review.tool === 'navigate') return false;
+    if (review.tool === 'scissors') return true;
     if (review.mode === 'plane') return review.showPlane !== false && this.reviewPlaneValid && (review.gpuMeta
       ? this.reviewPlane.gpuActive && this.reviewPlane.gpuReady && review.gpuMeta === this.reviewPlane.meta
       : !!review.frame && review.frame === this.reviewPlane.frame);
@@ -162,15 +240,19 @@ export class AnatomyScene {
     if (event.button !== 0 || !this.marking) return;
     event.preventDefault(); event.stopImmediatePropagation(); this.cancelReviewGesture();
     if (!this.reviewReady || !this.review) return;
-    const state = this.review, ray = this.ray(event);
-    if (state.mode === 'surface') {
+    const state = this.review;
+    if (state.tool === 'scissors') {
+      const capture = captureScissors(this.camera, this.renderer.domElement.getBoundingClientRect());
+      this.gesture = { pointerId: event.pointerId, state, pixels: [scissorsScreenPoint(capture.viewport, event.clientX, event.clientY)], scissors: capture };
+    } else if (state.mode === 'surface') {
+      const ray = this.ray(event);
       const hit = intersectReviewSurface(ray, this.meshes.get(state.targetId) ?? []);
       const ras = hit && reviewSurfacePoint(hit, state.geometry);
       if (!ras) return;
       this.gesture = { pointerId: event.pointerId, state, pixels: [], surface: ras };
     } else {
       const meta = state.gpuMeta ?? state.frame?.meta; if (!meta) return;
-      const hit = intersectReviewPlane(ray.ray, meta); if (!hit) return;
+      const hit = intersectReviewPlane(this.ray(event).ray, meta); if (!hit) return;
       this.gesture = { pointerId: event.pointerId, state, pixels: [hit.pixel] };
     }
     this.renderer.domElement.setPointerCapture(event.pointerId); this.gestureDirty = true; this.updateReviewData(); this.requestRender();
@@ -179,6 +261,16 @@ export class AnatomyScene {
     const gesture = this.gesture;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     event.preventDefault(); event.stopImmediatePropagation();
+    if (gesture.scissors) {
+      if (!scissorsCaptureMatches(gesture.scissors, this.camera, this.renderer.domElement.getBoundingClientRect())) { this.cancelReviewGesture(); return; }
+      const point = scissorsScreenPoint(gesture.scissors.viewport, event.clientX, event.clientY);
+      if ((gesture.state.scissorsShape ?? 'freehand') !== 'freehand') gesture.pixels = [gesture.pixels[0], point];
+      else {
+        const previous = gesture.pixels.at(-1)!;
+        if (Math.hypot((point[0] - previous[0]) * gesture.scissors.viewport.width / 2, (point[1] - previous[1]) * gesture.scissors.viewport.height / 2) >= 1 && gesture.pixels.length < 2048) gesture.pixels.push(point);
+      }
+      this.gestureDirty = true; this.requestRender(); return;
+    }
     const meta = gesture.state.gpuMeta ?? gesture.state.frame?.meta;
     if (gesture.surface || !meta) return;
     const hit = intersectReviewPlane(this.ray(event).ray, meta); if (!hit) return;
@@ -197,7 +289,10 @@ export class AnatomyScene {
       this.pointerMove(event);
       let prompt: InteractivePrompt | undefined;
       if (this.reviewReady && gesture.state.contextKey === this.review?.contextKey) {
-        if (gesture.surface) {
+        if (gesture.scissors) {
+          if (scissorsCaptureMatches(gesture.scissors, this.camera, this.renderer.domElement.getBoundingClientRect()))
+            prompt = createScissorsPrompt(gesture.scissors, gesture.state.scissorsShape ?? 'freehand', gesture.state.scissorsOperation ?? 'erase_inside', gesture.pixels);
+        } else if (gesture.surface) {
           if (Math.hypot(event.clientX - this.start[0], event.clientY - this.start[1]) <= 5)
             prompt = { id: crypto.randomUUID(), kind: 'point', ras: gesture.surface, include: gesture.state.include };
         } else prompt = reviewPlaneGesture(gesture.state, gesture.pixels);
@@ -206,15 +301,49 @@ export class AnatomyScene {
     }
     if (event.button !== 0 || Math.hypot(event.clientX - this.start[0], event.clientY - this.start[1]) > 5) return;
     const ray = this.ray(event);
-    const visible = [...this.meshes.values()].flat().filter(mesh => mesh.visible && (mesh.material as SurfaceMaterial).opacity > 0.02);
+    const visible = [...this.meshes.values()].flat().filter(mesh => {
+      if((mesh.material as SurfaceMaterial).opacity<=.02)return false;
+      for(let node:THREE.Object3D|null=mesh;node;node=node.parent)if(!node.visible)return false;
+      return true;
+    });
     const hit = ray.intersectObjects(visible, false)[0];
     if (hit) this.onPick(hit.object.userData.structureId, sceneToRas(hit.point.toArray()));
   };
   private pointerCancel = () => this.cancelReviewGesture();
+  private scissorsKeyboard = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !this.gesture?.scissors) return;
+    event.preventDefault(); event.stopImmediatePropagation(); this.cancelReviewGesture();
+  };
   private cancelReviewGesture() {
     const pointer = this.gesture?.pointerId; this.gesture = undefined; this.gestureDirty = false; this.gestureMarkers.clear();
     if (pointer !== undefined && this.renderer.domElement.hasPointerCapture(pointer)) this.renderer.domElement.releasePointerCapture(pointer);
     this.updateReviewData(); this.requestRender();
+  }
+  private updateScissorsOverlay() {
+    if (!this.scissorsGroup) return;
+    const cuts = this.review?.prompts.filter(prompt => prompt.kind === 'scissors') ?? [];
+    if (!cuts.length && !this.gesture?.scissors) {
+      if (this.scissorsGroup.childElementCount) this.scissorsGroup.replaceChildren();
+      this.scissorsOverlayKey = ''; return;
+    }
+    const projection = scissorsProjection(this.camera);
+    const saved = cuts.filter(prompt => prompt.kind === 'scissors' && scissorsProjectionMatches(prompt.ras_to_clip, projection));
+    const live = this.gesture?.scissors ? this.gesture : undefined;
+    const polygon = live ? scissorsPolygon(live.state.scissorsShape ?? 'freehand', live.pixels, live.scissors!.viewport) : [];
+    const key = JSON.stringify([saved, polygon, live?.state.scissorsOperation]);
+    if (key === this.scissorsOverlayKey) return;
+    this.scissorsOverlayKey = key; this.scissorsGroup.replaceChildren();
+    const add = (vertices: [number, number][], operation: 'erase_inside' | 'erase_outside', identity?: string) => {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', scissorsPath(vertices, operation)); path.setAttribute('fill-rule', 'evenodd');
+      path.setAttribute('fill', '#ff8c9b18'); path.setAttribute('stroke', '#ff9eae'); path.setAttribute('stroke-width', '1.5'); path.setAttribute('vector-effect', 'non-scaling-stroke');
+      path.dataset.scissorsOperation = operation;
+      if (identity) { path.dataset.scissorsPrompt = identity; path.setAttribute('stroke-dasharray', '5 4'); }
+      else path.dataset.scissorsLive = 'true';
+      this.scissorsGroup!.appendChild(path);
+    };
+    for (const prompt of saved) if (prompt.kind === 'scissors') add(prompt.vertices, prompt.operation, prompt.id);
+    if (live) add(polygon, live.state.scissorsOperation ?? 'erase_inside');
   }
   private updateReviewData() {
     const data = this.renderer.domElement.dataset, review = this.review;
@@ -222,6 +351,27 @@ export class AnatomyScene {
     data.ctPlaneReady = String(planeVisible && !!plane.meta);
     data.ctPlaneMode = plane.gpuActive ? 'gpu-volume' : 'slice';
     data.ctGpuReady = String(plane.gpuReady); data.ctGpuBytes = String(plane.gpuBytes);
+    const volume = this.volumeRenderer?.diagnostics;
+    data.ctVolumeReady = String(!!volume?.ready && !this.volumeDisabled);
+    data.ctVolumeVisible = String(this.volumePresentation);
+    data.ctVolumePreset = this.ctVolume?.settings.preset ?? '';
+    data.ctVolumeQuality = volume?.interacting ? 'interactive' : 'detail';
+    data.ctVolumeCinematic = String(volume?.cinematic ?? false);
+    data.ctVolumeShadowSamples = String(volume?.shadowSamples ?? 0);
+    data.ctVolumeRenderCount = String(volume?.frames ?? 0);
+    data.ctVolumeWidth = String(volume?.width ?? 0); data.ctVolumeHeight = String(volume?.height ?? 0);
+    data.ctVolumePlaneVisible = String(this.volumePresentation && planeVisible && !!volume?.planeActive);
+    data.ctVolumePlaneTargetBytes = String(volume?.planeTargetBytes ?? 0);
+    data.renderStackActive=String(volume?.stackActive??false);
+    data.renderStackSurfaces=String(volume?.surfaceCount??0);
+    data.renderStackPeels=String(volume?.peelCount??0);
+    data.renderStackTail=String(volume?.tailActive??false);
+    data.renderStackTargetBytes=String(volume?.stackTargetBytes??0);
+    data.segmentationLayerVisible=String(this.segmentationLayer.visible);
+    data.segmentationLayerOpacity=String(this.segmentationLayer.opacity);
+    data.ctVolumeMaskMode = volume?.maskMode ?? 'off';
+    data.ctVolumeMaskReady = String(volume?.maskReady ?? false);
+    data.ctVolumeMaskCount = String(volume?.maskSelectedCount ?? 0);
     data.ctPlaneAxis = planeVisible ? String(plane.meta?.native?.axis ?? '') : '';
     data.ctPlaneIndex = planeVisible ? String(plane.meta?.native?.index ?? '') : '';
     data.ctPlaneWidth = planeVisible ? String(plane.meta?.width ?? '') : '';
@@ -235,6 +385,7 @@ export class AnatomyScene {
       projection = JSON.stringify(this.camera.projectionMatrix.clone().multiply(this.camera.matrixWorldInverse).multiply(rasToWorld).elements);
     }
     data.ctPlaneProjection = planeVisible ? projection : '';
+    this.updateScissorsOverlay();
     if (!review) { for (const key of ['reviewMode', 'reviewTarget', 'reviewTool', 'reviewContext', 'reviewReady', 'reviewPlaneAxis', 'reviewPlaneIndex', 'reviewMarkers', 'reviewGestureActive', 'reviewProjection']) delete data[key]; return; }
     data.reviewMode = review.mode; data.reviewTarget = review.targetId; data.reviewTool = review.tool; data.reviewContext = review.contextKey;
     data.reviewReady = String(this.reviewReady); data.reviewMarkers = String(review.prompts.length); data.reviewGestureActive = String(!!this.gesture);
@@ -247,7 +398,8 @@ export class AnatomyScene {
     const old = this.review;
     if (!state || !old || state.contextKey !== old.contextKey || state.mode !== old.mode || state.targetId !== old.targetId
         || state.tool !== old.tool || state.include !== old.include || state.radiusMm !== old.radiusMm
-        || state.disabled !== old.disabled || state.frame !== old.frame || state.gpuMeta !== old.gpuMeta || state.showPlane !== old.showPlane) this.cancelReviewGesture();
+        || state.scissorsShape !== old.scissorsShape || state.scissorsOperation !== old.scissorsOperation
+        || state.disabled !== old.disabled || (state.tool !== 'scissors' && (state.frame !== old.frame || state.gpuMeta !== old.gpuMeta)) || state.showPlane !== old.showPlane) this.cancelReviewGesture();
     const oldLayout = this.planeLayout;
     this.review = state;
     if (oldLayout !== this.planeLayout) this.resize();
@@ -263,8 +415,10 @@ export class AnatomyScene {
   }
   /** Shares review's existing opaque CT quad and its four bounded GPU textures. */
   setCTPlane(state?: SceneCTPlaneState) {
-    const oldLayout = this.planeLayout;
+    const oldLayout = this.planeLayout, previous = this.ctPlane;
     this.ctPlane = state;
+    if (this.volumePresentation && state?.visible && (!previous?.visible || previous.contextKey !== state.contextKey
+        || previous.frame !== state.frame || previous.window !== state.window || previous.level !== state.level)) this.volumeInteraction();
     if (oldLayout !== this.planeLayout) this.resize();
     // Review owns the shared plane while active; its exact-frame edit gate is unchanged.
     if (!this.review) { this.syncCTPlane(); this.updateReviewData(); this.requestRender(); }
@@ -272,10 +426,86 @@ export class AnatomyScene {
   get gpuCTReady() { return this.reviewPlane.gpuReady; }
   get gpuCTKey() { return this.reviewPlane.gpuKey; }
   get gpuCTBytes() { return this.reviewPlane.gpuBytes; }
-  async prepareGPUCT(source: GPUVolumeSource, signal?: AbortSignal) { await this.reviewPlane.prepareGPUCT(source, signal); this.updateReviewData(); }
-  async prepareGPUOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[], signal?: AbortSignal) { await this.reviewPlane.prepareGPUOverlays(sources, colors, signal); this.updateReviewData(); }
-  clearGPUCT() { this.reviewPlane.clearGPUCT(); this.updateReviewData(); this.requestRender(); }
-  private get planeLayout() { return !!this.review || !!this.ctPlane?.visible; }
+  async prepareGPUCT(source: GPUVolumeSource, signal?: AbortSignal) {
+    if (this.reviewPlane.gpuKey !== source.descriptor.key) this.volumeRenderer?.setVolume(undefined);
+    await this.reviewPlane.prepareGPUCT(source, signal); this.updateReviewData();
+  }
+  async prepareGPUOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[], signal?: AbortSignal, maskSources?: GPUOverlaySources) {
+    // An atlas may be replaced during upload. Active masks remain closed until
+    // the matching revision/selection is published by the caller.
+    const mask = this.ctVolume?.mask;
+    this.volumeRenderer?.setMask(undefined, mask?.ids ?? [], mask?.mode ?? 'off');
+    await this.reviewPlane.prepareGPUOverlays(sources, colors, signal, maskSources);
+    this.updateReviewData();
+  }
+  clearGPUCT() { this.volumeRenderer?.setVolume(undefined); this.reviewPlane.clearGPUCT(); this.updateReviewData(); this.requestRender(); }
+  setCTVolume(state?: SceneCTVolumeState) {
+    const before = this.volumePresentation, oldLayout = this.planeLayout, previous = this.ctVolume;
+    this.ctVolume = state;
+    if (state?.visible && !previous?.visible) this.volumeDisabled = false;
+    if (state?.visible && this.reviewPlane.gpuBinding && !this.volumeDisabled) {
+      this.volumeRenderer ??= new CTVolumeRenderer(this.renderer);
+      this.volumeRenderer.setVolume(this.reviewPlane.gpuBinding);
+      this.volumeRenderer.setSettings(state.settings);
+      this.volumeRenderer.setMask(state.mask?.ready ? this.reviewPlane.gpuMaskBinding : undefined,
+        state.mask?.ids ?? [], state.mask?.mode ?? 'off');
+    }
+    const after = this.volumePresentation;
+    if (after && !before) {
+      this.surfaceHeight = this.height;
+      this.surfaceView = { position: this.camera.position.clone(), quaternion: this.camera.quaternion.clone(), up: this.camera.up.clone(),
+        target: this.controls.target.clone(), zoom: this.camera.zoom, name: this.currentViewName, hadSurfaces: this.meshes.size > 0 };
+      if(!this.meshes.size)this.focusVolume();
+    } else if (!after && previous?.visible && this.surfaceHeight !== undefined) {
+      const oldHeight=this.surfaceHeight;this.surfaceHeight = undefined;
+      const saved = this.surfaceView; this.surfaceView = undefined;
+      if(!saved?.hadSurfaces)this.height=oldHeight;
+      if (saved && !saved.hadSurfaces) {
+        this.camera.position.copy(saved.position); this.camera.quaternion.copy(saved.quaternion); this.camera.up.copy(saved.up);
+        this.camera.zoom = saved.zoom; this.controls.target.copy(saved.target); this.refreshControlsUp();
+        this.camera.updateProjectionMatrix(); this.controls.update(); this.nameView(saved.name);
+        if (!saved.hadSurfaces && this.meshes.size) this.fitModel();
+      }
+      clearTimeout(this.volumeSettleTimer); this.volumeRenderer?.setInteracting(false); this.resize();
+    }
+    if (after && previous?.settings !== state?.settings) this.volumeInteraction();
+    if (oldLayout !== this.planeLayout) this.resize();
+    this.updateReviewData(); this.requestRender();
+  }
+  private get volumePresentation() { return !!this.ctVolume?.visible && !this.review && !this.volumeDisabled && !!this.volumeRenderer?.ready; }
+  private failVolume(reason: string) {
+    if (this.disposed || this.volumeDisabled) return;
+    this.volumeDisabled = true; clearTimeout(this.volumeSettleTimer);
+    this.volumeRenderer?.dispose(); this.volumeRenderer = undefined;
+    this.onCTVolumeError?.(reason); this.updateReviewData(); this.requestRender();
+  }
+  private volumeBounds() {
+    if (!this.ctVolume) return;
+    const { geometry, settings } = this.ctVolume, box = new THREE.Box3();
+    for (let n = 0; n < 8; n++) {
+      const ijk = geometry.shape.map((size, axis) => settings.crop[n & (1 << axis) ? 1 : 0][axis] * size - .5) as Point;
+      box.expandByPoint(new THREE.Vector3(...rasToScene(transformPoint(geometry.affine_ras, ijk))));
+    }
+    return box;
+  }
+  private focusVolume() {
+    const box = this.volumeBounds(); if (!box) return;
+    const center = box.getCenter(new THREE.Vector3()), radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, .005);
+    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+    this.height = radius * 2.05; this.camera.zoom = 1; this.controls.target.copy(center);
+    this.camera.position.copy(center).addScaledVector(direction, Math.max(radius * 4, 1));
+    this.camera.lookAt(center); this.controls.update(); this.resize();
+  }
+  private get planeLayout() { return this.viewportControlsReserved || !!this.review || !!this.ctPlane?.visible || !!this.ctVolume?.visible; }
+  setViewportControlsReserved(reserved:boolean){
+    if(this.viewportControlsReserved===reserved)return;
+    this.viewportControlsReserved=reserved;this.resize();
+  }
+  setSegmentationLayer(layer:{visible:boolean;opacity:number}){
+    const opacity=THREE.MathUtils.clamp(Number.isFinite(layer.opacity)?layer.opacity:1,0,1);
+    if(this.segmentationLayer.visible===layer.visible&&this.segmentationLayer.opacity===opacity)return;
+    this.segmentationLayer={visible:layer.visible,opacity};this.display(this.states,this.selected);this.volumeInteraction();
+  }
   private syncCTPlane() {
     const review = this.review, state = review ?? this.ctPlane;
     this.reviewPlaneValid = false;
@@ -313,7 +543,7 @@ export class AnatomyScene {
     this.cancelReviewGesture(); this.controls.target.copy(center); this.camera.position.copy(center).addScaledVector(normal, Math.max(this.radius * 4, 1));
     this.camera.up.copy(y).normalize().negate(); this.refreshControlsUp(); this.camera.lookAt(center);
     this.camera.zoom = THREE.MathUtils.clamp(this.height / Math.max(meta.width * x.length(), meta.height * y.length()) / 1.3, .25, 20);
-    this.camera.updateProjectionMatrix(); this.controls.update(); this.onView?.('CT plane'); this.requestRender();
+    this.camera.updateProjectionMatrix(); this.controls.update(); this.nameView('CT plane'); this.requestRender();
   }
 
   async load(buffer: ArrayBuffer, structures: Structure[], preserveView = false) {
@@ -368,7 +598,7 @@ export class AnatomyScene {
     let completed = 0, reused = 0, committed = false;
     const progress = () => { if (!stale()) options.onProgress?.({ completed, total: manifest.structures.length, reused }); };
     try {
-      if (manifest.schema_version !== 1 || !Array.isArray(manifest.structures) || !manifest.structures.length) throw new Error('The surface manifest is empty or unsupported.');
+      if (manifest.schema_version !== 1 || !Array.isArray(manifest.structures)) throw new Error('The surface manifest is unsupported.');
       for (const item of manifest.structures) {
         if (!item || !item.id || !item.key || !item.url || ids.has(item.id) || !records.has(item.id)) throw new Error('The surface manifest contains invalid anatomical entries.');
         ids.add(item.id);
@@ -430,7 +660,7 @@ export class AnatomyScene {
         this.model.add(surface.object); this.surfaces.set(id, surface); this.meshes.set(id, surface.meshes);
       }
       committed = true;
-      if (!hadModel) this.fitModel();
+      if (!hadModel && !options.preserveView && this.meshes.size) this.fitModel();
       this.display(this.states, this.selected);
       this.requestRender();
     } finally {
@@ -442,6 +672,7 @@ export class AnatomyScene {
   private fitModel() {
     const bounds = new THREE.Box3().setFromObject(this.model!);
     bounds.getCenter(this.center); this.radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, 0.02);
+    if (this.volumePresentation) { this.surfaceHeight = this.radius * 2.05; return; }
     this.height = this.radius * 2.05; this.view('oblique');
   }
 
@@ -449,9 +680,10 @@ export class AnatomyScene {
     this.states = states; this.selected = selected;
     for (const [id, meshes] of this.meshes) for (const mesh of meshes) {
       const state = states[id] || { visible: true, opacity: 1 };
-      mesh.visible = state.visible && state.opacity > 0;
+      const opacity=state.opacity*this.segmentationLayer.opacity;
+      mesh.visible = this.segmentationLayer.visible && state.visible && opacity > 0;
       const material = mesh.material as SurfaceMaterial;
-      surfaceOpacity(material, state.opacity);
+      surfaceOpacity(material, opacity);
       material.emissive.set(id === selected ? 0x182132 : 0x000000);
     }
     if (this.gesture && !this.reviewReady) this.cancelReviewGesture();
@@ -461,13 +693,20 @@ export class AnatomyScene {
 
   setPoint(point?: Point) { this.crosshair.visible = !!point; if (point) this.crosshair.position.fromArray(rasToScene(point)); this.requestRender(); }
   view(name: CameraView) {
+    this.cancelReviewGesture();
     const direction = new THREE.Vector3(...directions[name]).normalize();
     this.camera.up.set(0, name === 'superior' ? 0 : 1, name === 'superior' ? 1 : 0);
     this.refreshControlsUp();
-    this.camera.position.copy(this.center).addScaledVector(direction, Math.max(this.radius * 4, 1));
-    this.camera.zoom = 1; this.controls.target.copy(this.center); this.camera.lookAt(this.center); this.controls.update(); this.resize(); this.onView?.(name);
+    const volume = this.volumePresentation ? this.volumeBounds() : undefined;
+    const center = volume?.getCenter(new THREE.Vector3()) ?? this.center;
+    const radius = volume ? Math.max(volume.getSize(new THREE.Vector3()).length() / 2, .005) : this.radius;
+    if (volume) this.height = radius * 2.05;
+    this.camera.position.copy(center).addScaledVector(direction, Math.max(radius * 4, 1));
+    this.camera.zoom = 1; this.controls.target.copy(center); this.camera.lookAt(center); this.controls.update(); this.resize(); this.nameView(name);
   }
   focus(id = this.selected) {
+    this.cancelReviewGesture();
+    if (this.volumePresentation) { this.focusVolume(); return; }
     const meshes = this.meshes.get(id); if (!meshes?.length) return;
     const box = new THREE.Box3(); meshes.forEach(m => box.expandByObject(m));
     const center = box.getCenter(new THREE.Vector3());
@@ -476,7 +715,21 @@ export class AnatomyScene {
     this.camera.zoom = Math.max(1, Math.min(12, this.height / (box.getSize(new THREE.Vector3()).length() * 1.3)));
     this.camera.updateProjectionMatrix(); this.controls.update(); this.requestRender();
   }
-  zoom(factor: number) { this.camera.zoom = THREE.MathUtils.clamp(this.camera.zoom * factor, 0.25, 20); this.camera.updateProjectionMatrix(); this.requestRender(); }
+  zoom(factor: number) { this.cancelReviewGesture(); this.camera.zoom = THREE.MathUtils.clamp(this.camera.zoom * factor, 0.25, 20); this.camera.updateProjectionMatrix(); this.requestRender(); }
+  captureCamera(): PortableCamera {
+    return { position_ras: sceneToRas(this.camera.position.toArray()), target_ras: sceneToRas(this.controls.target.toArray()),
+      up_ras: [-this.camera.up.x, this.camera.up.z, this.camera.up.y], zoom: this.camera.zoom,
+      height_mm: this.height * 1000, name: this.currentViewName };
+  }
+  restoreCamera(state: PortableCamera) {
+    const position = new THREE.Vector3(...rasToScene(state.position_ras)), target = new THREE.Vector3(...rasToScene(state.target_ras));
+    const up = new THREE.Vector3(-state.up_ras[0], state.up_ras[2], state.up_ras[1]).normalize();
+    if (position.distanceToSquared(target) < 1e-12 || up.lengthSq() < .5
+        || new THREE.Vector3().subVectors(position, target).normalize().cross(up).lengthSq() < 1e-12) return;
+    this.height = state.height_mm / 1000; this.camera.zoom = state.zoom;
+    this.camera.position.copy(position); this.controls.target.copy(target); this.camera.up.copy(up);
+    this.refreshControlsUp(); this.camera.lookAt(target); this.controls.update(); this.resize(); this.nameView(state.name?.replaceAll('-', ' ') ?? 'Saved view');
+  }
   restoreContext() { if (this.renderer.getContext().isContextLost()) this.contextExtension?.restoreContext(); }
   get transparencyWarning() { return this.transparency.warning; }
   /** One pipeline for interactive frames, pixel checks and PNG capture. */
@@ -484,27 +737,34 @@ export class AnatomyScene {
     const started = performance.now();
     if (this.gestureDirty && this.gesture) {
       const gesture = this.gesture; this.gestureDirty = false;
-      const prompt: InteractivePrompt | undefined = gesture.surface ? { id: 'active-gesture', kind: 'point', ras: gesture.surface, include: gesture.state.include }
+      const prompt: InteractivePrompt | undefined = gesture.scissors ? undefined : gesture.surface ? { id: 'active-gesture', kind: 'point', ras: gesture.surface, include: gesture.state.include }
         : reviewPlaneGesture(gesture.state, gesture.pixels, 'active-gesture');
       this.gestureMarkers.set(prompt ? [prompt] : [], gesture.state.geometry);
     }
     this.keyLight.position.copy(this.camera.position); this.keyLight.target.position.copy(this.controls.target);
     this.fillLight.position.copy(this.controls.target).multiplyScalar(2).sub(this.camera.position); this.fillLight.target.position.copy(this.controls.target);
-    this.transparency.render(this.scene, this.camera);
+    if (this.volumePresentation) {
+      try { this.volumeRenderer!.render(this.camera, this.reviewPlane.mesh.visible ? this.reviewPlane.mesh : undefined,
+        this.segmentationLayer.visible&&this.segmentationLayer.opacity>0?this.scene:undefined); }
+      catch { this.failVolume('CT volume rendering failed on this GPU. CT slice review remains available.'); this.transparency.render(this.scene, this.camera); }
+    } else this.transparency.render(this.scene, this.camera);
     // Actual completed render submissions, rather than slider inputs or worker replies.
     // CPU submission time is diagnostic only; it is not a GPU timer or frame-rate promise.
     const data = this.renderer.domElement.dataset, native = this.reviewPlane.mesh.visible ? this.reviewPlane.meta?.native : undefined;
+    this.updateScissorsOverlay();
     data.ctPlaneRenderedAxis = native ? String(native.axis) : '';
     data.ctPlaneRenderedIndex = native ? String(native.index) : '';
     data.ctPlaneRenderCount = String(++this.planeRenderCount);
     data.ctPlaneRenderCpuMs = (performance.now() - started).toFixed(2);
   }
   screenshot(label = '3dscan') {
+    if (this.volumePresentation) this.volumeRenderer!.setInteracting(false);
     this.render();
     const link = document.createElement('a'); link.download = `${label.replace(/[^a-z\d-]/gi, '_')}.png`; link.href = this.renderer.domElement.toDataURL('image/png'); link.click();
   }
   private resize() {
     if (this.disposed) return;
+    if (this.gesture?.scissors) this.cancelReviewGesture();
     const width = Math.max(this.element.clientWidth, 1), height = Math.max(this.element.clientHeight, 1);
     this.renderer.setSize(width, height);
     // Reserve screen space for camera controls so anatomy never sits behind the toolbars.
@@ -525,7 +785,8 @@ export class AnatomyScene {
         const axis = new THREE.Vector3(Number(x), Number(y), Number(z)).applyQuaternion(inverse);
         return { label: String(label), x: axis.x * 22, y: -axis.y * 22, front: axis.z >= 0 };
       }));
-      if (this.meshes.size) window.__SCAN3D_RENDER_READY__ = true;
+      window.__SCAN3D_RENDER_READY__ = !!(this.meshes.size || this.volumePresentation ||
+        (this.reviewPlane.mesh.visible && (this.reviewPlane.frame || this.reviewPlane.gpuReady)));
     });
   };
   private disposeObject(object: THREE.Object3D) {
@@ -538,13 +799,16 @@ export class AnatomyScene {
       });
     });
   }
+  clearSurfaces() { this.generation++; this.clearModel(); window.__SCAN3D_RENDER_READY__ = false; this.requestRender(); }
   private clearModel() { if (this.model) { this.scene.remove(this.model); this.disposeObject(this.model); this.model = undefined; } this.meshes.clear(); this.surfaces.clear(); }
   dispose() {
     this.disposed = true; this.generation++; cancelAnimationFrame(this.frame); this.observer.disconnect();
-    this.controls.removeEventListener('change', this.requestRender); this.controls.removeEventListener('start', this.orbitStart); this.controls.dispose();
+    clearTimeout(this.volumeSettleTimer); this.volumeRenderer?.dispose();
+    this.controls.removeEventListener('change', this.controlChange); this.controls.removeEventListener('start', this.orbitStart); this.controls.dispose();
     this.renderer.domElement.removeEventListener('pointerdown', this.pointerDown, true); this.renderer.domElement.removeEventListener('pointerup', this.pointerUp, true);
     this.renderer.domElement.removeEventListener('pointermove', this.pointerMove, true); this.renderer.domElement.removeEventListener('pointercancel', this.pointerCancel, true);
     this.renderer.domElement.removeEventListener('webglcontextlost', this.contextLost); this.renderer.domElement.removeEventListener('webglcontextrestored', this.contextRestored);
+    document.removeEventListener('keydown', this.scissorsKeyboard, true); this.scissorsOverlay?.remove();
     this.clearModel(); this.crosshair.geometry.dispose(); (this.crosshair.material as THREE.Material).dispose();
     this.cancelReviewGesture(); this.reviewPlane.dispose(); this.reviewMarkers.dispose(); this.gestureMarkers.dispose();
     this.transparency.dispose(); this.renderer.dispose(); this.renderer.forceContextLoss(); this.renderer.domElement.remove(); window.__SCAN3D_RENDER_READY__ = false;

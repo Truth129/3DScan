@@ -1,6 +1,6 @@
 import { api, ApiError } from './api';
-import type { InteractiveOptions, InteractivePrompt, InteractiveReview, Job, SegmentRelationship } from '../types';
-import { normalizeRelationship } from './interactive-review';
+import type { InteractiveMethod, InteractiveOptions, InteractivePrompt, InteractiveReview, Job, SegmentRelationship } from '../types';
+import { normalizeRelationship, reviewMethod } from './interactive-review';
 
 interface Snapshot { prompts: InteractivePrompt[]; options: InteractiveOptions; relationship: SegmentRelationship }
 const initialOptions = (): InteractiveOptions => ({ autozoom: true, start_empty: false });
@@ -38,7 +38,8 @@ export class InteractiveController {
   private starting?: Promise<InteractiveReview>;
 
   constructor(readonly caseId: string, readonly revisionId: string, readonly structureId: string,
-      private changed: () => void, private reader: Reader = api, relationship?: SegmentRelationship) {
+      private changed: () => void, private reader: Reader = api, relationship?: SegmentRelationship,
+      readonly method: InteractiveMethod = 'nninteractive') {
     this.initialRelationship = normalizeRelationship(relationship); this.install();
   }
   get canUndo() { return this.cursor > 0 && !this.working; }
@@ -58,20 +59,21 @@ export class InteractiveController {
   }
   get pendingCount() { return (this.candidate ? Math.max(0, this.prompts.length - this.appliedCount) : this.prompts.length) + Number(this.relationshipDirty); }
   get dirty() { return this.unsaved || !!this.review?.dirty || !this.candidate || this.pendingCount > 0; }
+  get hasDraftChanges() { return !!(this.prompts.length || this.review?.new_structure || this.candidate || this.relationshipDirty || this.unsaved); }
   get publicReview(): InteractiveReview | undefined {
     return this.review && !['accepted', 'discarded'].includes(this.review.status) ? { ...this.review, prompts: this.prompts, options: this.options, relationship: this.relationship, relationship_dirty: this.relationshipDirty, candidate: this.candidate,
       dirty: this.dirty, pending_count: this.pendingCount } : undefined;
   }
   private notify() { this.changed(); }
   adopt(value: InteractiveReview) {
-    if (value.case_id !== this.caseId || value.revision_id !== this.revisionId || value.structure_id !== this.structureId || ['accepted', 'discarded'].includes(value.status)) throw new Error('This draft belongs to a different review target');
+    if (value.case_id !== this.caseId || value.revision_id !== this.revisionId || value.structure_id !== this.structureId || reviewMethod(value) !== this.method || ['accepted', 'discarded'].includes(value.status)) throw new Error('This draft belongs to a different review target or editing method');
     this.install(value); this.loaded = true; this.working = ['predicting', 'accepting'].includes(value.status); this.error = ''; this.notify();
     if (this.working) this.poll();
   }
   async load() {
     try {
       const records = await this.reader.interactiveReviews(this.caseId);
-      const latest = records.find(item => item.revision_id === this.revisionId && item.structure_id === this.structureId && !['accepted', 'discarded'].includes(item.status));
+      const latest = records.find(item => item.revision_id === this.revisionId && item.structure_id === this.structureId && reviewMethod(item) === this.method && !['accepted', 'discarded'].includes(item.status));
       if (this.stopped) return;
       this.install(latest); this.loaded = true;
       if (latest && ['predicting', 'accepting'].includes(latest.status)) { this.working = true; this.poll(); }
@@ -91,6 +93,12 @@ export class InteractiveController {
   }
   editRelationship(value: SegmentRelationship) { this.edit(this.prompts, this.options, value); }
   append(prompt: InteractivePrompt) {
+    if (this.method === 'direct' && prompt.kind !== 'scribble' && prompt.kind !== 'scissors') {
+      this.error = 'Direct editing uses Paint and Erase strokes on CT or Scissors in 3D.'; this.notify(); return;
+    }
+    if (this.method === 'nninteractive' && prompt.kind === 'scissors') {
+      this.error = '3D scissors is available in Direct edit.'; this.notify(); return;
+    }
     if (this.prompts.length >= 128 || [...this.prompts, prompt].reduce((sum, item) => sum + ('vertices' in item ? item.vertices.length : 0), 0) > 8192) {
       this.error = 'This draft has reached its gesture limit. Remove an edit before adding more.'; this.notify(); return;
     }
@@ -112,7 +120,8 @@ export class InteractiveController {
   }
   private async startReview() {
     const requested = normalizeRelationship(this.relationship), explicit = signature(requested) !== signature(this.initialRelationship);
-    const value = await this.reader.startInteractive(this.caseId, this.revisionId, this.structureId, explicit ? requested : undefined);
+    const value = await this.reader.startInteractive(this.caseId, this.revisionId, this.structureId, explicit ? requested : undefined, this.method);
+    if (reviewMethod(value) !== this.method) throw new Error('The workstation returned a different editing method. Reload before editing.');
     this.review = value;
     if (!explicit) {
       const previous = this.initialRelationship, effective = normalizeRelationship(value.relationship ?? previous);
@@ -148,6 +157,7 @@ export class InteractiveController {
   async reload() { clearTimeout(this.timer); if (this.writing) await this.writing.catch(() => {}); this.error = ''; await this.load(); }
   async apply(fullRefine = false) {
     if (this.working || this.conflict) return;
+    if (this.method === 'direct' && fullRefine) { this.error = 'Whole-mask refinement is available in AI assist.'; this.notify(); return; }
     this.working = true; this.job = undefined; this.cancelRequested = false; this.error = ''; this.notify();
     try {
       await this.flush();
@@ -174,8 +184,8 @@ export class InteractiveController {
     catch (reason) { this.error = `Cancellation could not be requested. ${reason instanceof Error ? reason.message : reason}`; this.notify(); if (this.working) this.poll(); }
   }
   async discard() {
-    if (!this.review || this.working) return;
-    try { await this.flush(); await this.reader.discardInteractive(this.caseId, this.review.id, this.review.generation); this.install(); this.notify(); }
+    if (this.working) return;
+    try { await this.flush(); if (this.review) await this.reader.discardInteractive(this.caseId, this.review.id, this.review.generation); this.install(); this.notify(); }
     catch (reason) { this.error = reason instanceof Error ? reason.message : String(reason); this.notify(); }
   }
   private poll() {

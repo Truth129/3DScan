@@ -1,18 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InteractiveController } from '../src/lib/interactive-controller';
 import { ApiError } from '../src/lib/api';
-import type { InteractiveOptions, InteractivePrompt, InteractiveReview } from '../src/types';
+import type { InteractiveMethod, InteractiveOptions, InteractivePrompt, InteractiveReview } from '../src/types';
 
 const point = (id: string): InteractivePrompt => ({ id, kind: 'point', include: true, ras: [1, 2, 3] });
 const options: InteractiveOptions = { autozoom: true, start_empty: false };
 const base = (): InteractiveReview => ({ id: 'draft', case_id: 'case', revision_id: 'base', structure_id: 'liver', generation: 0, status: 'draft', prompts: [], options, dirty: true, applied_prompt_count: 0 });
 const clone = <T>(value: T): T => structuredClone(value);
-function fixture(initial?: InteractiveReview) {
+function fixture(initial?: InteractiveReview, method: InteractiveMethod = 'nninteractive') {
   let remote = initial;
   const job = { id: 'prediction', case_id: 'case', kind: 'review_predict', status: 'queued' as const, stage: 'Queued', created_at: '' };
   const reader = {
     interactiveReviews: vi.fn(async () => remote ? [clone(remote)] : []),
-    startInteractive: vi.fn(async () => { remote = base(); return clone(remote); }),
+    startInteractive: vi.fn(async (..._args: unknown[]) => { remote = { ...base(), method }; return clone(remote); }),
     interactivePrompts: vi.fn(async (_case: string, _id: string, generation: number, prompts: InteractivePrompt[], nextOptions?: InteractiveOptions) => {
       if (!remote || generation !== remote.generation) throw new ApiError(409, 'Generation changed');
       remote = { ...remote, generation: generation + 1, prompts: clone(prompts), options: { ...(nextOptions ?? options) }, dirty: true };
@@ -25,7 +25,7 @@ function fixture(initial?: InteractiveReview) {
     cancel: vi.fn(async () => ({ ...job, status: 'cancelled' as const })),
     job: vi.fn(async () => job),
   };
-  const controller = new InteractiveController('case', 'base', 'liver', vi.fn(), reader);
+  const controller = new InteractiveController('case', 'base', 'liver', vi.fn(), reader, undefined, method);
   controllers.push(controller);
   return { controller, reader };
 }
@@ -90,5 +90,78 @@ describe('optimistic interactive draft queue', () => {
     const { controller } = fixture(initial); await controller.load();
     controller.edit([{ id: 'legacy', ras: [1, 2, 3], include: true }]);
     expect(controller.unsaved).toBe(false); expect(controller.candidate?.revision_id).toBe('candidate'); expect(controller.dirty).toBe(false);
+  });
+});
+
+describe('direct paint and erase drafts', () => {
+  const stroke = (id: string, include = true): InteractivePrompt => ({ id, kind: 'scribble', axis: 2, index: 3, vertices: [[1, 1], [3, 3]], radius_mm: 2, include });
+
+  it('keeps direct and legacy AI drafts separate for the same target', async () => {
+    const ai = { ...base(), prompts: [point('ai-hint')] };
+    const direct = { ...base(), id: 'direct-draft', method: 'direct' as const, prompts: [stroke('paint')] };
+    const { controller, reader } = fixture(undefined, 'direct');
+    reader.interactiveReviews.mockResolvedValueOnce([ai, direct]);
+    await controller.load();
+    expect(controller.review?.id).toBe('direct-draft'); expect(controller.prompts).toEqual(direct.prompts);
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+  });
+
+  it('records ordered paint and erase locally, saving one snapshot before one Apply', async () => {
+    const { controller, reader } = fixture(undefined, 'direct'); await controller.load();
+    controller.append(stroke('paint')); controller.append(stroke('erase', false)); controller.append(stroke('paint-again'));
+    expect(controller.prompts.map(item => item.include)).toEqual([true, false, true]);
+    expect(reader.startInteractive).not.toHaveBeenCalled(); expect(reader.predictInteractive).not.toHaveBeenCalled();
+    await controller.apply();
+    expect(reader.startInteractive).toHaveBeenCalledExactlyOnceWith('case', 'base', 'liver', undefined, 'direct');
+    expect(reader.interactivePrompts).toHaveBeenCalledTimes(1);
+    expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['paint', 'erase', 'paint-again']);
+    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false);
+  });
+
+  it('undos and redoes direct stroke polarity without requesting a prediction', async () => {
+    const { controller, reader } = fixture(undefined, 'direct'); await controller.load();
+    expect(controller.hasDraftChanges).toBe(false);
+    controller.append(stroke('paint')); controller.append(stroke('erase', false)); expect(controller.hasDraftChanges).toBe(true);
+    controller.undo(); expect(controller.prompts.map(item => item.include)).toEqual([true]);
+    controller.redo(); expect(controller.prompts.map(item => item.include)).toEqual([true, false]);
+    controller.undo(); controller.undo(); expect(controller.hasDraftChanges).toBe(false);
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+  });
+
+  it('rejects AI-only interactions and full-mask inference in direct mode', async () => {
+    const { controller, reader } = fixture(undefined, 'direct'); await controller.load();
+    controller.append(point('not-paint')); expect(controller.prompts).toEqual([]); expect(controller.error).toContain('Paint and Erase');
+    await controller.apply(true); expect(controller.error).toContain('AI assist');
+    expect(reader.startInteractive).not.toHaveBeenCalled(); expect(reader.predictInteractive).not.toHaveBeenCalled();
+  });
+
+  it('discards locally queued strokes even before their WAN autosave starts', async () => {
+    const { controller, reader } = fixture(undefined, 'direct'); await controller.load(); controller.append(stroke('local'));
+    await controller.discard();
+    expect(reader.discardInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1);
+    expect(controller.prompts).toEqual([]); expect(controller.review).toBeUndefined(); expect(controller.hasDraftChanges).toBe(false);
+  });
+
+  it('rejects adoption or creation under the wrong method instead of silently invoking AI', async () => {
+    const { controller, reader } = fixture(undefined, 'direct'); await controller.load();
+    expect(() => controller.adopt(base())).toThrow('different review target or editing method');
+    reader.startInteractive.mockResolvedValueOnce(base()); controller.append(stroke('paint')); await controller.apply();
+    expect(controller.error).toContain('different editing method'); expect(reader.predictInteractive).not.toHaveBeenCalled();
+  });
+
+  it('keeps full-depth scissors and native paint in the same ordered direct batch', async () => {
+    const { controller, reader } = fixture(undefined, 'direct'); await controller.load();
+    const cut: InteractivePrompt = { id:'cut',kind:'scissors',include:false,shape:'rectangle',operation:'erase_inside',vertices:[[-.5,-.5],[.5,-.5],[.5,.5],[-.5,.5]],ras_to_clip:[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]] };
+    controller.append(stroke('paint'));controller.append(cut);controller.append(stroke('erase',false));
+    controller.undo();controller.undo();expect(controller.prompts.map(item=>item.id)).toEqual(['paint']);
+    controller.redo();expect(controller.prompts[1]).toEqual(cut);controller.redo();await controller.apply();
+    expect(reader.interactivePrompts.mock.calls[0][3].map(item=>item.id)).toEqual(['paint','cut','erase']);
+    expect(reader.predictInteractive).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not send a direct 3D cut through nnInteractive', async () => {
+    const { controller, reader } = fixture();await controller.load();
+    controller.append({id:'cut',kind:'scissors',include:false,shape:'freehand',operation:'erase_outside',vertices:[[-.5,-.5],[.5,-.5],[0,.5]],ras_to_clip:[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]});
+    expect(controller.prompts).toEqual([]);expect(controller.error).toContain('Direct edit');expect(reader.predictInteractive).not.toHaveBeenCalled();
   });
 });

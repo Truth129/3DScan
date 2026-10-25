@@ -5,6 +5,19 @@ import type { Geometry, SliceMeta } from '../types';
 
 export const GPU_CT_BUDGET = 512 * 1024 ** 2;
 export interface GPUOverlayColor { id: string; color?: [number, number, number] }
+/** Borrowed immutable storage. Its owning GPUCTVolume alone releases the CT texture. */
+export interface GPUCTBinding { texture: THREE.Data3DTexture; descriptor: VolumeDescriptor }
+/** Read-only view of the shared packed atlas; the owning GPUCTVolume releases it. */
+export interface GPUCTMaskBinding {
+  texture: THREE.DataTexture;
+  info: THREE.DataTexture;
+  width: number;
+  key: string;
+  ctKey: string;
+  ctTexture: THREE.Data3DTexture;
+  currentIndices: ReadonlyMap<string,number>;
+  isCurrent(): boolean;
+}
 const vertexShader = `out vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`;
 const fragmentShader = `
 precision highp float;
@@ -136,6 +149,8 @@ export class GPUCTVolume {
   private palette?: THREE.DataTexture;
   private descriptor?: VolumeDescriptor;
   private overlayKey = '';
+  private currentMaskIndices = new Map<string,number>();
+  private maskAtlasReady = false;
   private maskBytes = 0;
   private generation = 0;
   private overlayGeneration = 0;
@@ -155,6 +170,16 @@ export class GPUCTVolume {
   get ready() { return this.loaded; }
   get bytes() { return (this.ct ? this.descriptor?.byte_length ?? 0 : 0) + this.maskBytes; }
   get textureCount() { return [this.ct,this.masks,this.maskInfo,this.palette].filter(Boolean).length; }
+  get binding(): GPUCTBinding | undefined { return this.loaded && this.ct && this.descriptor ? { texture: this.ct, descriptor: this.descriptor } : undefined; }
+  get maskBinding(): GPUCTMaskBinding | undefined {
+    const texture=this.masks,info=this.maskInfo,ctTexture=this.ct,descriptor=this.descriptor;
+    const epoch=this.overlayGeneration;
+    if (!this.loaded || !this.maskAtlasReady || !texture || !info || !ctTexture || !descriptor) return;
+    return {texture,info,width:texture.image.width,key:this.overlayKey,ctKey:descriptor.key,ctTexture,
+      currentIndices:this.currentMaskIndices,
+      isCurrent:()=>this.loaded && this.maskAtlasReady && this.overlayGeneration===epoch
+        && this.ct===ctTexture && this.masks===texture && this.maskInfo===info};
+  }
   private checkGL() {
     const gl = this.renderer.getContext(); const code = gl.getError();
     if (gl.isContextLost() || code !== gl.NO_ERROR) throw new Error('This GPU could not allocate the CT volume. Using local slice rendering.');
@@ -196,15 +221,27 @@ export class GPUCTVolume {
       this.loaded = true;
     } catch (error) { if (generation === this.generation) this.clear(); throw error; }
   }
-  async prepareOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[] = [], signal?: AbortSignal) {
+  async prepareOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[] = [], signal?: AbortSignal,
+                        maskSources?: GPUOverlaySources) {
     if (!this.loaded || !this.descriptor) throw new Error('GPU CT volume is unavailable');
     cancelled(signal); const generation = this.generation, overlayGeneration = ++this.overlayGeneration;
+    this.maskAtlasReady=false;
     if (sources.overlays.length > 128 || new Set(sources.overlays.map(layer => layer.id)).size !== sources.overlays.length) throw new Error('Invalid GPU overlay selection');
+    const masks=maskSources?.overlays ?? [];
+    if (masks.length>128 || new Set(masks.map(layer=>layer.id)).size!==masks.length) throw new Error('Invalid volume mask selection');
     const unique = new Map<string,GPUVolumeSource>();
     for (const layer of sources.overlays) { unique.set(layer.current.descriptor.key,layer.current); if (layer.parent) unique.set(layer.parent.descriptor.key,layer.parent); }
-    const descriptors = [...unique.values()].map(source => validateDescriptor(source.descriptor,'mask'));
+    const currentKeys=new Map(sources.overlays.map(layer=>[layer.id,layer.current.descriptor.key]));
+    for (const layer of masks) {
+      if (currentKeys.has(layer.id) && currentKeys.get(layer.id)!==layer.current.descriptor.key)
+        throw new Error('The volume mask and CT overlays belong to different revisions');
+      currentKeys.set(layer.id,layer.current.descriptor.key);unique.set(layer.current.descriptor.key,layer.current);
+    }
+    // Stable descriptor order lets palette/selection ordering reuse the atlas.
+    const ordered=[...unique.values()].sort((a,b)=>a.descriptor.key<b.descriptor.key?-1:a.descriptor.key>b.descriptor.key?1:0);
+    const descriptors = ordered.map(source => validateDescriptor(source.descriptor,'mask'));
     if (descriptors.some(descriptor => descriptor.quality === 'preview')) throw new Error('GPU review requires exact mask volumes');
-    const key = JSON.stringify(sources.overlays.map(layer => [layer.id,layer.current.descriptor.key,layer.parent?.descriptor.key]));
+    const key = JSON.stringify(descriptors.map(descriptor=>descriptor.key));
     const colorMap = new Map(colors.map(value => [value.id,value.color ?? [56,189,248]]));
     const palette = new Float32Array(Math.max(1,sources.overlays.length) * 8), indices = new Map(descriptors.map((value,index) => [value.key,index]));
     sources.overlays.forEach((layer,index) => {
@@ -225,7 +262,7 @@ export class GPUCTVolume {
       this.masks = texture; this.maskBytes = layout.width * layout.height + layout.info.byteLength + palette.byteLength;
       try {
         this.allocate(texture); let offset = 0;
-        for (const source of unique.values()) {
+        for (const source of ordered) {
           const descriptor = source.descriptor, bytesPerSlice = descriptor.byte_length / descriptor.shape[2];
           if (bytesPerSlice > GPU_VOLUME_SLAB_BYTES) throw new Error('Mask planes exceed the bounded GPU upload size');
           const depth = Math.max(1,Math.floor(GPU_VOLUME_SLAB_BYTES / bytesPerSlice));
@@ -238,13 +275,17 @@ export class GPUCTVolume {
           }
           offset += descriptor.byte_length;
         }
+        cancelled(signal); if (generation!==this.generation || overlayGeneration!==this.overlayGeneration) throw new DOMException('Superseded GPU overlays','AbortError');
         this.maskInfo = configured(new THREE.DataTexture(layout.info,5,Math.max(1,descriptors.length),THREE.RGBAFormat,THREE.FloatType)); this.maskInfo.needsUpdate = true;
         this.material.uniforms.uMasks.value = texture; this.material.uniforms.uMaskInfo.value = this.maskInfo; this.material.uniforms.uMaskWidth.value = layout.width;
         this.overlayKey = key;
       } catch (error) { if (generation === this.generation && overlayGeneration === this.overlayGeneration) this.clearOverlays(); throw error; }
     }
+    cancelled(signal); if (generation!==this.generation || overlayGeneration!==this.overlayGeneration) throw new DOMException('Superseded GPU overlays','AbortError');
     this.palette?.dispose(); this.palette = configured(new THREE.DataTexture(palette,2,Math.max(1,sources.overlays.length),THREE.RGBAFormat,THREE.FloatType)); this.palette.needsUpdate = true;
     this.material.uniforms.uPalette.value = this.palette; this.material.uniforms.uLayers.value = sources.overlays.length;
+    this.currentMaskIndices=new Map([...currentKeys].map(([id,key])=>[id,indices.get(key)!]));
+    this.maskAtlasReady=true;
   }
   private uploadMaskBytes(texture: THREE.DataTexture, bytes: Uint8Array, offset: number, width: number) {
     let position = 0;
@@ -267,6 +308,8 @@ export class GPUCTVolume {
   private clearOverlays() {
     this.masks?.dispose(); this.maskInfo?.dispose(); this.palette?.dispose(); this.masks = this.maskInfo = this.palette = undefined;
     this.maskBytes = 0; this.overlayKey = ''; this.material.uniforms.uLayers.value = 0;
+    this.currentMaskIndices=new Map();
+    this.maskAtlasReady=false;
     for (const key of ['uMasks','uMaskInfo','uPalette']) this.material.uniforms[key].value = null;
   }
   clear() {

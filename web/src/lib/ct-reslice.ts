@@ -25,6 +25,8 @@ export interface VolumeDescriptor {
   quality?: 'preview' | 'full';
   reference_geometry?: Geometry;
   origin_ijk?: Point;
+  /** Present only for a derivative volume-display mask; never a CT overlay. */
+  display_margin_mm?: number;
 }
 export type VolumeValues = Int16Array | Uint16Array | Float32Array | Uint8Array;
 export interface ResidentVolume {

@@ -54,6 +54,40 @@ export interface Job {
   progress?: { phase: string; completed: number; total: number; timings_seconds?: Record<string, number> };
 }
 export interface JobMeasurements { structures: Structure[]; completed: number; total: number }
+export interface SegmentationSettings {
+  task: string;
+  robust_crop: boolean;
+  body_seg: boolean;
+  remove_small_blobs: boolean;
+}
+export interface RecordedSegmentationSettings extends Partial<SegmentationSettings> {
+  tasks?: string[];
+}
+export interface SegmentationTask {
+  id: string;
+  label: string;
+  description?: string;
+  modality: 'CT';
+  classes: string[];
+  license_required: boolean;
+  license_available: boolean;
+  class_count: number;
+  robust_crop_default: boolean;
+  robust_crop_supported: boolean;
+  body_seg_supported: boolean;
+}
+export interface SegmentationCatalog {
+  engine_version: string;
+  tasks: SegmentationTask[];
+  defaults: SegmentationSettings;
+  remove_small_blobs_mm3: number;
+  license_configured?: boolean;
+}
+export interface TotalSegmentatorLicenseStatus {
+  configured: boolean;
+  validated: boolean | null;
+  validated_at: string | null;
+}
 export interface SurfaceManifest {
   schema_version: 1;
   structures: { id: string; key: string; url: string }[];
@@ -70,15 +104,31 @@ export interface Revision {
   created_at: string;
   review_status: ReviewStatus;
   source: string;
+  kind?: 'ct' | 'segmentation';
   operation?: Record<string, unknown>;
   geometry: Geometry;
   structures: Structure[];
   qc: string[];
-  model_url: string;
-  model_manifest_url?: string;
-  acquisition?: { series_uid: string; profile: string; phase: string };
+  model_url: string | null;
+  model_manifest_url?: string | null;
+  acquisition?: Acquisition;
+  segmentation_settings?: RecordedSegmentationSettings;
   synthetic?: boolean;
 }
+export interface Acquisition {
+  series_uid: string;
+  profile: string;
+  phase: string;
+  cardiac_phase?: string | null;
+  rr_percent?: number | null;
+}
+export interface AcquisitionSelection {
+  profile: string;
+  phase: string;
+  cardiac_phase: string;
+  rr_percent: number | null;
+}
+export type ProcessRequest = Acquisition;
 export interface SliceMeta {
   width: number;
   height: number;
@@ -99,14 +149,18 @@ export interface OfflineManifest {
   created_at?: string;
   synthetic?: boolean;
 }
-export type InteractiveTool = 'navigate' | 'point' | 'scribble' | 'lasso' | 'bbox';
+export type InteractiveTool = 'navigate' | 'point' | 'scribble' | 'lasso' | 'bbox' | 'scissors';
+export type ScissorsShape = 'freehand' | 'rectangle' | 'circle';
+export type ScissorsOperation = 'erase_inside' | 'erase_outside';
+export type InteractiveMethod = 'direct' | 'nninteractive';
 export interface InteractivePoint { id: string; kind?: 'point'; ras: Point; include: boolean }
 export interface InteractiveDrawing { id: string; kind: 'bbox' | 'scribble' | 'lasso'; include: boolean; axis: 0 | 1 | 2; index: number; vertices: [number, number][]; radius_mm?: number }
-export type InteractivePrompt = InteractivePoint | InteractiveDrawing;
+export interface InteractiveScissors { id: string; kind: 'scissors'; include: false; operation: ScissorsOperation; shape: ScissorsShape; vertices: [number, number][]; ras_to_clip: number[][] }
+export type InteractivePrompt = InteractivePoint | InteractiveDrawing | InteractiveScissors;
 export interface InteractiveOptions { autozoom: boolean; start_empty: boolean }
 export interface SegmentRelationship { kind: 'independent' | 'subregion' | 'subdivision'; parent_id?: string; exclusive_with: string[] }
 export interface RelationshipSuggestion { id: string; name: string; exclusive_with: string[] }
-export interface InteractiveStructureInput { name: string; group: string; color: string; relationship?: SegmentRelationship }
+export interface InteractiveStructureInput { name: string; group: string; color: string; relationship?: SegmentRelationship; method?: InteractiveMethod }
 export interface MaskChangeSummary { changed_voxels: number; added_voxels: number; removed_voxels: number; before_volume_ml: number; after_volume_ml: number; after_voxels?: number }
 export interface InteractiveStatus {
   installed: boolean;
@@ -116,6 +170,7 @@ export interface InteractiveStatus {
   license?: string;
 }
 export interface InteractiveReview {
+  method?: InteractiveMethod;
   id: string;
   case_id: string;
   revision_id: string;
@@ -146,5 +201,7 @@ export interface InteractiveReview {
     warnings?: string[];
     total_changed_voxels?: number;
     relationship_changed?: boolean;
+    preview_3d_ready?: boolean;
+    model_manifest_url?: string | null;
   };
 }

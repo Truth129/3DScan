@@ -273,8 +273,8 @@ def test_interactive_runtime_released_before_totalsegmentator_job(example, monke
         assert runtime.released and service.interactive_runtime is None
         return {**base, "id": identifier()}
 
-    monkeypatch.setattr(service, "_process", process)
-    result = execute_next(service, service.store.enqueue(case["id"], "process", {}))
+    monkeypatch.setattr(service, "_segment", process)
+    result = execute_next(service, service.store.enqueue(case["id"], "segment", {"revision_id": base["id"]}))
     assert result["status"] == "completed"
 
 
@@ -325,15 +325,33 @@ def test_review_http_candidates_reuse_ct_and_authorize_masks_frames_and_history(
         assert "X-CT-Frame" in frame.headers
         png = client.get(candidate_url + "/slice", params=frame_query)
         assert png.status_code == 200 and png.content.startswith(b"\x89PNG")
-        assert client.get(candidate_url).status_code in (400, 404)
+        candidate_metadata = client.get(candidate_url)
+        assert candidate_metadata.status_code == 200, candidate_metadata.text
+        metadata = candidate_metadata.json()
+        assert metadata["id"] == alias and metadata["parent_id"] == base["id"]
+        assert metadata["source"] == "nninteractive_candidate" and metadata["review_status"] == "unreviewed"
+        assert metadata["geometry"] == base["geometry"]
+        assert metadata["model_url"] is metadata["model_manifest_url"] is None
+        assert metadata["preview_3d_ready"] is False and metadata["surface_assets"] == []
+        assert str(service.settings.data_dir) not in candidate_metadata.text
+        assert "ct_file" not in candidate_metadata.text and "mask_file" not in candidate_metadata.text
+        assert candidate_metadata.headers["cache-control"] == "private, no-store"
+        assert client.post(prefix + "/activate", json={"revision_id": alias}).status_code in (400, 404)
+        assert client.patch(candidate_url, json={"review_status": "corrected"}).status_code in (400, 404)
+        assert client.get(candidate_url + "/export.html").status_code in (400, 404)
+        assert client.post(candidate_url + "/export.html", json={}).status_code in (400, 404)
         assert client.get(candidate_url + "/model.glb").status_code in (400, 404)
+        assert client.get(candidate_url + "/model-manifest").status_code == 404
         assert len(client.get(prefix + "/revisions").json()) == 1
+        assert api_service.store.get("cases", case["id"])["active_revision_id"] == base["id"]
         other = api_service.new_case("Unauthorized candidate")
         denied = f"/api/cases/{other['id']}/revisions/{alias}"
+        assert client.get(denied).status_code == 404
         assert client.get(denied + "/ct-volume").status_code == 404
         assert client.get(denied + "/mask-volume", params=query).status_code == 404
         assert client.get(f"/api/cases/{other['id']}/reviews/{draft['id']}").status_code == 404
         assert client.post(review_url + "/discard", json={"expected_generation": 1}).status_code == 200
+        assert client.get(candidate_url).status_code == 404
         assert client.get(candidate_url + "/ct-volume").status_code == 404
 
 

@@ -18,6 +18,7 @@ function fixture() {
   const scene = Object.create(AnatomyScene.prototype) as AnatomyScene;
   const resize = vi.fn(), markers = { clear: vi.fn(), set: vi.fn() }, error = vi.fn();
   Object.assign(scene, { reviewPlane: plane, renderer: { domElement: { dataset: data } }, camera: new THREE.OrthographicCamera(),
+    segmentationLayer: { visible: true, opacity: 1 }, viewportControlsReserved: false,
     controls: { mouseButtons: { LEFT: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN } },
     reviewMarkers: markers, gestureMarkers: { clear: vi.fn() }, resize, cancelReviewGesture: vi.fn(), requestRender: vi.fn(), onError: error });
   return { scene, plane, data, resize, markers, error };

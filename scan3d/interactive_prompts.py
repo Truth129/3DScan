@@ -34,10 +34,12 @@ def normalize_prompts(prompts, affine, shape):
             raise ValueError("Every interaction must be a prompt record")
         kind = item.get("kind", "point")
         common = {"id", "kind", "include"}
-        allowed = common | ({"ras"} if kind == "point" else {"axis", "index", "vertices"})
+        allowed = common | ({"ras"} if kind == "point" else
+                            {"operation", "shape", "vertices", "ras_to_clip"} if kind == "scissors" else
+                            {"axis", "index", "vertices"})
         if kind == "scribble":
             allowed.add("radius_mm")
-        if kind not in {"point", "bbox", "scribble", "lasso"} or set(item) - allowed:
+        if kind not in {"point", "bbox", "scribble", "lasso", "scissors"} or set(item) - allowed:
             raise ValueError("Unknown interaction type or prompt fields")
         identity = item.get("id")
         if not isinstance(identity, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", identity) or identity in seen:
@@ -45,7 +47,11 @@ def normalize_prompts(prompts, affine, shape):
         if not isinstance(item.get("include"), bool):
             raise ValueError("Prompt polarity must be a boolean")
         record = dict(id=identity, kind=kind, include=item["include"])
-        if kind == "point":
+        if kind == "scissors":
+            from .scissors import normalize_scissors
+            record.update(normalize_scissors(item))
+            vertex_count += len(record["vertices"])
+        elif kind == "point":
             try:
                 ras = np.asarray(item.get("ras"), dtype=float)
             except (ValueError, TypeError) as exc:
@@ -97,6 +103,8 @@ def normalize_prompts(prompts, affine, shape):
 def materialize_prompt(prompt, affine, shape):
     """Return small native arrays; callers normalize the complete list first."""
     kind = prompt.get("kind", "point")
+    if kind == "scissors":
+        raise ValueError("3D scissors are deterministic direct edits, not AI prompts")
     result = dict(id=prompt["id"], kind=kind, include=prompt["include"])
     if kind == "point":
         voxel = _voxel(np.asarray(affine), shape, prompt["ras"])

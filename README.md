@@ -70,14 +70,54 @@ the first candidate and 50 seconds for a warm incremental correction. Those
 measurements precede batched Apply; current evidence is in the validation report.
 Correction latency is not assumed to be near-instant.
 
+### TotalSegmentator license
+
+Open **Segment CT → TotalSegmentator license**, enter your key and choose
+**Validate and save**. This checks it with TotalSegmentator and stores it on the
+processing workstation for all cases. The task list refreshes automatically;
+licensed models still check task access when their weights are downloaded.
+The panel also supports updating and removing a key. Existing segmentations
+remain available after removal.
+
+Status reads stay local. The key is never returned to the browser or saved in
+case/job records. It is stored in TotalSegmentator's existing
+`TOTALSEG_HOME_DIR/config.json` with private file permissions. Failed validation
+keeps the previous key and configuration unchanged. License changes wait until
+queued/running jobs finish. **Validated when saved** records that earlier check;
+it does not claim a fresh online check or entitlement to every task.
+The [provider's license page](https://backend.totalsegmentator.com/license-academic/)
+explains its noncommercial license terms.
+
 ## Review a case
 
 1. Import a DICOM folder or ZIP, or create the clearly labelled synthetic demo.
-2. Select one reconstruction, processing profile and contrast phase. Different
-   phases remain separate; series warnings explain unsupported geometry.
-3. Start processing. The single worker converts the selected DICOM series and
-   runs standard-resolution `total`, plus `lung_vessels` for chest profiles.
-   Every nonempty output is included; profiles select tasks without filtering anatomy.
+2. Select one reconstruction, scan region/study and contrast phase. The study
+   list includes **Coronary CTA (CorCTA)** and **Cardiac CT**, along with chest,
+   abdomen, pelvis, head/neck and whole-body coverage. Contrast labels include
+   coronary/pulmonary arterial, non-contrast, venous and delayed acquisitions.
+   Cardiac studies also accept a separate reconstruction label (for example,
+   **Best diastolic**) and optional **% R–R** (for example, **69**). Record the
+   reconstruction supplied with the chosen series; unknown timing can stay
+   unspecified. These are acquisition labels, so they do not change pixels,
+   rendering or segmentation tasks. Different phases remain separate; series
+   warnings explain unsupported geometry.
+3. Choose **Open CT**. The worker converts the selected series for CT review and
+   volume rendering without running a segmentation model. When ready, open
+   **Segment CT**, select a TotalSegmentator task and choose **Run segmentation**.
+   **Find a task or structure** searches task names and their output anatomy;
+   **Included structures** previews the selected task's outputs. Search preserves
+   your current task and options until you explicitly select another task.
+   The catalog uses all 39 current CT tasks in the installed 2.18.0 engine;
+   MRI, legacy and internal test tasks are excluded from this CT workflow.
+   Optional settings include robust organ cropping (`-rc`), initial body cropping
+   (`-bs`) and removing small disconnected components below 200 mm³ (`-rmb`).
+   Task defaults and unsupported options are explained in the panel. All nonempty
+   outputs of the chosen task are included at standard resolution. Each run
+   replaces that task's results and existing segments with matching anatomical
+   names, including manual corrections. For example, **Total v3** replaces the
+   matching organs from **Total**. Unmatched segments are kept, and the previous
+   revision remains available in History. Matching normalizes capitalization,
+   underscores and whitespace; distinct anatomical names remain separate.
 4. Select anatomy in the list or model. Inspect its overlay in the three patient
    planes, adjust window/level and inspect HU. Review QC messages against CT.
    Open **Segments** in CT review to check multiple colored overlays. Checked
@@ -97,8 +137,22 @@ Correction latency is not assumed to be near-instant.
    Choose its relationship: **Independent** preserves overlaps, **Subregion**
    records a parent, and **Subdivision** explicitly selects sibling segments
    whose overlapping voxels may be transferred to the new segment.
-   Use Include or Exclude with a point, box, scribble or lasso. The first mark
-   starts or resumes a draft; add several marks before running the model.
+   **Direct edit** is the default: choose **Paint** or **Erase**, set a physical
+   brush radius and draw on a native CT slice. Only the brushed voxel centres on
+   that slice change, in stroke order. Direct edits run on the CPU and do not
+   load or require an AI model. Several strokes can share one **Apply edits**.
+   For a Slicer-style 3D cut, choose **Scissors**, select **Freehand**,
+   **Rectangle** or **Circle**, then choose **Erase inside** or **Erase outside**.
+   Draw directly over the 3D view; cuts extend through the full depth of the
+   selected segment from that camera angle. Circle draws from centre to edge.
+   Right drag rotates the camera; **Escape** cancels an in-progress cut. The
+   original camera is recorded with each completed cut, so later rotation does
+   not move a queued selection. Scissors does not require a CT plane.
+   For larger corrections, choose optional **AI assist** and use Include or
+   Exclude with a point, hint brush, box or lasso. **Run AI** proposes changes
+   beyond the marked voxels. Save or discard the current draft before switching
+   editing methods; saved corrections become the starting mask for further work.
+   The first mark starts or resumes a draft.
    Drawings use the CT's native planes, preserving their true geometry even for
    oblique scans. Point prompts also work in patient-aligned views. Mark only a
    settled, full-resolution view; streamed exact detail is sufficient while the
@@ -110,19 +164,24 @@ Correction latency is not assumed to be near-instant.
    rotate with right drag while marking. A 3D point moves the linked CT crosshair
    for confirmation. New segments without a surface open the CT plane directly.
    Both views use the same pending prompts, Apply, comparison and Save controls.
-6. Choose **Apply** once for the pending marks. Nearby marks share a planned
-   model region; distant marks retain separate regions so none are omitted.
+6. Choose **Apply edits** or **Run AI** once for the pending marks. Direct edits
+   replay the exact strokes. For AI, nearby marks share a planned model region;
+   distant marks retain separate regions so none are omitted.
    Compare the original and working candidate and inspect voxel/volume changes.
    Add more marks and Apply again as needed. The last applied candidate remains
    visible while new marks are pending; saving waits for those marks to be
-   applied. Applying does not change accepted masks or rebuild the 3D model.
+   applied. Applying does not change accepted masks. Direct edits prepare the
+   changed surface for a 3D candidate preview; unchanged surfaces remain cached.
+   **Original** and **Candidate** compare both the CT mask and the 3D surface.
+   AI candidates remain proposals on CT until saved.
 7. Choose **Save correction** only after inspecting the candidate. This
    updates that structure and any explicitly selected exclusive siblings,
    including their measurements and surfaces. Inspect every affected volume
    and CT mask before saving; unrelated masks remain unchanged. The previous
    revision remains available in history for exact undo of all affected labels.
-   Empty candidates cannot be accepted; a nonempty candidate must change masks
-   or relationship metadata. **Discard draft**
+   Direct erasing can leave an existing named segment empty, with 0 mL volume.
+   Empty new segments and empty AI candidates cannot be accepted. A candidate
+   must change masks or relationship metadata. **Discard draft**
    closes a proposal; saved prompts and completed candidates otherwise survive
    reloads and workstation restarts. Interrupted predictions can be retried.
 8. The existing component/box operations remain available under **Refinement**.
@@ -130,8 +189,14 @@ Correction latency is not assumed to be near-instant.
    Slicer**, download its bundle and upload the edited `.seg.nrrd`. Preserve its
    segment tags: import checks segment identities, source CT hash and geometry.
 9. Set the revision's review status and export PNG, Slicer files or a portable
-   HTML viewer. HTML contains anatomy and voxel-derived measurements; CT review
-   remains in this application. Export labels use pseudonymous case IDs.
+   HTML viewer. **Export viewer** offers **Segmentation**, **CT volume** and
+   **CT plane**, defaulting to the currently visible rendering layers. Selected
+   layers retain the camera, appearances, structure visibility/opacity, volume
+   crop/mask and plane position/window. CT layers share one embedded CT, and
+   required overlay/masking labels travel with it. Unselected geometry and CT
+   data are omitted. The file works offline in a desktop browser; segmentation
+   editing and three-view CT review remain in the local app. Save or discard a
+   correction draft before exporting. Export labels use pseudonymous case IDs.
 
 nnInteractive uses a pretrained model for interactive inference; it does not
 train or fine-tune model weights. The initial segmentation is loaded unchanged
@@ -147,7 +212,7 @@ IDs provide suggestions that require selection. Policy-only changes reuse the
 predicted target without rerunning nnInteractive. See
 [segment relationships](docs/SEGMENT_RELATIONSHIPS.md).
 
-An Apply batch is not identical to predicting after every individual gesture.
+An AI Apply batch is not identical to predicting after every individual gesture.
 The pipeline records the exact Apply boundaries and settings for replay and
 undo. One Apply action can require several model regions/internal forwards,
 especially for distant marks, large drawings or whole-mask refinement.
@@ -157,12 +222,45 @@ display surface; it does not change the voxel mask used for volumes. Named
 bronchopulmonary territories and automated lesion characterization are outside
 this version's scope.
 
-The main 3D viewer also has a **CT plane** toggle. Choose a native i/j/k plane,
+The 3D view's **Rendering stack** lets you show **Segmentation**, **CT volume**
+and **CT plane** together or independently. Segmentation opacity scales the
+currently visible structures without changing their individual opacity settings.
+Open **CT volume settings** for its presets, opacity, masking and cropping.
+
+Choose **Cinematic heart** under Appearance for the supplied Slicer script's
+crimson myocardium and ivory blood colors, camera-following lighting and
+adjustable volume shadows on black. When suitable labels exist, selecting this
+appearance automatically measures median HU from myocardium and aorta (or
+left-heart) masks. **Measure from segments** repeats that measurement. When
+those labels are absent,
+enter both reference values and click **Apply reference HU**; the initial
+80 / 400 HU pair is an explicit display default. For an isolated heart, enable
+**Mask to segmentation** and choose its masks. Navigation temporarily drops
+shadow rays and restores them when the view settles. This browser approximation
+also travels with CT-volume HTML exports; it does not modify source scans or
+segmentation measurements.
+**Display margin** under the mask controls can retain surrounding thin walls;
+the **2.5 mm** shortcut matches the margin size used by the supplied Slicer
+heart-isolation script. It affects only the volume view, including its offline
+export. CT overlays remain exact. For the supplied saved CorCTA appearance,
+the measured reference pair is **86/483 HU** with **Intensity +20 HU**.
+The first cinematic selection in a cardiac case also opens **Heart view**, using
+the supplied Slicer camera's orientation and fitting the current heart anatomy.
+The **Heart view** button returns to it after rotating. General **Oblique** views
+face a different side of the heart, which can expose brighter blood and chamber
+interiors even in native Slicer. Saved offline cameras are retained on opening.
+
+The **CT plane** toggle shows a native i/j/k plane. Choose a plane,
 move its slice slider, or use **Face plane** to align the camera. It follows the
 linked CT position, window/level and overlay selection while retaining normal
 orbit and anatomy picking. Local overview frames appear during full CT preload;
 once cached, moving the plane needs no workstation slice requests. Review uses
 the same plane and requires an exact full-detail frame before accepting marks.
+
+Use **Expand ↗** in the top-right corner of the 3D view to fill the screen.
+**Restore ↙** or **Escape** returns to the workspace. The camera, loaded CT,
+volume mask and anatomy controls stay in place. This also works in review and
+the portable offline viewer.
 
 **Cornerstone3D is the default CT viewer.** It reuses the resident CT worker
 through a custom image loader. The viewer dropdown is removed; rendering
@@ -179,6 +277,8 @@ source scripts/env.sh
 python -m scan3d doctor
 python -m scan3d import /absolute/path/to/dicom.zip --label "Teaching case"
 python -m scan3d process CASE_ID --series SERIES_UID --profile chest_abdomen --phase venous
+python -m scan3d segment CASE_ID --task total --body-seg
+python -m scan3d segment CASE_ID --task lung_vessels --remove-small-blobs
 python -m scan3d include-all CASE_ID
 python -m scan3d refine CASE_ID --revision REVISION_ID --structure total:liver --recipe recipe.json
 python -m scan3d job JOB_ID
@@ -229,6 +329,18 @@ Source hashes record the exact processing code and downloaded model checkpoints.
   without extracting or uploading slice pixels. This shares the anatomy renderer
   and the existing CT download. Clients outside its texture or memory limits use
   the existing local slice path, with a visible status.
+  **CT volume** uses that same GPU texture for direct volume rendering, with
+  all 31 default Slicer appearances, intensity, opacity and native-axis cropping.
+  Enable **CT plane** alongside it to show the windowed CT slice at its correct
+  depth inside the volume, including its selected overlays. Both share the same
+  resident CT texture. **Mask to segmentation** clips the volume inside or outside
+  a union of chosen segments; use the selected/visible shortcuts or pick segments
+  individually. CT planes and slice review stay unchanged. The **Rendering stack**
+  combines visible segmentation surfaces with CT at their physical depths, with
+  independent layer visibility and opacity. Auto quality settles after movement. Volume
+  display does not alter masks, measurements or source CT and starts no inference.
+  The [volume-rendering contract](docs/CT_VOLUME_RENDERING.md) describes resource
+  limits, coordinates, lifecycle and the redistributed preset license.
   Segmentation, corrections and mesh generation remain on the workstation.
 - Mask preparation shares one decode between measurements/QC and surface
   extraction, with memory-aware CPU concurrency (up to four structures by

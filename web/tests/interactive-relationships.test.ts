@@ -81,7 +81,7 @@ describe('explicit segment relationships', () => {
   it('adopts authoritative reciprocal defaults and serializes concurrent draft creation once', async () => {
     const {controller,reader} = fixture(undefined,subdivision()); await controller.load();
     await Promise.all([controller.ensureDraft(),controller.ensureDraft()]);
-    expect(reader.startInteractive).toHaveBeenCalledExactlyOnceWith('case','base','custom:one',undefined);
+    expect(reader.startInteractive).toHaveBeenCalledExactlyOnceWith('case','base','custom:one',undefined,'nninteractive');
     expect(controller.relationship).toEqual(subdivision()); expect(controller.unsaved).toBe(false);
     controller.append({id:'point',kind:'point',include:true,ras:[1,2,3]}); await controller.flush();
     expect(reader.interactivePrompts.mock.calls[0][5]).toEqual(subdivision());
@@ -105,5 +105,21 @@ describe('explicit segment relationships', () => {
     expect(reviewCandidateHasChanges({...candidate,total_changed_voxels:0,relationship_changed:true})).toBe(true);
     expect(reviewCandidateHasChanges({...candidate,total_changed_voxels:0})).toBe(false);
     expect(reviewCandidateHasChanges({...candidate,total_changed_voxels:25,summary:{...summary,after_voxels:0}})).toBe(false);
+  });
+
+  it('allows complete erasure only when explicitly reviewing an existing direct target', () => {
+    const empty = {...ready().candidate!,total_changed_voxels:100,summary:{...summary,changed_voxels:100,removed_voxels:100,after_voxels:0,after_volume_ml:0}};
+    expect(reviewCandidateHasChanges(empty)).toBe(false);
+    expect(reviewCandidateHasChanges(empty, true)).toBe(true);
+    expect(reviewCandidateHasChanges({...empty,total_changed_voxels:0,summary:{...empty.summary,changed_voxels:0}}, true)).toBe(false);
+    expect(reviewCandidateHasChanges(undefined, true)).toBe(false);
+  });
+
+  it('sends an explicit direct method with both saved and new target creation', async () => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({...ready(),method:'direct'}),{status:200})); globalThis.fetch = fetch;
+    await api.startInteractive('case','base','custom:one',undefined,'direct');
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({revision_id:'base',structure_id:'custom:one',method:'direct'});
+    await api.createInteractiveStructure('case','base',{name:'Vessel',group:'Custom',color:'#c18dff',method:'direct'});
+    expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toEqual({revision_id:'base',name:'Vessel',group:'Custom',color:'#c18dff',method:'direct'});
   });
 });

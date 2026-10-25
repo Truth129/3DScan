@@ -14,6 +14,11 @@ certifi==2026.7.22
     #   -c requirements/core.lock
     #   httpcore
     #   httpx
+    #   requests
+charset-normalizer==3.5.2
+    # via
+    #   -c requirements/core.lock
+    #   requests
 click==8.5.0
     # via
     #   -c requirements/core.lock
@@ -60,6 +65,7 @@ idna==3.20
     #   -c requirements/core.lock
     #   anyio
     #   httpx
+    #   requests
 iniconfig==2.3.1
     # via
     #   -c requirements/core.lock
@@ -152,8 +158,14 @@ python-dateutil==2.9.0.post0
     #   -c requirements/core.lock
     #   matplotlib
 python-gdcm==3.2.6
-    # via -r requirements/core.in
+    # via
+    #   -c requirements/core.lock
+    #   -r requirements/core.in
 python-multipart==0.0.20
+    # via
+    #   -c requirements/core.lock
+    #   -r requirements/core.in
+requests==2.34.2
     # via
     #   -c requirements/core.lock
     #   -r requirements/core.in
@@ -197,6 +209,10 @@ typing-inspection==0.4.4
     # via
     #   -c requirements/core.lock
     #   pydantic
+urllib3==2.8.0
+    # via
+    #   -c requirements/core.lock
+    #   requests
 uvicorn==0.35.0
     # via
     #   -c requirements/core.lock

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Geometry, InteractivePrompt, InteractiveTool, Point, SliceMeta } from '../types';
+import type { Geometry, InteractivePrompt, InteractiveTool, Point, ScissorsOperation, ScissorsShape, SliceMeta } from '../types';
 import type { CTFrame } from './ct-renderer';
 import { inverseAffine, transformPoint } from './ct-reslice';
 import { pixelToRas, rasToPixel, rasToScene, sceneToRas } from './geometry';
@@ -13,6 +13,8 @@ export interface SceneReviewState {
   tool: InteractiveTool;
   include: boolean;
   radiusMm: number;
+  scissorsShape?: ScissorsShape;
+  scissorsOperation?: ScissorsOperation;
   disabled: boolean;
   geometry: Geometry;
   prompts: InteractivePrompt[];
@@ -106,6 +108,7 @@ export function reviewPlaneGesture(state: SceneReviewState, pixels: [number, num
 
 /** Patient vertices for all persisted native drawings, including prompts on other planes. */
 export function reviewPromptPoints(prompt: InteractivePrompt, geometry: Geometry): Point[] {
+  if (prompt.kind === 'scissors') return [];
   if (!('vertices' in prompt)) return [prompt.ras];
   const [u, v] = [0, 1, 2].filter(axis => axis !== prompt.axis);
   let vertices = prompt.vertices;

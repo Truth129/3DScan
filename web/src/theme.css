@@ -1,4 +1,117 @@
 /* Shared neutral workspace treatment for the app and portable viewer. */
+:root {
+  --control-border: #68758a;
+  --control-border-hover: #9baac1;
+  --control-focus: #b3cbff;
+}
+
+/* Actions have their own outline; panel dividers stay quieter. */
+:root :is(.button:not(.primary), .library-action, .text-button, .icon-button),
+:root :is(.camera-strip, .viewport-tools, .comparison-toggle, .review-workspace-tabs, .review-toolset) > button {
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  transition: background-color .12s, border-color .12s, color .12s;
+}
+:root .text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 4px 8px;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+:root :is(.button:not(.primary), .library-action, .text-button, .icon-button):hover:not(:disabled),
+:root :is(.camera-strip, .viewport-tools, .comparison-toggle, .review-workspace-tabs, .review-toolset) > button:hover:not(:disabled) {
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+  color: var(--white);
+}
+:root :is(.button:not(.primary), .library-action, .text-button, .icon-button):active:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-active);
+}
+:root .button.primary:active:not(:disabled) {
+  background: var(--primary-hover);
+  color: var(--ink);
+}
+:root :is(button, a, input, select, summary):focus-visible {
+  outline: 2px solid var(--control-focus);
+  outline-offset: 2px;
+}
+
+/* Keep compact toolbars readable as individual actions and selected modes. */
+:root :is(.camera-strip, .viewport-tools, .comparison-toggle, .review-toolset) {
+  gap: 3px;
+  padding: 3px;
+  overflow: visible;
+}
+:root .viewport-tools > button { padding: 6px 10px; min-height: 30px; }
+:root :is(.camera-strip, .viewport-tools, .comparison-toggle, .review-workspace-tabs, .review-toolset) > button.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px #a5bbef26;
+}
+:root :is(.camera-strip, .comparison-toggle, .review-workspace-tabs) > button.active {
+  background: #303d53;
+  color: var(--white);
+}
+:root :is(.inspector-tabs, .view-tabs) { gap: 8px; }
+:root :is(.inspector-tabs, .view-tabs) > button {
+  align-self: center;
+  height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+:root :is(.inspector-tabs, .view-tabs) > button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--control-border-hover);
+}
+:root :is(.inspector-tabs, .view-tabs) > button.active {
+  background: #283247;
+  border-color: var(--accent);
+  color: var(--white);
+}
+
+/* Make icon actions discoverable without hovering over the anatomy list. */
+:root :is(.visibility-button, .solo-button, .group-visibility-button) {
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  background: #191c2380;
+}
+:root .solo-button { opacity: .7; }
+:root .visibility-button { min-width: 26px; }
+:root .group-visibility-button[aria-pressed=mixed] { border-color: var(--accent); }
+:root :is(.visibility-button, .solo-button, .group-visibility-button):hover,
+:root :is(.visibility-button, .solo-button, .group-visibility-button):focus-visible {
+  opacity: 1;
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+  color: var(--white);
+}
+:root .structure-select { border-radius: 4px; }
+:root .structure-select:hover { background: #ffffff08; }
+:root .group-heading { border-radius: 4px; }
+:root .group-heading:hover { background: var(--surface-hover); color: var(--white); }
+
+:root :is(.volume-crop, .review-impact, .review-status, .slicer-fallback, .measurement-progress) > summary,
+:root .ct-overlay-picker > details > summary {
+  padding: 5px 7px;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  background: var(--surface);
+}
+:root :is(.volume-crop, .review-impact, .review-status, .slicer-fallback, .measurement-progress) > summary:hover,
+:root .ct-overlay-picker > details > summary:hover {
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+  color: var(--white);
+}
+
 .app-header, .case-toolbar, .app-footer { background: var(--panel); }
 .header-context { display: none; }
 .brand svg { stroke: #d4dbe7; }

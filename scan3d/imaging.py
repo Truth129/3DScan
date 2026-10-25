@@ -74,8 +74,8 @@ def _ct_array(path, image):
         return values
 
 
-def _image(path: Path):
-    image = nib.load(str(path))
+def _image(path: Path, *, keep_file_open=None):
+    image = nib.load(str(path), keep_file_open=keep_file_open)
     if len(image.shape) != 3 or any(n < 1 for n in image.shape):
         raise ValueError("A nonempty, scalar three-dimensional image is required")
     affine = np.asarray(image.affine, dtype=np.float64).copy()
@@ -91,7 +91,8 @@ def _image(path: Path):
     return image, affine
 
 
-def _binary(mask_path: Path, ct_image=None, ct_affine=None):
+def _binary_values(mask_path: Path, ct_image=None, ct_affine=None):
+    """Validate every voxel in its native storage order, without a dense copy."""
     image, affine = _image(mask_path)
     if ct_image is not None and (image.shape != ct_image.shape
             or not np.allclose(affine, ct_affine, rtol=0, atol=1e-4)):
@@ -105,6 +106,21 @@ def _binary(mask_path: Path, ct_image=None, ct_affine=None):
     if (not np.isfinite(minimum) or not np.isfinite(maximum) or minimum < 0 or maximum > 1
             or (values.dtype.kind == "f" and not np.all((values == 0) | (values == 1)))):
         raise ValueError("Per-structure masks must contain only binary values 0 and 1")
+    return values, image, affine, bool(maximum)
+
+
+def _binary_nonempty(mask_path: Path, ct_image=None, ct_affine=None):
+    """Check geometry, binary values and presence without reordering the volume.
+
+    Inference output checks only need presence. Converting NIfTI's native
+    Fortran-order volumes to C order here would repeat the expensive copy needed
+    later by numerical/QC/surface work, once for every output structure.
+    """
+    return _binary_values(mask_path, ct_image, ct_affine)[3]
+
+
+def _binary(mask_path: Path, ct_image=None, ct_affine=None):
+    values, image, affine, _ = _binary_values(mask_path, ct_image, ct_affine)
     # NIfTI proxies commonly expose Fortran-order arrays. SciPy's numerical
     # kernels otherwise traverse these with costly strides or make extra copies.
     return np.ascontiguousarray(values, dtype=bool), image, affine

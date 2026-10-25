@@ -15,9 +15,9 @@ import sys
 import time
 import uuid
 
-import numpy as np
-
-from .imaging import _binary, _image
+from .imaging import _binary_nonempty, _image
+from . import segmentation_options
+from .segmentation_options import normalize_options, resolved_task_config, task_capabilities
 
 
 class SegmentationCancelled(InterruptedError):
@@ -29,14 +29,14 @@ _LOBES = ("lung_lower_lobe_left", "lung_lower_lobe_right", "lung_middle_lobe_rig
 _LUNG = {"lung_arteries", "lung_veins", "lung_airways", "lung_airways_wall"}
 
 
-def _appearance(name):
+def _appearance(name, task=None):
     if "vein" in name or "vena" in name:
         return "Veins", "#4d82e8"
     if "arter" in name or "aorta" in name or name == "brachiocephalic_trunk":
         return "Arteries", "#eb655d"
     if "airway" in name or name == "trachea":
         return "Airways", "#f1dfb1"
-    if name.startswith("lung_"):
+    if name.startswith("lung_") and (task in (None, "total", "total_v3", "lung_vessels") or name in _LOBES):
         colors = ["#dca6d0", "#ad9ed8", "#e7ad8f", "#b5d59a", "#8fc3d7"]
         return "Lung lobes", colors[_LOBES.index(name)] if name in _LOBES else "#91cbd9"
     if name.startswith(("rib_", "vertebrae_", "clavicula", "scapula", "hip_", "humerus_", "femur_")) or name in {"skull", "sacrum", "sternum", "costal_cartilages"}:
@@ -49,6 +49,18 @@ def _appearance(name):
         return "Head organs", colors[index]
     if name.startswith(("gluteus_", "autochthon_", "iliopsoas_")):
         return "Muscles", colors[index]
+    if task not in (None, "total", "total_v3"):
+        groups = {"body": "Body", "heartchambers_highres": "Heart", "brain_structures": "Brain structures",
+                  "cerebral_bleed": "Brain findings", "ventricle_parts": "Brain structures",
+                  "head_glands_cavities": "Head organs", "head_muscles": "Muscles",
+                  "headneck_muscles": "Muscles", "oculomotor_muscles": "Muscles",
+                  "abdominal_muscles": "Muscles", "thigh_shoulder_muscles": "Muscles",
+                  "headneck_bones_vessels": "Head and neck", "craniofacial_structures": "Head and neck",
+                  "teeth": "Teeth", "tissue_types": "Tissues", "tissue_4_types": "Tissues",
+                  "lung_nodules": "Lung findings", "pleural_pericard_effusion": "Chest findings",
+                  "appendicular_bones": "Bones", "vertebrae_body": "Bones", "vertebrae_pp": "Bones",
+                  "vertebrae_pp_refined": "Bones", "hip_implant": "Implants", "face": "Head organs"}
+        return groups.get(task, task.replace("_", " ").capitalize()), colors[index]
     return "Abdominal organs", colors[index]
 
 
@@ -91,16 +103,44 @@ def _checkpoint_digest(path, size, modified_ns, changed_ns):
     return _digest(Path(path))
 
 
-def model_fingerprint(profile: str) -> dict:
+def _model_configurations(options: dict) -> list[tuple[str, dict]]:
+    """Exact primary and auxiliary model configurations used by the native API."""
+    configurations = []
+
+    def collect(task, robust_crop=False, body_seg=False, label=None, ancestors=()):
+        if task in ancestors:
+            raise ValueError("Cyclic TotalSegmentator crop-model configuration")
+        label = label or task
+        config = resolved_task_config(task, robust_crop)
+        configurations.append((label, config))
+        if config.get("crop") or config.get("cascade"):
+            if config.get("crop_model") is not None:
+                # Upstream recursively invokes that task with its own defaults.
+                collect(config["crop_model"], label=label + ":crop_model",
+                        ancestors=(*ancestors, task))
+            elif any(name in {"body_trunc", "body_extremities"} for name in (config.get("crop") or [])):
+                configurations.append((label + ":crop", resolved_task_config("body", mode="fast")))
+            else:
+                mode = "fast" if config.get("robust_crop") else "fastest"
+                configurations.append((label + ":crop", resolved_task_config("total", mode=mode)))
+        elif body_seg:
+            configurations.append((label + ":body_crop", resolved_task_config("body", mode="fast")))
+        if task == "vertebrae_pp_refined":
+            configurations.append((label + ":refinement", resolved_task_config("vertebrae_body")))
+
+    for task in options["tasks"]:
+        collect(task, options["robust_crop"], options["body_seg"])
+    return configurations
+
+
+def model_fingerprint(profile: str, options: dict | None = None) -> dict:
     """Resolved model/checkpoint identity for provenance and safe cache reuse.
 
     This does not download or import a model or initialize a GPU. An incomplete
     fingerprint cannot authorize a cache hit. Recompute after the first run,
     once TotalSegmentator has downloaded its model files.
     """
-    if profile not in {"chest", "abdomen", "chest_abdomen"}:
-        raise ValueError("Unknown segmentation profile")
-    from totalsegmentator.map_tasks_config import DEFAULT_CONFIG, TASK_CONFIGS
+    options = normalize_options(profile, options)
 
     versions = {}
     for package in ("TotalSegmentator", "nnunetv2", "torch"):
@@ -113,20 +153,7 @@ def model_fingerprint(profile: str) -> dict:
     else:
         home = Path(os.environ.get("TOTALSEG_HOME_DIR", str(Path.home() / ".totalsegmentator")))
         base = home / "nnunet" / "results"
-    tasks = ["total"] + (["lung_vessels"] if profile != "abdomen" else [])
-    configurations = []
-    for task in tasks:
-        raw = TASK_CONFIGS[task]
-        config = dict(DEFAULT_CONFIG)
-        config.update(raw["sub_modes"]["default"] if "sub_modes" in raw else raw)
-        config["plans"] = config.get("plans") or "nnUNetPlans"
-        configurations.append((task, config))
-        if config.get("crop") and config.get("crop_model") is None:
-            mode = "fast" if config.get("robust_crop") else "fastest"
-            crop = dict(DEFAULT_CONFIG)
-            crop.update(TASK_CONFIGS["total"]["sub_modes"][mode])
-            crop["plans"] = crop.get("plans") or "nnUNetPlans"
-            configurations.append((task + ":crop", crop))
+    configurations = _model_configurations(options)
     models = []
     for task, config in configurations:
         ids = config["task_id"] if isinstance(config["task_id"], list) else [config["task_id"]]
@@ -151,9 +178,12 @@ def model_fingerprint(profile: str) -> dict:
             else:
                 descriptor["complete"] = False
             models.append(descriptor)
-    result = {"schema_version": 1, "versions": versions, "profile": profile,
+    config_digest = hashlib.sha256(json.dumps(configurations, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    result = {"schema_version": 2, "versions": versions, "profile": profile, "options": options,
+              "task_configuration_sha256": config_digest,
               "device_request": os.environ.get("SCAN3D_DEVICE", "gpu"), "fast": False, "fastest": False,
-              "wrapper_sha256": _digest(Path(__file__)), "models": models,
+              "wrapper_sha256": _digest(Path(__file__)),
+              "options_adapter_sha256": _digest(Path(segmentation_options.__file__)), "models": models,
               "weights_complete": bool(models) and all(model["complete"] for model in models)}
     result["digest"] = hashlib.sha256(json.dumps(result, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return result
@@ -230,9 +260,10 @@ class _Resources:
                 "vram_scope": "Sampled whole R9700 device use via AMD sysfs; includes graphics and other processes; not per-process allocation"}
 
 
-def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled) -> list[dict]:
-    if profile not in {"chest", "abdomen", "chest_abdomen"}:
-        raise ValueError("Unknown segmentation profile")
+def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
+            options: dict | None = None) -> list[dict]:
+    legacy_options = options is None
+    options = normalize_options(profile, options)
     ct_path = Path(ct_path).resolve()
     ct, affine = _image(ct_path)
     output_dir = Path(output_dir).resolve()
@@ -242,12 +273,12 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled) 
     device = os.environ.get("SCAN3D_DEVICE", "gpu").strip()
     runtime = _device_info(device)
     effective_device = runtime["selected_device"]
-    tasks = ["total"] + (["lung_vessels"] if profile != "abdomen" else [])
+    tasks = options["tasks"]
     run_dir = output_dir / ("run-" + uuid.uuid4().hex)
     run_dir.mkdir()
     manifest = {"schema_version": 1, "engine": "TotalSegmentator",
                 "engine_version": metadata.version("TotalSegmentator"), "resolution": "standard_full",
-                "profile": profile, "output_selection": "all_nonempty_task_outputs",
+                "profile": profile, "options": options, "output_selection": "all_nonempty_task_outputs",
                 "input_sha256": _digest(ct_path), "runtime": runtime,
                 "started_at": datetime.now(timezone.utc).isoformat(), "status": "running",
                 "run_id": run_dir.name, "tasks": [], "empty_labels": [], "qc": []}
@@ -271,10 +302,26 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled) 
             task_dir.mkdir(exist_ok=True)
             if list(task_dir.glob("*.nii*")):
                 raise ValueError("Inference output already exists; use a new run directory")
-            command = [sys.executable, "-m", "totalsegmentator.bin.TotalSegmentator",
+            # nnU-Net starts manager processes while temporarily hiding stdout.
+            # Buffered output can be inherited and replayed when those children
+            # restore the original stream. Unbuffered output also makes tail -F
+            # report each stage promptly instead of delaying it until exit.
+            command = [sys.executable, "-u", "-m", "totalsegmentator.bin.TotalSegmentator",
                        "-i", str(ct_path), "-o", str(task_dir), "--task", task, "--device", effective_device,
                        "--report", str(run_dir / f"{task}-report.json")]
-            record = {"task": task, "device": effective_device, "fast": False, "status": "running"}
+            for option in ("robust_crop", "body_seg", "remove_small_blobs"):
+                if options[option]:
+                    command.append("--" + option)
+            capabilities = task_capabilities(task)
+            effective = {"robust_crop": options["robust_crop"] and capabilities["robust_crop_supported"],
+                         "body_seg": options["body_seg"], "remove_small_blobs": options["remove_small_blobs"],
+                         "remove_small_blobs_mm3": (segmentation_options.REMOVE_SMALL_BLOBS_MM3
+                                                    if options["remove_small_blobs"] else None)}
+            record = {"task": task, "device": effective_device, "fast": False, "status": "running",
+                      "options": {key: value for key, value in options.items() if key != "tasks"},
+                      "effective_options": effective}
+            if options["robust_crop"] and not capabilities["robust_crop_supported"]:
+                record["option_notes"] = ["Robust crop is only used by tasks with a standard organ crop model."]
             manifest["tasks"].append(record)
             save_manifest()
             started = time.monotonic()
@@ -320,24 +367,26 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled) 
             record["labels"] = sorted(masks)
             record["status"] = "completed"
             progress(f"Checking {task} mask geometry and labels")
+            validation_started = time.monotonic()
             for name, path in masks.items():
                 if cancelled():
                     raise SegmentationCancelled("Segmentation cancelled")
-                # Profiles select tasks, never an anatomical subset of their outputs.
-                mask, _, _ = _binary(path, ct, affine)
-                if not np.any(mask):
+                # Tasks select models, never an anatomical subset of their outputs.
+                if not _binary_nonempty(path, ct, affine):
                     stable_id = f"{task}:{name}"
                     manifest["empty_labels"].append(stable_id)
                     manifest["qc"].append(f"Empty label omitted: {stable_id}; inspect scan coverage")
                     continue
-                group, color = _appearance(name)
+                group, color = _appearance(name, task)
                 structures.append({"id": f"{task}:{name}", "name": name.replace("_", " ").capitalize(),
                                    "task": task, "group": group, "color": color, "mask_file": str(path)})
+            record["mask_validation_seconds"] = round(time.monotonic() - validation_started, 3)
             save_manifest()
         if not structures:
             raise RuntimeError("No nonempty structures were found in the requested task outputs")
         progress("Recording model checkpoint checksums")
-        manifest["model_fingerprint"] = model_fingerprint(profile)
+        manifest["model_fingerprint"] = (model_fingerprint(profile) if legacy_options
+                                         else model_fingerprint(profile, options))
         if not manifest["model_fingerprint"]["weights_complete"]:
             raise RuntimeError("Inference completed but its exact model checkpoints could not be identified; results were not published")
         manifest["status"] = "completed"

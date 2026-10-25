@@ -179,16 +179,30 @@ class Service:
             self.store.save("cases", case)
             raise
 
-    def process(self, case_id, series_uid, profile, phase):
+    def process(self, case_id, series_uid, profile, phase, *, cardiac_phase=None, rr_percent=None):
+        """Prepare a reference CT for viewing, without running segmentation."""
+        from .acquisition import acquisition_labels
+
         case = self.store.get("cases", case_id)
         selected = next((s for s in case["series"] if s["uid"] == series_uid), None)
         if not selected:
             raise ValueError("Select a series belonging to this case")
-        if profile not in ("chest", "abdomen", "chest_abdomen"):
-            raise ValueError("Unknown processing profile")
-        if not phase or len(phase) > 80:
-            raise ValueError("Specify the contrast phase or 'unknown'")
-        return self.store.enqueue(case_id, "process", dict(series_uid=series_uid, profile=profile, phase=phase))
+        acquisition = acquisition_labels(series_uid, profile, phase,
+            cardiac_phase=cardiac_phase, rr_percent=rr_percent)
+        return self.store.enqueue(case_id, "process", acquisition)
+
+    def segment_case(self, case_id, revision_id, task="total", robust_crop=False, body_seg=False,
+                     remove_small_blobs=False):
+        from .segmentation_options import normalize_options
+
+        parent = self.store.revision(case_id, revision_id)
+        if self.store.get("cases", case_id).get("active_revision_id") != revision_id:
+            raise ValueError("The active revision changed; start segmentation from the current CT")
+        acquisition = parent.get("acquisition") or {}
+        profile = acquisition.get("profile", "chest_abdomen")
+        options = normalize_options(profile, dict(tasks=[task], robust_crop=robust_crop,
+            body_seg=body_seg, remove_small_blobs=remove_small_blobs))
+        return self.store.enqueue(case_id, "segment", dict(revision_id=revision_id, options=options))
 
     def include_all_outputs(self, case_id):
         """Restore saved model outputs omitted by the former anatomy filter."""
@@ -261,12 +275,14 @@ class Service:
     def execute(self, job):
         try:
             if job["kind"] == "process":
-                # Serial GPU execution is insufficient if the idle interactive
-                # model still owns VRAM while TotalSegmentator starts.
-                self._release_interactive()
                 revision = self._process(job)
+            elif job["kind"] == "segment":
+                # Release the warm review model only when inference is requested.
+                self._release_interactive()
+                revision = self._segment(job)
             elif job["kind"] == "review_predict":
-                self.reviews.run_predict(job, None if job["payload"].get("relationship_only") else self._interactive())
+                no_inference = job["payload"].get("relationship_only") or job["payload"].get("method") == "direct"
+                self.reviews.run_predict(job, None if no_inference else self._interactive())
                 return
             elif job["kind"] == "review_accept":
                 revision = self.reviews.run_accept(job)
@@ -279,7 +295,7 @@ class Service:
             else:
                 raise ValueError("Unknown job kind")
             self.check_cancel(job)
-            expected = job["payload"]["revision_id"] if job["kind"] in ("include_all", "review_accept") else None
+            expected = job["payload"]["revision_id"] if job["kind"] in ("segment", "include_all", "review_accept") else None
             review_guard = ({key: job["payload"][key] for key in ("session_id", "generation")}
                             if job["kind"] == "review_accept" else None)
             self.store.commit_revision(revision, job, expected_active_revision_id=expected, review_guard=review_guard)
@@ -294,7 +310,7 @@ class Service:
                 self.reviews.get(job["case_id"], job["payload"]["session_id"])
 
     def _process(self, job):
-        from . import dicom, segmentation
+        from . import dicom
         case = self.store.get("cases", job["case_id"])
         series = next(s for s in case["series"] if s["uid"] == job["payload"]["series_uid"])
         case_dir = self.store.case_dir(case["id"])
@@ -310,8 +326,40 @@ class Service:
             conversion.mkdir(parents=True, exist_ok=True)
             ct = dicom.convert_series(series["files"], conversion)
         self.check_cancel(job)
-        fingerprint = segmentation.model_fingerprint(job["payload"]["profile"])
-        cache_parameters = {"input_sha256": digest.hexdigest(), "profile": job["payload"]["profile"],
+        self.stage(job, "Preparing CT for viewing; segmentation has not been requested")
+        return self.build_ct_revision(case["id"], ct, acquisition=job["payload"])
+
+    def build_ct_revision(self, case_id, ct, acquisition=None):
+        """A viewable CT revision has no mask, mesh or model dependency."""
+        from . import imaging
+
+        revision_id = identifier()
+        directory = self.store.case_dir(case_id) / "revisions" / revision_id
+        directory.mkdir(parents=True, exist_ok=True)
+        result = dict(id=revision_id, case_id=case_id, parent_id=None, kind="ct", created_at=now(),
+            review_status="unreviewed", source="dicom", operation=None, geometry=imaging.geometry(ct),
+            structures=[], qc=[], directory=str(directory), ct_file=str(ct), acquisition=acquisition,
+            synthetic=bool(self.store.get("cases", case_id).get("synthetic")),
+            model_url=None, model_manifest_url=None, surface_assets=[], mesh_statistics={},
+            pipeline_version=__version__, pipeline_code_sha256=code_fingerprint(), inference_manifest=None)
+        atomic_json(directory / "revision.json", result)
+        return result
+
+    def _segment(self, job):
+        from . import segmentation
+        from .segmentation_options import normalize_options
+
+        parent = self.store.revision(job["case_id"], job["payload"]["revision_id"])
+        if self.store.get("cases", job["case_id"]).get("active_revision_id") != parent["id"]:
+            raise ValueError("The active revision changed; start segmentation from the current CT")
+        ct = Path(parent["ct_file"])
+        acquisition = parent.get("acquisition") or {}
+        profile = acquisition.get("profile", "chest_abdomen")
+        options = normalize_options(profile, job["payload"]["options"])
+        case_dir = self.store.case_dir(job["case_id"])
+        self.stage(job, "Checking selected task, settings and reusable model outputs")
+        fingerprint = segmentation.model_fingerprint(profile, options=options)
+        cache_parameters = {"input_sha256": segmentation._digest(ct), "profile": profile, "options": options,
                             "versions": fingerprint["versions"], "device": fingerprint["device_request"],
                             "wrapper_sha256": fingerprint["wrapper_sha256"], "pipeline_version": __version__}
         key = hashlib.sha256(json.dumps(cache_parameters, sort_keys=True).encode()).hexdigest()
@@ -332,8 +380,8 @@ class Service:
                 cached.unlink()
         if not cached.exists():
             inference.mkdir(parents=True, exist_ok=True)
-            structures = segmentation.segment(ct, inference, job["payload"]["profile"],
-                lambda name: self.stage(job, name), lambda: self.cancelled(job))
+            structures = segmentation.segment(ct, inference, profile,
+                lambda name: self.stage(job, name), lambda: self.cancelled(job), options=options)
             self.check_cancel(job)
             run_manifest = json.loads((inference / "inference.json").read_text())
             pending = cached.with_suffix(".json.writing")
@@ -342,9 +390,20 @@ class Service:
                                            "manifest": run_manifest}))
             pending.replace(cached)
         self.stage(job, "Checking masks and generating surfaces")
-        return self.build_revision(case["id"], ct, structures, source="totalsegmentator",
-                                   acquisition=job["payload"], job=job, extra_qc=run_manifest.get("qc", []),
-                                   inference_manifest=run_manifest)
+        from .segmentation_merge import merge_task_outputs
+        merged, replacement = merge_task_outputs(parent["structures"], structures, options["tasks"])
+        result = self.build_revision(job["case_id"], ct, merged, source="totalsegmentator",
+            parent=parent["id"], acquisition=acquisition, job=job, extra_qc=run_manifest.get("qc", []),
+            operation={"type": "segment", "input_revision_id": parent["id"], "options": options,
+                       **replacement},
+            inference_manifest=run_manifest)
+        result["segmentation_settings"] = options
+        result["segmentation_runs"] = [*parent.get("segmentation_runs", []), {
+            "tasks": options["tasks"], "options": options, "input_revision_id": parent["id"],
+            **{key: run_manifest[key] for key in ("run_id", "engine_version", "started_at", "finished_at")
+               if key in run_manifest}, "model_fingerprint_digest": run_manifest.get("model_fingerprint", {}).get("digest")}]
+        atomic_json(Path(result["directory"]) / "revision.json", result)
+        return result
 
     def build_revision(self, case_id, ct, structures, source, parent=None, operation=None, directory=None, acquisition=None, job=None,
                        extra_qc=None, inference_manifest=None):
@@ -439,7 +498,7 @@ class Service:
                    "measurement_structures": measurement_timings, "preparation_workers": workers,
                    "measurement_cpu_seconds": sum(measurement_timings.values()),
                    "parallel_stage_times_are_summed_worker_seconds": True}
-        result = dict(id=revision_id, case_id=case_id, parent_id=parent, created_at=now(), review_status="unreviewed",
+        result = dict(id=revision_id, case_id=case_id, parent_id=parent, kind="segmentation", created_at=now(), review_status="unreviewed",
                       source=source, operation=operation, geometry=geometry, structures=reviewed_structures,
                       synthetic=bool(self.store.get("cases", case_id).get("synthetic")),
                       qc=sorted({warning for s in reviewed_structures for warning in s["qc"]} | set(extra_qc or [])),
@@ -450,6 +509,11 @@ class Service:
                       pipeline_version=__version__,
                       pipeline_code_sha256=code_fingerprint(),
                       inference_manifest=inference_manifest)
+        if parent:
+            previous = self.store.revision(case_id, parent)
+            for key in ("segmentation_settings", "segmentation_runs"):
+                if key in previous:
+                    result[key] = previous[key]
         # A readable provenance file travels with all case derivatives.
         atomic_json(directory / "revision.json", result)
         if job:
@@ -461,6 +525,8 @@ class Service:
         """Generate detailed geometry only for an explicit export request."""
         from . import surfaces
         revision = self.store.revision(case_id, revision_id)
+        if not revision["structures"]:
+            raise ValueError("This CT has no segmentation surfaces yet")
         target = Path(revision["directory"]) / "detailed.glb"
         if target.is_file() and revision.get("mesh_statistics", {}).get("detailed"):
             return target
@@ -536,10 +602,12 @@ class Service:
         if not tasks or len({t["task"] for t in tasks}) != len(tasks):
             raise ValueError("The saved inference task manifest is incomplete")
         outputs = []
+        from .segmentation_options import task_ids
+        allowed_tasks = set(task_ids())
         for task in tasks:
             task_name = task["task"]
             labels = task.get("labels", [])
-            if (task_name not in {"total", "lung_vessels"} or task.get("status") != "completed"
+            if (task_name not in allowed_tasks or task.get("status") != "completed"
                     or not labels or len(set(labels)) != len(labels)):
                 raise ValueError("The saved inference task manifest is incomplete")
             for name in labels:
@@ -548,7 +616,7 @@ class Service:
                 path = run / task_name / f"{name}.nii.gz"
                 if not path.is_file():
                     raise ValueError(f"Saved output {task_name}:{name} is unavailable; no inference was rerun")
-                group, color = segmentation._appearance(name)
+                group, color = segmentation._appearance(name, task_name)
                 outputs.append(dict(id=f"{task_name}:{name}", name=name.replace("_", " ").capitalize(),
                                     task=task_name, group=group, color=color, mask_file=str(path)))
         # Keep every current mask, including Slicer edits and refinement results.

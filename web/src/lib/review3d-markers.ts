@@ -42,6 +42,7 @@ export class Review3DMarkers {
     const key = JSON.stringify([geometry.affine_ras, prompts]); if (key === this.key) return;
     this.clear(); this.key = key;
     for (const prompt of prompts.slice(0, 128)) {
+      if (prompt.kind === 'scissors') continue;
       let object: THREE.Mesh;
       if (!('vertices' in prompt)) {
         object = new THREE.Mesh(this.sphere, prompt.include ? this.positive : this.negative);

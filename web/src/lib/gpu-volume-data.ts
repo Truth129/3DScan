@@ -1,4 +1,20 @@
 import type { ResidentVolume, VolumeDescriptor } from './ct-reslice';
+import type { CTFrame } from './ct-renderer';
+import type { Plane } from '../types';
+
+/** Viewer transport can be a live worker or a self-contained embedded source. */
+export interface RenderCTSession {
+  readonly descriptor: VolumeDescriptor | null;
+  readonly revisionBase: string;
+  readonly networkFree?: boolean;
+  getGPUVolume(signal?: AbortSignal): Promise<GPUVolumeSource>;
+  getGPUOverlays(selection: string | readonly string[] | null, compare?: boolean, signal?: AbortSignal): Promise<GPUOverlaySources>;
+  requestSlice(plane: Plane, position: number, selection?: string | readonly string[] | null, compare?: boolean,
+    native?: { axis: 0 | 1 | 2; index: number }, consumer?: 'ct' | 'model-review'): Promise<CTFrame>;
+}
+export interface GPUOverlaySourceProvider {
+  get(base: string, ids: readonly string[], signal: AbortSignal, marginMM?: number): Promise<GPUOverlaySources>;
+}
 
 /** One transfer is bounded; the worker retains the only full CPU volume. */
 export const GPU_VOLUME_SLAB_BYTES = 8 * 1024 ** 2;

@@ -1,4 +1,4 @@
-"""Persistent, explicitly accepted nnInteractive corrections in patient RAS.
+"""Persistent, explicitly accepted direct and nnInteractive corrections in RAS.
 
 A prediction is a draft mask, never an active segmentation revision. Immutable
 candidate aliases reuse the CT review transport without adding temporary masks
@@ -70,11 +70,13 @@ def public_review(record):
     result = {key: record.get(key) for key in (
         "id", "case_id", "revision_id", "structure_id", "status", "generation", "prompts",
         "job_id", "error", "accepted_revision_id", "created_at", "updated_at",
-        "options", "batches", "relationship", "relationship_suggestions",
+        "options", "batches", "relationship", "relationship_suggestions", "method",
     )}
+    result["method"] = record.get("method", "nninteractive")
     candidate = record.get("candidate")
     result["candidate"] = ({key: candidate[key] for key in (
         "generation", "revision_id", "summary", "created_at", "relationship", "overlaps", "warnings", "total_changed_voxels", "relationship_changed",
+        "preview_3d_ready", "model_manifest_url",
     ) if key in candidate} if candidate else None)
     if candidate:
         result["candidate"]["affected_structures"] = [
@@ -97,6 +99,12 @@ def _generation(value):
     return value
 
 
+def _method(value):
+    if value not in ("direct", "nninteractive"):
+        raise ValueError("Correction method must be direct or nninteractive")
+    return value
+
+
 class ReviewManager:
     def __init__(self, service):
         self.service = service
@@ -114,7 +122,8 @@ class ReviewManager:
             raise ValueError("The selected structure is unavailable in the source revision")
         return base, selected
 
-    def create(self, case_id, revision_id, structure_id, relationship=None):
+    def create(self, case_id, revision_id, structure_id, relationship=None, method="nninteractive"):
+        method = _method(method)
         safe_id(case_id)
         case = self.store.get("cases", case_id)
         base = self.store.revision(case_id, revision_id)
@@ -129,11 +138,13 @@ class ReviewManager:
                       options=normalize_options(), batches=[], error=None, accepted_revision_id=None,
                       relationship=chosen, initial_relationship=initial,
                       relationship_suggestions=relationship_suggestions(base["structures"], structure_id),
-                      created_at=now(), updated_at=now(), schema_version=2)
+                      created_at=now(), updated_at=now(), schema_version=2, method=method)
         return self.store.save("review_sessions", record)
 
-    def create_structure(self, case_id, revision_id, name, group="Custom", color="#e3a35d", relationship=None):
+    def create_structure(self, case_id, revision_id, name, group="Custom", color="#e3a35d", relationship=None,
+                         method="nninteractive"):
         """Create an empty draft target, without changing the segmentation history."""
+        method = _method(method)
         def label(value, maximum, field):
             if not isinstance(value, str):
                 raise ValueError(f"The segment {field} must be text")
@@ -166,7 +177,8 @@ class ReviewManager:
                       new_structure=True, target=target, status="draft", generation=0, prompts=[], job_id=None,
                       candidate=None, candidates={}, options=normalize_options({"start_empty": True}), batches=[],
                       relationship=chosen, initial_relationship=dict(INDEPENDENT), relationship_suggestions=[],
-                      error=None, accepted_revision_id=None, created_at=now(), updated_at=now(), schema_version=2)
+                      error=None, accepted_revision_id=None, created_at=now(), updated_at=now(), schema_version=2,
+                      method=method)
         return self.store.save("review_sessions", record)
 
     def get(self, case_id, session_id):
@@ -180,7 +192,12 @@ class ReviewManager:
     def _prompts(self, review, prompts):
         base, _ = self._base(review)
         image, affine = imaging._image(Path(base["ct_file"]))
-        return normalize_prompts(prompts, affine, image.shape)
+        normalized = normalize_prompts(prompts, affine, image.shape)
+        if review.get("method") == "direct" and any(prompt["kind"] not in {"scribble", "scissors"} for prompt in normalized):
+            raise ValueError("Direct editing supports paint and erase strokes or 3D scissors only")
+        if review.get("method") != "direct" and any(prompt["kind"] == "scissors" for prompt in normalized):
+            raise ValueError("3D scissors are only available in direct editing")
+        return normalized
 
     def update(self, case_id, session_id, expected_generation, prompts, options=None, relationship=None):
         review = self.get(case_id, session_id)
@@ -191,9 +208,11 @@ class ReviewManager:
                                         options=normalize_options(options) if options is not None else None, relationship=chosen)
 
     def predict(self, case_id, session_id, generation, full_refine=False):
-        self.get(case_id, session_id)
+        review = self.get(case_id, session_id)
         if not isinstance(full_refine, bool):
             raise ValueError("Whole-object refinement must be a boolean")
+        if review.get("method") == "direct" and full_refine:
+            raise ValueError("Whole-object AI refinement is unavailable in direct editing")
         return self.store.enqueue_review(case_id, session_id, _generation(generation), "review_predict", full_refine=full_refine)
 
     def accept(self, case_id, session_id, generation):
@@ -226,7 +245,45 @@ class ReviewManager:
             structures.append(_changed_structure(selected, changes[selected["id"]]))
         parent = f"review-{review['id']}-0" if review.get("new_structure") and match[2] != "0" else base["id"]
         return {**base, "id": alias, "parent_id": parent, "structures": structures,
-                "source": "nninteractive_candidate", "review_status": "unreviewed"}
+                "source": "direct_edit_candidate" if review.get("method") == "direct" else "nninteractive_candidate",
+                "review_status": "unreviewed", "model_url": None,
+                "model_manifest_url": (f"/api/cases/{case_id}/revisions/{alias}/model-manifest"
+                                       if candidate.get("preview_3d_ready") else None),
+                "surface_assets": candidate.get("surface_assets", []) if candidate.get("preview_3d_ready") else [],
+                "preview_3d_ready": bool(candidate.get("preview_3d_ready"))}
+
+    def _surface_preview(self, job, review, base, selected, changes, after, image, affine):
+        """Prepare affected display assets while the target's decoded mask lives.
+
+        The ledger belongs to this immutable candidate, not case history. Base
+        geometry/assets retain their keys, so the viewer only fetches changed
+        anatomy and preserves its camera, CT and WebGL context.
+        """
+        from . import surfaces
+        by_id = {item["id"]: item for item in base["structures"]}
+        if review.get("new_structure"):
+            by_id[selected["id"]] = selected
+        changed = {item["id"]: item for item in changes}
+        assets = {asset["id"]: {key: asset[key] for key in ("id", "key", "triangles")}
+                  for asset in base.get("surface_assets", [])}
+        for identity, structure in by_id.items():
+            self._running(job, "predicting")
+            change = changed.get(identity)
+            needs_asset = identity not in assets and structure.get("voxel_count") != 0
+            if not (needs_asset or change and not change.get("metadata_only")):
+                continue
+            source = _changed_structure(structure, change) if change else dict(structure)
+            prepared = surfaces.prepare_surface(source, self.service.surface_cache,
+                decoded_mask=(after, image, affine) if identity == selected["id"] else None,
+                progress=lambda message: self.service.stage(job, message))
+            if prepared["triangles"]:
+                assets[identity] = {key: prepared[key] for key in ("id", "key", "triangles")}
+            else:
+                assets.pop(identity, None)
+        alias = f"review-{review['id']}-{review['generation']}"
+        return dict(preview_3d_ready=True,
+                    model_manifest_url=f"/api/cases/{job['case_id']}/revisions/{alias}/model-manifest",
+                    surface_assets=[assets[identity] for identity in by_id if identity in assets])
 
     def _running(self, job, status):
         self.service.check_cancel(job)
@@ -329,6 +386,7 @@ class ReviewManager:
         ct = Path(base["ct_file"])
         mask_path = Path(selected["mask_file"])
         ct_digest, before_digest = _digest(ct), _digest(mask_path)
+        decoded = None
         if job["payload"].get("relationship_only"):
             alias = job["payload"].get("reuse_candidate_revision_id")
             previous = next((entry for entry in review.get("candidates", {}).values() if entry["revision_id"] == alias), None)
@@ -350,6 +408,11 @@ class ReviewManager:
                 else:
                     shutil.copyfile(mask_path, target)
                 provenance = dict(engine="mask-relationship-processing", version=__version__, reused_prediction=False, source="base_mask")
+        elif job["payload"].get("method") == "direct":
+            from .direct_edit import apply_strokes
+            provenance, decoded = apply_strokes(ct, mask_path, job["payload"]["prompts"], target,
+                options=job["payload"]["options"], progress=lambda message: self.service.stage(job, message),
+                cancelled=lambda: self.service.cancelled(job))
         else:
             provenance = runtime.predict(ct, mask_path, job["payload"]["prompts"], target,
                 progress=lambda message: self.service.stage(job, message), cancelled=lambda: self.service.cancelled(job),
@@ -357,9 +420,13 @@ class ReviewManager:
                 options=job["payload"]["options"], batches=job["payload"]["batches"])
         self._running(job, "predicting")
         self.service.stage(job, "Checking the candidate on the reference CT grid")
-        image, affine = imaging._image(ct)
-        before, _, _ = imaging._binary(mask_path, image, affine)
-        after, _, _ = imaging._binary(target, image, affine)
+        if decoded is None:
+            image, affine = imaging._image(ct)
+            before, _, _ = imaging._binary(mask_path, image, affine)
+            after, _, _ = imaging._binary(target, image, affine)
+        else:
+            before, after, image, affine = decoded
+            del decoded
         # Count in bounded chunks; avoid allocating several full CT-sized XOR,
         # addition and removal workspaces beside the model's resident tensors.
         before_flat, after_flat = before.reshape(-1), after.reshape(-1)
@@ -375,6 +442,8 @@ class ReviewManager:
         summary = _summary(before_count, after_count, added, removed, voxel_volume_ml)
         del before, before_flat, after_flat, a, b
         overlap = self._overlaps(job, base, selected, after, image, affine, directory, target, summary)
+        preview = (self._surface_preview(job, review, base, selected, overlap["affected_structures"], after, image, affine)
+                   if job["payload"].get("method") == "direct" else {})
         del after
         if _digest(ct) != ct_digest or _digest(mask_path) != before_digest:
             raise ValueError("The source CT or mask changed during interactive prediction")
@@ -383,7 +452,7 @@ class ReviewManager:
                          prompts_snapshot=job["payload"]["prompts"], options=job["payload"]["options"],
                          batches_snapshot=job["payload"]["batches"],
                          prompts_sha256=_prompt_digest(job["payload"]["prompts"]),
-                         ct_sha256=ct_digest, before_mask_sha256=before_digest, mask_sha256=_digest(target), **overlap)
+                         ct_sha256=ct_digest, before_mask_sha256=before_digest, mask_sha256=_digest(target), **overlap, **preview)
         from .service import atomic_json
         atomic_json(directory / "candidate.json", candidate)
         self.service.check_cancel(job)
@@ -397,9 +466,11 @@ class ReviewManager:
         if (not candidate or candidate["generation"] != review["generation"]
                 or candidate["revision_id"] != job["payload"].get("candidate_revision_id")):
             raise ValueError("The candidate changed; inspect the current preview before accepting")
-        if (not candidate["summary"]["after_voxels"] or not (
+        allow_empty = review.get("method") == "direct" and not review.get("new_structure")
+        if ((not candidate["summary"]["after_voxels"] and not allow_empty) or not (
                 candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]) or candidate.get("relationship_changed"))):
-            raise ValueError("Only a nonempty, changed candidate can be accepted")
+            raise ValueError("Only a changed candidate can be accepted" if allow_empty else
+                             "Only a nonempty, changed candidate can be accepted")
         base, selected = self._base(review)
         ct = Path(base["ct_file"])
         def verify_sources():
@@ -447,7 +518,10 @@ class ReviewManager:
             entry["before_mask_sha256"] = source_hashes[entry["id"]]
             entry["after_mask_sha256"] = changes[entry["id"]]["mask_sha256"]
         from .service import atomic_json, code_fingerprint
-        operation = dict(type="nninteractive_new_structure" if is_new else "nninteractive_correction",
+        method = review.get("method", "nninteractive")
+        source = ("direct_edit_new_structure" if is_new else "direct_edit_correction") if method == "direct" else (
+            "nninteractive_new_structure" if is_new else "nninteractive_correction")
+        operation = dict(type=source, method=method,
                          session_id=review["id"], generation=review["generation"],
                          structure_id=review["structure_id"], input_revision_id=base["id"],
                          prompts=job["payload"]["prompts"], prompts_sha256=candidate["prompts_sha256"],
@@ -465,7 +539,7 @@ class ReviewManager:
             operation["new_structure"]["relationship"] = candidate.get("relationship", INDEPENDENT)
         self.service.stage(job, "Preparing the accepted correction and updating its surface")
         revision = self.service.build_revision(job["case_id"], ct, structures,
-            source="nninteractive_new_structure" if is_new else "nninteractive_correction",
+            source=source,
             parent=base["id"], operation=operation, acquisition=base.get("acquisition"), job=job,
             extra_qc=sorted(set(self.service._inherited_qc(base)) | set(candidate.get("warnings", []))),
             inference_manifest=base.get("inference_manifest"))

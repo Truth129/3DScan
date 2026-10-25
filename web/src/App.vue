@@ -7,13 +7,19 @@ import CTOverlayPicker from './components/CTOverlayPicker.vue';
 import ImportDialog from './components/ImportDialog.vue';
 import RefinementPanel from './components/RefinementPanel.vue';
 import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
+import SegmentationControls from './components/SegmentationControls.vue';
+import ExportViewerDialog from './components/ExportViewerDialog.vue';
+import AcquisitionFields from './components/AcquisitionFields.vue';
+import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError } from './lib/acquisition';
 import { api, request, revisionUrl } from './lib/api';
 import { colorCss, initialDisplay, prettyName, referenceGridKey, setGroupVisibility } from './lib/geometry';
 import { recoverCaseJob } from './lib/jobs';
 import { LocalCTSession, type LocalCTProgress } from './lib/ct-volume';
 import { preloadCTSelection } from './lib/ct-preload';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
-import type { Case, InteractivePrompt, InteractiveReview, InteractiveTool, Job, JobMeasurements, Operation, Point, Revision, ReviewStatus, Structure, StructureDisplay } from './types';
+import { restoreSegmentationSettings } from './lib/segmentation-settings';
+import type { PortableRenderSnapshot } from './lib/portable-viewer';
+import type { Case, InteractivePrompt, InteractiveReview, InteractiveTool, Job, JobMeasurements, Operation, Point, Revision, ReviewStatus, ScissorsOperation, ScissorsShape, SegmentationCatalog, SegmentationSettings, Structure, StructureDisplay } from './types';
 
 const cases = ref<Case[]>([]), activeCase = ref<Case>(), revision = ref<Revision>(), revisions = ref<Revision[]>([]);
 const health = ref<Record<string, unknown>>({}), job = ref<Job>(), error = ref(''), notice = ref('');
@@ -21,6 +27,10 @@ const jobMeasurements = ref<JobMeasurements>();
 const importing = ref(false), loading = ref(true), actionBusy = ref(false), importOpen = ref(false);
 const selected = ref(''), display = ref<StructureDisplay>({}), point = ref<Point>([0, 0, 0]);
 const interactiveDraft = ref<InteractiveReview>(), interactiveTool = ref<InteractiveTool>('navigate'), interactiveCandidate = ref(true), interactiveDisabled = ref(false);
+const interactiveScissors = ref<{ shape: ScissorsShape; operation: ScissorsOperation }>({ shape: 'freehand', operation: 'erase_inside' });
+const candidateSurfaceRevision = shallowRef<Revision>(), candidateSurfaceSession = ref(''), candidateSurfaceLoading = ref(false), candidateSurfaceError = ref('');
+let surfacePreviewGeneration = 0;
+const surfacePreviewCache = new Map<string, Revision>();
 const interactiveOpen = ref(false), interactivePrompts = ref<InteractivePrompt[]>([]), interactiveInclude = ref(true), interactiveRadius = ref(3), interactiveNative = ref(true);
 const workspaceMode = ref<'model' | 'review'>('model'), reviewFocus = ref<'both' | 'ct' | 'model'>('both');
 const ctViewer = ref<'standard' | 'cornerstone'>('cornerstone'), ctViewerError = ref('');
@@ -40,11 +50,17 @@ const ctFollowing = ref(true), ctPinned = ref<string[]>([]);
 const ctOverlayIds = computed(() => [...new Set([...(ctFollowing.value ? selected.value ? [selected.value] : [] : ctPinned.value), ...(workspaceMode.value === 'review' && selected.value ? [selected.value] : [])])].filter(id => ctStructures.value.some(s => s.id === id)));
 const ctOverlayStructures = computed(() => ctOverlayIds.value.map(id => ctStructures.value.find(s => s.id === id)).filter((s): s is NonNullable<typeof s> => !!s));
 const windowWidth = ref(400), level = ref(40), hu = ref<number | null>(null), compare = ref(false), before = ref(false);
-const seriesUid = ref(''), profile = ref('chest_abdomen'), phase = ref('');
+const seriesUid = ref(''), acquisition = ref(acquisitionSelection());
+const acquisitionError = computed(() => acquisitionSelectionError(acquisition.value));
+const acquisitionTags = computed(() => acquisitionBadges(revision.value?.acquisition, activeCase.value?.phase));
 const mobilePanel = ref<'model' | 'anatomy' | 'review'>('model'), inspectorTab = ref<'selection' | 'refine' | 'history'>('selection');
 const ctExpanded = ref(false);
 const prepareOpen = ref(false);
+const segmentationOpen = ref(false), segmentationLoading = ref(false), segmentationError = ref('');
+const segmentationCatalog = shallowRef<SegmentationCatalog>();
+const segmentationSettings = ref<SegmentationSettings>(restoreSegmentationSettings());
 const model = ref<InstanceType<typeof ModelViewport>>(), correctionInput = ref<HTMLInputElement>();
+const exportSnapshot = shallowRef<PortableRenderSnapshot>();
 const interactivePanel = ref<InstanceType<typeof InteractiveReviewPanel>>();
 let pollTimer = 0, noticeTimer = 0, caseGeneration = 0, probeGeneration = 0, measurementToken = '', alive = true;
 let probeNext: { url: string; generation: number } | undefined;
@@ -58,15 +74,47 @@ let ctPreparedGrid = '';
 const structure = computed(() => shownRevision.value?.structures.find(s => s.id === selected.value) || (workspaceMode.value === 'review' ? pendingStructures.value.find(s => s.id === selected.value) : undefined));
 const pendingSelection = computed(() => pendingStructures.value.some(s => s.id === selected.value));
 const parentRevision = computed(() => revisions.value.find(r => r.id === revision.value?.parent_id));
-const shownRevision = computed(() => before.value && parentRevision.value ? parentRevision.value : revision.value);
+const shownRevision = computed(() => before.value && parentRevision.value ? parentRevision.value : showingCandidate.value && interactiveReview.value?.candidate?.preview_3d_ready && candidateSurfaceSession.value === interactiveReview.value?.id && candidateSurfaceRevision.value ? candidateSurfaceRevision.value : revision.value);
+const ctOnly = computed(() => !!revision.value && (revision.value.kind === 'ct' || !revision.value.structures.length));
+const canCompareSurfaces = computed(() => !!revision.value?.structures.length && !!parentRevision.value?.structures.length);
 const modelKey = computed(() => `${activeCase.value?.id}:${shownRevision.value ? referenceGridKey(shownRevision.value.geometry) : ''}`);
 const busyJob = computed(() => !!job.value && ['queued', 'running'].includes(job.value.status));
 const busy = computed(() => busyJob.value || actionBusy.value);
 const base = computed(() => activeCase.value && revision.value ? revisionUrl(activeCase.value.id, revision.value.id) : '');
 const ctRevisionId = computed(() => reviewDisplayRevision(interactiveReview.value, interactiveCandidate.value) || revision.value?.id || '');
 const showingCandidate = computed(() => !!interactiveCandidate.value && !!reviewCandidateRevision(interactiveReview.value));
+const scissorsSurfacePending = computed(() => showingCandidate.value && !!interactiveReview.value?.candidate?.preview_3d_ready
+  && (candidateSurfaceLoading.value || !!candidateSurfaceError.value || candidateSurfaceRevision.value?.id !== reviewCandidateRevision(interactiveReview.value)));
+async function loadCandidateSurface() {
+  const generation = ++surfacePreviewGeneration, caseId = activeCase.value?.id;
+  const review = interactiveReview.value, alias = reviewCandidateRevision(review);
+  if (!caseId || !review || !alias || !review.candidate?.preview_3d_ready) { candidateSurfaceLoading.value = false; candidateSurfaceError.value = ''; return; }
+  candidateSurfaceLoading.value = true; candidateSurfaceError.value = '';
+  try {
+    const cached = surfacePreviewCache.get(alias), next = cached ?? await api.revision(caseId, alias);
+    if (generation !== surfacePreviewGeneration || caseId !== activeCase.value?.id || alias !== reviewCandidateRevision(interactiveReview.value)) return;
+    if (!next.model_manifest_url) throw new Error('The workstation did not return a 3D candidate preview.');
+    surfacePreviewCache.delete(alias); surfacePreviewCache.set(alias, next);
+    while (surfacePreviewCache.size > 8) surfacePreviewCache.delete(surfacePreviewCache.keys().next().value!);
+    candidateSurfaceRevision.value = next; candidateSurfaceSession.value = review.id;
+  } catch (reason) { if (generation === surfacePreviewGeneration) candidateSurfaceError.value = reason instanceof Error ? reason.message : 'The 3D candidate preview could not be loaded.'; }
+  finally { if (generation === surfacePreviewGeneration) candidateSurfaceLoading.value = false; }
+}
+watch(() => [activeCase.value?.id, revision.value?.id], () => {
+  surfacePreviewGeneration++; surfacePreviewCache.clear(); candidateSurfaceRevision.value = undefined; candidateSurfaceSession.value = '';
+  candidateSurfaceLoading.value = false; candidateSurfaceError.value = '';
+});
+watch(() => [interactiveReview.value?.id, reviewCandidateRevision(interactiveReview.value)], () => { void loadCandidateSurface(); });
 const ctBase = computed(() => activeCase.value && ctRevisionId.value ? revisionUrl(activeCase.value.id, ctRevisionId.value) : '');
 const synthetic = computed(() => activeCase.value?.synthetic || revision.value?.synthetic || /synthetic|demo/i.test(revision.value?.source || ''));
+const exportDisabledReason = computed(() => {
+  if (busy.value) return 'Wait for the current operation to finish before exporting.';
+  if (before.value || compare.value) return 'Return to the current revision and turn off comparison before exporting.';
+  const draft = interactiveDraft.value;
+  if (draft && draft.case_id === activeCase.value?.id && draft.revision_id === revision.value?.id && !['accepted', 'discarded'].includes(draft.status)
+      && (draft.prompts.length || draft.candidate || draft.new_structure || draft.relationship_dirty)) return 'Save or discard the correction draft before exporting the saved revision.';
+  return '';
+});
 const workerText = computed(() => {
   const gpu = health.value.gpu;
   if (typeof gpu === 'string') return gpu;
@@ -81,6 +129,13 @@ const series = computed(() => activeCase.value?.series.find(s => s.uid === serie
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
 
 function fail(reason: unknown) { error.value = reason instanceof Error ? reason.message : String(reason); }
+function openExport() {
+  if (!revision.value || exportDisabledReason.value) return;
+  const snapshot = model.value?.exportSnapshot();
+  if (!snapshot) { fail(new Error('The 3D view is still preparing. Try exporting again shortly.')); return; }
+  exportSnapshot.value = structuredClone(snapshot);
+}
+watch(() => [activeCase.value?.id, revision.value?.id], () => { exportSnapshot.value = undefined; });
 function toast(message: string) { notice.value = message; clearTimeout(noticeTimer); noticeTimer = window.setTimeout(() => { notice.value = ''; }, 5000); }
 async function refreshCases() { cases.value = await api.cases(); }
 async function loadRevision(id: string, rid: string, generation: number, preserve = false) {
@@ -88,6 +143,11 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   if (generation !== caseGeneration) return;
   if (revision.value?.id !== next.id) { setInteractiveReview(undefined); pendingStructures.value = []; }
   revision.value = next; revisions.value = all; before.value = false; compare.value = false;
+  acquisition.value = acquisitionSelection(next.acquisition, activeCase.value?.phase);
+  segmentationSettings.value = restoreSegmentationSettings(segmentationCatalog.value, next.segmentation_settings);
+  if (next.kind === 'ct' || !next.structures.length) {
+    workspaceMode.value = 'model'; inspectorTab.value = 'selection'; ctExpanded.value = false;
+  }
   const previous = display.value;
   selected.value = preserve && next.structures.some(item => item.id === selected.value) ? selected.value : next.structures[0]?.id || '';
   if (preserve) ctPinned.value = ctPinned.value.filter(id => next.structures.some(s => s.id === id));
@@ -103,11 +163,13 @@ async function openCase(id: string) {
   setInteractiveReview(undefined); pendingStructures.value = []; interactiveTool.value = 'navigate'; interactiveCandidate.value = true; interactiveOpen.value = false; interactiveDisabled.value = false; interactivePrompts.value = []; workspaceMode.value = 'model'; reviewFocus.value = 'both';
   probeGeneration++; probeNext = undefined; probeController?.abort(); hu.value = null;
   clearTimeout(pollTimer); job.value = undefined; jobMeasurements.value = undefined; measurementToken = '';
-  ctExpanded.value = false; prepareOpen.value = false;
+  ctExpanded.value = false; prepareOpen.value = false; segmentationOpen.value = false;
+  segmentationSettings.value = restoreSegmentationSettings(segmentationCatalog.value);
   revision.value = undefined; revisions.value = []; selected.value = ''; mobilePanel.value = 'model';
+  acquisition.value = acquisitionSelection(); seriesUid.value = '';
   try {
     const next = await api.case(id); if (generation !== caseGeneration) return;
-    activeCase.value = next; seriesUid.value = next.selected_series_uid || ''; phase.value = next.phase || '';
+    activeCase.value = next; seriesUid.value = next.selected_series_uid || ''; acquisition.value = acquisitionSelection(undefined, next.phase || '');
     localStorage.setItem('scan3d-case', id);
     if (next.active_revision_id) await loadRevision(id, next.active_revision_id, generation);
     if (generation !== caseGeneration || !alive) return;
@@ -162,26 +224,58 @@ function poll() {
           activeCase.value = current;
           if (current.active_revision_id) await loadRevision(current.id, current.active_revision_id, generation, !!revision.value);
         }
-        toast('Processing complete. Review the masks on the source CT.');
+        toast(revision.value?.kind === 'ct' || !revision.value?.structures.length ? 'CT ready. View the scan now; segmentation is available when you need it.' : 'Segmentation ready. Review the masks on the source CT.');
       } else if (next.status === 'failed') error.value = next.error || 'Processing failed. See the worker logs for details.';
       else toast('Processing cancelled. Completed stages remain cached.');
     } catch (reason) { if (alive && generation === caseGeneration && job.value?.id === id) { fail(reason); poll(); } }
   }, 1400);
 }
 async function process() {
-  if (!activeCase.value || !seriesUid.value || !phase.value) return;
+  if (!activeCase.value || !seriesUid.value || acquisitionError.value) return;
   actionBusy.value = true; error.value = '';
   try {
-    track(await api.process(activeCase.value.id, { series_uid: seriesUid.value, profile: profile.value, phase: phase.value }));
+    track(await api.process(activeCase.value.id, acquisitionRequest(seriesUid.value, acquisition.value)));
     if (revision.value) prepareOpen.value = false;
   }
   catch (reason) { fail(reason); } finally { actionBusy.value = false; }
 }
+async function loadSegmentationOptions(preserveCurrent = false) {
+  if (segmentationLoading.value) return;
+  const generation = caseGeneration, current = { ...segmentationSettings.value };
+  segmentationLoading.value = true; segmentationError.value = '';
+  try {
+    const catalog = await api.segmentationOptions();
+    if (!alive) return;
+    segmentationCatalog.value = catalog;
+    segmentationSettings.value = restoreSegmentationSettings(catalog, preserveCurrent && generation === caseGeneration ? current : revision.value?.segmentation_settings);
+  } catch (reason) { if (alive) segmentationError.value = reason instanceof Error ? reason.message : 'Available segmentation tasks could not be loaded.'; }
+  finally { if (alive) segmentationLoading.value = false; }
+}
+function openSegmentation() {
+  if (!revision.value || synthetic.value || busy.value) return;
+  ctExpanded.value = false; prepareOpen.value = false; workspaceMode.value = 'model'; segmentationOpen.value = true;
+  void loadSegmentationOptions(!!segmentationCatalog.value);
+}
+async function segment() {
+  const current = activeCase.value, reference = revision.value, task = segmentationCatalog.value?.tasks.find(item => item.id === segmentationSettings.value.task);
+  if (!current || !reference || busy.value || !task || (task.license_required && !task.license_available)) return;
+  const generation = caseGeneration;
+  actionBusy.value = true; error.value = '';
+  try {
+    const settings = segmentationSettings.value;
+    const next = await api.segment(current.id, { revision_id: reference.id, task: task.id,
+      robust_crop: task.robust_crop_default || (task.robust_crop_supported && settings.robust_crop),
+      body_seg: task.body_seg_supported && settings.body_seg, remove_small_blobs: settings.remove_small_blobs });
+    track(next);
+    if (generation === caseGeneration) { segmentationOpen.value = false; before.value = false; }
+  } catch (reason) { if (generation === caseGeneration) fail(reason); }
+  finally { actionBusy.value = false; }
+}
 function openPrepare() {
-  const acquisition = revision.value?.acquisition;
-  seriesUid.value = acquisition?.series_uid || activeCase.value?.selected_series_uid || '';
-  profile.value = acquisition?.profile || 'chest_abdomen'; phase.value = acquisition?.phase || activeCase.value?.phase || '';
-  ctExpanded.value = false; prepareOpen.value = true;
+  const recorded = revision.value?.acquisition;
+  seriesUid.value = recorded?.series_uid || activeCase.value?.selected_series_uid || '';
+  acquisition.value = acquisitionSelection(recorded, activeCase.value?.phase || '');
+  ctExpanded.value = false; prepareOpen.value = true; segmentationOpen.value = false;
 }
 async function cancel() {
   if (!job.value) return;
@@ -197,11 +291,13 @@ function setInteractiveReview(next: InteractiveReview | undefined) {
   interactiveDraft.value = next;
 }
 function createTarget(value: { review: InteractiveReview; structure: Structure }) {
+  display.value[value.structure.id] ??= { visible: true, opacity: .8 };
   if (value.review.case_id !== activeCase.value?.id || value.review.revision_id !== revision.value?.id) return;
   if (!pendingStructures.value.some(s => s.id === value.structure.id)) pendingStructures.value.push(value.structure);
   setInteractiveReview(value.review); interactiveCandidate.value = true; select(value.structure.id);
 }
 function removeTarget(id: string) {
+  if (!revision.value?.structures.some(item => item.id === id)) delete display.value[id];
   pendingStructures.value = pendingStructures.value.filter(s => s.id !== id);
   ctPinned.value = ctPinned.value.filter(value => value !== id);
   if (selected.value === id) selected.value = revision.value?.structures[0]?.id || '';
@@ -398,7 +494,7 @@ onMounted(async () => {
   if (results[1].status === 'fulfilled') health.value = results[1].value;
   loading.value = false;
 });
-onBeforeUnmount(() => { alive = false; ctGeneration++; localCT.value?.dispose(); cancelFullCT(); clearTimeout(pollTimer); clearTimeout(noticeTimer); clearTimeout(probeFrame); probeNext = undefined; probeController?.abort(); document.removeEventListener('keydown', keyboard); });
+onBeforeUnmount(() => { alive = false; surfacePreviewGeneration++; surfacePreviewCache.clear(); ctGeneration++; localCT.value?.dispose(); cancelFullCT(); clearTimeout(pollTimer); clearTimeout(noticeTimer); clearTimeout(probeFrame); probeNext = undefined; probeController?.abort(); document.removeEventListener('keydown', keyboard); });
 </script>
 
 <template>
@@ -425,36 +521,42 @@ onBeforeUnmount(() => { alive = false; ctGeneration++; localCT.value?.dispose();
     <template v-else-if="activeCase">
       <div class="case-toolbar">
         <div class="case-title"><span class="eyebrow">{{ synthetic ? 'SYNTHETIC DEMONSTRATION' : 'LOCAL CASE' }}</span><h1>{{ activeCase.label }}</h1></div>
-        <div v-if="revision" class="case-tags"><span v-if="revision.acquisition" class="pill">{{ revision.acquisition.profile.replaceAll('_', ' + ') }}</span><span v-if="activeCase.phase" class="pill">{{ activeCase.phase }}</span><span class="status-dot" :class="revision.review_status">{{ reviewLabels[revision.review_status] }}</span></div>
-        <div v-if="revision" class="case-actions"><button v-if="!synthetic && activeCase.series.length" class="button secondary compact reprocess-action" :disabled="busy" aria-label="Select series or reprocess scan" @click="openPrepare"><span class="reprocess-long">Select series / reprocess</span><span class="reprocess-short">Series</span></button><button class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button><a class="button primary compact" :href="`${base}/export.html`" download>Export viewer ↗</a></div>
+        <div v-if="revision" class="case-tags acquisition-tags"><span v-for="tag in acquisitionTags" :key="tag" class="pill">{{ tag }}</span><span v-if="ctOnly" class="pill">CT ready</span><span v-else class="status-dot" :class="revision.review_status">{{ reviewLabels[revision.review_status] }}</span></div>
+        <div v-if="revision" class="case-actions"><button v-if="!synthetic && activeCase.series.length" class="button secondary compact reprocess-action" :disabled="busy" aria-label="Select series or reprocess scan" @click="openPrepare"><span class="reprocess-long">Select CT series</span><span class="reprocess-short">Series</span></button><button v-if="!synthetic" class="button secondary compact" :disabled="busy" :aria-expanded="segmentationOpen" @click="openSegmentation">Segment CT…</button><button v-if="!ctOnly" class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button><button class="button primary compact export-viewer-button" :disabled="!!exportDisabledReason" :title="exportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'" @click="openExport">Export viewer ↗</button></div>
       </div>
+
+      <p v-if="revision && exportDisabledReason && !busy" class="export-disabled-note" role="status">{{ exportDisabledReason }}</p>
 
       <div v-if="job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status"><span v-if="busyJob" class="spinner"></span><div><strong>{{ job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally' }}</strong><span>{{ job.error || job.stage }}<template v-if="job.progress"> · {{ job.progress.completed }} / {{ job.progress.total }} {{ job.progress.phase === 'meshes' ? 'surfaces' : 'structures' }}</template></span><progress v-if="busyJob && job.progress && job.progress.total" :value="job.progress.completed" :max="job.progress.total" :aria-label="`${job.progress.phase} progress`"></progress></div><button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button><button v-else class="text-button" @click="job = undefined">Dismiss</button></div>
       <details v-if="busyJob && jobMeasurements?.structures.length" class="measurement-progress" :open="!revision"><summary>{{ jobMeasurements.completed }} / {{ jobMeasurements.total }} measurements available · {{ job?.progress?.phase === 'meshes' ? 'building display surfaces' : 'checking masks' }}</summary><p>Volumes are calculated from mask voxels.<template v-if="revision"> The current result stays available while this new revision is prepared.</template></p><div><table><thead><tr><th>Structure</th><th>Volume (mL)</th></tr></thead><tbody><tr v-for="item in jobMeasurements.structures" :key="item.id"><td>{{ prettyName(item.name) }}</td><td>{{ Number(item.volume_ml).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}</td></tr></tbody></table></div></details>
 
+      <SegmentationControls v-if="segmentationOpen && revision && !prepareOpen" v-model="segmentationSettings" :catalog="segmentationCatalog" :busy="busy" :loading="segmentationLoading" :error="segmentationError" @run="segment" @close="segmentationOpen = false" @retry="loadSegmentationOptions" @license-changed="loadSegmentationOptions(true)" />
+
       <div v-if="!revision || prepareOpen" class="prepare-workspace">
-        <section class="prepare-panel"><div class="prepare-heading"><span class="eyebrow">{{ revision ? 'SELECT SERIES / REPROCESS' : '01 / PREPARE SCAN' }}</span><button v-if="revision" class="text-button" @click="prepareOpen = false">← Back to current result</button></div><h2>Choose the right series.</h2><p class="muted">Each phase is processed separately. Select one diagnostic CT reconstruction to establish the reference geometry.</p><p v-if="revision" class="retained-result-note">Your current result remains available while another series is selected or processed.</p>
+        <section class="prepare-panel"><div class="prepare-heading"><span class="eyebrow">{{ revision ? 'SELECT CT SERIES' : '01 / OPEN SCAN' }}</span><button v-if="revision" class="text-button" @click="prepareOpen = false">← Back to current result</button></div><h2>Choose the right series.</h2><p class="muted">Each phase is opened separately. Select one diagnostic CT reconstruction for viewing and later segmentation.</p><p v-if="revision" class="retained-result-note">Your current result remains available while another series is selected or opened.</p>
           <div class="series-list"><label v-for="item in activeCase.series" :key="item.uid" class="series-option" :class="{ active: seriesUid === item.uid }"><input v-model="seriesUid" type="radio" :value="item.uid" :disabled="busy" /><div><strong>{{ item.description || 'CT series' }}</strong><span>{{ item.slice_count }} slices <i>·</i> {{ item.spacing?.map(n => Number(n).toFixed(2)).join(' × ') || 'Spacing unavailable' }} mm</span><small v-for="warning in item.warnings" :key="warning" class="warning">{{ warning }}</small></div><span class="pill">{{ item.modality }}</span></label></div>
           <p v-if="!activeCase.series.length" class="warning">No CT series found. Import a DICOM folder or ZIP containing image slices.</p>
-          <div class="prepare-fields"><label class="field">Processing profile<select v-model="profile" :disabled="busy"><option value="chest_abdomen">Chest + abdomen</option><option value="chest">Chest</option><option value="abdomen">Abdomen</option></select></label><label class="field">Contrast phase<select v-model="phase" :disabled="busy"><option value="" disabled>Select phase…</option><option value="arterial">Arterial</option><option value="portal_venous">Portal venous</option><option value="delayed">Delayed</option><option value="unknown">Unknown</option><option value="other">Other</option></select></label></div>
-          <div v-if="series" class="processing-note"><span>⌁</span><p>Standard-resolution TotalSegmentator inference. Chest profiles also run pulmonary vessel and airway segmentation.</p></div>
-          <button class="button primary large full" :disabled="!seriesUid || !phase || busy" @click="process">{{ busyJob ? 'Processing scan…' : 'Segment selected series →' }}</button>
+          <AcquisitionFields v-model="acquisition" :disabled="busy" />
+          <div v-if="series" class="processing-note"><span>⌁</span><p>Open the source CT for slice review and volume rendering. Choose a segmentation task separately when you need anatomical segments.</p></div>
+          <button class="button primary large full" :disabled="!seriesUid || !!acquisitionError || busy" @click="process">{{ busyJob ? 'Opening CT…' : 'Open CT →' }}</button>
         </section>
-        <aside class="prepare-guide"><span class="eyebrow">THE WORKFLOW</span><h3>From image to anatomy.</h3><ol><li><span>01</span><div><strong>Segment</strong><p>Organs, lung lobes, major vessels and airways, using local GPU inference.</p></div></li><li><span>02</span><div><strong>Inspect & refine</strong><p>Verify boundaries on source CT. Make reproducible corrections with a complete revision history.</p></div></li><li><span>03</span><div><strong>Explore & share</strong><p>Control anatomy in 3D and export a self-contained offline viewer.</p></div></li></ol></aside>
+        <aside class="prepare-guide"><span class="eyebrow">THE WORKFLOW</span><h3>From image to anatomy.</h3><ol><li><span>01</span><div><strong>View CT</strong><p>Open the scan, scroll through slices and explore the CT volume.</p></div></li><li><span>02</span><div><strong>Segment when needed</strong><p>Choose a TotalSegmentator task and optional processing settings.</p></div></li><li><span>03</span><div><strong>Review & share</strong><p>Verify segments on CT, refine boundaries and export the 3D anatomy.</p></div></li></ol></aside>
       </div>
 
       <div v-if="revision" v-show="!prepareOpen" class="workspace" :class="[`mobile-${mobilePanel}`, { 'review-workspace': workspaceMode === 'review', 'review-focus-ct': workspaceMode === 'review' && reviewFocus === 'ct', 'review-focus-model': workspaceMode === 'review' && reviewFocus === 'model' }]">
-        <div v-show="workspaceMode === 'review'" class="review-workspace-toolbar"><div class="review-workspace-tabs"><strong>Review segmentation</strong><button :class="{ active: reviewFocus === 'both' }" @click="reviewFocus = 'both'">CT + 3D</button><button :class="{ active: reviewFocus === 'ct' }" @click="reviewFocus = 'ct'">Focus CT</button><button :class="{ active: reviewFocus === 'model' }" @click="reviewFocus = 'model'">Focus 3D</button><button class="text-button" @click="workspaceMode = 'model'">Exit review</button></div><InteractiveReviewPanel ref="interactivePanel" :case-id="activeCase.id" :revision-id="revision.id" :selected="selected" :structures="reviewStructures" :busy="busy" :active="workspaceMode === 'review'" @state="setInteractiveReview" @targets="pendingStructures = $event" @create-target="createTarget" @remove-target="removeTarget" @prompts="interactivePrompts = $event" @select="select" @tool="interactiveTool = $event" @polarity="interactiveInclude = $event" @radius="interactiveRadius = $event" @native="interactiveNative = $event" @candidate="interactiveCandidate = $event" @preview-overlaps="previewOverlaps" @disabled="interactiveDisabled = $event" @opened="interactiveOpen = $event" @accept="track" /></div>
-        <aside class="anatomy-rail"><AnatomyPanel :structures="shownRevision?.structures || revision.structures" :display="display" :selected="selected" @select="select" @visibility="visibility" @group-visibility="groupVisibility" @solo="solo" @all="showAll" @hide-all="hideAll" /></aside>
+        <div v-show="workspaceMode === 'review'" class="review-workspace-toolbar"><div class="review-workspace-tabs"><strong>Review segmentation</strong><button :class="{ active: reviewFocus === 'both' }" @click="reviewFocus = 'both'">CT + 3D</button><button :class="{ active: reviewFocus === 'ct' }" @click="reviewFocus = 'ct'">Focus CT</button><button :class="{ active: reviewFocus === 'model' }" @click="reviewFocus = 'model'">Focus 3D</button><button class="text-button" @click="workspaceMode = 'model'">Exit review</button></div><InteractiveReviewPanel ref="interactivePanel" :case-id="activeCase.id" :revision-id="revision.id" :selected="selected" :structures="reviewStructures" :busy="busy" :active="workspaceMode === 'review'" @state="setInteractiveReview" @targets="pendingStructures = $event" @create-target="createTarget" @remove-target="removeTarget" @prompts="interactivePrompts = $event" @select="select" @tool="interactiveTool = $event" @polarity="interactiveInclude = $event" @radius="interactiveRadius = $event" @scissors="interactiveScissors = $event" @native="interactiveNative = $event" @candidate="interactiveCandidate = $event" @preview-overlaps="previewOverlaps" @disabled="interactiveDisabled = $event" @opened="interactiveOpen = $event" @accept="track" /></div>
+        <aside class="anatomy-rail"><div v-if="ctOnly" class="ct-only-anatomy"><span class="eyebrow">SOURCE CT</span><h2>CT ready</h2><p>Explore the scan in 3D and the linked CT views. Anatomical segments will appear here after segmentation.</p><button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Choose segmentation task</button><p class="help">Opening the CT does not start TotalSegmentator.</p></div><AnatomyPanel v-else :structures="shownRevision?.structures || revision.structures" :display="display" :selected="selected" @select="select" @visibility="visibility" @group-visibility="groupVisibility" @solo="solo" @all="showAll" @hide-all="hideAll" /></aside>
         <section class="central-workspace">
-          <div class="model-header"><div class="view-tabs"><button class="active">3D anatomy</button><span>{{ interactiveReview?.candidate ? 'Saved mask · candidate on CT' : `${revision.structures.length} structures` }}</span></div><div v-if="revision.parent_id" class="comparison-toggle"><button :class="{ active: !before }" @click="before = false">Current</button><button :class="{ active: before }" @click="before = true">Before</button></div><span class="model-scale">PATIENT RAS · mm</span></div>
-          <ModelViewport v-if="shownRevision" ref="model" :key="modelKey" :manifest-url="shownRevision.model_manifest_url" :model-url="shownRevision.model_url || `${revisionUrl(activeCase.id, shownRevision.id)}/model.glb`" :structures="shownRevision.structures" :display="display" :selected="selected"  :point="point" :label="activeCase.label" :viewport-active="!prepareOpen && (workspaceMode !== 'review' || reviewFocus !== 'ct')" :review-active="workspaceMode === 'review' && reviewFocus !== 'ct'" :review-target="reviewStructures.find(s => s.id === selected)" :review-tool="interactiveTool" :review-prompts="interactivePrompts" :review-disabled="interactiveDisabled || before" :review-include="interactiveInclude" :review-radius="interactiveRadius" :case-id="activeCase.id" :revision-id="ctRevisionId" :geometry="revision.geometry" :local-session="localCT" :local-ready="localCTReady" :full-resolution="localCTFull" :overlays="ctOverlayStructures" :compare="compare" :window="Math.max(1, windowWidth || 400)" :level="level || 0" @pick="picked" @point="setPoint" @gesture="interactivePanel?.addGesture($event)" />
+          <div class="model-header"><div class="view-tabs"><button class="active">{{ ctOnly ? 'CT view' : '3D anatomy' }}</button><span>{{ ctOnly ? 'Source CT' : interactiveReview?.candidate ? 'Saved mask · candidate on CT' : `${revision.structures.length} structures` }}</span></div><div v-if="canCompareSurfaces" class="comparison-toggle"><button :class="{ active: !before }" @click="before = false">Current</button><button :class="{ active: before }" @click="before = true">Before</button></div><span class="model-scale">PATIENT RAS · mm</span></div>
+          <p v-if="workspaceMode === 'review' && showingCandidate && (candidateSurfaceLoading || candidateSurfaceError)" class="candidate-surface-note" :role="candidateSurfaceError ? 'alert' : 'status'">{{ candidateSurfaceError || 'Preparing the 3D candidate preview… Previous surfaces remain visible.' }}<button v-if="candidateSurfaceError" class="text-button" @click="loadCandidateSurface">Retry preview</button></p>
+          <ModelViewport v-if="shownRevision" ref="model" :key="modelKey" :manifest-url="shownRevision.structures.length ? shownRevision.model_manifest_url || undefined : undefined" :model-url="shownRevision.structures.length ? shownRevision.model_url || `${revisionUrl(activeCase.id, shownRevision.id)}/model.glb` : undefined" :structures="shownRevision.structures" :mask-structures="revision.structures" :display="display" :selected="selected"  :point="point" :label="activeCase.label" :viewport-active="!prepareOpen && (workspaceMode !== 'review' || reviewFocus !== 'ct')" :review-active="workspaceMode === 'review' && reviewFocus !== 'ct'" :review-target="reviewStructures.find(s => s.id === selected)" :review-tool="interactiveTool" :review-prompts="interactivePrompts" :review-disabled="interactiveDisabled || before || (interactiveTool === 'scissors' && scissorsSurfacePending)" :review-include="interactiveInclude" :review-radius="interactiveRadius" :review-scissors-shape="interactiveScissors.shape" :review-scissors-operation="interactiveScissors.operation" :model-revision-id="shownRevision.id" :case-id="activeCase.id" :revision-id="ctRevisionId" :geometry="revision.geometry" :local-session="localCT" :local-ready="localCTReady" :full-resolution="localCTFull" :overlays="ctOverlayStructures" :compare="compare" :window="Math.max(1, windowWidth || 400)" :level="level || 0" @pick="picked" @point="setPoint" @gesture="interactivePanel?.addGesture($event)" />
           <div v-if="before" class="before-label">Parent surface and measurements · CT retains the active revision</div>
           <div v-if="synthetic" class="demo-label">SYNTHETIC DEMO <span>Illustrative shapes for workflow testing · no patient data or model inference</span></div>
           <section class="inspector">
-            <header class="inspector-tabs"><button :class="{ active: inspectorTab === 'selection' }" @click="inspectorTab = 'selection'">Selected structure</button><button :class="{ active: inspectorTab === 'refine' }" @click="inspectorTab = 'refine'; before = false">Refinement</button><button :class="{ active: inspectorTab === 'history' }" @click="inspectorTab = 'history'">Revision history <span>{{ revisions.length }}</span></button></header>
+            <header class="inspector-tabs"><button :class="{ active: inspectorTab === 'selection' }" @click="inspectorTab = 'selection'">{{ ctOnly ? 'Source CT' : 'Selected structure' }}</button><button v-if="!ctOnly" :class="{ active: inspectorTab === 'refine' }" @click="inspectorTab = 'refine'; before = false">Refinement</button><button :class="{ active: inspectorTab === 'history' }" @click="inspectorTab = 'history'">Revision history <span>{{ revisions.length }}</span></button></header>
+            <div v-if="ctOnly && inspectorTab === 'selection'" class="ct-only-summary"><div><span class="eyebrow">CT GEOMETRY</span><p>{{ revision.geometry.shape.join(' × ') }} voxels <span>·</span> {{ revision.geometry.spacing.map(n => Number(n).toFixed(2)).join(' × ') }} mm</p><p class="help">Select a segmentation task to create anatomical masks for review and measurement.</p></div><button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Segment CT…</button></div>
             <div v-if="inspectorTab === 'selection' && structure" class="selection-content"><div class="selection-identity"><i :style="{ background: colorCss(structure.color) }"></i><div><span class="eyebrow">{{ prettyName(structure.group) }}</span><h2>{{ prettyName(structure.name) }}</h2><span class="selection-source">{{ pendingStructures.some(s => s.id === selected) ? 'Unsaved segment · preview on CT before saving' : `${structure.task} · mask-derived measurement` }}</span></div></div><p v-if="pendingSelection" class="help">Review the candidate on CT, then save to measure it and create its 3D surface.</p><div v-else class="measurement"><span class="eyebrow">VOLUME</span><strong>{{ Number(structure.volume_ml).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}<small>mL</small></strong></div><div v-if="!pendingSelection" class="selection-controls"><label>Opacity <span>{{ Math.round((display[selected]?.opacity || 0) * 100) }}%</span><input v-if="display[selected]" v-model.number="display[selected].opacity" type="range" min="0.05" max="1" step="0.01" /></label><div class="button-row"><button class="button secondary compact" @click="solo(selected)">Isolate</button><button class="button secondary compact" @click="model?.focus()">Focus ↗</button></div></div><div v-if="structure.qc?.length" class="selection-qc"><span v-for="message in structure.qc" :key="message">⚑ {{ message }}</span></div></div>
-            <RefinementPanel v-else-if="inspectorTab === 'refine' && revision.structures.some(s => s.id === selected)" :key="revision.id" :point="point" :geometry="revision.geometry" :selected="selected" :busy="busy" @apply="refine" />
+            <RefinementPanel v-else-if="!ctOnly && inspectorTab === 'refine' && revision.structures.some(s => s.id === selected)" :key="revision.id" :point="point" :geometry="revision.geometry" :selected="selected" :busy="busy" @apply="refine" />
             <div v-else-if="inspectorTab === 'history'" class="history-content"><div class="history-heading"><p class="help">Activate a previous revision for exact undo. Every mask and measurement is preserved.</p><button class="button secondary compact" :disabled="!revision.parent_id || busy" @click="revision.parent_id && activate(revision.parent_id)">↶ Undo to parent</button></div><div v-for="item in revisions" :key="item.id" class="revision-row"><span class="revision-node" :class="{ active: revision.id === item.id }"></span><div><strong>{{ prettyName(item.source) }} <span v-if="revision.id === item.id" class="pill">ACTIVE</span></strong><small>{{ new Date(item.created_at).toLocaleString() }} · {{ item.review_status }}</small><small v-if="changeSummary(item)" class="revision-change">{{ changeSummary(item) }}</small></div><button class="text-button" :disabled="revision.id === item.id || busy" @click="activate(item.id)">Activate</button></div></div>
           </section>
         </section>
@@ -464,7 +566,7 @@ onBeforeUnmount(() => { alive = false; ctGeneration++; localCT.value?.dispose();
           <div class="panel-heading"><div><span class="eyebrow">SOURCE IMAGES</span><h2>CT review</h2></div><span class="pill">LINKED</span><button class="text-button ct-expand-button" :aria-expanded="ctExpanded" @click="toggleCT">{{ workspaceMode === 'review' ? reviewFocus === 'ct' ? 'CT + 3D' : 'Focus CT' : ctExpanded ? 'Close ×' : 'Expand ↗' }}</button></div>
           <div class="window-controls"><label>Window<select aria-label="CT window preset" @change="preset"><option value="400,40">Soft tissue</option><option value="1500,-600">Lung</option><option value="1800,400">Bone</option><option value="700,100">Vessels</option></select></label><label>W<input v-model.number="windowWidth" type="number" min="1" max="6000" /></label><label>L<input v-model.number="level" type="number" min="-2000" max="4000" /></label></div>
           <div v-if="ctViewerError" class="ct-viewer-error" role="status">Cornerstone could not render this view: {{ ctViewerError }}. Fallback CT navigation is active. <button class="text-button" @click="retryCornerstone">Retry Cornerstone</button></div>
-          <CTOverlayPicker :structures="ctStructures" :ids="ctOverlayIds" :selected="selected" :following="ctFollowing" @change="setCTOverlays" @follow="followCTSelection" />
+          <CTOverlayPicker v-if="ctStructures.length" :structures="ctStructures" :ids="ctOverlayIds" :selected="selected" :following="ctFollowing" @change="setCTOverlays" @follow="followCTSelection" />
           <div class="ct-delivery" :data-mode="ctDeliveryMode" role="status">
             <span v-if="ctDeliveryMode === 'loading'">Loading fast CT navigation<span v-if="ctProgress?.stage === 'ct'"> · {{ ctPercent }}%</span>…</span>
             <span v-else-if="ctDeliveryMode === 'full'">Full CT cached · local review</span>
@@ -475,15 +577,32 @@ onBeforeUnmount(() => { alive = false; ctGeneration++; localCT.value?.dispose();
             <p v-if="ctLocalError" class="ct-detail-error">{{ ctLocalError }} <button v-if="!localCTReady" class="text-button" @click="prepareLocalCT(ctBase)">Retry</button></p>
           </div>
           <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate"><span>Reviewing <strong>{{ prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id) }}</strong> · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span><button class="text-button" @click="openInteractiveReview">Review controls ↗</button></div>
-          <div class="ct-slices"><CTSlice v-for="plane in (['axial', 'coronal', 'sagittal'] as const)" :key="plane" :viewer="ctViewer" :case-id="activeCase.id" :revision-id="ctRevisionId" :geometry="revision.geometry" :plane="plane" :point="point" :window="Math.max(1, windowWidth || 400)" :level="level || 0" :structure="selected" :overlays="ctOverlayStructures" :compare="compare" :local-session="localCT" :local-ready="localCTReady" :full-resolution="localCTFull" :review-tool="workspaceMode === 'review' ? interactiveTool : 'navigate'" :review-prompts="workspaceMode === 'review' ? interactivePrompts : []" :review-disabled="interactiveDisabled" :review-include="interactiveInclude" :review-radius="interactiveRadius" :native-review="workspaceMode === 'review' && interactiveNative" @point="setPoint" @prompt="interactivePanel?.addPrompt($event)" @gesture="interactivePanel?.addGesture($event)" @fallback="useServerCT" @viewer-fallback="cornerstoneFallback" @window-level="cornerstoneWindowLevel" /></div>
+          <div class="ct-slices"><CTSlice v-for="plane in (['axial', 'coronal', 'sagittal'] as const)" :key="plane" :viewer="ctViewer" :case-id="activeCase.id" :revision-id="ctRevisionId" :geometry="revision.geometry" :plane="plane" :point="point" :window="Math.max(1, windowWidth || 400)" :level="level || 0" :structure="selected" :overlays="ctOverlayStructures" :compare="compare" :local-session="localCT" :local-ready="localCTReady" :full-resolution="localCTFull" :review-tool="workspaceMode === 'review' && interactiveTool !== 'scissors' ? interactiveTool : 'navigate'" :review-prompts="workspaceMode === 'review' ? interactivePrompts : []" :review-disabled="interactiveDisabled" :review-include="interactiveInclude" :review-radius="interactiveRadius" :native-review="workspaceMode === 'review' && interactiveNative" @point="setPoint" @prompt="interactivePanel?.addPrompt($event)" @gesture="interactivePanel?.addGesture($event)" @fallback="useServerCT" @viewer-fallback="cornerstoneFallback" @window-level="cornerstoneWindowLevel" /></div>
           <div class="probe-readout"><span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span><strong>{{ hu === null ? '—' : Math.round(hu) }} <small>HU</small></strong></div>
-          <label v-if="revision.parent_id || showingCandidate" class="compare-check"><input v-model="compare" type="checkbox" /> {{ showingCandidate ? 'Compare candidate with original masks' : 'Compare CT overlay with parent' }}</label>
-          <details class="review-status" :open="workspaceMode !== 'review'"><summary v-if="workspaceMode === 'review'">Review status and external tools</summary><div class="section-title"><h3>Review & correction</h3></div><label class="field">Revision status<select :value="revision.review_status" :disabled="busy" @change="review"><option value="unreviewed">Unreviewed</option><option value="reviewed">Reviewed</option><option value="corrected">Corrected</option></select></label><details class="slicer-fallback"><summary>External correction with Slicer</summary><div class="button-row"><a class="button secondary compact" :href="`${base}/slicer.zip`" download>Slicer bundle ↓</a><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button></div><p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p></details><input ref="correctionInput" type="file" accept=".nrrd,.nhdr" hidden @change="correction" /><div v-if="revision.qc.length" class="qc-list"><details><summary>{{ revision.qc.length }} automated check {{ revision.qc.length === 1 ? 'note' : 'notes' }}</summary><p v-for="message in revision.qc" :key="message">{{ message }}</p></details></div></details>
+          <label v-if="canCompareSurfaces || showingCandidate" class="compare-check"><input v-model="compare" type="checkbox" /> {{ showingCandidate ? 'Compare candidate with original masks' : 'Compare CT overlay with parent' }}</label>
+          <details v-if="!ctOnly" class="review-status" :open="workspaceMode !== 'review'"><summary v-if="workspaceMode === 'review'">Review status and external tools</summary><div class="section-title"><h3>Review & correction</h3></div><label class="field">Revision status<select :value="revision.review_status" :disabled="busy" @change="review"><option value="unreviewed">Unreviewed</option><option value="reviewed">Reviewed</option><option value="corrected">Corrected</option></select></label><details class="slicer-fallback"><summary>External correction with Slicer</summary><div class="button-row"><a class="button secondary compact" :href="`${base}/slicer.zip`" download>Slicer bundle ↓</a><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button></div><p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p></details><input ref="correctionInput" type="file" accept=".nrrd,.nhdr" hidden @change="correction" /><div v-if="revision.qc.length" class="qc-list"><details><summary>{{ revision.qc.length }} automated check {{ revision.qc.length === 1 ? 'note' : 'notes' }}</summary><p v-for="message in revision.qc" :key="message">{{ message }}</p></details></div></details>
         </aside>
       </div>
       <nav v-if="revision && !prepareOpen" class="mobile-navigation" aria-label="Workspace panels"><button :class="{ active: mobilePanel === 'anatomy' }" @click="mobilePanel = 'anatomy'">☷ Anatomy</button><button :class="{ active: mobilePanel === 'model' }" @click="mobilePanel = 'model'">◇ 3D model</button><button :class="{ active: mobilePanel === 'review' }" @click="mobilePanel = 'review'">⊞ CT review</button></nav>
-      <footer class="app-footer"><span><span class="live-dot"></span> LOCAL PROCESSING <i>·</i> {{ synthetic ? 'SYNTHETIC FIXTURE' : 'TOTAL SEGMENTATOR' }}</span><span>{{ revision ? `${revision.structures.length} structures · revision ${revision.id.slice(0, 8)}` : 'Select a series to begin' }}</span><span>Verify anatomy on the source CT</span></footer>
+      <footer class="app-footer"><span><span class="live-dot"></span> LOCAL PROCESSING <i>·</i> {{ synthetic ? 'SYNTHETIC FIXTURE' : ctOnly ? 'SOURCE CT' : 'TOTAL SEGMENTATOR' }}</span><span>{{ revision ? `${ctOnly ? 'CT ready' : `${revision.structures.length} structures`} · revision ${revision.id.slice(0, 8)}` : 'Select a series to begin' }}</span><span>Verify anatomy on the source CT</span></footer>
     </template>
     <ImportDialog v-if="importOpen" :busy="importing" @close="importOpen = false" @import="imported" @demo="demo" />
+    <ExportViewerDialog v-if="exportSnapshot && revision && activeCase" :key="`${activeCase.id}:${revision.id}`" :base="base" :label="activeCase.label" :snapshot="exportSnapshot" :has-structures="!!revision.structures.length" @close="exportSnapshot = undefined" />
   </div>
 </template>
+
+<style scoped>
+.acquisition-tags{min-width:0;flex-wrap:wrap;gap:5px}
+.acquisition-tags>.pill{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+.export-disabled-note{padding:7px 24px;border-bottom:1px solid var(--line);font-size:10px;color:var(--text-secondary);background:var(--surface);flex-shrink:0}
+.candidate-surface-note{margin:0;padding:6px 14px;background:#1c2532;color:#bdcce0;font-size:10px;line-height:1.5}.candidate-surface-note .text-button{margin-left:8px;font-size:10px}
+.ct-only-anatomy{padding:22px 17px;display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.ct-only-anatomy h2{font-size:15px;color:var(--white);margin:0}
+.ct-only-anatomy p{font-size:11px;line-height:1.7;color:var(--text-secondary);margin:0}
+.ct-only-anatomy p.help{font-size:10px;color:var(--muted)}
+.ct-only-summary{padding:17px 20px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+.ct-only-summary p{font-size:11px;color:var(--text-secondary);line-height:1.6;margin:6px 0 0}
+.ct-only-summary p>span{margin:0 5px;color:var(--muted)}
+.ct-only-summary .help{font-size:10px;color:var(--muted)}
+.ct-only-summary>.button{flex-shrink:0}
+</style>
