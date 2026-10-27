@@ -6,10 +6,10 @@ import { cornerstoneMPRCacheStats } from '../src/lib/cornerstone-mpr';
 import { cornerstoneLibraries } from '../src/lib/cornerstone-runtime';
 import { cornerstoneSessionStats } from '../src/lib/cornerstone-session';
 import { transformPoint, type VolumeDescriptor } from '../src/lib/ct-reslice';
-import { gpuVolumeSlabRange, type GPUVolumeSource } from '../src/lib/gpu-volume-data';
+import { gpuVolumeSlabRange, type GPUOverlaySourceProvider, type GPUVolumeSource, type VolumeDisplayUnion } from '../src/lib/gpu-volume-data';
 import { sharedVolumeMemoryBudget, type VolumeMemoryLease } from '../src/lib/volume-memory-budget';
 import type { LocalCTSession } from '../src/lib/ct-volume';
-import type { Geometry, Point } from '../src/types';
+import type { Geometry, Point, Structure } from '../src/types';
 import '../src/style.css';
 
 const bootKey = 'scan3d-cornerstone-volume-fixture-boots';
@@ -155,6 +155,101 @@ function makeSession(version: number): FixtureSession {
 }
 let sourceVersion = 1;
 const session = shallowRef(makeSession(sourceVersion));
+const maskStructures: Structure[] = [
+  {
+    id: 'fixture:bone',
+    name: 'reference_bone',
+    task: 'synthetic',
+    group: 'synthetic',
+    color: '#d8d2bd',
+    volume_ml: 1,
+    voxel_count: 870,
+    centroid_ras: transformPoint(affine, [24, 31, 20]),
+    bounds_ras: geometry.bounds_ras,
+    qc: [],
+  },
+];
+const maskInputs = new Map<string, { bytes: Uint8Array; checksum: number; descriptor: VolumeDisplayUnion }>();
+let maskRequests = 0,
+  maskSlabReads = 0,
+  maskSlabBytes = 0,
+  failMaskTransfer = false;
+function maskChecksum(bytes: Uint8Array) {
+  return bytes.reduce((hash, byte) => Math.imul(hash ^ byte, 16777619) >>> 0, 2166136261);
+}
+const maskProvider: GPUOverlaySourceProvider = {
+  async get(_base, ids, signal, marginMM = 0) {
+    maskRequests++;
+    await new Promise(resolve => setTimeout(resolve, 80));
+    if (signal.aborted) throw new DOMException('Cancelled fixture mask', 'AbortError');
+    if (failMaskTransfer) throw new Error('Synthetic cropped mask transfer unavailable');
+    const selected = [...new Set(ids)].sort();
+    if (!selected.length) return { overlays: [] };
+    if (selected.some(id => id !== 'fixture:bone')) throw new Error('Unexpected synthetic mask selection');
+    const key = JSON.stringify([session.value.descriptor!.key, selected, marginMM]);
+    let union = maskInputs.get(key);
+    if (!union) {
+      // The analytical mask is a small native box around one bright vessel.
+      // Dilate in physical mm, preserving the oblique/reflected source affine.
+      const low: Point = [22, 29, 6],
+        high: Point = [27, 33, 34],
+        first = low.map((value, axis) => Math.max(0, value - Math.ceil(marginMM / spacing[axis]))) as Point,
+        last = high.map((value, axis) => Math.min(shape[axis] - 1, value + Math.ceil(marginMM / spacing[axis]))) as Point,
+        dimensions = first.map((value, axis) => last[axis] - value + 1) as Point,
+        bytes = new Uint8Array(dimensions.reduce((a, b) => a * b));
+      for (let k = 0; k < dimensions[2]; k++)
+        for (let j = 0; j < dimensions[1]; j++)
+          for (let i = 0; i < dimensions[0]; i++) {
+            const point: Point = [i + first[0], j + first[1], k + first[2]],
+              distance = point.reduce((sum, value, axis) => sum + (Math.max(low[axis] - value, 0, value - high[axis]) * spacing[axis]) ** 2, 0);
+            bytes[i + dimensions[0] * (j + dimensions[1] * k)] = distance <= marginMM ** 2 ? 1 : 0;
+          }
+      const origin = transformPoint(affine, first),
+        croppedAffine = affine.map((row, axis) => (axis < 3 ? [row[0], row[1], row[2], origin[axis]] : [...row]));
+      const maskDescriptor: VolumeDisplayUnion = {
+        schema_version: 1,
+        key,
+        kind: 'mask',
+        quality: 'preview',
+        dtype: 'uint8',
+        slope: 1,
+        intercept: 0,
+        shape: dimensions,
+        affine_ras: croppedAffine,
+        byte_length: bytes.byteLength,
+        chunk_depth: dimensions[2],
+        chunks: [{ index: 0, start_k: 0, depth: dimensions[2], byte_offset: 0, byte_length: bytes.byteLength, url: '/fixture-mask-unused' }],
+        reference_geometry: geometry,
+        reference_image_id: session.value.descriptor!.reference_image_id,
+        presentation_only: true,
+        volume_mask_union: true,
+        selected_structure_ids: selected,
+        display_margin_mm: marginMM,
+      };
+      union = { bytes, descriptor: maskDescriptor, checksum: maskChecksum(bytes) };
+      maskInputs.set(key, union);
+    }
+    const current = union;
+    return {
+      overlays: [
+        {
+          id: 'volume-mask-union:' + current.descriptor.key,
+          parent: null,
+          current: {
+            descriptor: current.descriptor,
+            async readSlab(start, depth, readSignal) {
+              if (signal.aborted || readSignal?.aborted) throw new DOMException('Cancelled fixture mask slab', 'AbortError');
+              const range = gpuVolumeSlabRange(current.descriptor, start, depth);
+              maskSlabReads++;
+              maskSlabBytes += range.byteLength;
+              return current.bytes.slice(range.byteOffset, range.byteOffset + range.byteLength).buffer;
+            },
+          },
+        },
+      ],
+    };
+  },
+};
 type Model = {
   volumeDiagnostics(): Record<string, unknown> | undefined;
   captureVolumePNG(): Promise<string>;
@@ -192,6 +287,8 @@ const app = createApp({
         ? h(ModelViewport, {
             ref: (value: unknown) => (model = value as Model | null),
             structures: [],
+            maskStructures,
+            maskSourceProvider: maskProvider,
             display: {},
             selected: '',
             caseId: 'fixture',
@@ -249,6 +346,7 @@ async function stats() {
     shared,
     visibility: { mpr: state.showMPR, model: state.showModel },
     preview: model?.volumeDiagnostics?.(),
+    model: { ...document.querySelector<HTMLElement>('#model .model-viewport')?.dataset },
     previewMounted: !!document.querySelector('#model .cornerstone-volume-view'),
     standard: { ...standardHost()?.dataset },
     cache: cornerstoneMPRCacheStats(),
@@ -258,6 +356,18 @@ async function stats() {
     slabReads,
     maxSlabBytes,
     textureCalls: { ...textureCalls },
+    masks: {
+      requests: maskRequests,
+      slabReads: maskSlabReads,
+      slabBytes: maskSlabBytes,
+      unchanged: [...maskInputs.values()].every(item => maskChecksum(item.bytes) === item.checksum),
+      inputs: [...maskInputs.values()].map(item => ({
+        key: item.descriptor.key,
+        shape: item.descriptor.shape,
+        affineRAS: item.descriptor.affine_ras,
+        bytes: item.bytes.byteLength,
+      })),
+    },
     apiRequests,
     sourceUnchanged: checksum() === originalChecksum,
     memoryFailures,
@@ -436,6 +546,19 @@ Object.assign(window, {
       });
       await frames();
       return stats();
+    },
+    reserveMaskPressure: async () => {
+      pressure = sharedVolumeMemoryBudget.reserve('fixture-mask-pressure', {
+        sourceKey: 'virtual-mask-pressure',
+        workerBytes: 0,
+        cpuBytes: sharedVolumeMemoryBudget.limitBytes - sharedVolumeMemoryBudget.stats.usedBytes - 1,
+        gpuBytes: 0,
+      });
+      await frames();
+      return stats();
+    },
+    failMaskTransfer: (fail: boolean) => {
+      failMaskTransfer = fail;
     },
     releasePressure: async () => {
       pressure?.release();

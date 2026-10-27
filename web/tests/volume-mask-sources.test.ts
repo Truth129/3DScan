@@ -114,6 +114,56 @@ describe('bounded independent volume-mask union transport', () => {
     await expect(source.readSlab(0, 1)).rejects.toMatchObject({ name: 'AbortError' });
     loader.dispose();
   });
+  it('releases decoded chunks while reusing descriptors and preserving existing source handles', async () => {
+    const desc = descriptor(),
+      fetcher = vi.fn(async (url: string) => {
+        if (url.includes('/volume-mask?')) return metadata(desc);
+        const chunk = desc.chunks.find(chunk => chunk.url === url)!;
+        return new Response(Uint8Array.from({ length: chunk.byte_length }, (_, index) => chunk.byte_offset + index));
+      });
+    vi.stubGlobal('fetch', fetcher);
+    const loader = new VolumeMaskSources(0),
+      signal = new AbortController().signal,
+      first = (await loader.get('/revision', ['a'], signal)).overlays[0].current;
+    expect([...new Uint8Array(await first.readSlab(0, 1))]).toEqual([0, 1, 2, 3]);
+    expect(loader.diagnostics.chunkCacheBytes).toBe(8);
+    loader.clearDecoded();
+    expect(loader.diagnostics).toMatchObject({ metadataCount: 1, chunkCacheBytes: 0 });
+    const reused = (await loader.get('/revision', ['a'], signal)).overlays[0].current;
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(reused.descriptor).toEqual(first.descriptor);
+    expect([...new Uint8Array(await first.readSlab(1, 1))]).toEqual([4, 5, 6, 7]);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect([...new Uint8Array(await reused.readSlab(0, 1))]).toEqual([0, 1, 2, 3]);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(loader.diagnostics.chunkCacheBytes).toBe(8);
+    loader.clear();
+    loader.clearDecoded();
+    await expect(first.readSlab(0, 1)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(reused.readSlab(0, 1)).rejects.toMatchObject({ name: 'AbortError' });
+    loader.dispose();
+  });
+  it('does not abort an active slab read when clearing decoded transport copies', async () => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn(async (url: string) =>
+      url.includes('/volume-mask?')
+        ? metadata()
+        : new Promise<Response>(resolve => {
+            finish = resolve;
+          }),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    const loader = new VolumeMaskSources(0),
+      source = (await loader.get('/revision', ['a'], new AbortController().signal)).overlays[0].current,
+      reading = source.readSlab(0, 1);
+    await until(() => !!finish);
+    loader.clearDecoded();
+    expect(loader.diagnostics).toMatchObject({ metadataCount: 1, activeRequests: 1, chunkCacheBytes: 0 });
+    finish(new Response(new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7])));
+    expect([...new Uint8Array(await reading)]).toEqual([0, 1, 2, 3]);
+    expect(loader.diagnostics.activeRequests).toBe(0);
+    loader.dispose();
+  });
   it('debounces changing selections and cancels pending delays before backend work', async () => {
     vi.useFakeTimers();
     const fetcher = vi.fn(async (url: string) =>

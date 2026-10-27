@@ -74,13 +74,17 @@ export class VolumeMaskSources {
     }
   }
 
+  /** Drop CPU transport copies after upload without invalidating open sources. */
+  clearDecoded(): void {
+    this.chunks.clear();
+    this.chunkBytes = 0;
+  }
   clear(): void {
     this.generation++;
     for (const controller of this.controllers) controller.abort();
     this.controllers.clear();
     this.metadata.clear();
-    this.chunks.clear();
-    this.chunkBytes = 0;
+    this.clearDecoded();
   }
   dispose(): void {
     this.disposed = true;

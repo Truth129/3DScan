@@ -2,6 +2,12 @@ import type { Structure, StructureDisplay } from '../types';
 
 export const MAX_VOLUME_MASK_SEGMENTS = 128;
 
+export interface VolumeMaskStatus {
+  ready: boolean;
+  loading: boolean;
+  error: string;
+}
+
 /** Explicit volume-only selection; preset resets and surface visibility do not change it. */
 export interface VolumeMaskSettings {
   enabled: boolean;

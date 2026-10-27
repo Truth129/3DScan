@@ -312,8 +312,11 @@ The 3D view defaults to **Cornerstone3D**, using vtk.js ray casting. Its
 **Rendering stack** shows **Segmentation**, **CT volume** and **CT plane** together
 or independently. With CT visible, surfaces are solid for correct depth;
 turn CT off to adjust their transparency. **CT volume settings** provides
-presets, native lighting/scattering, opacity and cropping. **Three.js (legacy)**
-retains the previous renderer, including mask-based volume isolation and HTML
+presets, native lighting/scattering, opacity, masking and cropping. Enable
+**Mask to segmentation**, choose segments and select **Inside** or **Outside**;
+**Display margin** grows only that display region. Empty/loading/failed masks
+keep the CT volume hidden while slices and surfaces remain available.
+**Three.js (legacy)** retains the previous renderer and HTML
 export. The following cinematic-heart recipe describes that legacy renderer.
 
 Choose **Cinematic heart** under Appearance for the supplied Slicer script's
@@ -382,7 +385,13 @@ not require the CT review panel to be open. Opening that panel attaches MPR to
 the same source. PNG captures the current view. Plane/surface failures keep CT
 available; a renderer failure offers **Retry 3D view**.
 
-Use **Three.js (legacy)** for cropped mask ray casting or HTML export. Tilted
+Native masking reuses the CT texture and adds one cropped mask texture of at
+most 8 MiB. Camera, crop and inside/outside changes reuse resident data. The
+shared 2 GiB desktop budget includes current/staged resources; completed CT
+upload staging is released and mesh uploads share one bounded scratch allowance.
+Views that still exceed it show an error; hiding surfaces or CT review frees capacity.
+
+Use **Three.js (legacy)** for HTML export. Tilted
 scans, MRI and corrections use that existing renderer automatically. Native 3D
 does not yet implement surface picking/marking, scissors or markers; entering
 corrections shows the target in the legacy renderer. The native plane currently

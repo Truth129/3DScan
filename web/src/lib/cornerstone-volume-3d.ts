@@ -9,6 +9,9 @@ import { inverseAffine, transformPoint, type VolumeDescriptor } from './ct-resli
 import { cornerstoneVolumeGeometry } from './cornerstone-volume';
 import { freshVolumeSettings, type CTVolumeSettings } from './volume-presets';
 import { applyVTKVolumePreset } from './vtk-volume-preset';
+import { VTKVolumeMask, type VTKMaskMapper, type VTKMaskMapperNode, type VTKVolumeMaskMode } from './vtk-volume-mask';
+import type { GPUVolumeSource } from './gpu-volume-data';
+import { attachVTKMaskMapperFactory } from './vtk-volume-mask-mapper';
 
 export interface CornerstoneVolumeCameraRAS {
   positionRAS: Point;
@@ -123,6 +126,11 @@ export class CornerstoneVolume3D {
   private applyingCamera = false;
   private detachingFeatures = false;
   private ready = false;
+  private volumeVisible = true;
+  private maskMode: VTKVolumeMaskMode = 'off';
+  private mask?: VTKVolumeMask;
+  private maskReserve?: (bytes: number) => void;
+  private maskFactory?: ReturnType<typeof attachVTKMaskMapperFactory>;
   private frames = 0;
   private pending?: { promise: Promise<void>; resolve(): void; reject(reason: unknown): void; timer: ReturnType<typeof setTimeout> };
 
@@ -135,6 +143,7 @@ export class CornerstoneVolume3D {
     private options: CornerstoneVolume3DOptions,
   ) {
     this.settings = freshVolumeSettings(options.settings);
+    this.volumeVisible = options.volumeVisible ?? true;
   }
 
   static async create(element: HTMLDivElement, owner: CornerstoneMPR, options: CornerstoneVolume3DOptions) {
@@ -185,6 +194,7 @@ export class CornerstoneVolume3D {
         true,
       );
       instance.assertAlive();
+      instance.installMaskFactory();
       instance.installTools();
       engine.resize(false, true);
       instance.setCamera(options.camera ?? instance.defaultCamera());
@@ -231,7 +241,72 @@ export class CornerstoneVolume3D {
   }
   setVolumeVisible(visible: boolean) {
     this.assertAlive();
-    this.actor!.setVisibility(visible);
+    this.volumeVisible = visible;
+    this.applyVolumeVisibility();
+    this.requestRender();
+  }
+
+  private applyVolumeVisibility() {
+    if (!this.disposed) this.actor?.setVisibility(this.volumeVisible && (this.maskMode === 'off' || this.mask?.stats().ready === true));
+  }
+
+  private installMaskFactory() {
+    const renderWindow = this.engine.getOffscreenMultiRenderWindow(this.id).getOpenGLRenderWindow();
+    const rendererNode = renderWindow.getViewNodeFor(this.nativeRenderer) ?? renderWindow.addMissingNode(this.nativeRenderer);
+    const actorNode = rendererNode?.addMissingNode(this.actor!);
+    if (!actorNode) throw new Error('The native CT volume actor is unavailable for segmentation masking.');
+    this.maskFactory = attachVTKMaskMapperFactory(actorNode, this.actor!.getMapper() as SharedMapper);
+  }
+
+  /** The caller resolves the revision-bound union; this viewport owns only its
+   * bounded texture. Pending/error/empty selections hide CT in both modes. */
+  async setMask(source: GPUVolumeSource | undefined, mode: VTKVolumeMaskMode, options: { signal?: AbortSignal; reserveMemory?: (bytes: number) => void } = {}) {
+    this.assertAlive();
+    if (!['off', 'inside', 'outside'].includes(mode)) throw new Error('Unsupported native volume mask mode.');
+    this.maskMode = mode;
+    this.applyVolumeVisibility();
+    if (!source || mode === 'off') {
+      this.clearMask(mode);
+      return;
+    }
+    if (options.reserveMemory) this.maskReserve = options.reserveMemory;
+    if (!this.mask) {
+      const renderWindow = this.engine.getOffscreenMultiRenderWindow(this.id).getOpenGLRenderWindow();
+      const mapper = this.actor!.getMapper()!;
+      const node = this.maskFactory?.node;
+      if (!node) throw new Error('The native CT volume mapper is unavailable for segmentation masking.');
+      this.mask = new VTKVolumeMask(
+        this.owner.sourceDescriptor,
+        mapper as VTKMaskMapper,
+        node as unknown as VTKMaskMapperNode,
+        renderWindow,
+        bytes => this.maskReserve?.(bytes),
+        () => this.applyVolumeVisibility(),
+      );
+    }
+    try {
+      await this.mask.set(source, mode, options.signal);
+    } finally {
+      this.applyVolumeVisibility();
+      this.requestRender();
+    }
+  }
+
+  setMaskMode(mode: VTKVolumeMaskMode) {
+    this.assertAlive();
+    if (!['off', 'inside', 'outside'].includes(mode)) throw new Error('Unsupported native volume mask mode.');
+    this.maskMode = mode;
+    this.mask?.setMode(mode);
+    this.applyVolumeVisibility();
+    this.requestRender();
+  }
+
+  clearMask(mode: VTKVolumeMaskMode = 'off') {
+    this.assertAlive();
+    if (!['off', 'inside', 'outside'].includes(mode)) throw new Error('Unsupported native volume mask mode.');
+    this.maskMode = mode;
+    this.mask?.clear(mode);
+    this.applyVolumeVisibility();
     this.requestRender();
   }
 
@@ -352,6 +427,7 @@ export class CornerstoneVolume3D {
     this.dispose();
   }
   private requestRender() {
+    if (this.disposed) return;
     void this.render().catch(reason => {
       if (!this.disposed) this.fail(reason);
     });
@@ -436,6 +512,19 @@ export class CornerstoneVolume3D {
       mprViewportCount: mpr.length,
       sourceContextAvailable: !!native,
       volumeVisible: this.actor!.getVisibility(),
+      volumeRequestedVisible: this.volumeVisible,
+      mask: this.mask?.stats() ?? {
+        mode: this.maskMode,
+        ready: false,
+        key: '',
+        gpuBytes: 0,
+        cpuBytes: 0,
+        reservedBytes: 0,
+        textureUploads: 0,
+        slabReads: 0,
+        textureCount: 0,
+        additionalFullGridMaskBytes: 0,
+      },
       volumeId: this.source.volumeId,
       sourceKey: this.owner.sourceDescriptor.key,
       sourceVolumeIsMPROwner: this.libs.core.cache.getVolume(this.source.volumeId) === this.source,
@@ -477,6 +566,10 @@ export class CornerstoneVolume3D {
     if (this.disposed) return;
     this.disposed = true;
     this.settleFrame(new DOMException('The experimental CT viewer was disposed.', 'AbortError'));
+    this.mask?.dispose();
+    this.mask = undefined;
+    this.maskFactory?.dispose();
+    this.maskFactory = undefined;
     this.detachingFeatures = true;
     try {
       this.options.onBeforeDispose?.();

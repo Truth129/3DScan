@@ -135,9 +135,32 @@ transparency. Pending or failed mesh replacements hide the previous revision's
 actors until an atomic replacement succeeds. Plane/surface errors leave CT
 rendering available. Source masks remain authoritative.
 
+Native **Mask to segmentation** uses the existing revision-bound display union,
+capped at 8 MiB, in one nearest-sampled R8 crop texture. Full-affine transforms
+map CT ray positions into that crop; samples outside it are rejected for inside
+mode and retained for outside mode. Masking gates primary opacity, native
+scattering and ambient occlusion, without modifying CT normals, source samples,
+slice overlays or measurement masks. The provider's decoded cache is released
+after upload; only the crop texture remains. Empty/loading/error states hide CT
+in either mode, and Retry rebuilds just the mask. Mode/camera/crop changes reuse
+the texture; source/revision changes invalidate it before replacement.
+
+The isolated mask bridge installs an actor-local view-node factory before VTK
+freezes its public API. It extends the pinned Core streaming mapper, sharing the
+original CT texture, and uses guarded shader replacements. Other actors/MPR
+retain their original factories. One relative import to Core's unexported
+streaming-mapper extension is version guarded; dependency updates require mask
+shader/browser qualification. The ray caster itself remains maintained upstream.
+
+CT transfer slabs are reserved only during image-cache preparation. Surface
+admission charges all retained CPU arrays and expanded GPU triangles plus one
+largest-part upload scratch allowance; unused hardware-selection maps are
+disabled. Retained and staged revisions remain charged together until commit.
+The 2 GiB desktop / 256 MiB low-memory caps are unchanged.
+
 Three.js loads on demand for the legacy renderer, corrections, sheared grids,
-MRI and portable HTML. Native 3D does not implement cropped mask ray casting,
-surface marking, scissors or markers. Correction entry shows the legacy target
+MRI and portable HTML. Native 3D does not implement surface marking, scissors
+or markers. Correction entry shows the legacy target
 surface and preserves the earlier layer choices on return. HTML export requires
 the legacy renderer; the offline entry contains no Cornerstone runtime. Camera
 state remains patient RAS, including parallel scale and finite ordered clipping

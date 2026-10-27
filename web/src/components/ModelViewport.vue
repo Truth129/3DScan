@@ -44,7 +44,7 @@ import {
 } from '../lib/volume-presets';
 import { CinematicReferenceGate, hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { cardiacCamera } from '../lib/cardiac-camera';
-import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings } from '../lib/volume-mask';
+import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
 import { normalizePortableState, type PortableLayers, type PortableRenderSnapshot } from '../lib/portable-viewer';
 const props = defineProps<{
@@ -99,6 +99,7 @@ interface VolumePreview {
   capturePNG(): Promise<string>;
   resetView(): void;
   retry(): Promise<void>;
+  retryMask(): Promise<void>;
 }
 const volumePreview = ref<VolumePreview>();
 const preferCornerstone =
@@ -109,6 +110,7 @@ const volumeRenderer = ref<'three' | 'vtk'>(preferCornerstone ? 'vtk' : 'three')
 const vtkComponentFailed = ref(false),
   vtkComponentVersion = ref(0);
 const vtkCamera = shallowRef<CornerstoneVolumeCameraRAS>();
+const nativeMaskStatus = ref<VolumeMaskStatus>({ ready: false, loading: false, error: '' });
 let pendingVolumeCamera: CornerstoneVolumeCameraRAS | undefined;
 const viewport = ref<HTMLElement>(),
   expandButton = ref<HTMLButtonElement>();
@@ -333,11 +335,16 @@ const needsVolumeMask = computed(
   () => needsVolume.value && volumeMask.value.enabled && volumeMaskIds.value.length > 0 && volumeMaskIds.value.length <= MAX_VOLUME_MASK_SEGMENTS,
 );
 const volumeMaskFamily = computed(() => (needsVolumeMask.value ? JSON.stringify([volumeFamily.value, volumeMaskIds.value, volumeMask.value.margin_mm]) : ''));
-const volumeMaskReady = computed(() => needsVolumeMask.value && maskFamilyReady.value === volumeMaskFamily.value);
-const volumeMaskLoading = computed(() => needsVolumeMask.value && !volumeMaskReady.value && !maskError.value);
+const volumeMaskReady = computed(() =>
+  vtkSelected.value ? nativeMaskStatus.value.ready : needsVolumeMask.value && maskFamilyReady.value === volumeMaskFamily.value,
+);
+const effectiveMaskError = computed(() => (vtkSelected.value ? nativeMaskStatus.value.error : maskError.value));
+const volumeMaskLoading = computed(() =>
+  vtkSelected.value ? nativeMaskStatus.value.loading : needsVolumeMask.value && !volumeMaskReady.value && !maskError.value,
+);
 const volumeMaskMessage = computed(
   () =>
-    maskError.value ||
+    effectiveMaskError.value ||
     (volumeMaskReady.value
       ? `Showing ${volumeMask.value.mode} ${volumeMaskIds.value.length} selected ${volumeMaskIds.value.length === 1 ? 'segment' : 'segments'}.`
       : ''),
@@ -357,7 +364,16 @@ const volumeMessage = computed(
         : `Preparing ${modality.value} volume…`),
 );
 const volumeStackStatus = computed(() => {
-  if (vtkSelected.value) return vtkError.value ? 'Unavailable' : vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
+  if (vtkSelected.value) {
+    if (vtkError.value) return 'Unavailable';
+    if (volumeMask.value.enabled) {
+      if (!volumeMaskIds.value.length) return 'Choose mask segments';
+      if (volumeMaskIds.value.length > MAX_VOLUME_MASK_SEGMENTS) return 'Reduce mask selection';
+      if (effectiveMaskError.value) return 'Mask unavailable';
+      if (!volumeMaskReady.value) return 'Preparing mask…';
+    }
+    return vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
+  }
   if (volumeError.value) return 'Unavailable';
   if (volumeMask.value.enabled) {
     if (!volumeMaskIds.value.length) return 'Choose mask segments';
@@ -881,6 +897,10 @@ function setVolumeMask(settings: VolumeMaskSettings) {
   syncReview();
 }
 function retryVolumeMask() {
+  if (vtkSelected.value) {
+    void volumePreview.value?.retryMask();
+    return;
+  }
   maskError.value = '';
   maskFamilyReady.value = '';
   atlasFamilyReady.value = '';
@@ -1368,7 +1388,7 @@ watch(
 );
 watch(() => [props.reviewActive, controlsVisible.value, showPlane.value, showVolume.value], observeReviewControls);
 watch(
-  () => [volumeError.value, maskError.value],
+  () => [volumeError.value, effectiveMaskError.value],
   ([volumeFailure, maskFailure]) => {
     if (volumeFailure || maskFailure) volumeOptionsOpen.value = true;
   },
@@ -1595,7 +1615,7 @@ defineExpose({
     :data-volume-mask-sources="JSON.stringify(volumeMaskSourceIds)"
     :data-volume-mask-ready="volumeMaskReady"
     :data-volume-mask-pending="volumeMaskLoading"
-    :data-volume-mask-error="maskError"
+    :data-volume-mask-error="effectiveMaskError"
     :data-volume-renderer="vtkSelected ? 'vtk' : 'three'"
   >
     <div ref="surface" class="model-canvas" :style="{ visibility: vtkSelected ? 'hidden' : undefined }"></div>
@@ -1618,9 +1638,13 @@ defineExpose({
       :structures="structures"
       :display="display"
       :selected="selected"
+      :mask="volumeMask"
+      :revision-base="planeRequest?.base"
+      :mask-source-provider="maskSourceProvider"
       @ready="nativeReady"
       @error="vtkError = $event"
       @camera="vtkCamera = $event"
+      @mask-status="nativeMaskStatus = $event"
     />
     <div v-if="vtkSelected && vtkComponentFailed" class="viewport-state error-state" role="alert">
       <strong>Cornerstone3D unavailable</strong>
@@ -1720,9 +1744,7 @@ defineExpose({
           observeReviewControls();
         "
       >
-        <summary>
-          {{ modality }} volume settings <span>{{ vtkSelected ? 'Appearance · opacity · crop' : 'Appearance · opacity · mask · crop' }}</span>
-        </summary>
+        <summary>{{ modality }} volume settings <span>Appearance · opacity · mask · crop</span></summary>
         <VolumeControls
           headerless
           :enabled="showVolume"
@@ -1735,9 +1757,8 @@ defineExpose({
           :reference-message="referenceMessage"
           :reference-error="referenceError"
           @measure-reference="measureCinematicReference()"
-          :ready="vtkSelected ? vtkReady : volumeReady && !volumeError"
-          :loading="vtkSelected ? !vtkReady && !vtkError : needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
-          :mask-supported="!vtkSelected"
+          :ready="vtkSelected ? vtkReady && (!volumeMask.enabled || volumeMaskReady) : volumeReady && !volumeError"
+          :loading="vtkSelected ? (!vtkReady && !vtkError) || volumeMaskLoading : needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
           :mask="volumeMask"
           :structures="availableMaskStructures"
           :selected="selected"
@@ -1745,7 +1766,7 @@ defineExpose({
           :mask-margin-fixed="!!props.localSession?.networkFree"
           :mask-loading="volumeMaskLoading"
           :mask-message="volumeMaskMessage"
-          :mask-error="!!maskError"
+          :mask-error="!!effectiveMaskError"
           :message="showVolume ? volumeMessage : ''"
           @update:enabled="setVolumeEnabled"
           @update:settings="setVolumeSettings"

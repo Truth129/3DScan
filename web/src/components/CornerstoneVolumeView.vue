@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { CornerstoneVolume3D, type CornerstoneVolumeCameraRAS } from '../lib/cornerstone-volume-3d';
 import { acquireCornerstoneSource, type CornerstoneSourceLease } from '../lib/cornerstone-session';
-import type { RenderCTSession } from '../lib/gpu-volume-data';
+import { isVolumeDisplayUnion, type GPUOverlaySourceProvider, type RenderCTSession } from '../lib/gpu-volume-data';
 import type { Structure, StructureDisplay, SurfaceManifest } from '../types';
 import { VTKCTPlane, type VTKCTPlaneState } from '../lib/vtk-ct-plane';
 import { VTKSurfaceScene } from '../lib/vtk-surface-scene';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { CTVolumeSettings } from '../lib/volume-presets';
+import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
+import { VolumeMaskSources } from '../lib/volume-mask-sources';
 
 const props = defineProps<{
   session?: RenderCTSession;
@@ -23,11 +25,15 @@ const props = defineProps<{
   structures?: readonly Structure[];
   display?: StructureDisplay;
   selected?: string;
+  mask?: VolumeMaskSettings;
+  revisionBase?: string;
+  maskSourceProvider?: GPUOverlaySourceProvider;
 }>();
 const emit = defineEmits<{
   ready: [value: boolean];
   camera: [value: CornerstoneVolumeCameraRAS];
   error: [reason: string];
+  maskStatus: [status: VolumeMaskStatus];
 }>();
 const host = ref<HTMLDivElement>();
 const ready = ref(false),
@@ -35,6 +41,13 @@ const ready = ref(false),
   planeError = ref(''),
   surfaceError = ref(''),
   surfaceLoading = ref(false);
+const maskLoading = ref(false),
+  maskError = ref(''),
+  maskReady = ref(false);
+const localMasks = new VolumeMaskSources();
+let maskController: AbortController | undefined,
+  maskGeneration = 0;
+let reserveMask: ((bytes: number) => void) | undefined, reserveMaskTransport: ((bytes: number) => void) | undefined;
 let viewer: CornerstoneVolume3D | undefined, controller: AbortController | undefined, observer: ResizeObserver | undefined;
 let lease: CornerstoneSourceLease | undefined, planeLayer: VTKCTPlane | undefined, surfaces: VTKSurfaceScene | undefined;
 let featureRenderer: vtkRenderer | undefined;
@@ -47,8 +60,23 @@ let generation = 0,
 const visibleStructures = computed(() =>
   (props.structures ?? []).filter(item => props.display?.[item.id]?.visible !== false && (props.display?.[item.id]?.opacity ?? 0.5) > 0),
 );
+const maskFamily = computed(() =>
+  JSON.stringify([props.revisionBase ?? props.session?.revisionBase, [...(props.mask?.ids ?? [])].sort(), props.mask?.margin_mm ?? 0]),
+);
+const maskMode = () => (props.mask?.enabled ? props.mask.mode : 'off');
+function publishMaskStatus() {
+  emit('maskStatus', { ready: maskReady.value, loading: maskLoading.value, error: maskError.value });
+}
 
 function disposeFeatures() {
+  maskController?.abort();
+  maskGeneration++;
+  localMasks.clear();
+  reserveMaskTransport?.(0);
+  reserveMask = reserveMaskTransport = undefined;
+  maskReady.value = maskLoading.value = false;
+  maskError.value = '';
+  publishMaskStatus();
   surfaceController?.abort();
   surfaceGeneration++;
   surfaces?.dispose();
@@ -101,7 +129,9 @@ async function initialize() {
     const instance = await CornerstoneVolume3D.create(host.value, sourceLease.owner, {
       settings: props.settings,
       camera: props.camera,
-      volumeVisible: props.volumeVisible !== false,
+      // Reconcile the latest mask before the first visible CT frame, including
+      // settings changed while this asynchronous attachment was in progress.
+      volumeVisible: false,
       signal: active.signal,
       onCamera: camera => {
         if (disposed || id !== generation || !viewer) return;
@@ -125,12 +155,13 @@ async function initialize() {
       return;
     }
     viewer = instance;
+    instance.clearMask(maskMode());
     featureRenderer = instance.nativeRenderer;
-    const featureBytes = { plane: 0, surfaces: 0 };
+    const featureBytes = { plane: 0, surfaces: 0, mask: 0, maskTransport: 0 };
     const reserveFeature = (feature: keyof typeof featureBytes) => (bytes: number) => {
       const previous = featureBytes[feature];
       try {
-        sourceLease.setOverlayBytes(featureBytes.plane + featureBytes.surfaces - previous + bytes);
+        sourceLease.setOverlayBytes(Object.values(featureBytes).reduce((sum, value) => sum + value, 0) - previous + bytes);
       } catch (reason) {
         // A closed source has already released its reservation. Teardown may
         // still report freed feature buffers from its before-dispose hook.
@@ -146,6 +177,8 @@ async function initialize() {
     );
     instance.nativeRenderer.addViewProp(planeLayer.actor);
     surfaces = new VTKSurfaceScene(instance.nativeRenderer, undefined, reserveFeature('surfaces'));
+    reserveMask = reserveFeature('mask');
+    reserveMaskTransport = reserveFeature('maskTransport');
     // Appearance and camera can change while the shared actor is attaching.
     // Reconcile the latest props before publishing a ready viewport.
     instance.setSettings(props.settings);
@@ -157,9 +190,81 @@ async function initialize() {
     emit('camera', instance.camera);
     ready.value = true;
     emit('ready', true);
+    void loadMask();
     void loadSurfaces();
   } catch (reason) {
     if (!disposed && !active.signal.aborted && id === generation && !session.isDisposed) fail(reason);
+  }
+}
+async function loadMask() {
+  const instance = viewer,
+    reserve = reserveMask,
+    transport = reserveMaskTransport,
+    id = generation;
+  if (!instance || !reserve || !transport) return;
+  maskController?.abort();
+  localMasks.clearDecoded();
+  const active = new AbortController(),
+    version = ++maskGeneration;
+  maskController = active;
+  const settings = freshVolumeMaskSettings(props.mask);
+  const current = () => !disposed && id === generation && version === maskGeneration && !active.signal.aborted && viewer === instance;
+  instance.clearMask(settings.enabled ? settings.mode : 'off');
+  maskReady.value = false;
+  maskError.value = '';
+  maskLoading.value = settings.enabled && props.volumeVisible !== false;
+  publishMaskStatus();
+  if (!maskLoading.value) {
+    localMasks.clearDecoded();
+    transport(0);
+    return;
+  }
+  if (!settings.ids.length || settings.ids.length > MAX_VOLUME_MASK_SEGMENTS) {
+    // Selection is an ordinary configuration state. The existing picker
+    // explains it while CT stays hidden, without collapsing the open choices.
+    maskLoading.value = false;
+    publishMaskStatus();
+    return;
+  }
+  try {
+    const base = props.revisionBase ?? props.session?.revisionBase;
+    if (!base) throw new Error('The selected CT revision is unavailable for volume masking.');
+    const result = await (props.maskSourceProvider ?? localMasks).get(base, settings.ids, active.signal, settings.margin_mm);
+    if (!current()) return;
+    const overlay = result.overlays[0],
+      descriptor = overlay?.current.descriptor;
+    if (
+      result.overlays.length !== 1 ||
+      !descriptor ||
+      !isVolumeDisplayUnion(descriptor) ||
+      overlay!.parent ||
+      overlay!.id !== `volume-mask-union:${descriptor.key}` ||
+      JSON.stringify([...(descriptor.selected_structure_ids ?? [])].sort()) !== JSON.stringify([...settings.ids].sort()) ||
+      (descriptor.display_margin_mm ?? 0) !== settings.margin_mm
+    )
+      throw new Error('The volume mask does not match the selected segments and display margin.');
+    // Charge the loader's bounded decoded cache and incoming chunk before any
+    // voxel reads. Drop that transport cache once the GPU owns the crop.
+    transport(2 * descriptor.byte_length);
+    await instance.setMask(overlay!.current, settings.mode, { signal: active.signal, reserveMemory: reserve });
+    if (!current()) return;
+    instance.setMaskMode(maskMode());
+    maskReady.value = true;
+  } catch (reason) {
+    if (current()) {
+      instance.clearMask(maskMode());
+      maskError.value = reason instanceof Error ? reason.message : 'The volume mask could not load.';
+    }
+  } finally {
+    if (current()) {
+      localMasks.clearDecoded();
+      transport(0);
+      maskLoading.value = false;
+      publishMaskStatus();
+      void instance.render().catch(reason => {
+        if (current()) fail(reason);
+      });
+    }
   }
 }
 function syncPresentation() {
@@ -235,6 +340,13 @@ async function loadSurfaces() {
 watch(
   () => [props.session, props.sourceKey],
   () => void initialize(),
+);
+watch([() => props.mask?.enabled, () => props.volumeVisible, () => props.maskSourceProvider, maskFamily], () => void loadMask());
+watch(
+  () => props.mask?.mode,
+  () => {
+    if (viewer) viewer.setMaskMode(maskMode());
+  },
 );
 watch(
   [
@@ -318,6 +430,7 @@ onBeforeUnmount(() => {
   observer?.disconnect();
   cancelAnimationFrame(resizeFrame);
   release();
+  localMasks.dispose();
 });
 defineExpose({
   diagnostics: () => ({
@@ -327,6 +440,9 @@ defineExpose({
     surfaceLoading: surfaceLoading.value,
     surfaceError: surfaceError.value,
     planeError: planeError.value,
+    maskLoading: maskLoading.value,
+    maskError: maskError.value,
+    maskReady: maskReady.value,
     ready: ready.value,
     error: error.value,
   }),
@@ -336,6 +452,7 @@ defineExpose({
   },
   resetView: () => viewer?.resetCamera(),
   retry: initialize,
+  retryMask: loadMask,
 });
 </script>
 

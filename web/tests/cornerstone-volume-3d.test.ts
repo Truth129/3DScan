@@ -69,7 +69,17 @@ function setup() {
   const element = Object.assign(new EventTarget(), { clientWidth: 320, clientHeight: 240 }) as unknown as HTMLDivElement;
   const context = { finish: vi.fn(), isContextLost: () => false, getExtension: () => null, getParameter: () => 'synthetic-context' };
   const nativeCanvas = { getContext: () => context };
-  const window = { getContext: () => context, getCanvas: () => nativeCanvas };
+  let actorFactory: any = { createNode: vi.fn() };
+  const actorNode = {
+    getMyFactory: () => actorFactory,
+    setMyFactory: (value: any) => {
+      actorFactory = value;
+    },
+    getViewNodeFor: () => undefined,
+    addMissingNode: (mapper: any) => actorFactory.createNode(mapper),
+  };
+  const rendererNode = { addMissingNode: () => actorNode };
+  const window = { getContext: () => context, getCanvas: () => nativeCanvas, getViewNodeFor: () => rendererNode, addMissingNode: () => rendererNode };
   const actors: ReturnType<typeof vtkVolume.newInstance>[] = [];
   function actor() {
     const result = vtkVolume.newInstance(),
@@ -251,6 +261,31 @@ describe('physical shared CT volume', () => {
     expect(fixture.engine.getViewports()).toHaveLength(0);
     expect(fixture.texture.delete).not.toHaveBeenCalled();
     expect(() => adapter.nativeRenderer).toThrow(/no longer available/i);
+  });
+
+  it('fails closed for empty or pending inside/outside masks while preserving requested CT visibility and the MPR owner', async () => {
+    const fixture = setup();
+    const adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera });
+    adapters.push(adapter);
+    expect(adapter.stats()).toMatchObject({ volumeVisible: true });
+    adapter.clearMask('inside');
+    adapter.setVolumeVisible(true);
+    await adapter.render();
+    expect(adapter.stats()).toMatchObject({ volumeVisible: false, volumeRequestedVisible: true, mask: { mode: 'inside', ready: false } });
+    adapter.setMaskMode('outside');
+    await adapter.render();
+    expect(adapter.stats()).toMatchObject({ volumeVisible: false, mask: { mode: 'outside', ready: false } });
+    await adapter.setMask(undefined, 'outside');
+    expect(adapter.stats()).toMatchObject({ volumeVisible: false });
+    adapter.clearMask();
+    expect(adapter.stats()).toMatchObject({ volumeVisible: true });
+    adapter.setVolumeVisible(false);
+    adapter.clearMask('inside');
+    adapter.clearMask();
+    expect(adapter.stats()).toMatchObject({ volumeVisible: false, volumeRequestedVisible: false });
+    expect(fixture.owner.isDisposed).toBe(false);
+    expect(fixture.engine.getViewports()).toHaveLength(4);
+    expect(fixture.texture.delete).not.toHaveBeenCalled();
   });
 
   it('bounds native VTK ray work for long, fine, oblique CT fields of view', () => {
