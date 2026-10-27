@@ -241,6 +241,8 @@ def test_header_limits_reject_oversized_ct_before_dense_decode(portable_case, mo
     settings, revision, _ = portable_case
     image = SimpleNamespace(shape=(512, 512, 2048), get_data_dtype=lambda: np.dtype("int16"))
     monkeypatch.setattr(imaging, "_image", lambda _: (image, np.eye(4)))
+    # Ample memory, so the header limit rejects it rather than this machine's free RAM.
+    monkeypatch.setattr(portable_export, "_available_memory", lambda: 1024 ** 4)
     monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Oversized CT must be rejected before decoding"))
     request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True}})
     with pytest.raises(ExportTooLarge, match="512 MiB"):

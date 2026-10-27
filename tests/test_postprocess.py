@@ -1,4 +1,5 @@
 from collections import Counter
+import os
 from pathlib import Path
 import threading
 
@@ -29,6 +30,8 @@ def test_cold_measurements_and_surface_generation_decode_each_mask_once(tmp_path
 
 def test_preparation_concurrency_reserves_memory_for_other_work(monkeypatch):
     monkeypatch.setenv("SCAN3D_POSTPROCESS_WORKERS", "4")
+    # The request is also capped by CPU count; pin it so small CI runners agree.
+    monkeypatch.setattr(os, "cpu_count", lambda: 32)
     geometry = {"shape": [512, 512, 729]}
     monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: "MemAvailable: 8388608 kB\n")
     assert Service._preparation_workers(geometry) == 1
