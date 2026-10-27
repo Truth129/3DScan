@@ -1,5 +1,6 @@
 import type { Case, Job, JobMeasurements, Revision, Operation, ReviewStatus, InteractiveOptions, InteractivePrompt, InteractiveReview, InteractiveStatus, InteractiveStructureInput, SegmentRelationship, SegmentationCatalog, SegmentationSettings, TotalSegmentatorLicenseStatus, ProcessRequest } from '../types';
 import { presentRevision, presentStructures } from './appearance';
+import type { AgreementAggregate, RevisionAgreement } from './agreement';
 import type { ImageAsset } from './image-domain';
 
 export class ApiError extends Error {
@@ -55,6 +56,8 @@ export const api = {
   revisions: async (id: string) => (await request<Revision[]>(`${caseUrl(id)}/revisions`)).map(presentRevision),
   revision: async (id: string, rid: string) => presentRevision(await request<Revision>(revisionUrl(id, rid))),
   cinematicReference: (id: string, rid: string, signal?: AbortSignal) => request<CinematicReference>(`${revisionUrl(id, rid)}/cinematic-reference`, { signal }),
+  agreement: (id: string, rid: string, signal?: AbortSignal) => request<RevisionAgreement>(`${revisionUrl(id, rid)}/agreement`, { signal }),
+  agreementSummary: (signal?: AbortSignal) => request<AgreementAggregate>('/api/agreement', { signal }),
   activate: (id: string, rid: string) => request<Case>(`${caseUrl(id)}/activate`, json('POST', { revision_id: rid })),
   review: async (id: string, rid: string, status: ReviewStatus) => presentRevision(await request<Revision>(revisionUrl(id, rid), json('PATCH', { review_status: status }))),
   refine: (id: string, rid: string, structure: string, operation: Operation) => request<Job>(`${caseUrl(id)}/refinements`, json('POST', { revision_id: rid, structure_id: structure, operation })),
