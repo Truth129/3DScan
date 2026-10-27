@@ -35,7 +35,7 @@ window.fetch = async (input, init) => {
   if (!url.pathname.startsWith('/local-fixture/')) return nativeFetch(input, init);
   requests.push(url.pathname + url.search);
   const quality = url.searchParams.get('quality') === 'full' ? 'full' : 'preview';
-  if (url.pathname.endsWith('/ct-volume')) return new Response(JSON.stringify(descriptor(url.pathname.includes('/oblique/') ? '/local-fixture/oblique/ct' : '/local-fixture/ct', quality)));
+  if (/\/(?:ct|image)-volume$/.test(url.pathname)) return new Response(JSON.stringify(descriptor(url.pathname.includes('/oblique/') ? '/local-fixture/oblique/ct' : '/local-fixture/ct', quality)));
   if (url.pathname.endsWith('/mask-volume')) {
     const root = url.pathname.replace('/mask-volume', '') + '/' + url.searchParams.get('structure_id');
     return new Response(JSON.stringify({ schema_version: 1, current: descriptor(root + '/current', quality, true),
@@ -79,7 +79,7 @@ async function run() {
     // Starting overlays immediately also tests the shared two-download gate.
     await Promise.all([session.ready, session.setOverlay('liver', true)]);
     check('all_chunk_transfers_bounded_to_two', maximum <= 2 && maximum > 0, maximum);
-    check('preview_default_is_explicit', requests.filter(url => url.includes('ct-volume')).every(url => url.includes('quality=preview')));
+    check('preview_default_is_explicit', requests.filter(url => /(?:ct|image)-volume/.test(url)).every(url => url.includes('quality=preview')));
     check('CT_progress_reaches_exact_byte_count', progress.some(value => value.stage === 'ct' && value.ready && value.loadedBytes === 64 * 48 * 32 * 2));
     check('preview_HU_never_reported_as_exact', (await session.probe([0, 0, 0])).hu === null);
     const frames = await Promise.all((['axial', 'coronal', 'sagittal'] as Plane[]).map(plane => session.requestSlice(plane, 0, 'liver', true)));

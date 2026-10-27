@@ -1,4 +1,6 @@
 import type { Geometry, Plane, Point, SliceMeta } from '../types';
+import { assertReferenceImage, imageBackground, imagePresentation, type ImageContext } from './image-domain';
+import { assertCTFrameBudget } from './ct-frame-budget';
 
 export type VolumeDType = 'int16' | 'uint16' | 'float32' | 'uint8';
 export interface VolumeChunk {
@@ -9,7 +11,7 @@ export interface VolumeChunk {
   byte_length: number;
   url: string;
 }
-export interface VolumeDescriptor {
+export interface VolumeDescriptor extends ImageContext {
   schema_version: 1;
   key: string;
   kind: 'ct' | 'mask';
@@ -27,6 +29,8 @@ export interface VolumeDescriptor {
   origin_ijk?: Point;
   /** Present only for a derivative volume-display mask; never a CT overlay. */
   display_margin_mm?: number;
+  presentation_only?: boolean;
+  volume_mask_union?: boolean;
 }
 export type VolumeValues = Int16Array | Uint16Array | Float32Array | Uint8Array;
 export interface ResidentVolume {
@@ -46,7 +50,7 @@ export interface ResidentOverlay {
   current: ResidentVolume;
   parent?: ResidentVolume | null;
 }
-export interface LocalSlice {
+export interface LocalSlice extends ImageContext {
   meta: SliceMeta;
   hu: Float32Array;
   current: Uint8Array;
@@ -69,6 +73,7 @@ export function validateDescriptor(input: VolumeDescriptor, kind: 'ct' | 'mask' 
       || !Number.isFinite(input.intercept) || input.slope === 0 || !Number.isSafeInteger(input.chunk_depth)
       || input.chunk_depth < 1 || !Array.isArray(input.chunks)) throw new Error('Invalid local CT allocation');
   inverseAffine(input.affine_ras);
+  if (kind === 'ct') imagePresentation(input);
   const sliceBytes = input.shape[0] * input.shape[1] * DTYPE_BYTES[input.dtype];
   let nextK = 0;
   input.chunks.forEach((chunk, index) => {
@@ -124,7 +129,8 @@ export function transformPoint(matrix: number[][], point: Point): Point {
   return matrix.slice(0, 3).map(row => row[0] * point[0] + row[1] * point[1] + row[2] * point[2] + row[3]) as Point;
 }
 
-/** Identical patient-plane bounds, pixel centres and maximum size to imaging.slice_image. */
+/** Patient-plane bounds and pixel centres match imaging.slice_image. Only
+ * overview rasters have a display-size cap; full rasters retain native sampling. */
 export function sliceMetadata(volume: VolumeDescriptor, plane: Plane, position: number): SliceMeta {
   const axes = { axial: [2, 0, 1], coronal: [1, 0, 2], sagittal: [0, 1, 2] }[plane];
   if (!axes || !Number.isFinite(position)) throw new Error('Invalid CT slice position');
@@ -133,8 +139,10 @@ export function sliceMetadata(volume: VolumeDescriptor, plane: Plane, position: 
   if (position < low[fixed] || position > high[fixed]) throw new Error('Slice position lies outside the reference CT');
   const extent = high.map((value, axis) => value - low[axis]);
   const spacing = [0, 1, 2].map(column => Math.hypot(...reference.affine_ras.slice(0, 3).map(row => row[column])));
-  const step = Math.max(Math.min(...spacing), Math.max(extent[horizontal], extent[vertical]) / 768);
+  const step = volume.quality === 'preview'
+    ? Math.max(Math.min(...spacing), Math.max(extent[horizontal], extent[vertical]) / 768) : Math.min(...spacing);
   const width = Math.max(1, Math.ceil(extent[horizontal] / step)), height = Math.max(1, Math.ceil(extent[vertical] / step));
+  assertCTFrameBudget(width, height);
   const matrix = Array.from({ length: 4 }, () => [0, 0, 0, 0]);
   matrix[3][3] = 1;
   matrix[horizontal][0] = -extent[horizontal] / width;
@@ -155,7 +163,9 @@ export function nativeSliceMetadata(volume: VolumeDescriptor, plane: Plane, nati
   const spacing = [u, v].map(column => Math.hypot(...reference.affine_ras.slice(0, 3).map(row => row[column])));
   const extent = [reference.shape[u] * spacing[0], reference.shape[v] * spacing[1]];
   const step = Math.max(Math.min(...spacing), Math.max(...extent) / 768);
-  const width = Math.max(1, Math.ceil(extent[0] / step)), height = Math.max(1, Math.ceil(extent[1] / step));
+  const width = volume.quality === 'preview' ? Math.max(1, Math.ceil(extent[0] / step)) : reference.shape[u];
+  const height = volume.quality === 'preview' ? Math.max(1, Math.ceil(extent[1] / step)) : reference.shape[v];
+  assertCTFrameBudget(width, height);
   const du = reference.shape[u] / width, dv = reference.shape[v] / height;
   const origin: Point = [0, 0, 0]; origin[axis] = index; origin[u] = -.5 + du / 2; origin[v] = -.5 + dv / 2;
   const ras = transformPoint(reference.affine_ras, origin);
@@ -166,7 +176,7 @@ export function nativeSliceMetadata(volume: VolumeDescriptor, plane: Plane, nati
 
 export function sampleLinear(volume: ResidentVolume, x: number, y: number, z: number): number {
   const [nx, ny, nz] = volume.descriptor.shape;
-  if (x < 0 || y < 0 || z < 0 || x > nx - 1 || y > ny - 1 || z > nz - 1) return -1024;
+  if (x < 0 || y < 0 || z < 0 || x > nx - 1 || y > ny - 1 || z > nz - 1) return imageBackground(volume.descriptor);
   const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
   const fx = x - ix, fy = y - iy, fz = z - iz;
   const dx = ix + 1 < nx ? 1 : 0, dy = iy + 1 < ny ? nx : 0, dz = iz + 1 < nz ? nx * ny : 0;
@@ -235,7 +245,7 @@ function copyNativePixels(volume: ResidentVolume, meta: SliceMeta, matrix: numbe
     output: Float32Array | Uint8Array, mask: boolean): void {
   const shape = volume.descriptor.shape, strides = [1, shape[0], shape[0] * shape[1]];
   let x0 = 0, x1 = meta.width, y0 = 0, y1 = meta.height;
-  if (!mask) output.fill(-1024);
+  if (!mask) output.fill(imageBackground(volume.descriptor));
   for (let axis = 0; axis < 3; axis++) {
     const [dx, dy, origin] = matrix[axis];
     if (dx) { x0 = Math.max(x0, Math.ceil(-origin / dx)); x1 = Math.min(x1, Math.ceil((shape[axis] - origin) / dx)); }
@@ -285,11 +295,20 @@ function reslice(volume: ResidentVolume, meta: SliceMeta, mask: boolean, referen
 /** Worker-only allocation: HU and selected label slices are transferred, never a full volume. */
 export function resliceVolume(ct: ResidentVolume, plane: Plane, position: number,
     current?: ResidentVolume | null, parent?: ResidentVolume | null, overlays?: readonly ResidentOverlay[], native?: { axis: 0 | 1 | 2; index: number }): LocalSlice {
+  for (const mask of [current, parent, ...(overlays ?? []).flatMap(layer => [layer.current, layer.parent])]) {
+    if (mask) assertReferenceImage(ct.descriptor, mask.descriptor);
+  }
   const meta = native ? nativeSliceMetadata(ct.descriptor, plane, native) : sliceMetadata(ct.descriptor, plane, position);
+  const maskLayers = overlays ? overlays.reduce((sum, layer) => sum + 1 + (layer.parent ? 1 : 0), 0)
+    : (current ? 1 : 0) + (parent ? 1 : 0);
+  assertCTFrameBudget(meta.width, meta.height, maskLayers);
   const layers = overlays?.map(layer => ({ id: layer.id, current: reslice(layer.current, meta, true, ct) as Uint8Array,
     ...(layer.parent ? { parent: reslice(layer.parent, meta, true, ct) as Uint8Array } : {}) }));
   const result: LocalSlice = { meta, hu: reslice(ct, meta, false) as Float32Array,
     current: layers?.[0]?.current ?? (current ? reslice(current, meta, true, ct) as Uint8Array : new Uint8Array(meta.width * meta.height)) };
+  for (const key of ['reference_image_id', 'modality', 'scalar', 'presentation', 'source'] as const) {
+    if (ct.descriptor[key] !== undefined) Object.assign(result, { [key]: ct.descriptor[key] });
+  }
   if (layers) {
     result.overlays = layers;
     if (layers[0]?.parent) result.parent = layers[0].parent;

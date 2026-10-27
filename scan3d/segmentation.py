@@ -1,4 +1,4 @@
-"""Full-resolution, explicitly selected-device TotalSegmentator worker adapter."""
+"""Full-resolution, modality-scoped, explicitly selected-device worker adapter."""
 
 from __future__ import annotations
 
@@ -36,10 +36,10 @@ def _appearance(name, task=None):
         return "Arteries", "#eb655d"
     if "airway" in name or name == "trachea":
         return "Airways", "#f1dfb1"
-    if name.startswith("lung_") and (task in (None, "total", "total_v3", "lung_vessels") or name in _LOBES):
+    if name.startswith("lung_") and (task in (None, "total", "total_v3", "total_mr", "lung_vessels") or name in _LOBES):
         colors = ["#dca6d0", "#ad9ed8", "#e7ad8f", "#b5d59a", "#8fc3d7"]
         return "Lung lobes", colors[_LOBES.index(name)] if name in _LOBES else "#91cbd9"
-    if name.startswith(("rib_", "vertebrae_", "clavicula", "scapula", "hip_", "humerus_", "femur_")) or name in {"skull", "sacrum", "sternum", "costal_cartilages"}:
+    if name.startswith(("rib_", "vertebrae_", "clavicula", "scapula", "hip_", "humerus_", "femur_")) or name in {"skull", "sacrum", "sternum", "costal_cartilages", "vertebrae", "intervertebral_discs"}:
         return "Bones", "#d8cdb1"
     if name in {"heart", "atrial_appendage_left", "spinal_cord", "esophagus", "thyroid_gland"}:
         return "Chest organs", "#ce94a7"
@@ -49,8 +49,11 @@ def _appearance(name, task=None):
         return "Head organs", colors[index]
     if name.startswith(("gluteus_", "autochthon_", "iliopsoas_")):
         return "Muscles", colors[index]
-    if task not in (None, "total", "total_v3"):
-        groups = {"body": "Body", "heartchambers_highres": "Heart", "brain_structures": "Brain structures",
+    if task not in (None, "total", "total_v3", "total_mr"):
+        groups = {"body": "Body", "body_mr": "Body", "tissue_types_mr": "Tissues",
+                  "appendicular_bones_mr": "Bones", "vertebrae_mr": "Bones", "face_mr": "Head organs",
+                  "thigh_shoulder_muscles_mr": "Muscles", "brain_aneurysm": "Brain findings",
+                  "heartchambers_highres": "Heart", "brain_structures": "Brain structures",
                   "cerebral_bleed": "Brain findings", "ventricle_parts": "Brain structures",
                   "head_glands_cavities": "Head organs", "head_muscles": "Muscles",
                   "headneck_muscles": "Muscles", "oculomotor_muscles": "Muscles",
@@ -120,6 +123,8 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
                         ancestors=(*ancestors, task))
             elif any(name in {"body_trunc", "body_extremities"} for name in (config.get("crop") or [])):
                 configurations.append((label + ":crop", resolved_task_config("body", mode="fast")))
+            elif task.endswith("_mr"):
+                configurations.append((label + ":crop", resolved_task_config("total_mr", mode="fast")))
             else:
                 mode = "fast" if config.get("robust_crop") else "fastest"
                 configurations.append((label + ":crop", resolved_task_config("total", mode=mode)))
@@ -133,14 +138,14 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
     return configurations
 
 
-def model_fingerprint(profile: str, options: dict | None = None) -> dict:
+def model_fingerprint(profile: str, options: dict | None = None, *, modality: str = "CT") -> dict:
     """Resolved model/checkpoint identity for provenance and safe cache reuse.
 
     This does not download or import a model or initialize a GPU. An incomplete
     fingerprint cannot authorize a cache hit. Recompute after the first run,
     once TotalSegmentator has downloaded its model files.
     """
-    options = normalize_options(profile, options)
+    options = normalize_options(profile, options, modality=modality)
 
     versions = {}
     for package in ("TotalSegmentator", "nnunetv2", "torch"):
@@ -165,8 +170,14 @@ def model_fingerprint(profile: str, options: dict | None = None) -> dict:
                         if p.is_dir() and p.name.split("_", 1)[0] == f"Dataset{dataset_id:03d}"]
             if len(datasets) == 1:
                 folder = datasets[0] / f"{config['trainer']}__{config['plans']}__{config['model']}"
+                folds = config["folds"]
+                if folds is None:
+                    # nnU-Net auto-detects numeric fold directories when unset.
+                    folds = sorted(int(p.name[5:]) for p in folder.glob("fold_*")
+                                   if p.is_dir() and p.name[5:].isdigit())
+                    descriptor["folds"] = folds
                 required = [folder / "plans.json", folder / "dataset.json"]
-                required += [folder / f"fold_{fold}" / "checkpoint_final.pth" for fold in config["folds"]]
+                required += [folder / f"fold_{fold}" / "checkpoint_final.pth" for fold in folds]
                 for path in required:
                     if not path.is_file():
                         continue
@@ -174,12 +185,12 @@ def model_fingerprint(profile: str, options: dict | None = None) -> dict:
                     descriptor["files"].append({"name": path.relative_to(base).as_posix(), "bytes": stat.st_size,
                                                 "sha256": _checkpoint_digest(str(path.resolve()), stat.st_size,
                                                                              stat.st_mtime_ns, stat.st_ctime_ns)})
-                descriptor["complete"] = len(descriptor["files"]) == len(required)
+                descriptor["complete"] = bool(folds) and len(descriptor["files"]) == len(required)
             else:
                 descriptor["complete"] = False
             models.append(descriptor)
     config_digest = hashlib.sha256(json.dumps(configurations, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    result = {"schema_version": 2, "versions": versions, "profile": profile, "options": options,
+    result = {"schema_version": 2, "versions": versions, "profile": profile, "modality": modality, "options": options,
               "task_configuration_sha256": config_digest,
               "device_request": os.environ.get("SCAN3D_DEVICE", "gpu"), "fast": False, "fastest": False,
               "wrapper_sha256": _digest(Path(__file__)),
@@ -261,9 +272,9 @@ class _Resources:
 
 
 def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
-            options: dict | None = None) -> list[dict]:
+            options: dict | None = None, *, modality: str = "CT") -> list[dict]:
     legacy_options = options is None
-    options = normalize_options(profile, options)
+    options = normalize_options(profile, options, modality=modality)
     ct_path = Path(ct_path).resolve()
     ct, affine = _image(ct_path)
     output_dir = Path(output_dir).resolve()
@@ -278,7 +289,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
     run_dir.mkdir()
     manifest = {"schema_version": 1, "engine": "TotalSegmentator",
                 "engine_version": metadata.version("TotalSegmentator"), "resolution": "standard_full",
-                "profile": profile, "options": options, "output_selection": "all_nonempty_task_outputs",
+                "profile": profile, "modality": modality, "options": options, "output_selection": "all_nonempty_task_outputs",
                 "input_sha256": _digest(ct_path), "runtime": runtime,
                 "started_at": datetime.now(timezone.utc).isoformat(), "status": "running",
                 "run_id": run_dir.name, "tasks": [], "empty_labels": [], "qc": []}
@@ -322,6 +333,8 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
                       "effective_options": effective}
             if options["robust_crop"] and not capabilities["robust_crop_supported"]:
                 record["option_notes"] = ["Robust crop is only used by tasks with a standard organ crop model."]
+            if modality == "MR" and capabilities["uses_organ_crop"]:
+                record.setdefault("option_notes", []).append("MRI organ crops use the native 3 mm MRI model; CT crop switches do not apply.")
             manifest["tasks"].append(record)
             save_manifest()
             started = time.monotonic()
@@ -330,7 +343,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     while process.poll() is None:
-                        resources.sample(getattr(process, "pid", None))
+                        resources.sample(process.pid)
                         if cancelled():
                             _stop(process)
                             raise SegmentationCancelled("Segmentation cancelled")
@@ -339,7 +352,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
                     _stop(process)
                     raise
                 finally:
-                    resources.sample(getattr(process, "pid", None))
+                    resources.sample(process.pid)
                     record["elapsed_seconds"] = round(time.monotonic() - started, 3)
                     record["resources"] = resources.result()
             record["returncode"] = process.returncode
@@ -385,8 +398,9 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
         if not structures:
             raise RuntimeError("No nonempty structures were found in the requested task outputs")
         progress("Recording model checkpoint checksums")
-        manifest["model_fingerprint"] = (model_fingerprint(profile) if legacy_options
-                                         else model_fingerprint(profile, options))
+        source_options = {"modality": modality} if modality != "CT" else {}
+        manifest["model_fingerprint"] = (model_fingerprint(profile, **source_options) if legacy_options
+                                         else model_fingerprint(profile, options, **source_options))
         if not manifest["model_fingerprint"]["weights_complete"]:
             raise RuntimeError("Inference completed but its exact model checkpoints could not be identified; results were not published")
         manifest["status"] = "completed"

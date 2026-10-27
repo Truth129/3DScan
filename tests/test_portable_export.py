@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from scan3d import imaging, portable_export, review_volume
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.image_assets import bind_structures, create_image_asset, public_image_asset
 from scan3d.portable_export import ExportRequest, ExportTooLarge, prepare_export
 from scan3d.store import identifier
 
@@ -66,6 +67,26 @@ def portable_case(tmp_path):
     return settings, revision, glb
 
 
+@pytest.fixture
+def portable_mr(portable_case):
+    settings, revision, glb = portable_case
+    image = nib.load(revision["ct_file"])
+    signal = np.linspace(-.2, .8, np.prod(image.shape), dtype=np.float32).reshape(image.shape)
+    mr = nib.Nifti1Image(signal, image.affine)
+    mr.header.set_xyzt_units("mm")
+    mr.header.set_slope_inter(.37, -.1333)
+    nib.save(mr, revision["ct_file"])
+    asset = create_image_asset(revision["case_id"], revision["ct_file"], modality="MR",
+        source={"series_uid": "PRIVATE-MR-SERIES", "study_uid": "PRIVATE-STUDY",
+                "frame_of_reference_uid": "PRIVATE-FRAME", "sop_class_uids": ["PRIVATE-SOP"]},
+        presentation_metadata={"window_width": .125, "window_center": -.05,
+                               "photometric_interpretation": "MONOCHROME1"})
+    revision["image_asset"] = public_image_asset(asset)
+    revision["reference_image_id"] = asset["id"]
+    revision["structures"] = bind_structures(revision["structures"], asset["id"])
+    return settings, revision, glb
+
+
 def decoded_document(plan):
     document = b"".join(plan.chunks())
     assert len(document) == plan.byte_length
@@ -102,8 +123,13 @@ def test_independent_layer_combinations_embed_only_requested_artifacts(portable_
     assert (base64.b64decode(model) if model is not None else None) == (glb if segmentation else None)
     assert payload["layers"] == request.layers.model_dump()
     assert ("ct" in payload) == (volume or plane)
-    required = ({"fixture:one"} if plane else set()) | ({"fixture:two"} if volume else set())
-    assert {item["id"] for item in payload["masks"]} == required
+    native = [item for item in payload["masks"] if not item["descriptor"].get("volume_mask_union")]
+    unions = [item for item in payload["masks"] if item["descriptor"].get("volume_mask_union")]
+    assert {item["id"] for item in native} == ({"fixture:one"} if plane else set())
+    assert len(unions) == int(volume)
+    if volume:
+        assert unions[0]["descriptor"]["selected_structure_ids"] == ["fixture:two"]
+        assert unions[0]["id"] == "volume-mask-union:" + unions[0]["descriptor"]["key"]
     assert payload["schema_version"] == 1
     assert "PRIVATE-" not in text
     assert "mask_file" not in text and "ct_file" not in text and "/api/" not in text
@@ -129,8 +155,12 @@ def test_ct_hu_and_mask_crops_reconstruct_exactly_on_oblique_reflected_grid(port
     np.testing.assert_allclose(descriptor["affine_ras"], imaging.geometry(Path(revision["ct_file"]))["affine_ras"], atol=1e-6)
     assert np.linalg.det(np.asarray(descriptor["affine_ras"])[:3, :3]) < 0
     assert descriptor["quality"] == "full" and not descriptor["approximate"]
-    assert len(payload["masks"]) == 2
+    assert len(payload["masks"]) == 3
     for embedded in payload["masks"]:
+        if embedded["descriptor"].get("volume_mask_union"):
+            assert embedded["descriptor"]["presentation_only"] is True
+            assert embedded["descriptor"]["byte_length"] <= 8 * 1024**2
+            continue
         source = next(item for item in revision["structures"] if item["id"] == embedded["id"])
         mask = decode_volume(embedded)
         crop = embedded["descriptor"]
@@ -152,10 +182,12 @@ def test_display_margin_embeds_separate_volume_alias_and_exact_plane_overlay(por
                   "volume_mask": {"enabled": True, "ids": ["fixture:one"], "margin_mm": 2.5}}})
     _, (_, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
     masks = {item['id']: item for item in payload['masks']}
-    assert set(masks) == {'fixture:one', 'volume-margin:2.5:fixture:one'}
+    union = next(item for item in payload['masks'] if item['descriptor'].get('volume_mask_union'))
+    assert set(masks) == {'fixture:one', union['id']}
+    assert union['descriptor']['selected_structure_ids'] == ['fixture:one']
     assert payload['state']['volume_mask']['ids'] == ['fixture:one']
     assert payload['state']['volume_mask']['margin_mm'] == 2.5
-    exact = masks['fixture:one']; padded = masks['volume-margin:2.5:fixture:one']
+    exact = masks['fixture:one']; padded = union
     assert exact['descriptor']['key'] != padded['descriptor']['key']
     assert padded['descriptor']['display_margin_mm'] == 2.5
     assert int(decode_volume(padded).sum()) > int(decode_volume(exact).sum())
@@ -209,7 +241,7 @@ def test_header_limits_reject_oversized_ct_before_dense_decode(portable_case, mo
     settings, revision, _ = portable_case
     image = SimpleNamespace(shape=(512, 512, 2048), get_data_dtype=lambda: np.dtype("int16"))
     monkeypatch.setattr(imaging, "_image", lambda _: (image, np.eye(4)))
-    monkeypatch.setattr(review_volume, "ct_volume", lambda *args: pytest.fail("Oversized CT must be rejected before decoding"))
+    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Oversized CT must be rejected before decoding"))
     request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True}})
     with pytest.raises(ExportTooLarge, match="512 MiB"):
         prepare_export(revision, revision["case_id"], settings, request)
@@ -218,7 +250,7 @@ def test_header_limits_reject_oversized_ct_before_dense_decode(portable_case, mo
 def test_low_memory_rejected_before_dense_decode(portable_case, monkeypatch):
     settings, revision, _ = portable_case
     monkeypatch.setattr(portable_export, "_available_memory", lambda: 1)
-    monkeypatch.setattr(review_volume, "ct_volume", lambda *args: pytest.fail("Low-memory export must be rejected before decoding"))
+    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Low-memory export must be rejected before decoding"))
     request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_plane": True}})
     with pytest.raises(ExportTooLarge, match="insufficient available memory"):
         prepare_export(revision, revision["case_id"], settings, request)
@@ -239,7 +271,7 @@ def test_mask_and_html_budget_reject_before_streaming(portable_case, monkeypatch
 
 def test_unknown_segment_and_out_of_range_plane_are_rejected_before_decode(portable_case, monkeypatch):
     settings, revision, _ = portable_case
-    monkeypatch.setattr(review_volume, "ct_volume", lambda *args: pytest.fail("Invalid references must be rejected before decoding"))
+    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Invalid references must be rejected before decoding"))
     for state in ({"plane": {"overlays": ["other:secret"]}}, {"volume_mask": {"enabled": True, "ids": ["other:secret"]}},
                   {"display": {"other:secret": {"visible": True, "opacity": 1}}}, {"selected": "other:secret"}):
         request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_plane": True}, "state": state})
@@ -283,8 +315,8 @@ def test_empty_mask_and_required_id_union_remain_explicit_without_duplicate_data
         "state": {"plane": {"overlays": ["fixture:one", "fixture:one"]},
                   "volume_mask": {"enabled": True, "mode": "outside", "ids": ["fixture:one"]}}})
     _, (_, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
-    assert len(payload["masks"]) == 1
-    embedded = payload["masks"][0]
+    assert len(payload["masks"]) == 2
+    embedded = next(item for item in payload["masks"] if item["descriptor"].get("volume_mask_union"))
     assert embedded["descriptor"]["empty"] is True
     assert embedded["descriptor"]["shape"] == [1, 1, 1]
     assert decode_volume(embedded).sum() == 0
@@ -324,9 +356,142 @@ def test_supported_volume_presets_match_generated_frontend_catalog():
     ids = set(re.findall(r'^  "([^"\n]+)": \{', generated, re.M))
     assert len(ids) == 31
     assert portable_export.SUPPORTED_VOLUME_PRESETS == ids | {
-        "angiography", "bone", "soft-tissue", "lung", "CT-Cinematic-Heart"}
+        "angiography", "bone", "soft-tissue", "lung", "CT-Cinematic-Heart", "MR-SignalWindow"}
     for preset in portable_export.SUPPORTED_VOLUME_PRESETS:
         assert ExportRequest.model_validate({"state": {"volume": {"preset": preset}}}).state.volume.preset == preset
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_mr_surface_export_retains_only_safe_source_display_context(portable_mr, legacy):
+    settings, revision, glb = portable_mr
+    original = deepcopy(revision)
+    text, arguments = decoded_document(prepare_export(revision, revision["case_id"], settings,
+                                                      ExportRequest(), legacy=legacy))
+    manifest, model = arguments[:2]
+    assert base64.b64decode(model) == glb
+    context = manifest["image_context"]
+    assert set(context) == {"reference_image_id", "modality", "scalar", "presentation"}
+    assert context["reference_image_id"] == revision["reference_image_id"]
+    assert context["modality"] == "MR" and context["scalar"]["units"] == "signal"
+    assert context["presentation"] == revision["image_asset"]["presentation"]
+    assert "PRIVATE-" not in text and "source_uid" not in text and "content_sha256" not in text
+    assert "image_asset" not in manifest and "case_id" not in context and "source" not in context
+    assert revision == original
+    if not legacy:
+        assert "ct" not in arguments[2]
+        assert arguments[2]["state"]["volume"]["preset"] == "MR-SignalWindow"
+
+
+def test_mr_layers_preserve_fractional_signal_and_bound_mask_identity(portable_mr):
+    settings, revision, _ = portable_mr
+    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True, "ct_plane": True},
+        "state": {"plane": {"overlays": ["fixture:one"], "index": 12},
+                  "volume_mask": {"enabled": True, "ids": ["fixture:two"], "margin_mm": 1}}})
+    original_request, original_revision = request.model_dump(), deepcopy(revision)
+    text, (manifest, model, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    assert model is None and "PRIVATE-" not in text
+    context, descriptor = manifest["image_context"], payload["ct"]["descriptor"]
+    assert {key: descriptor[key] for key in context} == context
+    assert descriptor["dtype"] == "float32" and descriptor["slope"] == 1 and descriptor["intercept"] == 0
+    signal = decode_volume(payload["ct"])
+    np.testing.assert_array_equal(signal, np.asarray(nib.load(revision["ct_file"]).dataobj, dtype=np.float32))
+    assert np.any(signal < 0) and np.any(signal != np.rint(signal))
+    assert payload["state"]["volume"]["preset"] == "MR-SignalWindow"
+    assert payload["state"]["volume"]["signal_window"] == {"window": .125, "level": -.05, "invert": True}
+    assert payload["state"]["plane"]["window"] == .125 and payload["state"]["plane"]["level"] == -.05
+    assert {item["descriptor"]["reference_image_id"] for item in payload["masks"]} == {revision["reference_image_id"]}
+    unbound = review_volume.scalar_volume(revision["ct_file"], settings.data_dir / "review-cache", "full",
+                                          presentation=context["presentation"])
+    assert unbound["key"] != descriptor["key"]
+    exact = next(item for item in payload["masks"] if item["id"] == "fixture:one")
+    unbound_mask = review_volume.mask_volume(revision["ct_file"], revision["structures"][0]["mask_file"],
+                                             settings.data_dir / "review-cache", "full")
+    assert unbound_mask["key"] != exact["descriptor"]["key"]
+    assert request.model_dump() == original_request and revision == original_revision
+
+
+def test_mr_export_keeps_explicit_fractional_signal_and_plane_windows(portable_mr):
+    settings, revision, _ = portable_mr
+    window = {"window": .03125, "level": -.0075, "invert": False}
+    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True, "ct_plane": True},
+        "state": {"volume": {"preset": "MR-SignalWindow", "signal_window": window},
+                  "plane": {"window": .07, "level": .02}}})
+    _, (_, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    assert payload["state"]["volume"]["signal_window"] == window
+    assert payload["state"]["plane"]["window"] == .07 and payload["state"]["plane"]["level"] == .02
+    assert payload["ct"]["descriptor"]["presentation"]["default_window"] == .125
+
+
+@pytest.mark.parametrize("volume", [{"preset": "CT-Cinematic-Heart"}, {"preset": "angiography"},
+                                   {"preset": "CT-Bone"}, {"preset": "MR-SignalWindow", "shift": 25}])
+def test_mr_rejects_ct_calibration_before_volume_decode(portable_mr, monkeypatch, volume):
+    settings, revision, _ = portable_mr
+    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Invalid appearance decoded MRI"))
+    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True},
+                                           "state": {"volume": volume}})
+    with pytest.raises(ValueError, match="MR .*CT"):
+        prepare_export(revision, revision["case_id"], settings, request)
+
+
+@pytest.mark.parametrize("field", ["reference_image_id", "structure_reference_image_id"])
+def test_mr_export_rejects_cross_source_binding_before_decode(portable_mr, monkeypatch, field):
+    settings, revision, _ = portable_mr
+    if field == "reference_image_id":
+        revision["reference_image_id"] = identifier()
+    else:
+        revision["structures"][0]["reference_image_id"] = identifier()
+    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Wrong source decoded MRI"))
+    with pytest.raises(ValueError, match="reference image"):
+        prepare_export(revision, revision["case_id"], settings, ExportRequest())
+
+
+@pytest.mark.parametrize("window", [
+    {"window": 0, "level": 0}, {"window": -1, "level": 0},
+    {"window": float("inf"), "level": 0}, {"window": 1, "level": float("nan")},
+    {"window": True, "level": 0}, {"window": 1, "level": False},
+    {"window": 1, "level": 0, "invert": "false"},
+    {"window": 1, "level": 0, "source_file": "private.nii.gz"},
+])
+def test_signal_window_requires_finite_numbers_positive_width_and_strict_inversion(window):
+    with pytest.raises(ValidationError):
+        ExportRequest.model_validate({"state": {"volume": {"preset": "MR-SignalWindow", "signal_window": window}}})
+
+
+@pytest.mark.parametrize("window", [None, {"window": .125, "level": -.05, "invert": False}])
+def test_optional_signal_window_serialization_preserves_ct_shape_and_mr_values(window):
+    request = ExportRequest.model_validate({"state": {"volume": {"signal_window": window}}})
+    serialized = [request.state.volume.model_dump(), json.loads(request.state.volume.model_dump_json()),
+                  request.model_dump()["state"]["volume"], json.loads(request.model_dump_json())["state"]["volume"]]
+    for volume in serialized:
+        if window is None:
+            assert "signal_window" not in volume
+        else:
+            assert volume["signal_window"] == window
+
+
+def test_legacy_ct_surface_export_does_not_require_source_pixels(portable_case):
+    settings, revision, glb = portable_case
+    Path(revision["ct_file"]).unlink()
+    _, (manifest, model) = decoded_document(prepare_export(revision, revision["case_id"], settings, ExportRequest(), legacy=True))
+    assert base64.b64decode(model) == glb and "image_context" not in manifest
+
+
+def test_bound_ct_export_keeps_hu_pixels_and_legacy_appearance_defaults(portable_case):
+    settings, revision, _ = portable_case
+    asset = create_image_asset(revision["case_id"], revision["ct_file"], acquisition=revision["acquisition"])
+    revision["image_asset"] = public_image_asset(asset)
+    revision["reference_image_id"] = asset["id"]
+    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True, "ct_plane": True}})
+    text, (manifest, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    descriptor = payload["ct"]["descriptor"]
+    assert descriptor["modality"] == "CT" and descriptor["scalar"]["units"] == "HU"
+    assert descriptor["reference_image_id"] == asset["id"]
+    raw = decode_volume(payload["ct"])
+    pixels = (raw.astype(np.float64) * descriptor["slope"] + descriptor["intercept"]).astype(np.float32)
+    np.testing.assert_array_equal(pixels, np.asarray(nib.load(revision["ct_file"]).dataobj, dtype=np.float32))
+    assert payload["state"] == request.state.model_dump(mode="json", exclude_none=True)
+    assert manifest["image_context"]["presentation"]["default_window"] == 400
+    assert "PRIVATE-" not in text
 
 
 def test_changed_export_file_cannot_silently_truncate_or_extend_stream(tmp_path):
@@ -373,3 +538,10 @@ def test_export_api_headers_legacy_post_authorization_and_limits(portable_case, 
         assert service.store.list("jobs") == []
     finally:
         client.close()
+
+
+def test_new_partial_segment_display_defaults_to_fifty_percent():
+    request = ExportRequest.model_validate({"state": {"display": {"fixture:one": {"visible": True}}}})
+    assert request.state.display["fixture:one"].opacity == .5
+    explicit = ExportRequest.model_validate({"state": {"display": {"fixture:one": {"visible": True, "opacity": 1}}}})
+    assert explicit.state.display["fixture:one"].opacity == 1

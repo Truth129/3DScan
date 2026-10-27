@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import re
 import sqlite3
-import uuid
 
+from .identifiers import identifier
 from .relationships import INDEPENDENT, relationship_dirty
 
 
@@ -16,10 +16,6 @@ class ReviewConflict(ValueError):
 
 def now():
     return datetime.now(timezone.utc).isoformat()
-
-
-def identifier():
-    return uuid.uuid4().hex
 
 
 def safe_id(value):
@@ -43,8 +39,11 @@ class Store:
                 CREATE INDEX IF NOT EXISTS job_status ON jobs(status);
                 CREATE TABLE IF NOT EXISTS review_sessions(id TEXT PRIMARY KEY, case_id TEXT NOT NULL, data TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS review_case ON review_sessions(case_id);
-                PRAGMA user_version=2;
+                CREATE TABLE IF NOT EXISTS image_assets(id TEXT PRIMARY KEY, case_id TEXT NOT NULL, data TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS image_asset_case ON image_assets(case_id);
             """)
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 3:
+                connection.execute("PRAGMA user_version=3")
 
     @contextmanager
     def connection(self):
@@ -60,7 +59,7 @@ class Store:
             con.close()
 
     def get(self, table, record_id):
-        if table not in ("cases", "revisions", "jobs", "review_sessions"):
+        if table not in ("cases", "revisions", "jobs", "review_sessions", "image_assets"):
             raise ValueError("Unknown record type")
         safe_id(record_id)
         with self.connection() as con:
@@ -71,6 +70,10 @@ class Store:
         return self._upgrade_review(record) if table == "review_sessions" else record
 
     def save(self, table, record):
+        if table == "image_assets":
+            return self.register_image_asset(record)
+        if table == "revisions" and ("reference_image_id" in record or "image_asset" in record):
+            self.resolve_reference(record)
         safe_id(record["id"])
         encoded = json.dumps(record, allow_nan=False)
         with self.connection() as con:
@@ -87,7 +90,7 @@ class Store:
         return record
 
     def list(self, table, case_id=None):
-        if table not in ("cases", "revisions", "jobs", "review_sessions"):
+        if table not in ("cases", "revisions", "jobs", "review_sessions", "image_assets"):
             raise ValueError("Unknown record type")
         with self.connection() as con:
             if case_id:
@@ -107,6 +110,66 @@ class Store:
             raise KeyError("Revision does not belong to this case")
         return revision
 
+    def register_image_asset(self, record):
+        """Register immutable source-image metadata without replacing a record."""
+        from .image_assets import assert_reference_image
+
+        assert_reference_image(record, record.get("file_path"))
+        safe_id(record["id"])
+        safe_id(record["case_id"])
+        encoded = json.dumps(record, allow_nan=False)
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if con.execute("SELECT 1 FROM cases WHERE id=?", (record["case_id"],)).fetchone() is None:
+                raise KeyError("Case not found")
+            row = con.execute("SELECT data FROM image_assets WHERE id=?", (record["id"],)).fetchone()
+            if row is not None:
+                existing = json.loads(row["data"])
+                if ({k: v for k, v in existing.items() if k != "file_path"}
+                        != {k: v for k, v in record.items() if k != "file_path"}):
+                    raise ValueError("Image assets are immutable")
+                # A copied source with identical bytes and provenance is the
+                # same asset; retain its original immutable storage location.
+                return existing
+            con.execute("INSERT INTO image_assets VALUES (?,?,?)", (record["id"], record["case_id"], encoded))
+        return record
+
+    def image_asset(self, case_id, image_id):
+        self.get("cases", case_id)
+        try:
+            record = self.get("image_assets", image_id)
+        except KeyError:
+            record = next((entry for entry in self.image_assets(case_id) if entry["id"] == image_id), None)
+            if record is None:
+                raise KeyError("Image not found") from None
+        if record["case_id"] != case_id:
+            raise KeyError("Image does not belong to this case")
+        return record
+
+    def image_assets(self, case_id):
+        """Include legacy references in the read model without migrating rows."""
+        self.get("cases", case_id)
+        records = {record["id"]: record for record in self.list("image_assets", case_id)}
+        for revision in self.list("revisions", case_id):
+            asset = self.resolve_reference(revision)
+            records.setdefault(asset["id"], asset)
+        return list(records.values())
+
+    def resolve_reference(self, revision, *, persist=False):
+        from .image_assets import reference_image, public_image_asset
+
+        asset = reference_image(revision)
+        if "reference_image_id" in revision or "image_asset" in revision:
+            try:
+                registered = self.get("image_assets", asset["id"])
+            except KeyError:
+                raise ValueError("Revision references an unregistered source image") from None
+            if public_image_asset(registered) != public_image_asset(asset):
+                raise ValueError("Revision image metadata differs from its immutable source image")
+        if persist:
+            return self.register_image_asset(asset)
+        return asset
+
     def activate(self, case_id, revision_id):
         self.revision(case_id, revision_id)
         case = self.get("cases", case_id)
@@ -119,6 +182,8 @@ class Store:
 
     def commit_revision(self, revision, job=None, expected_active_revision_id=None, review_guard=None):
         """Revision visibility, case activation and job completion are one transaction."""
+        if "reference_image_id" in revision or "image_asset" in revision:
+            self.resolve_reference(revision)
         with self.connection() as con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT data FROM cases WHERE id=?", (revision["case_id"],)).fetchone()
@@ -448,9 +513,17 @@ def public_case(record):
 
 
 def public_revision(record):
-    result = {k: v for k, v in record.items() if k not in ("ct_file", "directory", "inference_manifest")}
+    from .image_assets import reference_image, public_image_asset, bind_structures
+
+    asset = reference_image(record) if all(key in record for key in ("case_id", "ct_file", "geometry")) else None
+    result = {k: v for k, v in record.items() if k not in ("ct_file", "directory", "inference_manifest", "image_asset")}
+    if asset is not None:
+        result["reference_image_id"] = asset["id"]
+        result["image_asset"] = public_image_asset(asset)
     result.setdefault("kind", "segmentation" if record["structures"] else "ct")
-    result["structures"] = [{k: v for k, v in s.items() if k != "mask_file"} for s in record["structures"]]
+    result["structures"] = [{k: v for k, v in s.items() if k != "mask_file"}
+                            for s in (bind_structures(record["structures"], asset["id"])
+                                      if asset is not None else record["structures"])]
     manifest = record.get("inference_manifest")
     if manifest:
         result["model_provenance"] = {k: manifest[k] for k in ("engine", "engine_version", "nnunet_version", "resolution", "started_at", "finished_at") if k in manifest}

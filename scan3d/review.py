@@ -25,6 +25,42 @@ from .store import ReviewConflict, identifier, now, safe_id
 
 _ALIAS = re.compile(r"review-([a-f0-9]{32})-(0|[1-9][0-9]{0,9})")
 _MEASUREMENTS = {"volume_ml", "voxel_count", "bounds_ras", "centroid_ras", "qc"}
+_OVERLAP_CHUNK_VOXELS = 4 * 1024 * 1024
+
+
+def _count_foreground(values, check_cancel):
+    """Count complete binary masks in native order with bounded cancellation gaps."""
+    count = 0
+    with np.nditer(values, flags=["external_loop", "buffered", "zerosize_ok"],
+                   op_flags=["readonly"], order="K", buffersize=_OVERLAP_CHUNK_VOXELS) as chunks:
+        for chunk in chunks:
+            check_cancel()
+            count += int(np.count_nonzero(chunk))
+    return count
+
+
+def _count_overlap(target, peer, check_cancel):
+    """Compare matching ROI views without copying either complete source mask."""
+    count = 0
+    with np.nditer([target, peer], flags=["external_loop", "buffered", "zerosize_ok"],
+                   op_flags=[["readonly"], ["readonly"]], order="K",
+                   buffersize=_OVERLAP_CHUNK_VOXELS) as chunks:
+        for selected, other in chunks:
+            check_cancel()
+            # Validated peers may be float-valued zero/one NIfTIs. Logical AND
+            # preserves binary semantics without a whole-volume bool conversion.
+            count += int(np.count_nonzero(np.logical_and(selected, other)))
+    return count
+
+
+def _erase_overlap(target, peer, check_cancel):
+    """Update only a private writable peer's ROI, flushing bounded buffer writes."""
+    with np.nditer([target, peer], flags=["external_loop", "buffered", "zerosize_ok"],
+                   op_flags=[["readonly"], ["readwrite"]], order="K",
+                   buffersize=_OVERLAP_CHUNK_VOXELS) as chunks:
+        for selected, other in chunks:
+            check_cancel()
+            other[selected] = False
 
 
 def _digest(path):
@@ -112,12 +148,19 @@ class ReviewManager:
 
     def _base(self, review):
         base = self.store.revision(review["case_id"], review["revision_id"])
+        from .image_assets import bind_structures, public_image_asset
+        asset = self.store.resolve_reference(base)
+        if review.get("reference_image_id", asset["id"]) != asset["id"]:
+            raise ReviewConflict("The correction belongs to another reference image")
+        base = {**base, "reference_image_id": asset["id"], "image_asset": public_image_asset(asset),
+                "structures": bind_structures(base["structures"], asset["id"])}
         selected = next((s for s in base["structures"] if s["id"] == review["structure_id"]), None)
         if selected is None and review.get("new_structure"):
             selected = review.get("target")
             if (not selected or selected["id"] != review["structure_id"] or selected.get("task") != "custom"
                     or not re.fullmatch(r"custom:[a-f0-9]{32}", selected["id"])):
                 raise ValueError("The provisional structure identity is invalid")
+            selected = bind_structures([selected], asset["id"])[0]
         if selected is None:
             raise ValueError("The selected structure is unavailable in the source revision")
         return base, selected
@@ -131,9 +174,11 @@ class ReviewManager:
             raise ReviewConflict("Start a correction from the active revision")
         if structure_id not in {s["id"] for s in base["structures"]}:
             raise ValueError("Structure does not belong to the selected revision")
+        asset = self.store.resolve_reference(base)
         initial = effective_relationship(base["structures"], structure_id)
         chosen = initial if relationship is None else normalize_relationship(relationship, base["structures"], structure_id)
         record = dict(id=identifier(), case_id=case_id, revision_id=revision_id, structure_id=structure_id,
+                      reference_image_id=asset["id"],
                       status="draft", generation=0, prompts=[], job_id=None, candidate=None, candidates={},
                       options=normalize_options(), batches=[], error=None, accepted_revision_id=None,
                       relationship=chosen, initial_relationship=initial,
@@ -160,6 +205,7 @@ class ReviewManager:
         base = self.store.revision(case_id, revision_id)
         if case.get("active_revision_id") != revision_id:
             raise ReviewConflict("Start a new segment from the active revision")
+        asset = self.store.resolve_reference(base)
         session_id, structure_id = identifier(), f"custom:{identifier()}"
         chosen = normalize_relationship(relationship, base["structures"], structure_id)
         directory = self.store.case_dir(case_id) / "reviews" / session_id
@@ -172,8 +218,10 @@ class ReviewManager:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             imaging._save_mask(np.zeros(image.shape, dtype=np.uint8), image, baseline)
         target = dict(id=structure_id, name=name, task="custom", group=group, color=color.lower(),
+                      reference_image_id=asset["id"],
                       mask_file=str(baseline), volume_ml=0., voxel_count=0, centroid_ras=None, bounds_ras=None, qc=[], relationship=chosen)
         record = dict(id=session_id, case_id=case_id, revision_id=revision_id, structure_id=structure_id,
+                      reference_image_id=asset["id"],
                       new_structure=True, target=target, status="draft", generation=0, prompts=[], job_id=None,
                       candidate=None, candidates={}, options=normalize_options({"start_empty": True}), batches=[],
                       relationship=chosen, initial_relationship=dict(INDEPENDENT), relationship_suggestions=[],
@@ -313,7 +361,13 @@ class ReviewManager:
         protected = ancestors(selected["id"], parents)
         protected.update(entry["id"] for entry in base["structures"] if selected["id"] in ancestors(entry["id"], parents))
         exclusive = set(relationship["exclusive_with"])
-        target_flat = after.reshape(-1)
+        # Every foreground voxel lies in this inclusive native-IJK box. The
+        # entire target is authoritative, including unchanged baseline overlap;
+        # a model's most recent prediction box is not sufficient here.
+        region = (tuple(slice(int(low), int(high) + 1) for low, high in zip(*bounds))
+                  if bounds is not None else None)
+        target_region = after[region] if region is not None else None
+        check_cancel = lambda: self.service.check_cancel(job)
         self.service.stage(job, "Checking explicit sibling relationships and preserved overlaps")
         for entry in base["structures"]:
             self.service.check_cancel(job)
@@ -334,16 +388,11 @@ class ReviewManager:
             result_path = entry["mask_file"]
             if not disjoint:
                 digest = _digest(entry["mask_file"])
-                peer, _, _ = imaging._binary(Path(entry["mask_file"]), image, affine)
-                peer_flat = peer.reshape(-1)
-                peer_count = 0
-                for start in range(0, target_flat.size, 4 * 1024 * 1024):
-                    self.service.check_cancel(job)
-                    a, b = target_flat[start:start + 4 * 1024 * 1024], peer_flat[start:start + 4 * 1024 * 1024]
-                    peer_count += int(np.count_nonzero(b))
-                    overlap += int(np.count_nonzero(a & b))
-                    if peer_id in exclusive:
-                        b[a] = False
+                # Validate every source voxel and the full reference geometry,
+                # then retain NIfTI's native layout for read-only overlap work.
+                peer, _, _, _ = imaging._binary_values(Path(entry["mask_file"]), image, affine)
+                peer_count = _count_foreground(peer, check_cancel)
+                overlap = _count_overlap(target_region, peer[region], check_cancel)
                 if overlap:
                     checked[peer_id] = dict(id=peer_id, mask_file=entry["mask_file"], sha256=digest)
                     removed = peer_id in exclusive
@@ -352,14 +401,19 @@ class ReviewManager:
                                          policy="removed" if removed else "preserved", reason=reason))
                     if removed:
                         result_path = str(directory / f"peer-{hashlib.sha256(peer_id.encode()).hexdigest()}.nii.gz")
-                        imaging._save_mask(peer, image, Path(result_path))
+                        # Only a truly affected exclusive sibling needs a dense
+                        # writable mask. Source arrays may be shared/read-only.
+                        writable = np.array(peer, dtype=bool, order="K", copy=True)
+                        _erase_overlap(target_region, writable[region], check_cancel)
+                        imaging._save_mask(writable, image, Path(result_path))
+                        del writable
                         if overlap == peer_count:
                             warnings.append(f"Replacing overlap leaves {entry['name']} empty; inspect this subdivision")
                     elif peer_id not in protected:
                         warnings.append(f"Overlap with {entry['name']} is preserved; no exclusive sibling relationship was selected")
                 if _digest(entry["mask_file"]) != digest:
                     raise ValueError("An overlapping source mask changed during candidate preparation")
-                del peer, peer_flat
+                del peer
             removed = overlap if peer_id in exclusive else 0
             if removed or metadata_changed:
                 checked.setdefault(peer_id, dict(id=peer_id, mask_file=entry["mask_file"], sha256=_digest(entry["mask_file"])))

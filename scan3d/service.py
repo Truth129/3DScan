@@ -134,7 +134,7 @@ class Service:
                 self.worker_lock = None
 
     def new_case(self, label=None):
-        record = dict(id=identifier(), label=label or "New CT case", created_at=now(), status="importing",
+        record = dict(id=identifier(), label=label or "New imaging case", created_at=now(), status="importing",
                       active_revision_id=None, selected_series_uid=None, phase=None, series=[], references={})
         self.store.save("cases", record)
         return record
@@ -143,7 +143,7 @@ class Service:
         from .dicom import index_dicom
         series = index_dicom(source)
         if not series:
-            raise ValueError("No supported CT DICOM series found")
+            raise ValueError("No supported DICOM image series found")
         case.update(series=series, source_dir=str(source), status="imported")
         return self.store.save("cases", case)
 
@@ -180,29 +180,37 @@ class Service:
             raise
 
     def process(self, case_id, series_uid, profile, phase, *, cardiac_phase=None, rr_percent=None):
-        """Prepare a reference CT for viewing, without running segmentation."""
+        """Prepare a reference image for viewing, without running segmentation."""
         from .acquisition import acquisition_labels
 
         case = self.store.get("cases", case_id)
         selected = next((s for s in case["series"] if s["uid"] == series_uid), None)
         if not selected:
             raise ValueError("Select a series belonging to this case")
+        if selected.get("supported") is False:
+            raise ValueError(selected.get("unsupported_reason") or "This series is unavailable for volume preparation")
+        if selected.get("modality", "CT") != "CT" and (cardiac_phase is not None or rr_percent is not None):
+            raise ValueError("Cardiac CT timing does not apply to a static MR volume")
         acquisition = acquisition_labels(series_uid, profile, phase,
             cardiac_phase=cardiac_phase, rr_percent=rr_percent)
         return self.store.enqueue(case_id, "process", acquisition)
 
-    def segment_case(self, case_id, revision_id, task="total", robust_crop=False, body_seg=False,
+    def segment_case(self, case_id, revision_id, task=None, robust_crop=False, body_seg=False,
                      remove_small_blobs=False):
-        from .segmentation_options import normalize_options
+        from .segmentation_options import default_task, normalize_options
 
         parent = self.store.revision(case_id, revision_id)
         if self.store.get("cases", case_id).get("active_revision_id") != revision_id:
-            raise ValueError("The active revision changed; start segmentation from the current CT")
+            raise ValueError("The active revision changed; start segmentation from the current image")
         acquisition = parent.get("acquisition") or {}
         profile = acquisition.get("profile", "chest_abdomen")
-        options = normalize_options(profile, dict(tasks=[task], robust_crop=robust_crop,
-            body_seg=body_seg, remove_small_blobs=remove_small_blobs))
-        return self.store.enqueue(case_id, "segment", dict(revision_id=revision_id, options=options))
+        reference = self.store.resolve_reference(parent)
+        if "segmentation" not in reference["capabilities"]:
+            raise ValueError("This source image does not support segmentation")
+        options = normalize_options(profile, dict(tasks=[task or default_task(reference["modality"])], robust_crop=robust_crop,
+            body_seg=body_seg, remove_small_blobs=remove_small_blobs), modality=reference["modality"])
+        return self.store.enqueue(case_id, "segment", dict(revision_id=revision_id, options=options,
+                                  reference_image_id=reference["id"]))
 
     def include_all_outputs(self, case_id):
         """Restore saved model outputs omitted by the former anatomy filter."""
@@ -313,6 +321,8 @@ class Service:
         from . import dicom
         case = self.store.get("cases", job["case_id"])
         series = next(s for s in case["series"] if s["uid"] == job["payload"]["series_uid"])
+        if series.get("supported") is False:
+            raise ValueError(series.get("unsupported_reason") or "This series is unavailable for volume preparation")
         case_dir = self.store.case_dir(case["id"])
         self.stage(job, "Checking and converting selected DICOM series")
         digest = hashlib.sha256()
@@ -326,24 +336,79 @@ class Service:
             conversion.mkdir(parents=True, exist_ok=True)
             ct = dicom.convert_series(series["files"], conversion)
         self.check_cancel(job)
-        self.stage(job, "Preparing CT for viewing; segmentation has not been requested")
-        return self.build_ct_revision(case["id"], ct, acquisition=job["payload"])
+        modality = series.get("modality", "CT")
+        self.stage(job, f"Preparing {modality} for viewing; segmentation has not been requested")
+        image_source = {key: series[key] for key in (
+            "study_uid", "frame_of_reference_uid", "sop_class_uids") if key in series}
+        return self.build_ct_revision(case["id"], ct, acquisition=job["payload"], image_source=image_source,
+                                      modality=modality, presentation_metadata=series,
+                                      frame_selector=series.get("frame_selector"))
 
-    def build_ct_revision(self, case_id, ct, acquisition=None):
-        """A viewable CT revision has no mask, mesh or model dependency."""
+    def _reference_for_build(self, case_id, image_file, geometry, *, parent=None,
+                             acquisition=None, image_source=None, frame_selector=None,
+                             modality=None, presentation_metadata=None):
+        from .image_assets import create_image_asset, assert_reference_image
+
+        if parent:
+            previous = self.store.revision(case_id, parent)
+            asset = self.store.resolve_reference(previous)
+            if modality is not None and modality != asset["modality"]:
+                raise ValueError("A derived revision must keep its reference image modality")
+            assert_reference_image(asset, image_file, geometry)
+            series_uid = (acquisition or {}).get("series_uid")
+            if series_uid is not None and series_uid != asset["source"].get("series_uid"):
+                raise ValueError("A derived revision must keep its reference image series")
+            if frame_selector is not None and frame_selector != asset["frame_selector"]:
+                raise ValueError("A derived revision must keep its reference image frame")
+            if image_source is not None:
+                requested = create_image_asset(case_id, image_file, acquisition=acquisition,
+                                               source=image_source, frame_selector=asset["frame_selector"],
+                                               modality=asset["modality"], presentation_metadata=presentation_metadata)
+                if requested["source"] != asset["source"]:
+                    raise ValueError("A derived revision must keep its reference image source")
+        else:
+            asset = create_image_asset(case_id, image_file, acquisition=acquisition,
+                                       source=image_source, frame_selector=frame_selector,
+                                       modality=modality or "CT", presentation_metadata=presentation_metadata)
+            try:
+                existing = self.store.get("image_assets", asset["id"])
+            except KeyError:
+                pass
+            else:
+                if existing["case_id"] != case_id:
+                    raise ValueError("Reference image belongs to another case")
+                # Immutable presentation metadata belongs to the source asset;
+                # evolving adapter defaults apply only to newly seen images.
+                asset = assert_reference_image(existing, image_file, geometry)
+        return self.store.register_image_asset(asset)
+
+    def build_ct_revision(self, case_id, ct, acquisition=None, *, image_source=None, frame_selector=None,
+                          modality="CT", presentation_metadata=None):
+        """A scalar image revision; the method name remains a CT compatibility alias."""
         from . import imaging
+
+        geometry = imaging.geometry(ct)
+        asset = self._reference_for_build(case_id, ct, geometry, acquisition=acquisition,
+                                          image_source=image_source, frame_selector=frame_selector,
+                                          modality=modality, presentation_metadata=presentation_metadata)
+        from .image_assets import public_image_asset
 
         revision_id = identifier()
         directory = self.store.case_dir(case_id) / "revisions" / revision_id
         directory.mkdir(parents=True, exist_ok=True)
-        result = dict(id=revision_id, case_id=case_id, parent_id=None, kind="ct", created_at=now(),
-            review_status="unreviewed", source="dicom", operation=None, geometry=imaging.geometry(ct),
+        result = dict(id=revision_id, case_id=case_id, parent_id=None,
+            kind="ct" if asset["modality"] == "CT" else "image", created_at=now(),
+            review_status="unreviewed", source="dicom", operation=None, geometry=geometry,
             structures=[], qc=[], directory=str(directory), ct_file=str(ct), acquisition=acquisition,
+            reference_image_id=asset["id"], image_asset=public_image_asset(asset),
             synthetic=bool(self.store.get("cases", case_id).get("synthetic")),
             model_url=None, model_manifest_url=None, surface_assets=[], mesh_statistics={},
             pipeline_version=__version__, pipeline_code_sha256=code_fingerprint(), inference_manifest=None)
         atomic_json(directory / "revision.json", result)
         return result
+
+    def build_image_revision(self, case_id, image_file, acquisition=None, **metadata):
+        return self.build_ct_revision(case_id, image_file, acquisition=acquisition, **metadata)
 
     def _segment(self, job):
         from . import segmentation
@@ -351,14 +416,20 @@ class Service:
 
         parent = self.store.revision(job["case_id"], job["payload"]["revision_id"])
         if self.store.get("cases", job["case_id"]).get("active_revision_id") != parent["id"]:
-            raise ValueError("The active revision changed; start segmentation from the current CT")
+            raise ValueError("The active revision changed; start segmentation from the current image")
         ct = Path(parent["ct_file"])
         acquisition = parent.get("acquisition") or {}
         profile = acquisition.get("profile", "chest_abdomen")
-        options = normalize_options(profile, job["payload"]["options"])
+        reference = self.store.resolve_reference(parent)
+        if "segmentation" not in reference["capabilities"]:
+            raise ValueError("This source image does not support segmentation")
+        if job["payload"].get("reference_image_id", reference["id"]) != reference["id"]:
+            raise ValueError("Segmentation job belongs to another reference image")
+        options = normalize_options(profile, job["payload"]["options"], modality=reference["modality"])
         case_dir = self.store.case_dir(job["case_id"])
         self.stage(job, "Checking selected task, settings and reusable model outputs")
-        fingerprint = segmentation.model_fingerprint(profile, options=options)
+        source_options = {"modality": reference["modality"]} if reference["modality"] != "CT" else {}
+        fingerprint = segmentation.model_fingerprint(profile, options=options, **source_options)
         cache_parameters = {"input_sha256": segmentation._digest(ct), "profile": profile, "options": options,
                             "versions": fingerprint["versions"], "device": fingerprint["device_request"],
                             "wrapper_sha256": fingerprint["wrapper_sha256"], "pipeline_version": __version__}
@@ -381,7 +452,7 @@ class Service:
         if not cached.exists():
             inference.mkdir(parents=True, exist_ok=True)
             structures = segmentation.segment(ct, inference, profile,
-                lambda name: self.stage(job, name), lambda: self.cancelled(job), options=options)
+                lambda name: self.stage(job, name), lambda: self.cancelled(job), options=options, **source_options)
             self.check_cancel(job)
             run_manifest = json.loads((inference / "inference.json").read_text())
             pending = cached.with_suffix(".json.writing")
@@ -391,7 +462,8 @@ class Service:
             pending.replace(cached)
         self.stage(job, "Checking masks and generating surfaces")
         from .segmentation_merge import merge_task_outputs
-        merged, replacement = merge_task_outputs(parent["structures"], structures, options["tasks"])
+        merged, replacement = merge_task_outputs(parent["structures"], structures, options["tasks"],
+                                                 reference_image_id=reference["id"])
         result = self.build_revision(job["case_id"], ct, merged, source="totalsegmentator",
             parent=parent["id"], acquisition=acquisition, job=job, extra_qc=run_manifest.get("qc", []),
             operation={"type": "segment", "input_revision_id": parent["id"], "options": options,
@@ -406,13 +478,18 @@ class Service:
         return result
 
     def build_revision(self, case_id, ct, structures, source, parent=None, operation=None, directory=None, acquisition=None, job=None,
-                       extra_qc=None, inference_manifest=None):
+                       extra_qc=None, inference_manifest=None, *, image_source=None, frame_selector=None):
         from . import imaging, surfaces
+        from .image_assets import bind_structures, public_image_asset
+        geometry = imaging.geometry(ct)
+        asset = self._reference_for_build(case_id, ct, geometry, parent=parent,
+                                          acquisition=acquisition, image_source=image_source,
+                                          frame_selector=frame_selector)
+        structures = bind_structures(structures, asset["id"])
         revision_id = identifier()
         directory = directory or self.store.case_dir(case_id) / "revisions" / revision_id
         directory.mkdir(parents=True, exist_ok=True)
         started = time.perf_counter()
-        geometry = imaging.geometry(ct)
         analysis_hits = 0
         measurement_timings = {}
         reviewed_structures = [None] * len(structures)
@@ -503,6 +580,7 @@ class Service:
                       synthetic=bool(self.store.get("cases", case_id).get("synthetic")),
                       qc=sorted({warning for s in reviewed_structures for warning in s["qc"]} | set(extra_qc or [])),
                       directory=str(directory), ct_file=str(ct), acquisition=acquisition,
+                      reference_image_id=asset["id"], image_asset=public_image_asset(asset),
                       model_url=f"/api/cases/{case_id}/revisions/{revision_id}/model.glb",
                       model_manifest_url=f"/api/cases/{case_id}/revisions/{revision_id}/model-manifest",
                       surface_assets=assets, mesh_statistics={"display": display, "detailed": None}, processing_timings=timings,
@@ -526,7 +604,7 @@ class Service:
         from . import surfaces
         revision = self.store.revision(case_id, revision_id)
         if not revision["structures"]:
-            raise ValueError("This CT has no segmentation surfaces yet")
+            raise ValueError("This image has no segmentation surfaces yet")
         target = Path(revision["directory"]) / "detailed.glb"
         if target.is_file() and revision.get("mesh_statistics", {}).get("detailed"):
             return target
@@ -603,7 +681,8 @@ class Service:
             raise ValueError("The saved inference task manifest is incomplete")
         outputs = []
         from .segmentation_options import task_ids
-        allowed_tasks = set(task_ids())
+        reference = self.store.resolve_reference(parent)
+        allowed_tasks = set(task_ids(reference["modality"]))
         for task in tasks:
             task_name = task["task"]
             labels = task.get("labels", [])

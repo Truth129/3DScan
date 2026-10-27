@@ -147,4 +147,15 @@ describe('borrowed volume-mask authorization',()=>{
     volume.dispose();disposals.forEach(dispose=>expect(dispose).not.toHaveBeenCalled());
     replacement.dispose();ct.dispose();atlas.dispose();info.dispose();
   });
+  it('releases every hidden render target while retaining borrowed source textures',()=>{
+    const {volume,ct,atlas,info}=fixture(),borrowed=[ct,atlas,info].map(texture=>vi.spyOn(texture,'dispose'));
+    const targets=Array.from({length:5},()=>({dispose:vi.fn(),width:1024,height:768}));
+    Object.assign(volume,{target:targets[0],planeTarget:targets[1],surfaceLayers:{dispose:targets[2].dispose,bytes:1024},
+      stackAccum:targets.slice(3),lastWidth:1024,lastHeight:768,planeActive:true,stackActive:true});
+    volume.releaseTargets();targets.forEach(target=>expect(target.dispose).toHaveBeenCalledTimes(1));
+    expect(volume.diagnostics.targetBytes).toBe(0);expect(volume.diagnostics.planeTargetBytes).toBe(0);
+    expect(volume.diagnostics.stackTargetBytes).toBe(0);expect(volume.diagnostics.planeActive).toBe(false);
+    expect(volume.diagnostics.ready).toBe(true);borrowed.forEach(dispose=>expect(dispose).not.toHaveBeenCalled());
+    volume.dispose();ct.dispose();atlas.dispose();info.dispose();
+  });
 });

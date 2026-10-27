@@ -2,6 +2,7 @@ import { acceptChunk, allocateVolume, probeVolume, resliceVolume } from './ct-re
 import type { ResidentOverlay, ResidentVolume, VolumeDescriptor } from './ct-reslice';
 import type { Plane, Point } from '../types';
 import { copyGPUVolumeSlab } from './gpu-volume-data';
+import { assertReferenceImage } from './image-domain';
 
 // The volume has one owner. Only completed slices or bounded upload slabs leave.
 let ct: ResidentVolume | null = null;
@@ -27,6 +28,7 @@ interface Command {
   ras?: Point;
   native?: { axis: 0 | 1 | 2; index: number };
   consumer?: 'ct' | 'model-review';
+  includeOverlays?: boolean;
   volumeKey?: string;
   zStart?: number;
   depth?: number;
@@ -53,6 +55,8 @@ scope.onmessage = ({ data: command }) => {
           ? [{ id: 'selected', current: command.current, parent: command.parent ?? null }] : []);
         const descriptors = new Map<string, VolumeDescriptor>();
         for (const entry of entries) {
+          assertReferenceImage(ct.descriptor, entry.current);
+          if (entry.parent) assertReferenceImage(ct.descriptor, entry.parent);
           descriptors.set(entry.current.key, entry.current);
           if (entry.parent) descriptors.set(entry.parent.key, entry.parent);
         }
@@ -79,9 +83,10 @@ scope.onmessage = ({ data: command }) => {
         acceptChunk(volume, command.index!, command.bytes!);
         mask?.loaded.add(command.index!);
       } else if (command.type === 'slice') {
-        if (command.overlayVersion !== overlayVersion) throw new Error('Superseded local CT overlay');
-        if ([...masks.values()].some(mask => mask.loaded.size !== mask.volume.descriptor.chunks.length)) throw new Error('Local CT overlay is incomplete');
-        const slice = resliceVolume(ct, command.plane!, command.position!, null, null, overlays, command.native);
+        const includeOverlays = command.includeOverlays !== false;
+        if (includeOverlays && command.overlayVersion !== overlayVersion) throw new Error('Superseded local CT overlay');
+        if (includeOverlays && [...masks.values()].some(mask => mask.loaded.size !== mask.volume.descriptor.chunks.length)) throw new Error('Local CT overlay is incomplete');
+        const slice = resliceVolume(ct, command.plane!, command.position!, null, null, includeOverlays ? overlays : [], command.native);
         result = slice;
         const buffers = new Set<ArrayBuffer>([slice.hu.buffer as ArrayBuffer, slice.current.buffer as ArrayBuffer]);
         if (slice.parent) buffers.add(slice.parent.buffer as ArrayBuffer);

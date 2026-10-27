@@ -1,8 +1,9 @@
 import type * as Core from '@cornerstonejs/core';
 import type * as Tools from '@cornerstonejs/tools';
 import type { Point, SliceMeta } from '../types';
-import type { CTFrame } from './ct-renderer';
+import { ctOverlayAppearance, sameCTFrameSamples, type CTFrame } from './ct-renderer';
 import { cornerstoneDisplayMeta, cornerstonePlane, lpsToRas, rasToLps } from './cornerstone-frame';
+import { imagePresentation } from './image-domain';
 
 type Libraries = { core: typeof Core; tools: typeof Tools };
 type ImageRecord = { frame: CTFrame; image: Core.Types.IImage; frameOfReferenceUID: string };
@@ -30,11 +31,12 @@ async function libraries(): Promise<Libraries> {
     core.metaData.addProvider((type: string, imageId: string) => {
       const record = records.get(imageId);
       if (!record) return;
+      const presentation = imagePresentation(record.frame);
       if (type === 'imagePlaneModule') return { ...cornerstonePlane(record.frame.meta), frameOfReferenceUID: record.frameOfReferenceUID };
-      if (type === 'imagePixelModule') return { samplesPerPixel: 1, photometricInterpretation: 'MONOCHROME2',
+      if (type === 'imagePixelModule') return { samplesPerPixel: 1, photometricInterpretation: presentation.photometric_interpretation,
         bitsAllocated: 32, bitsStored: 32, highBit: 31, pixelRepresentation: 1 };
-      if (type === 'generalSeriesModule') return { modality: 'CT' };
-      if (type === 'modalityLutModule') return { rescaleSlope: 1, rescaleIntercept: 0, rescaleType: 'HU' };
+      if (type === 'generalSeriesModule') return { modality: record.frame.modality ?? 'CT' };
+      if (type === 'modalityLutModule') return { rescaleSlope: 1, rescaleIntercept: 0, rescaleType: presentation.units };
       if (type === 'voiLutModule') return { windowCenter: [record.image.windowCenter], windowWidth: [record.image.windowWidth] };
     }, 10000);
     core.cache.setMaxCacheSize(64 * 1024 * 1024);
@@ -150,6 +152,16 @@ export class CornerstoneFrameViewport {
   }
   reset() { this.viewport.resetCamera(); this.viewport.render(); }
 
+  /** Overlay styling does not replace the Cornerstone image, actor or camera. */
+  setPresentation(frame: CTFrame): boolean {
+    if (this.disposed || !this.currentFrame || !sameCTFrameSamples(this.currentFrame, frame)) return false;
+    ctOverlayAppearance(frame.overlayOpacity);
+    this.currentFrame = frame;
+    const record = this.currentImage ? records.get(this.currentImage) : undefined;
+    if (record) record.frame = frame;
+    return true;
+  }
+
   setFrame(frame: CTFrame, window: number, level: number, reset = false): Promise<boolean> {
     if (this.disposed) return Promise.resolve(false);
     this.desiredWindow = { window, level };
@@ -166,6 +178,7 @@ export class CornerstoneFrameViewport {
       while (this.pending && !this.disposed) {
         const request = this.pending; this.pending = undefined;
         const { frame, window, level, reset } = request;
+        const presentation = imagePresentation(frame), modality = frame.modality ?? 'CT';
         let imageId: string | undefined;
         try {
           const plane = cornerstonePlane(frame.meta), { width, height } = frame.meta;
@@ -179,15 +192,15 @@ export class CornerstoneFrameViewport {
           const image: Core.Types.IImage = {
             imageId, width, height, rows: height, columns: width, slope: 1, intercept: 0,
             minPixelValue: minimum, maxPixelValue: maximum, windowCenter: level, windowWidth: window,
-            color: false, rgba: false, numberOfComponents: 1, invert: false,
-            photometricInterpretation: 'MONOCHROME2', dataType: 'Float32Array',
+            color: false, rgba: false, numberOfComponents: 1, invert: presentation.photometric_interpretation === 'MONOCHROME1',
+            photometricInterpretation: presentation.photometric_interpretation, dataType: 'Float32Array',
             columnPixelSpacing: plane.columnPixelSpacing, rowPixelSpacing: plane.rowPixelSpacing,
             sizeInBytes: frame.hu.byteLength, getPixelData: () => frame.hu,
             getCanvas: () => this.viewport.canvas, voiLUTFunction: this.libs.core.Enums.VOILUTFunctionType.LINEAR_EXACT,
-            isPreScaled: true, preScale: { enabled: true, scaled: true, scalingParameters: { modality: 'CT', rescaleSlope: 1, rescaleIntercept: 0 } },
+            isPreScaled: true, preScale: { enabled: true, scaled: true, scalingParameters: { modality, rescaleSlope: 1, rescaleIntercept: 0 } },
             voxelManager: this.libs.core.utilities.VoxelManager.createImageVoxelManager({ width, height, scalarData: frame.hu, numberOfComponents: 1 }),
           };
-          records.set(imageId, { frame, image, frameOfReferenceUID: this.id });
+          records.set(imageId, { frame, image, frameOfReferenceUID: frame.source?.frame_of_reference_uid ?? frame.reference_image_id ?? this.id });
           this.applyingImage = true;
           try { await this.viewport.setStack([imageId]); }
           finally { this.applyingImage = false; }

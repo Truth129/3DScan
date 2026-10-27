@@ -32,10 +32,6 @@ export function presentRevision(revision: Revision): Revision {
   return { ...revision, structures: presentStructures(revision.structures) };
 }
 
-export function defaultOpacity(structure: Structure): number {
-  const group = structure.group.toLowerCase();
-  if (group === 'bones') return .2;
-  if (group === 'lung lobes' || nameOf(structure) === 'heart') return .35;
-  if (['abdominal organs', 'chest organs', 'head organs', 'muscles'].includes(group)) return .55;
-  return 1;
+export function defaultOpacity(_structure: Structure): number {
+  return .5;
 }

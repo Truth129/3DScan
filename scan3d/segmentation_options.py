@@ -1,4 +1,4 @@
-"""Validated CT tasks and display-safe settings for the pinned local engine.
+"""Modality-scoped tasks and display-safe settings for the pinned local engine.
 
 The upstream registry/configuration modules contain metadata only. Reading this
 catalog must not import torch, initialize a GPU, download weights or validate a
@@ -32,6 +32,10 @@ _LABELS = {
     "ventricle_parts": "Brain ventricular regions",
     "liver_vessels": "Liver vessels and tumor",
     "tissue_4_types": "Tissue composition — four types",
+    "total_mr": "Whole body — MRI",
+    "body_mr": "Body outline — MRI",
+    "vertebrae_mr": "Vertebrae — MRI",
+    "brain_aneurysm": "Brain aneurysms — TOF MRI",
 }
 
 _DESCRIPTIONS = {
@@ -43,14 +47,26 @@ _DESCRIPTIONS = {
     "renal_arteries": "Renal arteries, celiac trunk and superior mesenteric artery.",
     "aorta_annulus": "Aortic annulus and sinotubular junction.",
     "pulmonary_artery_landmarks": "Pulmonary and aortic valve landmarks, pulmonary bifurcation and branch positions.",
+    "total_mr": "Whole-body anatomical MRI model. Review results for the selected sequence and scan coverage.",
+    "body_mr": "MRI trunk and extremity outlines. These are general body masks, not breast tissue or lesion labels.",
+    "brain_aneurysm": "Requires a time-of-flight (TOF) MR angiography volume; not intended for routine T1/T2 imaging.",
+    "liver_lesions_mr": "MRI liver lesion model. Performance depends on sequence and contrast timing; review all findings.",
 }
 
 
-def task_ids() -> list[str]:
+def default_task(modality: str = "CT") -> str:
+    from .domain import Modality
+    from .modalities import get_modality_adapter
+    return "total_mr" if get_modality_adapter(modality).modality == Modality.MR else "total"
+
+
+def task_ids(modality: str = "CT") -> list[str]:
+    from .modalities import get_modality_adapter
+    adapter = get_modality_adapter(modality)
     from totalsegmentator.registry import TASKS, task_modality
     from totalsegmentator.map_tasks_config import TASK_CONFIGS
 
-    return [task for task in TASKS if task_modality(task) == "CT"
+    return [task for task in TASKS if task_modality(task) == adapter.modality
             and task in TASK_CONFIGS and task not in _EXCLUDED_TASKS
             and not task.endswith("_LEGACY")]
 
@@ -68,24 +84,27 @@ def resolved_task_config(task: str, robust_crop: bool = False, mode: str = "defa
 
 
 def task_capabilities(task: str) -> dict:
+    from totalsegmentator.registry import task_modality
+
     config = resolved_task_config(task)
+    is_mr = task_modality(task) == "MR"
     cropped = bool(config.get("crop") or config.get("cascade"))
     crop_labels = config.get("crop") or []
     return {
         "uses_organ_crop": cropped,
-        "robust_crop_default": bool(config.get("robust_crop")),
-        "robust_crop_supported": cropped and config.get("crop_model") is None
+        "robust_crop_default": bool(config.get("robust_crop")) and not is_mr,
+        "robust_crop_supported": not is_mr and cropped and config.get("crop_model") is None
         and not any(label in {"body_trunc", "body_extremities"} for label in crop_labels),
-        "body_seg_supported": not cropped,
+        "body_seg_supported": not is_mr and not cropped,
     }
 
 
-def segmentation_catalog() -> dict:
+def segmentation_catalog(modality: str = "CT") -> dict:
     from totalsegmentator.registry import get_task_classes, requires_license
 
     configured = license_configured()
     tasks = []
-    for task in task_ids():
+    for task in task_ids(modality):
         required = requires_license(task)
         available = not required or configured
         classes = list(get_task_classes(task).values())
@@ -96,18 +115,18 @@ def segmentation_catalog() -> dict:
             classes += [name for name in ("body", "skin") if name not in classes]
         tasks.append({"id": task, "label": _LABELS.get(task, task.replace("_", " ").capitalize()),
                       "license_required": required, "license_available": available,
-                      "available": available, "modality": "CT", "classes": classes,
+                      "available": available, "modality": modality, "classes": classes,
                       "class_count": len(classes), "model_class_count": model_class_count,
                       "description": _DESCRIPTIONS.get(task, ""),
                       **task_capabilities(task)})
     return {"engine_version": metadata.version("TotalSegmentator"), "tasks": tasks,
             "license_configured": configured,
-            "defaults": {"task": "total", "robust_crop": False, "body_seg": False,
+            "defaults": {"task": default_task(modality), "robust_crop": False, "body_seg": False,
                          "remove_small_blobs": False},
             "remove_small_blobs_mm3": REMOVE_SMALL_BLOBS_MM3}
 
 
-def normalize_options(profile: str, options: dict | None = None) -> dict:
+def normalize_options(profile: str, options: dict | None = None, *, modality: str = "CT") -> dict:
     """Canonical immutable-by-convention request for cache/provenance/worker use.
 
     ``None`` retains the historical profile task selection for old callers.
@@ -118,21 +137,24 @@ def normalize_options(profile: str, options: dict | None = None) -> dict:
 
     if profile not in PROFILE_IDS:
         raise ValueError("Unknown segmentation profile")
+    selected_default = default_task(modality)
     if options is None:
-        options = {"tasks": ["total"] + (["lung_vessels"] if profile in {"chest", "chest_abdomen"} else [])}
+        options = {"tasks": [selected_default] + (["lung_vessels"] if selected_default == "total" and profile in {"chest", "chest_abdomen"} else [])}
     if not isinstance(options, dict) or set(options) - _OPTION_NAMES:
         raise ValueError("Unknown segmentation settings")
-    tasks = options.get("tasks", ["total"])
+    tasks = options.get("tasks", [selected_default])
     if not isinstance(tasks, list) or not tasks or len(tasks) > 8:
         raise ValueError("Select between one and eight segmentation tasks")
-    allowed = set(task_ids())
+    allowed = set(task_ids(modality))
     if any(not isinstance(task, str) or task not in allowed for task in tasks):
-        raise ValueError("Select a supported CT segmentation task")
+        raise ValueError(f"Select a supported {modality} segmentation task")
     if len(set(tasks)) != len(tasks):
         raise ValueError("Segmentation tasks must be unique")
     settings = {name: options.get(name, False) for name in _BOOLEAN_OPTIONS}
     if any(type(value) is not bool for value in settings.values()):
         raise ValueError("Segmentation options must be true or false")
+    if selected_default == "total_mr" and (settings["body_seg"] or settings["robust_crop"]):
+        raise ValueError("Body cropping and the robust-crop switch are CT-only options; MRI organ tasks use their native MRI crop model")
     if any(requires_license(task) for task in tasks) and not license_configured():
         raise ValueError("This task requires a TotalSegmentator license configured on the workstation")
     capabilities = [task_capabilities(task) for task in tasks]

@@ -6,6 +6,16 @@ interface PreloadSession {
   setOverlay(ids: string[], compare: boolean): Promise<void>;
 }
 
+/** Start masks eagerly, but promote the source as soon as its own voxels are
+ * ready. Overlay download/allocation must never hold native CT navigation back.
+ * LocalCTSession reports overlay failures separately and clears stale labels. */
+export async function preloadCTSource(session: PreloadSession, selection: () => Selection,
+    current: () => boolean): Promise<boolean> {
+  void preloadCTSelection(session, selection, current).catch(() => {});
+  await session.ready;
+  return current();
+}
+
 /** Wait for the latest selection while keeping the one resident CT alive. */
 export async function preloadCTSelection(session: PreloadSession, selection: () => Selection,
     current: () => boolean): Promise<boolean> {

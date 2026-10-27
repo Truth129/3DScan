@@ -62,7 +62,7 @@ def _remap_relationship(value, replacements):
     return result
 
 
-def merge_task_outputs(previous, incoming, selected_tasks):
+def merge_task_outputs(previous, incoming, selected_tasks, *, reference_image_id=None):
     """Return independent merged metadata and an auditable replacement record.
 
     A selected task replaces its prior outputs wholesale, including newly empty
@@ -70,6 +70,18 @@ def merge_task_outputs(previous, incoming, selected_tasks):
     Explicit relationships follow the replacement IDs; conflicting or invalid
     graphs fail before a revision is built. No overlap-based voxel edits occur.
     """
+    from .image_assets import bind_structures
+
+    scopes = {entry["reference_image_id"] for entry in previous + incoming
+              if entry.get("reference_image_id") is not None}
+    if reference_image_id is not None:
+        scopes.add(reference_image_id)
+    if len(scopes) > 1:
+        raise ValueError("Segmentation replacement cannot combine different reference images")
+    reference_image_id = next(iter(scopes), None)
+    if reference_image_id is not None:
+        previous = bind_structures(previous, reference_image_id)
+        incoming = bind_structures(incoming, reference_image_id)
     _ids(previous)
     incoming_ids = _ids(incoming)
     by_id = {entry["id"]: entry for entry in incoming}
@@ -134,8 +146,11 @@ def merge_task_outputs(previous, incoming, selected_tasks):
         if entry["id"] in normalized:
             entry["relationship"] = normalized[entry["id"]]
 
-    return merged, {
+    operation = {
         "replacement_policy": REPLACEMENT_POLICY,
         "replaced_structure_ids": removed,
         "replacement_id_map": replacements,
     }
+    if reference_image_id is not None:
+        operation["reference_image_id"] = reference_image_id
+    return merged, operation

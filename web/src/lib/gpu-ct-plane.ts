@@ -1,9 +1,16 @@
 import * as THREE from 'three';
 import { inverseAffine, validateDescriptor, type VolumeDescriptor, type VolumeValues } from './ct-reslice';
-import { GPU_VOLUME_SLAB_BYTES, type GPUOverlaySources, type GPUVolumeSource } from './gpu-volume-data';
+import { GPU_VOLUME_SLAB_BYTES, isVolumeDisplayUnion, type GPUOverlaySources, type GPUVolumeSource } from './gpu-volume-data';
 import type { Geometry, SliceMeta } from '../types';
+import { assertReferenceImage, imagePresentation } from './image-domain';
 
 export const GPU_CT_BUDGET = 512 * 1024 ** 2;
+export class GPUCTMaskBudgetError extends Error {
+  constructor() {
+    super('Selected overlays exceed this GPU’s volume memory budget. Using local slice rendering.');
+    this.name = 'GPUCTMaskBudgetError';
+  }
+}
 export interface GPUOverlayColor { id: string; color?: [number, number, number] }
 /** Borrowed immutable storage. Its owning GPUCTVolume alone releases the CT texture. */
 export interface GPUCTBinding { texture: THREE.Data3DTexture; descriptor: VolumeDescriptor }
@@ -42,6 +49,8 @@ uniform float uSlope;
 uniform float uIntercept;
 uniform float uWindow;
 uniform float uLevel;
+uniform float uBackground;
+uniform bool uInvert;
 in vec2 vUv;
 out vec4 outColor;
 float nativeCoordinate(int pixel, int count, int raster) {
@@ -60,7 +69,7 @@ vec3 ctPoint(ivec2 pixel) {
 }
 float huCorner(ivec3 p) { return float(texelFetch(uVolume, p, 0).r) * uSlope + uIntercept; }
 float huAt(vec3 point) {
-  if (any(lessThan(point, vec3(0.))) || any(greaterThan(point, vec3(uCTSize - 1)))) return -1024.;
+  if (any(lessThan(point, vec3(0.))) || any(greaterThan(point, vec3(uCTSize - 1)))) return uBackground;
   ivec3 lo = ivec3(floor(point)), hi = min(lo + 1, uCTSize - 1); vec3 f = point - vec3(lo);
   float a = mix(huCorner(lo), huCorner(ivec3(hi.x,lo.y,lo.z)), f.x);
   float b = mix(huCorner(ivec3(lo.x,hi.y,lo.z)), huCorner(ivec3(hi.x,hi.y,lo.z)), f.x);
@@ -92,7 +101,8 @@ vec3 overlay(vec3 rgb, ivec2 p, int current, int previous, int kind, vec3 color,
 }
 void main() {
   ivec2 p = clamp(ivec2(floor(vUv * vec2(uSize))), ivec2(0), uSize - 1);
-  float hu = huAt(ctPoint(p)); vec3 rgb = vec3(clamp((hu - (uLevel - uWindow * .5)) / uWindow, 0., 1.));
+  float hu = huAt(ctPoint(p)); float gray = clamp((hu - (uLevel - uWindow * .5)) / uWindow, 0., 1.);
+  vec3 rgb = vec3(uInvert ? 1. - gray : gray);
   for (int layer = 0; layer < uLayers; layer++) {
     vec4 appearance = texelFetch(uPalette,ivec2(0,layer),0); int current = int(appearance.a);
     int previous = int(texelFetch(uPalette,ivec2(1,layer),0).r);
@@ -147,9 +157,12 @@ export class GPUCTVolume {
   private masks?: THREE.DataTexture;
   private maskInfo?: THREE.DataTexture;
   private palette?: THREE.DataTexture;
+  private emptyMask?: THREE.DataTexture;
   private descriptor?: VolumeDescriptor;
   private overlayKey = '';
   private currentMaskIndices = new Map<string,number>();
+  private overlayIds: string[] = [];
+  private overlayColors = new Map<string, readonly number[]>();
   private maskAtlasReady = false;
   private maskBytes = 0;
   private generation = 0;
@@ -163,7 +176,8 @@ export class GPUCTVolume {
     this.material = new THREE.ShaderMaterial({ glslVersion: THREE.GLSL3, vertexShader, fragmentShader,
       uniforms: { uVolume: { value: null }, uMasks: { value: null }, uMaskInfo: { value: null }, uPalette: { value: null },
         uCTSize: { value: new THREE.Vector3() }, uSize: { value: new THREE.Vector2() }, uAxis: { value: 2 }, uIndex: { value: 0 },
-        uLayers: { value: 0 }, uMaskWidth: { value: 1 }, uSlope: { value: 1 }, uIntercept: { value: 0 }, uWindow: { value: 400 }, uLevel: { value: 40 } },
+        uLayers: { value: 0 }, uMaskWidth: { value: 1 }, uSlope: { value: 1 }, uIntercept: { value: 0 }, uWindow: { value: 400 }, uLevel: { value: 40 },
+        uBackground: { value: -1024 }, uInvert: { value: false } },
       side: THREE.DoubleSide, depthTest: true, depthWrite: true, transparent: false, toneMapped: false });
   }
   get key() { return this.loaded ? this.descriptor?.key : undefined; }
@@ -179,6 +193,32 @@ export class GPUCTVolume {
       currentIndices:this.currentMaskIndices,
       isCurrent:()=>this.loaded && this.maskAtlasReady && this.overlayGeneration===epoch
         && this.ct===ctTexture && this.masks===texture && this.maskInfo===info};
+  }
+  /** Recolor resident labels without touching CT/mask storage or its epoch. */
+  setOverlayColors(colors: readonly GPUOverlayColor[]) {
+    const next = new Map<string, readonly number[]>();
+    for (const item of colors) {
+      const color = item.color ?? [56, 189, 248];
+      if (!item.id || color.length !== 3 || color.some(value => !Number.isFinite(value) || value < 0 || value > 255))
+        throw new Error('Invalid GPU overlay color');
+      next.set(item.id, color);
+    }
+    this.overlayColors = next;
+    return this.applyOverlayColors();
+  }
+  private applyOverlayColors() {
+    if (!this.palette) return false;
+    const values = this.palette.image.data as Float32Array;
+    let changed = false;
+    this.overlayIds.forEach((id, index) => {
+      const color = this.overlayColors.get(id) ?? [56, 189, 248];
+      for (let channel = 0; channel < 3; channel++) {
+        const value = Math.fround(color[channel] / 255), offset = index * 8 + channel;
+        if (values[offset] !== value) { values[offset] = value; changed = true; }
+      }
+    });
+    if (changed) this.palette.needsUpdate = true;
+    return changed;
   }
   private checkGL() {
     const gl = this.renderer.getContext(); const code = gl.getError();
@@ -218,7 +258,11 @@ export class GPUCTVolume {
       this.material.needsUpdate = true;
       this.material.uniforms.uVolume.value = texture; this.material.uniforms.uCTSize.value.set(...descriptor.shape);
       this.material.uniforms.uSlope.value = descriptor.slope; this.material.uniforms.uIntercept.value = descriptor.intercept;
+      const presentation = imagePresentation(descriptor);
+      this.material.uniforms.uBackground.value = presentation.background_value;
+      this.material.uniforms.uInvert.value = presentation.photometric_interpretation === 'MONOCHROME1';
       this.loaded = true;
+      this.material.uniforms.uMasks.value = this.emptyMaskTexture();
     } catch (error) { if (generation === this.generation) this.clear(); throw error; }
   }
   async prepareOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[] = [], signal?: AbortSignal,
@@ -229,6 +273,15 @@ export class GPUCTVolume {
     if (sources.overlays.length > 128 || new Set(sources.overlays.map(layer => layer.id)).size !== sources.overlays.length) throw new Error('Invalid GPU overlay selection');
     const masks=maskSources?.overlays ?? [];
     if (masks.length>128 || new Set(masks.map(layer=>layer.id)).size!==masks.length) throw new Error('Invalid volume mask selection');
+    if (!sources.overlays.length && !masks.length) { this.clearOverlays(); return; }
+    this.setOverlayColors(colors);
+    // Review labels stay exact. Only the separate 3D display-mask input may
+    // contain a bounded pooled union with an explicit presentation role.
+    for (const layer of sources.overlays) for (const source of [layer.current, layer.parent]) {
+      if (source && source.descriptor.quality === 'preview') throw new Error('GPU review requires exact mask volumes');
+    }
+    for (const layer of masks) if (layer.current.descriptor.quality === 'preview' && !isVolumeDisplayUnion(layer.current.descriptor))
+      throw new Error('Invalid volume-display mask union');
     const unique = new Map<string,GPUVolumeSource>();
     for (const layer of sources.overlays) { unique.set(layer.current.descriptor.key,layer.current); if (layer.parent) unique.set(layer.parent.descriptor.key,layer.parent); }
     const currentKeys=new Map(sources.overlays.map(layer=>[layer.id,layer.current.descriptor.key]));
@@ -240,7 +293,12 @@ export class GPUCTVolume {
     // Stable descriptor order lets palette/selection ordering reuse the atlas.
     const ordered=[...unique.values()].sort((a,b)=>a.descriptor.key<b.descriptor.key?-1:a.descriptor.key>b.descriptor.key?1:0);
     const descriptors = ordered.map(source => validateDescriptor(source.descriptor,'mask'));
-    if (descriptors.some(descriptor => descriptor.quality === 'preview')) throw new Error('GPU review requires exact mask volumes');
+    for (const descriptor of descriptors) {
+      assertReferenceImage(this.descriptor, descriptor);
+      if (isVolumeDisplayUnion(descriptor) && (JSON.stringify(descriptor.reference_geometry!.shape) !== JSON.stringify(this.descriptor.shape)
+          || JSON.stringify(descriptor.reference_geometry!.affine_ras) !== JSON.stringify(this.descriptor.affine_ras)))
+        throw new Error('Volume-display mask does not match the reference CT geometry');
+    }
     const key = JSON.stringify(descriptors.map(descriptor=>descriptor.key));
     const colorMap = new Map(colors.map(value => [value.id,value.color ?? [56,189,248]]));
     const palette = new Float32Array(Math.max(1,sources.overlays.length) * 8), indices = new Map(descriptors.map((value,index) => [value.key,index]));
@@ -255,9 +313,9 @@ export class GPUCTVolume {
       const width = Math.min(this.max2D,Math.max(4096,2 ** Math.ceil(Math.log2(Math.max(1,rawBytes / this.max2D)))));
       const layout = gpuMaskLayout(descriptors,this.descriptor,width);
       if (layout.height > this.max2D || this.descriptor.byte_length + layout.width * layout.height + layout.info.byteLength + palette.byteLength > GPU_CT_BUDGET)
-        throw new Error('Selected overlays exceed this GPU’s volume memory budget. Using local slice rendering.');
+        throw new GPUCTMaskBudgetError();
       // Replace old mask storage before allocation; CT remains resident across revisions.
-      this.clearOverlays();
+      this.releaseOverlays();
       const texture = configured(new THREE.DataTexture(null,layout.width,layout.height,THREE.RedIntegerFormat,THREE.UnsignedByteType)); texture.internalFormat = 'R8UI';
       this.masks = texture; this.maskBytes = layout.width * layout.height + layout.info.byteLength + palette.byteLength;
       try {
@@ -279,10 +337,13 @@ export class GPUCTVolume {
         this.maskInfo = configured(new THREE.DataTexture(layout.info,5,Math.max(1,descriptors.length),THREE.RGBAFormat,THREE.FloatType)); this.maskInfo.needsUpdate = true;
         this.material.uniforms.uMasks.value = texture; this.material.uniforms.uMaskInfo.value = this.maskInfo; this.material.uniforms.uMaskWidth.value = layout.width;
         this.overlayKey = key;
-      } catch (error) { if (generation === this.generation && overlayGeneration === this.overlayGeneration) this.clearOverlays(); throw error; }
+      } catch (error) { if (generation === this.generation && overlayGeneration === this.overlayGeneration) this.releaseOverlays(); throw error; }
     }
     cancelled(signal); if (generation!==this.generation || overlayGeneration!==this.overlayGeneration) throw new DOMException('Superseded GPU overlays','AbortError');
     this.palette?.dispose(); this.palette = configured(new THREE.DataTexture(palette,2,Math.max(1,sources.overlays.length),THREE.RGBAFormat,THREE.FloatType)); this.palette.needsUpdate = true;
+    this.overlayIds = sources.overlays.map(layer => layer.id);
+    // A color may change while the immutable atlas is still being uploaded.
+    this.applyOverlayColors();
     this.material.uniforms.uPalette.value = this.palette; this.material.uniforms.uLayers.value = sources.overlays.length;
     this.currentMaskIndices=new Map([...currentKeys].map(([id,key])=>[id,indices.get(key)!]));
     this.maskAtlasReady=true;
@@ -305,16 +366,32 @@ export class GPUCTVolume {
     this.material.uniforms.uSize.value.set(meta.width,meta.height); this.material.uniforms.uAxis.value = meta.native.axis; this.material.uniforms.uIndex.value = meta.native.index;
   }
   setWindow(window: number, level: number) { this.material.uniforms.uWindow.value = window; this.material.uniforms.uLevel.value = level; }
-  private clearOverlays() {
+  clearOverlays() {
+    this.overlayGeneration++;
+    this.releaseOverlays();
+  }
+  private releaseOverlays() {
     this.masks?.dispose(); this.maskInfo?.dispose(); this.palette?.dispose(); this.masks = this.maskInfo = this.palette = undefined;
     this.maskBytes = 0; this.overlayKey = ''; this.material.uniforms.uLayers.value = 0;
     this.currentMaskIndices=new Map();
+    this.overlayIds = [];
     this.maskAtlasReady=false;
-    for (const key of ['uMasks','uMaskInfo','uPalette']) this.material.uniforms[key].value = null;
+    this.material.uniforms.uMasks.value = this.loaded ? this.emptyMaskTexture() : null;
+    for (const key of ['uMaskInfo','uPalette']) this.material.uniforms[key].value = null;
+  }
+  private emptyMaskTexture() {
+    // WebGL validates sampler formats even when uLayers is zero. Three's null
+    // fallback is normalized RGBA and cannot back this shader's usampler2D.
+    if (!this.emptyMask) {
+      this.emptyMask = configured(new THREE.DataTexture(new Uint8Array(1),1,1,THREE.RedIntegerFormat,THREE.UnsignedByteType));
+      this.emptyMask.internalFormat = 'R8UI'; this.emptyMask.needsUpdate = true;
+    }
+    return this.emptyMask;
   }
   clear() {
     this.generation++; this.overlayGeneration++; this.loaded = false; this.ct?.dispose(); this.ct = undefined; this.descriptor = undefined;
-    this.material.uniforms.uVolume.value = null; this.clearOverlays();
+    this.material.uniforms.uVolume.value = null; this.releaseOverlays();
+    this.emptyMask?.dispose(); this.emptyMask = undefined;
   }
   dispose() { this.clear(); this.material.dispose(); }
 }

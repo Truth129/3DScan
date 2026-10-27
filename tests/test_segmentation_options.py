@@ -188,6 +188,7 @@ def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, mo
     monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
 
     class Worker:
+        pid = None  # Completed in-process fixture; no native worker to sample.
         returncode = 0
 
         def __init__(self, command, **_):

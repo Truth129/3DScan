@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import { cinematicReferenceError, CINEMATIC_HEART_PRESET, freshVolumeSettings, getVolumePreset, VOLUME_PRESET_GROUPS, VOLUME_PRESET_LABELS, type CTVolumePresetId, type CTVolumeSettings } from '../lib/volume-presets';
+import { cinematicReferenceError, CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, freshVolumeSettings, getVolumePreset, VOLUME_PRESET_GROUPS, VOLUME_PRESET_LABELS, type CTVolumePresetId, type CTVolumeSettings } from '../lib/volume-presets';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, visibleVolumeMaskIds, type VolumeMaskSettings } from '../lib/volume-mask';
 import { colorCss, prettyName } from '../lib/geometry';
 import type { Structure, StructureDisplay } from '../types';
@@ -9,6 +9,7 @@ const props = withDefaults(defineProps<{
   enabled: boolean;
   headerless?: boolean;
   settings: CTVolumeSettings;
+  modality?: string;
   ready?: boolean;
   loading?: boolean;
   message?: string;
@@ -48,15 +49,17 @@ const currentMaskTarget = computed(() => props.structures.some(structure => stru
 const visibleMaskIds = computed(() => visibleVolumeMaskIds(props.structures, props.display));
 const maskCanRetry = computed(() => props.maskError && !props.maskLoading && props.mask.ids.length > 0
   && props.mask.ids.length <= MAX_VOLUME_MASK_SEGMENTS && props.mask.ids.every(id => props.structures.some(structure => structure.id === id)));
+const signalVolume = computed(() => !!props.modality && props.modality !== 'CT');
+const modalityLabel = computed(() => props.modality ?? 'CT');
 const intensityLabel = computed(() => `${props.settings.shift > 0 ? '+' : ''}${props.settings.shift} HU`);
 const opacityLabel = computed(() => `${Math.round(props.settings.density * 100)}%`);
-const preset = computed(() => getVolumePreset(props.settings.preset, props.settings.cinematic));
+const preset = computed(() => getVolumePreset(props.settings.preset, props.settings.cinematic, props.settings.signal_window));
 const cinematic = computed(() => props.settings.preset === CINEMATIC_HEART_PRESET);
 const myocardiumInput = ref(String(props.settings.cinematic.myocardiumHU)), bloodInput = ref(String(props.settings.cinematic.bloodHU));
 const referenceInputError = ref('');
-const otherModality = computed(() => !preset.value.sourcePreset.startsWith('CT-'));
+const otherModality = computed(() => !signalVolume.value && !preset.value.sourcePreset.startsWith('CT-'));
 const projectionNamed = computed(() => preset.value.sourcePreset.endsWith('-MIP'));
-const stateMessage = computed(() => props.message || (props.loading ? 'Preparing CT volume…' : props.ready ? 'CT volume · drag to rotate; scroll to zoom.' : 'Waiting for the full CT to finish loading.'));
+const stateMessage = computed(() => props.message || (props.loading ? `Preparing ${modalityLabel.value} volume…` : props.ready ? `${modalityLabel.value} volume · drag to rotate; scroll to zoom.` : `Waiting for the full ${modalityLabel.value} to finish loading.`));
 function update(change: Partial<CTVolumeSettings>) {
   emit('update:settings', freshVolumeSettings({ ...props.settings, ...change }));
 }
@@ -75,7 +78,7 @@ function changeCrop(axis: number, end: 0 | 1, event: Event) {
   crop[end][axis] = end === 0 ? Math.min(number(event), crop[1][axis] - .01) : Math.max(number(event), crop[0][axis] + .01);
   update({ crop });
 }
-function reset() { emit('update:settings', freshVolumeSettings({ preset: props.settings.preset })); }
+function reset() { emit('update:settings', freshVolumeSettings({ preset: props.settings.preset, signal_window: props.settings.signal_window })); }
 function updateMask(change: Partial<VolumeMaskSettings>) {
   emit('update:mask', freshVolumeMaskSettings({ ...props.mask, ...change }, props.structures));
 }
@@ -97,30 +100,31 @@ watch(maskOpen, layout);
 </script>
 
 <template>
-  <section class="volume-controls" :class="{ enabled }" aria-label="CT volume rendering controls">
+  <section class="volume-controls" :class="{ enabled }" :aria-label="`${modalityLabel} volume rendering controls`">
     <div class="volume-controls-header">
-      <label v-if="!headerless" class="volume-toggle"><input type="checkbox" aria-label="Show CT volume" :checked="enabled" :disabled="disabled" @change="emit('update:enabled', ($event.target as HTMLInputElement).checked)" /> CT volume</label>
+      <label v-if="!headerless" class="volume-toggle"><input type="checkbox" :aria-label="`Show ${modalityLabel} volume`" :checked="enabled" :disabled="disabled" @change="emit('update:enabled', ($event.target as HTMLInputElement).checked)" /> {{ modalityLabel }} volume</label>
       <span v-if="enabled && loading" class="volume-loading">Preparing…</span>
       <button v-if="enabled" type="button" class="text-button volume-reset" title="Reset this preset's appearance and crop" @click="reset">Reset volume</button>
     </div>
     <template v-if="enabled">
       <div class="volume-appearance">
         <label class="volume-preset">Appearance
-          <select aria-label="CT volume preset" :value="preset.id" :disabled="disabled" @change="changePreset">
-            <optgroup v-for="group in VOLUME_PRESET_GROUPS" :key="group.label" :label="group.label"><option v-for="id in group.ids" :key="id" :value="id">{{ VOLUME_PRESET_LABELS[id] }}</option></optgroup>
+          <select :aria-label="`${modalityLabel} volume preset`" :value="preset.id" :disabled="disabled" @change="changePreset">
+            <option v-if="signalVolume" :value="MR_SIGNAL_PRESET">Signal window (grayscale)</option><optgroup v-for="group in signalVolume ? [] : VOLUME_PRESET_GROUPS" :key="group.label" :label="group.label"><option v-for="id in group.ids" :key="id" :value="id">{{ VOLUME_PRESET_LABELS[id] }}</option></optgroup>
           </select>
         </label>
-        <label class="volume-slider">Intensity <output>{{ intensityLabel }}</output>
+        <label v-if="!signalVolume" class="volume-slider">Intensity <output>{{ intensityLabel }}</output>
           <input type="range" aria-label="CT volume intensity shift" min="-500" max="500" step="5" :value="settings.shift" :disabled="disabled" @input="update({ shift: number($event) })" />
         </label>
         <label class="volume-slider">Opacity <output>{{ opacityLabel }}</output>
-          <input type="range" aria-label="CT volume opacity" :aria-valuetext="opacityLabel" min="0.1" max="3" step="0.05" :value="settings.density" :disabled="disabled" @input="update({ density: number($event) })" />
+          <input type="range" :aria-label="`${modalityLabel} volume opacity`" :aria-valuetext="opacityLabel" min="0.1" max="3" step="0.05" :value="settings.density" :disabled="disabled" @input="update({ density: number($event) })" />
         </label>
         <label class="volume-quality">Quality
-          <select aria-label="CT volume quality" :value="settings.quality" :disabled="disabled" @change="update({ quality: ($event.target as HTMLSelectElement).value as 'auto' | 'detail' })"><option value="auto">Auto</option><option value="detail">Detail</option></select>
+          <select :aria-label="`${modalityLabel} volume quality`" :value="settings.quality" :disabled="disabled" @change="update({ quality: ($event.target as HTMLSelectElement).value as 'auto' | 'detail' })"><option value="auto">Auto</option><option value="detail">Detail</option></select>
         </label>
       </div>
-      <div v-if="cinematic" class="volume-cinematic" aria-label="Cinematic heart appearance">
+      <p v-if="signalVolume" class="volume-preset-note">Grayscale uses the linked slice window and level. MR signal values depend on the sequence; they are not HU.</p>
+      <div v-if="cinematic && !signalVolume" class="volume-cinematic" aria-label="Cinematic heart appearance">
         <button v-if="heartViewAvailable" class="button secondary compact" type="button" aria-label="Use Slicer heart orientation" :disabled="disabled" @click="emit('heart-view')">Heart view</button>
         <p v-if="heartViewAvailable" class="volume-preset-note">Heart view faces the same side as the supplied Slicer scene. Oblique exposes a different face and can show brighter blood or chamber interiors.</p>
         <p class="volume-preset-note">Crimson myocardium, ivory blood and a camera-following key light. For an isolated heart, enable Mask to segmentation below and choose its segments.</p>
@@ -142,25 +146,25 @@ watch(maskOpen, layout);
       <p v-if="otherModality" class="volume-preset-note">This preset is designed for another modality and may need adjustment for CT.</p>
       <p v-if="projectionNamed" class="volume-preset-note">Slicer’s {{ preset.label }} appearance, shown with composite volume rendering.</p>
       <div class="volume-mask">
-        <div class="volume-mask-header"><label class="volume-toggle" :title="structures.length ? 'Limit the CT volume to the selected anatomical masks.' : 'Run segmentation first to create anatomical masks.'"><input type="checkbox" aria-label="Mask CT volume to segmentation" :checked="mask.enabled" :disabled="disabled || !structures.length" @change="updateMask({ enabled: ($event.target as HTMLInputElement).checked })" />Mask to segmentation</label><span v-if="!structures.length" class="volume-mask-help">Run segmentation first.</span><button v-if="mask.enabled" type="button" class="text-button" :aria-expanded="maskOpen" aria-label="Choose volume mask segments" @click="maskOpen = !maskOpen">{{ maskOpen ? 'Done' : 'Choose segments' }} · {{ mask.ids.length }} {{ maskOpen ? '▴' : '▾' }}</button></div>
+        <div class="volume-mask-header"><label class="volume-toggle" :title="structures.length ? `Limit the ${modalityLabel} volume to the selected anatomical masks.` : 'Run segmentation first to create anatomical masks.'"><input type="checkbox" :aria-label="`Mask ${modalityLabel} volume to segmentation`" :checked="mask.enabled" :disabled="disabled || !structures.length" @change="updateMask({ enabled: ($event.target as HTMLInputElement).checked })" />Mask to segmentation</label><span v-if="!structures.length" class="volume-mask-help">Run segmentation first.</span><button v-if="mask.enabled" type="button" class="text-button" :aria-expanded="maskOpen" aria-label="Choose volume mask segments" @click="maskOpen = !maskOpen">{{ maskOpen ? 'Done' : 'Choose segments' }} · {{ mask.ids.length }} {{ maskOpen ? '▴' : '▾' }}</button></div>
         <template v-if="mask.enabled">
           <div v-if="maskOpen" class="volume-mask-picker">
-            <label class="volume-mask-mode">Show volume<select aria-label="CT volume mask region" :value="mask.mode" :disabled="disabled" @change="updateMask({ mode: ($event.target as HTMLSelectElement).value as VolumeMaskSettings['mode'] })"><option value="inside">Inside selected segments</option><option value="outside">Outside selected segments</option></select></label>
+            <label class="volume-mask-mode">Show volume<select :aria-label="`${modalityLabel} volume mask region`" :value="mask.mode" :disabled="disabled" @change="updateMask({ mode: ($event.target as HTMLSelectElement).value as VolumeMaskSettings['mode'] })"><option value="inside">Inside selected segments</option><option value="outside">Outside selected segments</option></select></label>
             <div class="volume-mask-actions"><button type="button" class="button secondary compact" :disabled="disabled || !currentMaskTarget" title="Use the segment selected in the anatomy list" @click="useMaskIds([selected])">Use selected</button><button type="button" class="button secondary compact" :disabled="disabled || !visibleMaskIds.length" title="Use a snapshot of all currently visible segments" @click="useMaskIds(visibleMaskIds)">Use visible</button><button type="button" class="text-button" :disabled="disabled || !mask.ids.length" @click="updateMask({ ids: [] })">Clear</button></div>
             <input v-model="maskSearch" class="volume-mask-search" type="search" aria-label="Search volume mask segments" placeholder="Search segments…" :disabled="disabled" />
             <div class="volume-mask-segments" role="group" aria-label="Volume mask segments"><label v-for="structure in maskStructures" :key="structure.id" class="volume-mask-segment"><input type="checkbox" :aria-label="`Mask segment ${prettyName(structure.name)}`" :checked="maskIds.has(structure.id)" :disabled="disabled" @change="toggleMask(structure.id, ($event.target as HTMLInputElement).checked)" /><i :style="{ background: colorCss(structure.color) }" aria-hidden="true"></i><span>{{ prettyName(structure.name) }}</span><small>{{ prettyName(structure.group) }}</small></label><p v-if="!maskStructures.length" class="volume-mask-help">No matching segments.</p></div>
-            <p class="volume-mask-help">Selected segments form one combined region. This mask affects only the CT volume; CT slices stay unchanged.</p>
+            <p class="volume-mask-help">Selected segments form one combined region. This mask affects only the {{ modalityLabel }} volume; {{ modalityLabel }} slices stay unchanged.</p>
           </div>
           <div class="volume-mask-margin">
             <label class="volume-slider">Display margin <output>{{ mask.margin_mm.toFixed(1) }} mm</output>
-              <input type="range" aria-label="CT volume mask margin" min="0" max="5" step="0.5" :value="mask.margin_mm"
+              <input type="range" :aria-label="`${modalityLabel} volume mask margin`" min="0" max="5" step="0.5" :value="mask.margin_mm"
                 :disabled="disabled || maskMarginFixed" @input="updateMask({ margin_mm: number($event) })" />
             </label>
             <button v-if="!maskMarginFixed" class="button secondary compact" type="button" aria-label="Use 2.5 mm volume mask margin" :disabled="disabled" @click="updateMask({ margin_mm: 2.5 })">2.5 mm</button>
           </div>
-          <p class="volume-mask-help">{{ maskMarginFixed ? 'This offline export retains its prepared display margin.' : 'Grow the display region to retain thin walls and surface vessels. CT overlays and segmentation measurements stay unchanged.' }}</p>
-          <p v-if="!mask.ids.length" class="volume-mask-message" role="status">Choose at least one segment. The CT volume stays hidden until a mask is ready.</p>
-          <p v-else-if="mask.ids.length > MAX_VOLUME_MASK_SEGMENTS" class="volume-mask-message" role="status">Choose up to {{ MAX_VOLUME_MASK_SEGMENTS }} segments. The CT volume stays hidden until you reduce the selection.</p>
+          <p class="volume-mask-help">{{ maskMarginFixed ? 'This offline export retains its prepared display margin.' : `Grow the display region to retain thin walls and surface vessels. ${modalityLabel} overlays and segmentation measurements stay unchanged.` }}</p>
+          <p v-if="!mask.ids.length" class="volume-mask-message" role="status">Choose at least one segment. The {{ modalityLabel }} volume stays hidden until a mask is ready.</p>
+          <p v-else-if="mask.ids.length > MAX_VOLUME_MASK_SEGMENTS" class="volume-mask-message" role="status">Choose up to {{ MAX_VOLUME_MASK_SEGMENTS }} segments. The {{ modalityLabel }} volume stays hidden until you reduce the selection.</p>
           <p v-else-if="maskLoading" class="volume-mask-message" role="status">Preparing volume mask…</p>
           <p v-else-if="maskMessage || maskError" class="volume-mask-message" role="status">{{ maskMessage || 'The volume mask could not be loaded.' }} <button v-if="maskCanRetry" type="button" class="text-button" aria-label="Retry volume mask" :disabled="disabled" @click="emit('retry-mask')">Retry mask</button></p>
         </template>
@@ -170,8 +174,8 @@ watch(maskOpen, layout);
         <div class="volume-crop-grid">
           <div v-for="(axis, index) in axes" :key="axis" class="volume-crop-axis">
             <div class="volume-crop-axis-header"><strong>{{ axis }}</strong><output>{{ Math.round(settings.crop[0][index] * 100) }}–{{ Math.round(settings.crop[1][index] * 100) }}%</output></div>
-            <label>Start <input type="range" :aria-label="`CT volume crop ${axis} minimum`" min="0" max="1" step="0.01" :value="settings.crop[0][index]" :disabled="disabled" @input="changeCrop(index, 0, $event)" /></label>
-            <label>End <input type="range" :aria-label="`CT volume crop ${axis} maximum`" min="0" max="1" step="0.01" :value="settings.crop[1][index]" :disabled="disabled" @input="changeCrop(index, 1, $event)" /></label>
+            <label>Start <input type="range" :aria-label="`${modalityLabel} volume crop ${axis} minimum`" min="0" max="1" step="0.01" :value="settings.crop[0][index]" :disabled="disabled" @input="changeCrop(index, 0, $event)" /></label>
+            <label>End <input type="range" :aria-label="`${modalityLabel} volume crop ${axis} maximum`" min="0" max="1" step="0.01" :value="settings.crop[1][index]" :disabled="disabled" @input="changeCrop(index, 1, $event)" /></label>
           </div>
         </div>
       </details>

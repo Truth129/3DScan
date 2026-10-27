@@ -7,12 +7,14 @@ import type { GPUOverlaySourceProvider, RenderCTSession } from '../lib/gpu-volum
 import { nativeSliceMetadata } from '../lib/ct-reslice';
 import { api, revisionUrl } from '../lib/api';
 import { moveNativeSlice, nativeSliceFor } from '../lib/interactive-review';
-import { ModelReviewFrames, modelReviewFrameKey, modelReviewFrameFamilyKey, type ModelReviewFrame, type ModelReviewFrameRequest } from '../lib/model-review-frame';
+import { ModelReviewFrames, modelReviewFrameKey, modelReviewFrameFamilyKey, modelReviewTargetAvailable, type ModelReviewFrame, type ModelReviewFrameRequest } from '../lib/model-review-frame';
+import { imagePresentation, type ImageContext, type ImageCapability } from '../lib/image-domain';
+import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
-import { cinematicReferenceError, CINEMATIC_HEART_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings, type CTVolumeSettings } from '../lib/volume-presets';
+import { cinematicReferenceError, CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings, type CTVolumeSettings } from '../lib/volume-presets';
 import { CinematicReferenceGate, hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { cardiacCamera } from '../lib/cardiac-camera';
-import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, volumeMaskSourceId, type VolumeMaskSettings } from '../lib/volume-mask';
+import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
 import { normalizePortableState, type PortableLayers, type PortableRenderSnapshot } from '../lib/portable-viewer';
 const props = defineProps<{
@@ -21,13 +23,14 @@ const props = defineProps<{
   reviewActive?: boolean; reviewTarget?: Structure; reviewTool?: InteractiveTool;
   reviewPrompts?: InteractivePrompt[]; reviewDisabled?: boolean; reviewInclude?: boolean; reviewRadius?: number;
   reviewScissorsShape?: ScissorsShape; reviewScissorsOperation?: ScissorsOperation; modelRevisionId?: string;
+  imageContext?: ImageContext; capabilities?: readonly ImageCapability[];
   caseId?: string; revisionId?: string; geometry?: Geometry; localSession?: RenderCTSession;
   localReady?: boolean; fullResolution?: boolean; overlays?: CTOverlaySelection[];
   compare?: boolean; window?: number; level?: number;
   viewportActive?: boolean; maskStructures?: Structure[];
   maskSourceProvider?: GPUOverlaySourceProvider; availableLayers?: PortableLayers; initialSnapshot?: PortableRenderSnapshot;
 }>();
-const emit = defineEmits<{ pick: [id: string, point: Point]; point: [point: Point]; gesture: [prompt: InteractivePrompt] }>();
+const emit = defineEmits<{ pick: [id: string, point: Point]; point: [point: Point]; gesture: [prompt: InteractivePrompt]; opacity: [value: number] }>();
 const viewport = ref<HTMLElement>(), expandButton = ref<HTMLButtonElement>();
 const viewportId = useId(), expanded = ref(false);
 let expansionVersion = 0, previousFocus: HTMLElement | undefined;
@@ -94,29 +97,45 @@ const planeFrame = shallowRef<ModelReviewFrame>();
 const planeFrameFamily = ref('');
 const planeLoading = ref(false), planeError = ref('');
 const gpuFamilyReady = ref(''), gpuPreparing = ref(false), gpuFallback = ref('');
-const showSegmentation = ref(props.initialSnapshot?.layers.segmentation ?? true), segmentationOpacity = ref(props.initialSnapshot?.state.segmentation_opacity ?? 1), volumeOptionsOpen = ref(false);
+const showSegmentation = ref(props.initialSnapshot?.layers.segmentation ?? true), volumeOptionsOpen = ref(false);
+const segmentOpacities = computed(() => props.structures.map(item => props.display[item.id]?.opacity ?? .5));
+const segmentationOpacityMixed = computed(() => segmentOpacities.value.some(value => Math.abs(value - (segmentOpacities.value[0] ?? .5)) > .0001));
+const segmentationOpacity = computed({
+  get: () => segmentOpacities.value.length ? segmentOpacities.value.reduce((total, value) => total + value, 0) / segmentOpacities.value.length : .5,
+  set: (value: number) => { if (Number.isFinite(value)) emit('opacity', Math.max(0, Math.min(1, value))); },
+});
+const selectedSegmentationOpacity = computed(() => props.display[target.value?.id ?? props.selected]?.opacity ?? .5);
+const modality = computed(() => props.imageContext?.modality ?? props.localSession?.descriptor?.modality ?? 'CT');
+const sourcePresentation = computed(() => imagePresentation(props.imageContext ?? props.localSession?.descriptor ?? undefined));
+const signalVolume = computed(() => modality.value !== 'CT');
+const allows = (capability: ImageCapability) => !props.capabilities || props.capabilities.includes(capability);
 const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? false), volumeSettings = shallowRef(freshVolumeSettings(props.initialSnapshot?.state.volume)), volumeError = ref(''), volumeFamilyReady = ref('');
 const referenceLoading = ref(false), referenceMessage = ref(''), referenceError = ref(false);
 let referenceController: AbortController | undefined;
 const automaticReference = new CinematicReferenceGate();
 const referenceKey = computed(() => props.caseId && props.revisionId ? JSON.stringify([props.caseId, props.revisionId]) : '');
-const referenceAvailable = computed(() => !!props.caseId && !!props.revisionId && !props.initialSnapshot && !props.reviewActive && props.structures.length > 0);
+const referenceAvailable = computed(() => !signalVolume.value && !!props.caseId && !!props.revisionId && !props.initialSnapshot && !props.reviewActive && props.structures.length > 0);
 const automaticReferenceAvailable = computed(() => referenceAvailable.value && !props.revisionId!.startsWith('review-')
   && hasCinematicReferenceMasks(props.maskStructures ?? props.structures));
 const volumeMask = shallowRef(freshVolumeMaskSettings(props.initialSnapshot?.state.volume_mask)), maskFamilyReady = ref(''), maskError = ref(''), atlasFamilyReady = ref('');
 const availableMaskStructures = computed(() => props.maskStructures ?? props.structures);
-const heartCamera = computed(() => cardiacCamera(availableMaskStructures.value, volumeMask.value.enabled ? volumeMask.value.margin_mm : 0));
+const heartCamera = computed(() => signalVolume.value ? undefined : cardiacCamera(availableMaskStructures.value, volumeMask.value.enabled ? volumeMask.value.margin_mm : 0));
 let automaticHeartCase = '';
 function showHeartView() {
   if (scene && heartCamera.value && !props.reviewActive) scene.restoreCamera(heartCamera.value);
 }
 const volumeMaskIds = computed(() => [...volumeMask.value.ids].sort());
-const volumeMaskSourceIds = computed(() => volumeMaskIds.value.map(id => volumeMaskSourceId(id, volumeMask.value.margin_mm)));
+// Display transport may supply one combined union or per-mask portable sources.
+// The user's selected IDs remain separate from the atlas aliases.
+const volumeMaskSourceIds = shallowRef<string[]>([]);
 const ctOnly = computed(() => !!props.caseId && !!props.geometry && !props.structures.length);
+const renderVolumeSettings = computed(() => signalVolume.value ? freshVolumeSettings({ ...volumeSettings.value,
+  preset: MR_SIGNAL_PRESET, shift: 0, signal_window: { window: validWindow(props.window, sourcePresentation.value),
+    level: validLevel(props.level, sourcePresentation.value), invert: sourcePresentation.value.photometric_interpretation === 'MONOCHROME1' } }) : volumeSettings.value);
 const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!props.revisionId && !!props.point);
 const segmentationAvailable = computed(() => props.structures.length > 0 && props.availableLayers?.segmentation !== false);
-const ctVolumeAvailable = computed(() => planeAvailable.value && props.availableLayers?.ct_volume !== false);
-const ctPlaneAvailable = computed(() => planeAvailable.value && props.availableLayers?.ct_plane !== false);
+const ctVolumeAvailable = computed(() => planeAvailable.value && allows('volume_rendering') && props.availableLayers?.ct_volume !== false);
+const ctPlaneAvailable = computed(() => planeAvailable.value && allows('mpr') && props.availableLayers?.ct_plane !== false);
 const controlsVisible = computed(() => !!props.reviewActive || planeAvailable.value || props.structures.length > 0);
 const planeLayout = computed(() => controlsVisible.value);
 const target = computed(() => props.reviewTarget ?? props.structures.find(item => item.id === props.selected));
@@ -135,8 +154,8 @@ const desiredPlaneFamily = computed(() => planeRequest.value ? modelReviewFrameF
 const gpuFamily = computed(() => planeRequest.value ? JSON.stringify([
   planeRequest.value.base, planeRequest.value.overlays, planeRequest.value.compare,
   planeRequest.value.geometry.shape, planeRequest.value.geometry.affine_ras,
-  props.overlays?.map(item => [item.id, item.color]),
 ]) : '');
+const overlayPalette = computed(() => (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })));
 const needsPlane = computed(() => ctPlaneAvailable.value && props.viewportActive !== false && showPlane.value);
 const needsVolume = computed(() => ctVolumeAvailable.value && props.viewportActive !== false && showVolume.value && !props.reviewActive);
 const volumeFamily = computed(() => planeRequest.value ? JSON.stringify([
@@ -151,8 +170,8 @@ const volumeMaskLoading = computed(() => needsVolumeMask.value && !volumeMaskRea
 const volumeMaskMessage = computed(() => maskError.value || (volumeMaskReady.value
   ? `Showing ${volumeMask.value.mode} ${volumeMaskIds.value.length} selected ${volumeMaskIds.value.length === 1 ? 'segment' : 'segments'}.` : ''));
 const volumeMessage = computed(() => volumeError.value || (!props.fullResolution
-  ? 'Preloading full CT. Progress and cache errors appear in CT review.'
-  : volumeReady.value ? ctOnly.value ? 'CT intensities · drag to rotate; scroll to zoom.' : 'Rotate to compare the volume and visible segments.' : 'Preparing CT volume…'));
+  ? `Preloading full ${modality.value}. Progress and cache errors appear in source review.`
+  : volumeReady.value ? ctOnly.value ? `${modality.value} ${sourcePresentation.value.units} · drag to rotate; scroll to zoom.` : 'Rotate to compare the volume and visible segments.' : `Preparing ${modality.value} volume…`));
 const volumeStackStatus = computed(() => {
   if (volumeError.value) return 'Unavailable';
   if (volumeMask.value.enabled) {
@@ -162,7 +181,7 @@ const volumeStackStatus = computed(() => {
   }
   if (needsVolume.value && (!props.fullResolution || gpuPreparing.value)) return 'Preparing…';
   if (volumeMask.value.enabled && !volumeMaskReady.value) return 'Preparing mask…';
-  return volumeReady.value ? 'Visible' : 'Waiting for CT';
+  return volumeReady.value ? 'Visible' : `Waiting for ${modality.value}`;
 });
 const gpuActive = computed(() => needsPlane.value && !!gpuFamilyReady.value && gpuFamilyReady.value === gpuFamily.value);
 const gpuMeta = computed(() => {
@@ -171,12 +190,14 @@ const gpuMeta = computed(() => {
 });
 const currentPlane = computed(() => planeFrameFamily.value === desiredPlaneFamily.value ? planeFrame.value : undefined);
 const exactPlaneReady = computed(() => !!gpuMeta.value || (!!currentPlane.value && currentPlane.value.quality === 'full' && currentPlane.value.context === desiredPlaneContext.value && !planeError.value));
+const targetOverlayAvailable = computed(() => modelReviewTargetAvailable(target.value?.id,
+  planeRequest.value?.overlays ?? [], currentPlane.value?.frame, !!gpuMeta.value));
 const planeReady = computed(() => !!gpuMeta.value || !!currentPlane.value);
 const displayedMeta = computed(() => gpuMeta.value ?? currentPlane.value?.frame.meta);
 const displayedContext = computed(() => gpuMeta.value ? desiredPlaneContext.value : currentPlane.value?.context ?? '');
 const coloredPlaneFrame = computed(() => currentPlane.value ? colorCTOverlays(currentPlane.value.frame, props.overlays) : undefined);
 const reviewReady = computed(() => !!props.reviewActive && !!target.value && !props.reviewDisabled &&
-  (props.reviewTool === 'scissors' ? !loading.value && !error.value : reviewMode.value === 'plane' ? showPlane.value && exactPlaneReady.value : showSegmentation.value && segmentationOpacity.value > .02 && hasTargetSurface.value && hasModel.value && !loading.value && props.reviewTool === 'point'));
+  (props.reviewTool === 'scissors' ? !loading.value && !error.value : reviewMode.value === 'plane' ? showPlane.value && exactPlaneReady.value && targetOverlayAvailable.value : showSegmentation.value && selectedSegmentationOpacity.value > .02 && hasTargetSurface.value && hasModel.value && !loading.value && props.reviewTool === 'point'));
 const reviewHint = computed(() => {
   if (props.reviewActive && props.reviewTool === 'scissors') return error.value ? 'The 3D surface preview is unavailable. Reload the model to continue cutting.' : loading.value ? 'Preparing the 3D surface preview…' : props.reviewDisabled
     ? 'Editing paused while the current operation finishes.'
@@ -185,22 +206,23 @@ const reviewHint = computed(() => {
   if (!props.reviewActive) {
     if (!showPlane.value) return '';
     if (gpuActive.value) return 'GPU volume · local navigation. Drag to rotate; scroll to zoom.';
-    if (!currentPlane.value) return 'Preparing CT plane…';
+    if (!currentPlane.value) return `Preparing ${modality.value} plane…`;
     if (planeLoading.value) return `Updating… Showing slice ${(currentPlane.value.frame.meta.native?.index ?? 0) + 1}.`;
     if (gpuPreparing.value) return 'Preparing GPU volume · local slice navigation remains available.';
     if (gpuFallback.value) return `Local slice navigation. ${gpuFallback.value}`;
-    return `${currentPlane.value.quality === 'preview' ? 'Local preview · full CT preloading.' : 'Full CT · local navigation.'} Drag to rotate; scroll to zoom.`;
+    return `${currentPlane.value.quality === 'preview' ? `Local preview · full ${modality.value} preloading.` : `Full ${modality.value} · local navigation.`} Drag to rotate; scroll to zoom.`;
   }
-  if (!hasTargetSurface.value && reviewMode.value === 'surface') return 'This segment has no saved surface. Mark its CT plane to create it.';
-  if (reviewMode.value === 'surface' && (!showSegmentation.value || segmentationOpacity.value <= .02)) return 'Show the segmentation and increase its opacity to mark a surface.';
+  if (!hasTargetSurface.value && reviewMode.value === 'surface') return `This segment has no saved surface. Mark its ${modality.value} plane to create it.`;
+  if (reviewMode.value === 'surface' && (!showSegmentation.value || selectedSegmentationOpacity.value <= .02)) return 'Show the segmentation and increase its opacity to mark a surface.';
   if (reviewMode.value === 'surface') return props.reviewTool === 'point'
     ? `Click the ${target.value?.name || 'selected'} surface to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point. Right drag rotates.`
-    : 'Choose Point for surface marks, or use a CT plane for drawn regions.';
-  if (!showPlane.value) return 'Show the CT plane to mark it.';
-  if (!gpuActive.value && planeLoading.value) return currentPlane.value ? 'Updating CT plane… Previous slice remains visible.' : 'Preparing CT plane…';
-  if (!gpuActive.value && reviewMode.value === 'plane' && currentPlane.value?.quality === 'preview') return 'Local preview · marking waits for full-resolution CT.';
+    : `Choose Point for surface marks, or use a ${modality.value} plane for drawn regions.`;
+  if (!showPlane.value) return `Show the ${modality.value} plane to mark it.`;
+  if (!gpuActive.value && planeLoading.value) return currentPlane.value ? `Updating ${modality.value} plane… Previous slice remains visible.` : `Preparing ${modality.value} plane…`;
+  if (!gpuActive.value && reviewMode.value === 'plane' && currentPlane.value?.quality === 'preview') return `Local preview · marking waits for full-resolution ${modality.value}.`;
+  if (reviewMode.value === 'plane' && !targetOverlayAvailable.value) return 'Editing paused: the selected segment overlay is unavailable.';
   if (props.reviewDisabled) return 'Editing paused while the current operation finishes.';
-  return props.reviewTool === 'navigate' ? 'Choose a marking tool above. Drag to rotate; right drag to pan.' : 'Draw directly on the CT plane. Right drag rotates; scroll zooms.';
+  return props.reviewTool === 'navigate' ? 'Choose a marking tool above. Drag to rotate; right drag to pan.' : `Draw directly on the ${modality.value} plane. Right drag rotates; scroll zooms.`;
 });
 let scene: AnatomyScene | undefined;
 let controller: AbortController | undefined;
@@ -230,9 +252,9 @@ async function observeReviewControls() {
 function syncReview() {
   if (!scene || disposed) return;
   scene.setViewportControlsReserved(controlsVisible.value);
-  scene.setSegmentationLayer({ visible: showSegmentation.value, opacity: segmentationOpacity.value });
+  scene.setSegmentationLayer({ visible: showSegmentation.value, opacity: 1 });
   scene.setCTVolume(props.geometry ? { visible: volumeReady.value && !volumeError.value,
-    geometry: props.geometry, settings: volumeSettings.value,
+    geometry: props.geometry, settings: renderVolumeSettings.value,
     mask: { mode: volumeMask.value.enabled ? volumeMask.value.mode : 'off', ids: volumeMaskSourceIds.value,
       ready: volumeMaskReady.value } } : undefined);
   scene.setCTPlane(!props.reviewActive && planeAvailable.value ? {
@@ -265,22 +287,34 @@ async function prepareGPUPlane() {
   if (gpuSession !== session) {
     gpuController?.abort(); gpuPendingFamily = ''; gpuFamilyReady.value = ''; gpuFallback.value = ''; volumeFamilyReady.value = ''; volumeError.value = '';
     maskFamilyReady.value = ''; maskError.value = ''; atlasFamilyReady.value = '';
+    volumeMaskSourceIds.value = []; scene?.clearGPUCT();
     gpuSession = session;
     gpuBaseRetryFamily = ''; gpuBaseRetries = 0;
   }
   if (gpuBaseRetryFamily !== family) { gpuBaseRetryFamily = family; gpuBaseRetries = 0; }
   if (gpuFamilyReady.value && gpuFamilyReady.value !== overlayFamily) gpuFamilyReady.value = '';
   if (!scene || disposed || (!wantPlane && !needsVolume.value) || !session || !props.localReady || !props.fullResolution || !rawFamily) {
-    if ((!wantPlane && !needsVolume.value) || !session || !props.fullResolution) {
+    if ((!wantPlane && !needsVolume.value) || !session || !props.localReady || !props.fullResolution || !rawFamily) {
       gpuController?.abort(); gpuPendingFamily = ''; gpuPreparing.value = false;
+      scene?.clearGPUCT(); gpuFamilyReady.value = ''; volumeFamilyReady.value = '';
+      maskFamilyReady.value = ''; atlasFamilyReady.value = ''; volumeMaskSourceIds.value = [];
+      syncReview();
     }
     return;
   }
   if (gpuPendingFamily && gpuPendingFamily !== family) {
     gpuController?.abort(); gpuPendingFamily = ''; gpuPreparing.value = false;
   }
+  if (volumeMaskSourceIds.value.length && maskFamilyReady.value !== maskFamily) {
+    // Drop a disabled/stale union immediately, before any replacement fetch.
+    scene.clearGPUOverlays(); volumeMaskSourceIds.value = [];
+    gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = '';
+  }
+  if (!wantPlane && !wantMask && atlasFamilyReady.value) {
+    scene.clearGPUOverlays(); gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = '';
+  }
   if (volumeFamilyReady.value === rawFamily && scene.gpuCTReady && (!(wantPlane || wantMask) ||
-      (atlasFamilyReady.value === atlasFamily && (!wantPlane || gpuFamilyReady.value === overlayFamily)
+      (atlasFamilyReady.value === atlasFamily && (!wantPlane || gpuFamilyReady.value === overlayFamily || !!gpuFallback.value)
         && (!wantMask || maskFamilyReady.value === maskFamily)))) { syncReview(); return; }
   if (gpuPendingFamily === family && gpuController && !gpuController.signal.aborted) return;
   gpuController?.abort(); const controller = new AbortController(); gpuController = controller;
@@ -309,31 +343,54 @@ async function prepareGPUPlane() {
       volumeFamilyReady.value = rawFamily;
       syncReview();
     }
-    if (!wantPlane && !wantMask) { syncReview(); return; }
+    if (!wantPlane && !wantMask) {
+      scene.clearGPUOverlays(); gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = '';
+      volumeMaskSourceIds.value = []; syncReview(); return;
+    }
     // GPU masks have an independent, bounded transport. Changing volume masking
     // must never change the CT worker's slice-overlay selection/version.
     gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = ''; maskError.value = '';
     syncReview();
     if (wantPlane) queueReviewPlane();
-    const [masks, extraMasks] = await Promise.all([
-      wantPlane ? session.getGPUOverlays(request.overlays, request.compare, controller.signal) : Promise.resolve({ overlays: [] }),
-      wantMask ? (props.maskSourceProvider ?? maskSources).get(request.base, volumeMaskIds.value, controller.signal, volumeMask.value.margin_mm) : Promise.resolve(undefined),
-    ]);
+    const planePromise = wantPlane ? session.getGPUOverlays(request.overlays, request.compare, controller.signal)
+        .then(masks => ({ masks, error: '' })).catch(reason => ({ masks: { overlays: [] },
+          error: reason instanceof Error ? reason.message : 'GPU overlays unavailable; using local slices.' }))
+        : Promise.resolve({ masks: { overlays: [] }, error: '' });
+    const extraMasks = wantMask ? await (props.maskSourceProvider ?? maskSources).get(request.base,
+      volumeMaskIds.value, controller.signal, volumeMask.value.margin_mm) : undefined;
     if (!current()) return;
-    await scene.prepareGPUOverlays(masks, (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })), controller.signal, extraMasks);
+    if (wantMask) {
+      // The small display union can be shown before optional native colored
+      // plane labels finish their independent WAN download.
+      await scene.prepareGPUOverlays({ overlays: [] }, [], controller.signal, extraMasks);
+      if (!current()) return;
+      volumeMaskSourceIds.value = extraMasks!.overlays.map(layer => layer.id); maskFamilyReady.value = maskFamily;
+      syncReview();
+    }
+    const planeResult = await planePromise;
+    if (!current()) return;
+    const planeFits = await scene.prepareGPUOverlays(planeResult.masks,
+      (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })), controller.signal, extraMasks);
     if (!current()) return;
     atlasFamilyReady.value = atlasFamily;
-    if (wantMask) maskFamilyReady.value = maskFamily;
-    if (wantPlane) {
+    if (wantMask) {
+      volumeMaskSourceIds.value = extraMasks!.overlays.map(layer => layer.id); maskFamilyReady.value = maskFamily;
+    }
+    if (wantPlane && planeFits && !planeResult.error) {
       gpuFamilyReady.value = overlayFamily; planeError.value = ''; planeLoading.value = false;
       reviewFrames.cancel(); clearTimeout(exactPlaneTimer); planeLoadId++;
+    } else if (wantPlane) {
+      gpuFallback.value = planeResult.error || 'Colored plane overlays use local full-resolution slices; the masked 3D volume remains on the GPU.';
+      queueReviewPlane();
     }
     syncReview();
     if (faceWhenReady) { faceWhenReady = false; scene.focusReviewPlane(); }
   } catch (reason) {
     if (!current()) return;
+    controller.abort();
     gpuFamilyReady.value = '';
-    maskFamilyReady.value = ''; atlasFamilyReady.value = '';
+    maskFamilyReady.value = ''; atlasFamilyReady.value = ''; volumeMaskSourceIds.value = [];
+    scene.clearGPUOverlays();
     gpuFallback.value = reason instanceof Error ? reason.message : 'GPU volume unavailable; using local slices.';
     if (wantMask) maskError.value = `Volume mask unavailable: ${gpuFallback.value} The masked volume stays hidden. Choose fewer segments or retry.`;
     if (needsVolume.value && (volumeFamilyReady.value !== rawFamily || !scene.gpuCTReady)) {
@@ -429,7 +486,7 @@ async function loadReviewPlane(exact = false) {
   } catch (reason) {
     if (disposed || id !== planeLoadId) return;
     planeLoading.value = false;
-    planeError.value = reason instanceof Error ? reason.message : 'The 3D CT plane is unavailable.';
+    planeError.value = reason instanceof Error ? reason.message : `The 3D ${modality.value} plane is unavailable.`;
     syncReview();
   }
 }
@@ -455,7 +512,7 @@ function queueReviewPlane() {
   // Embedded exports have no remote detail endpoint or external worker. Their
   // shared 3D texture supplies the plane as soon as its bounded upload finishes.
   if (props.localSession?.networkFree) {
-    planeError.value = gpuFallback.value ? `Embedded CT plane unavailable: ${gpuFallback.value}` : '';
+    planeError.value = gpuFallback.value ? `Embedded ${modality.value} plane unavailable: ${gpuFallback.value}` : '';
     planeLoading.value = needsPlane.value && !planeError.value; syncReview(); return;
   }
   syncReview();
@@ -513,7 +570,7 @@ async function load() {
       await scene.load(data, props.structures, hasModel.value);
     }
     if (id !== loadId) return;
-    scene.display(props.display, props.selected); scene.setPoint(props.point);
+    scene.setStructureColors(props.structures); scene.display(props.display, props.selected); scene.setPoint(props.point);
     hasModel.value = true; surfaceRevisionLoaded.value = props.modelRevisionId ?? ''; syncReview();
   } catch (reason) { if (id === loadId && !(reason instanceof DOMException && reason.name === 'AbortError')) error.value = reason instanceof Error ? reason.message : '3D rendering failed.'; }
   finally { if (id === loadId) { loading.value = false; transparencyWarning.value = scene.transparencyWarning; syncReview(); } }
@@ -525,7 +582,7 @@ onMounted(() => {
     scene.onCTVolumeError = reason => { volumeError.value = reason; gpuFallback.value = reason; fallbackToCTPlane(); syncReview(); };
     if (ctOnly.value && !props.initialSnapshot && ctVolumeAvailable.value) setVolumeEnabled(true);
     load(); syncReview(); queueReviewPlane(); void prepareGPUPlane(); void observeReviewControls(); }
-  catch { error.value = 'WebGL is unavailable. You can still review CT slices and export the segmentation.'; loading.value = false; }
+  catch { error.value = `WebGL is unavailable. You can still review ${modality.value} slices and export the segmentation.`; loading.value = false; }
 });
 onBeforeUnmount(() => { void setExpanded(false, false); disposed = true; cancelReference(); loadId++; planeLoadId++; gpuController?.abort(); maskSources.dispose(); clearTimeout(gpuBaseTimer); cancelAnimationFrame(requestFrame); clearTimeout(exactPlaneTimer); reviewControlsObserver?.disconnect(); reviewFrames.dispose(); controller?.abort(); scene?.dispose(); });
 watch(() => [props.manifestUrl, props.modelUrl, props.modelData], load);
@@ -559,11 +616,19 @@ watch(() => [props.caseId, volumeSettings.value.preset, showVolume.value, heartC
     automaticHeartCase = caseId; showHeartView();
   });
 watch(() => [props.display, props.selected], () => scene?.display(props.display, props.selected), { deep: true });
+watch(() => JSON.stringify(props.structures.map(item => [item.id, item.color])), () => scene?.setStructureColors(props.structures));
+watch(() => JSON.stringify(overlayPalette.value), () => scene?.setGPUOverlayColors(overlayPalette.value));
 watch(() => [showSegmentation.value, segmentationOpacity.value, controlsVisible.value], syncReview);
 watch(() => props.point, point => { if (props.viewportActive !== false) scene?.setPoint(point); }, { deep: true });
 watch(() => props.viewportActive, active => { if (active !== false) scene?.setPoint(props.point); else void setExpanded(false, false); syncReview(); });
 watch(() => props.caseId, () => { void setExpanded(false, false); });
 watch(() => [desiredPlaneContext.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution, props.reviewActive, reviewMode.value], queueReviewPlane);
+watch(() => props.localSession, (session, _previous, cleanup) => {
+  const unsubscribe = session?.onOverlayChange?.(() => {
+    reviewFrames.clear(); planeFrame.value = undefined; planeFrameFamily.value = ''; queueReviewPlane();
+  });
+  if (unsubscribe) cleanup(unsubscribe);
+}, { immediate: true });
 watch(() => [gpuFamily.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution], () => { void prepareGPUPlane(); });
 watch(() => [volumeFamily.value, needsVolume.value], () => { syncReview(); void prepareGPUPlane(); });
 watch(volumeMaskFamily, () => { maskError.value = ''; syncReview(); void prepareGPUPlane(); });
@@ -598,8 +663,8 @@ function exportSnapshot(): PortableRenderSnapshot {
     state: normalizePortableState({ display: Object.fromEntries(structures.map(structure => [structure.id, {
       visible: props.display[structure.id]?.visible !== false, opacity: props.display[structure.id]?.opacity ?? .8,
       ...(typeof structure.color === 'string' ? { color: structure.color } : {}),
-    }])), selected: props.selected, segmentation_opacity: segmentationOpacity.value,
-    volume: volumeSettings.value, volume_mask: volumeMask.value,
+    }])), selected: props.selected, segmentation_opacity: 1,
+    volume: renderVolumeSettings.value, volume_mask: volumeMask.value,
     plane: { plane: reviewPlane.value, axis: plane?.native.axis ?? 2, index: plane?.native.index ?? 0,
       window: props.window ?? 400, level: props.level ?? 40, overlays: [...(plane?.overlays ?? [])] },
     camera: hasModel.value || volumeReady.value || gpuActive.value ? scene?.captureCamera() : undefined }, structures, props.geometry) };
@@ -611,7 +676,7 @@ defineExpose({ focus: () => scene?.focus(), screenshot: () => scene?.screenshot(
 
 <template>
   <div ref="viewport" :id="viewportId" class="model-viewport" :class="{ 'model-review': reviewActive, 'model-plane': !reviewActive && planeLayout, 'viewport-expanded': expanded }" :data-expanded="expanded"
-    :role="expanded ? 'dialog' : undefined" :aria-modal="expanded ? true : undefined" :aria-label="expanded ? 'Expanded 3D view' : undefined" :data-review-mode="reviewMode"
+    :role="expanded ? 'dialog' : undefined" :aria-modal="expanded ? true : undefined" :aria-label="expanded ? 'Expanded 3D view' : undefined" :data-review-mode="reviewMode" :data-image-modality="modality" :data-reference-image-id="imageContext?.reference_image_id" :data-volume-window="renderVolumeSettings.signal_window.window" :data-volume-level="renderVolumeSettings.signal_window.level" :data-volume-invert="renderVolumeSettings.signal_window.invert"
     :style="planeLayout ? { '--review-scene-top': `${reviewSceneTop}px` } : undefined"
     :data-ct-plane-visible="needsPlane" :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"
     :data-review-ready="reviewReady" :data-review-context="displayedContext" :data-model-revision="modelRevisionId" :data-surface-revision="surfaceRevisionLoaded" :data-surface-loading="loading"
@@ -622,27 +687,27 @@ defineExpose({ focus: () => scene?.focus(), screenshot: () => scene?.screenshot(
     :data-volume-mask-margin="volumeMask.margin_mm" :data-volume-mask-sources="JSON.stringify(volumeMaskSourceIds)"
     :data-volume-mask-ready="volumeMaskReady" :data-volume-mask-pending="volumeMaskLoading" :data-volume-mask-error="maskError">
     <div ref="surface" class="model-canvas"></div>
-    <div class="viewport-caption">{{ ctOnly ? 'CT view' : '3D anatomy' }} <span class="divider">·</span> <span>{{ view }}</span></div>
+    <div class="viewport-caption">{{ ctOnly ? `${modality} view` : '3D anatomy' }} <span class="divider">·</span> <span>{{ sourceViewLabel(view, modality) }}</span></div>
     <button ref="expandButton" class="text-button viewport-expand-button" :aria-label="expanded ? 'Restore 3D view' : 'Expand 3D view'" :title="expanded ? 'Restore 3D view (Esc)' : 'Expand 3D view'" :aria-expanded="expanded" :aria-controls="viewportId" @click="setExpanded(!expanded)">{{ expanded ? 'Restore ↙' : 'Expand ↗' }}</button>
     <div v-if="controlsVisible" ref="reviewControls" class="model-review-controls" :class="{ 'main-plane-controls': !reviewActive }">
       <section class="rendering-stack" aria-label="Rendering stack">
         <div class="rendering-stack-heading">Rendering stack <span>One aligned 3D view</span></div>
         <div class="rendering-stack-layer">
           <label class="rendering-stack-toggle" :title="segmentationAvailable ? 'Show the segments enabled in the anatomy list.' : 'Segmentation surfaces are not included in this view.'"><input type="checkbox" aria-label="Show segmentation" :checked="showSegmentation && segmentationAvailable" :disabled="!segmentationAvailable" @change="showSegmentation = ($event.target as HTMLInputElement).checked" /> Segmentation</label>
-          <label class="rendering-stack-opacity" title="Multiplies each segment’s own opacity; individual visibility stays unchanged.">Opacity <input type="range" aria-label="Segmentation opacity" :aria-valuetext="`${Math.round(segmentationOpacity * 100)}%`" min="0" max="1" step="0.01" v-model.number="segmentationOpacity" :disabled="!segmentationAvailable || !showSegmentation" /><output>{{ Math.round(segmentationOpacity * 100) }}%</output></label>
+          <label class="rendering-stack-opacity" title="Set every segment’s opacity together. Visibility stays unchanged; 100% makes every visible segment opaque.">All segment opacity <input type="range" aria-label="All segment opacity" :aria-valuetext="segmentationOpacityMixed ? 'Mixed segment values' : `${Math.round(segmentationOpacity * 100)}%`" min="0" max="1" step="0.01" v-model.number="segmentationOpacity" :disabled="!segmentationAvailable || !showSegmentation" /><output>{{ segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%` }}</output></label>
         </div>
         <div v-if="ctVolumeAvailable && !reviewActive" class="rendering-stack-layer">
-          <label class="rendering-stack-toggle"><input type="checkbox" aria-label="Show CT volume" :checked="showVolume" @change="setVolumeEnabled(($event.target as HTMLInputElement).checked)" /> CT volume</label>
+          <label class="rendering-stack-toggle"><input type="checkbox" :aria-label="`Show ${modality} volume`" :checked="showVolume" @change="setVolumeEnabled(($event.target as HTMLInputElement).checked)" /> {{ modality }} volume</label>
           <span v-if="showVolume" class="rendering-stack-status" role="status">{{ volumeStackStatus }}</span>
         </div>
         <div v-if="ctPlaneAvailable" class="rendering-stack-layer">
-          <label class="rendering-stack-toggle"><input type="checkbox" aria-label="Show CT plane" v-model="showPlane" /> CT plane</label>
+          <label class="rendering-stack-toggle"><input type="checkbox" :aria-label="`Show ${modality} plane`" v-model="showPlane" /> {{ modality }} plane</label>
           <button v-if="showPlane" class="text-button" :disabled="!planeReady" @click="scene?.focusReviewPlane()">Face plane</button>
         </div>
       </section>
       <details v-if="!reviewActive && ctVolumeAvailable" v-show="showVolume" class="stack-volume-options" :open="volumeOptionsOpen" @toggle="volumeOptionsOpen = ($event.target as HTMLDetailsElement).open; observeReviewControls()">
-        <summary>CT volume settings <span>Appearance · opacity · mask · crop</span></summary>
-        <VolumeControls headerless :enabled="showVolume" :settings="volumeSettings"
+        <summary>{{ modality }} volume settings <span>Appearance · opacity · mask · crop</span></summary>
+        <VolumeControls headerless :enabled="showVolume" :settings="renderVolumeSettings" :modality="modality"
           :heart-view-available="!!heartCamera && !reviewActive" @heart-view="showHeartView"
           :reference-available="referenceAvailable" :reference-loading="referenceLoading" :reference-message="referenceMessage" :reference-error="referenceError" @measure-reference="measureCinematicReference()"
           :ready="volumeReady && !volumeError" :loading="needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
@@ -653,11 +718,11 @@ defineExpose({ focus: () => scene?.focus(), screenshot: () => scene?.screenshot(
           @update:mask="setVolumeMask" @retry-mask="retryVolumeMask" @retry="retryVolume" @layout="observeReviewControls" />
       </details>
       <div v-if="reviewActive && reviewTool !== 'scissors'" class="model-review-row review-marking-row">
-        <label v-if="reviewActive">Mark on <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode"><option value="surface">Surface point</option><option value="plane">CT plane</option></select></label>
+        <label v-if="reviewActive">Mark on <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode"><option value="surface">Surface point</option><option value="plane">{{ modality }} plane</option></select></label>
       </div>
       <div v-if="showPlane || (reviewActive && reviewMode === 'plane')" class="model-review-row model-plane-navigation">
-        <select aria-label="3D CT plane" :value="reviewPlane" @change="changePlane"><option value="axial">Native k</option><option value="coronal">Native j</option><option value="sagittal">Native i</option></select>
-        <input v-if="planeRequest" aria-label="3D CT slice" type="range" min="0" :max="geometry!.shape[planeRequest.native.axis] - 1" step="1" :value="planeRequest.native.index" @input="slidePlane" />
+        <select :aria-label="`3D ${modality} plane`" :value="reviewPlane" @change="changePlane"><option value="axial">Native k</option><option value="coronal">Native j</option><option value="sagittal">Native i</option></select>
+        <input v-if="planeRequest" :aria-label="`3D ${modality} slice`" type="range" min="0" :max="geometry!.shape[planeRequest.native.axis] - 1" step="1" :value="planeRequest.native.index" @input="slidePlane" />
         <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
       </div>
       <p v-if="reviewHint" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">{{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button></p>

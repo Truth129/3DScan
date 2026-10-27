@@ -8,8 +8,11 @@ export const VOLUME_PRESET_IDS = Object.keys(SLICER_VOLUME_PRESET_DATA) as Slice
 export const VOLUME_PRESET_ALIASES = {
   angiography: 'CT-AAA', bone: 'CT-Bone', 'soft-tissue': 'CT-Cardiac', lung: 'CT-Lung',
 } as const satisfies Record<string, SlicerVolumePresetId>;
+export const MR_SIGNAL_PRESET = 'MR-SignalWindow' as const;
+export interface SignalWindow { window: number; level: number; invert: boolean }
+export const DEFAULT_SIGNAL_WINDOW: Readonly<SignalWindow> = { window: 400, level: 40, invert: false };
 export const CINEMATIC_HEART_PRESET = 'CT-Cinematic-Heart' as const;
-export type CTVolumePresetId = SlicerVolumePresetId | keyof typeof VOLUME_PRESET_ALIASES | typeof CINEMATIC_HEART_PRESET;
+export type CTVolumePresetId = SlicerVolumePresetId | keyof typeof VOLUME_PRESET_ALIASES | typeof CINEMATIC_HEART_PRESET | typeof MR_SIGNAL_PRESET;
 export interface CTVolumeCinematicSettings {
   myocardiumHU: number;
   bloodHU: number;
@@ -25,6 +28,8 @@ export function cinematicReferenceError(myocardium: number, blood: number): stri
 export type CTVolumeCrop = [[number, number, number], [number, number, number]];
 export interface CTVolumeSettings {
   preset: CTVolumePresetId;
+  /** Source-relative signal appearance; does not rescale or replace voxel data. */
+  signal_window: SignalWindow;
   /** Shift the transfer function along the native HU axis. */
   shift: number;
   density: number;
@@ -35,9 +40,9 @@ export interface CTVolumeSettings {
   crop: CTVolumeCrop;
 }
 export interface CTVolumePreset {
-  id: SlicerVolumePresetId | typeof CINEMATIC_HEART_PRESET;
+  id: SlicerVolumePresetId | typeof CINEMATIC_HEART_PRESET | typeof MR_SIGNAL_PRESET;
   label: string;
-  sourcePreset: SlicerVolumePresetId | typeof CINEMATIC_HEART_PRESET;
+  sourcePreset: SlicerVolumePresetId | typeof CINEMATIC_HEART_PRESET | typeof MR_SIGNAL_PRESET;
   opacity: readonly (readonly [number, number])[];
   color: readonly (readonly [number, number, number, number])[];
   gradientOpacity: readonly (readonly [number, number])[];
@@ -53,7 +58,7 @@ export interface CTVolumePreset {
 /** Legacy default range retained for callers; the renderer uses preset.transferRange. */
 export const CT_TRANSFER_RANGE = [-4096, 8192] as const;
 export const DEFAULT_VOLUME_SETTINGS: Readonly<CTVolumeSettings> = {
-  preset: 'angiography', shift: 0, density: 1, quality: 'auto', cinematic: { ...DEFAULT_CINEMATIC_SETTINGS }, crop: [[0, 0, 0], [1, 1, 1]],
+  preset: 'angiography', signal_window: { ...DEFAULT_SIGNAL_WINDOW }, shift: 0, density: 1, quality: 'auto', cinematic: { ...DEFAULT_CINEMATIC_SETTINGS }, crop: [[0, 0, 0], [1, 1, 1]],
 };
 
 /**
@@ -70,6 +75,7 @@ const canonicalPresets = Object.fromEntries<CTVolumePreset>(VOLUME_PRESET_IDS.ma
 }])) as Readonly<Record<SlicerVolumePresetId, CTVolumePreset>>;
 export const VOLUME_PRESETS: Readonly<Record<CTVolumePresetId, CTVolumePreset>> = {
   ...canonicalPresets,
+  [MR_SIGNAL_PRESET]: signalWindowPreset(DEFAULT_SIGNAL_WINDOW),
   angiography: canonicalPresets['CT-AAA'], bone: canonicalPresets['CT-Bone'],
   'soft-tissue': canonicalPresets['CT-Cardiac'], lung: canonicalPresets['CT-Lung'],
   [CINEMATIC_HEART_PRESET]: cinematicHeartPreset(DEFAULT_CINEMATIC_SETTINGS),
@@ -103,7 +109,20 @@ export function cinematicHeartPreset(settings: CTVolumeCinematicSettings): CTVol
     gradientOpacity: [[0, 1]], shade: true, interpolation: 'linear', transferRange: [ordered[0][0], ordered.at(-1)![0]],
     ambient: .3, diffuse: .8, specular: .25, specularPower: 25 };
 }
-export function getVolumePreset(id: CTVolumePresetId, cinematic?: CTVolumeCinematicSettings): CTVolumePreset {
+export function signalWindowPreset(input: SignalWindow): CTVolumePreset {
+  const { window, level, invert } = freshSignalWindow(input), low = level - window / 2, high = level + window / 2;
+  const dark = invert ? 1 : 0, bright = invert ? 0 : 1;
+  return { id: MR_SIGNAL_PRESET, sourcePreset: MR_SIGNAL_PRESET, label: 'Signal window (grayscale)',
+    color: [[low, dark, dark, dark], [high, bright, bright, bright]], opacity: [[low, 0], [high, 1]],
+    gradientOpacity: [[0, 1]], shade: false, interpolation: 'linear', transferRange: [low, high],
+    ambient: 1, diffuse: 0, specular: 0, specularPower: 1 };
+}
+export function freshSignalWindow(input?: Partial<SignalWindow>): SignalWindow {
+  return { window: Number.isFinite(input?.window) && input!.window! > 0 ? input!.window! : DEFAULT_SIGNAL_WINDOW.window,
+    level: Number.isFinite(input?.level) ? input!.level! : DEFAULT_SIGNAL_WINDOW.level, invert: input?.invert === true };
+}
+export function getVolumePreset(id: CTVolumePresetId, cinematic?: CTVolumeCinematicSettings, signal?: SignalWindow): CTVolumePreset {
+  if (id === MR_SIGNAL_PRESET) return signalWindowPreset(signal ?? DEFAULT_SIGNAL_WINDOW);
   return id === CINEMATIC_HEART_PRESET && cinematic ? cinematicHeartPreset(cinematic) : VOLUME_PRESETS[id] ?? VOLUME_PRESETS.angiography;
 }
 
@@ -154,6 +173,7 @@ export function freshVolumeSettings(settings: Partial<CTVolumeSettings> = {}): C
   const low = [0, 1, 2].map(axis => bounded(input.crop?.[0]?.[axis], 0, .99, 0)) as [number, number, number];
   const high = [0, 1, 2].map(axis => bounded(input.crop?.[1]?.[axis], low[axis] + .01, 1, 1)) as [number, number, number];
   return {
+    signal_window: freshSignalWindow(input.signal_window),
     preset: Object.hasOwn(VOLUME_PRESETS, input.preset) ? input.preset : 'angiography',
     shift: bounded(input.shift, -500, 500, 0), density: bounded(input.density, .1, 3, 1),
     quality: input.quality === 'detail' ? 'detail' : 'auto', cinematic: freshCinematicSettings(input.cinematic), crop: [low, high],

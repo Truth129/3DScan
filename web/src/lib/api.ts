@@ -1,5 +1,6 @@
 import type { Case, Job, JobMeasurements, Revision, Operation, ReviewStatus, InteractiveOptions, InteractivePrompt, InteractiveReview, InteractiveStatus, InteractiveStructureInput, SegmentRelationship, SegmentationCatalog, SegmentationSettings, TotalSegmentatorLicenseStatus, ProcessRequest } from '../types';
 import { presentRevision, presentStructures } from './appearance';
+import type { ImageAsset } from './image-domain';
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) { super(message); this.name = 'ApiError'; }
@@ -31,6 +32,8 @@ export interface CinematicReference {
 export const api = {
   cases: () => request<Case[]>('/api/cases'),
   case: (id: string) => request<Case>(caseUrl(id)),
+  images: (id: string) => request<ImageAsset[]>(`${caseUrl(id)}/images`),
+  image: (id: string, imageId: string) => request<ImageAsset>(`${caseUrl(id)}/images/${encodeURIComponent(imageId)}`),
   health: () => request<Record<string, unknown>>('/api/health'),
   demo: () => request<Case>('/api/cases/demo', { method: 'POST' }),
   async import(files: File[], label: string) {
@@ -40,7 +43,7 @@ export const api = {
     return request<Case>('/api/cases/import', { method: 'POST', body: data });
   },
   process: (id: string, data: ProcessRequest) => request<Job>(`${caseUrl(id)}/process`, json('POST', data)),
-  segmentationOptions: () => request<SegmentationCatalog>('/api/segmentation-options'),
+  segmentationOptions: (modality = 'CT', signal?: AbortSignal) => request<SegmentationCatalog>(`/api/segmentation-options?modality=${encodeURIComponent(modality)}`, { signal }),
   totalSegmentatorLicense: (signal?: AbortSignal) => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', { signal }),
   saveTotalSegmentatorLicense: (license_key: string) => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', json('PUT', { license_key })),
   removeTotalSegmentatorLicense: () => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', { method: 'DELETE' }),

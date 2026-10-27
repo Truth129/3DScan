@@ -279,7 +279,7 @@ def test_revision_scoped_api_raw_bytes_parent_crop_and_case_isolation(source, tm
     service = app.state.service
     case = service.new_case("Volume transport fixture")
     parent_id, current_id = uuid.uuid4().hex, uuid.uuid4().hex
-    base = {"case_id": case["id"], "ct_file": str(ct), "structures": [
+    base = {"case_id": case["id"], "ct_file": str(ct), "geometry": imaging.geometry(ct), "structures": [
         {"id": "total:liver", "mask_file": str(mask_path)}]}
     service.store.save("revisions", {**base, "id": parent_id, "parent_id": None})
     new_mask = mask.copy()

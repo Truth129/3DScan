@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { acceptChunk, allocateVolume, inverseAffine, probeVolume, resliceVolume, sampleLinear,
-  sampleNearest, sliceMetadata, transformPoint, validateDescriptor } from '../src/lib/ct-reslice';
+  sampleNearest, sliceMetadata, nativeSliceMetadata, transformPoint, validateDescriptor } from '../src/lib/ct-reslice';
 import type { VolumeDescriptor } from '../src/lib/ct-reslice';
 import { fetchCTDetail, localCTBudget } from '../src/lib/ct-volume';
 
@@ -61,7 +61,14 @@ describe('local CT geometry and HU preservation', () => {
     overview.reference_geometry = { shape: full.shape, affine_ras: full.affine_ras,
       spacing: [.7, .7, 1.2], center_ras: [0, 0, 0], bounds_ras: [[0, 0, 0], [1, 1, 1]] };
     for (const plane of ['axial', 'coronal', 'sagittal'] as const) {
-      expect(sliceMetadata(overview, plane, 0)).toEqual(sliceMetadata(full, plane, 0));
+      const preview = sliceMetadata(overview, plane, 0), exact = sliceMetadata(full, plane, 0);
+      expect(preview.extent_mm).toEqual(exact.extent_mm);
+      for (const [px, py] of [[0, 0], [1, 1]]) {
+        const a = transformPoint(preview.pixel_to_ras, [px * preview.width - .5, py * preview.height - .5, 0]);
+        const b = transformPoint(exact.pixel_to_ras, [px * exact.width - .5, py * exact.height - .5, 0]);
+        a.forEach((value, axis) => expect(value).toBeCloseTo(b[axis], 9));
+      }
+      expect(exact.width).toBeGreaterThanOrEqual(preview.width); expect(exact.height).toBeGreaterThanOrEqual(preview.height);
     }
   });
 
@@ -130,6 +137,43 @@ describe('local CT geometry and HU preservation', () => {
         expect(slice.hu[x + y * slice.meta.width]).toBe(Math.fround(volume.values[source] * desc.slope + desc.intercept));
       }
     }
+  });
+
+  it('keeps all 967 native slices and anisotropic patient spacing without a display-size raster cap', () => {
+    const affine = [[-.44, -.54, .25, 90], [.33, -.72, .5, -40], [0, 0, -2.5, 110], [0, 0, 0, 1]];
+    const desc = descriptor([3, 4, 967], affine); desc.quality = 'full'; desc.slope = .25; desc.intercept = -1024;
+    const volume = allocateVolume(desc);
+    for (let k = 0; k < 967; k++) for (let j = 0; j < 4; j++) for (let i = 0; i < 3; i++) volume.values[i + 3 * (j + 4 * k)] = i + 10 * j + 20 * k;
+    for (const axis of [0, 1] as const) {
+      const index = 1, plane = axis === 0 ? 'sagittal' : 'coronal';
+      const slice = resliceVolume(volume, plane, index, null, null, [], { axis, index });
+      const u = axis === 0 ? 1 : 0;
+      expect([slice.meta.width, slice.meta.height]).toEqual([desc.shape[u], 967]);
+      for (const y of [0, 453, 966]) for (let x = 0; x < desc.shape[u]; x++) {
+        const i = axis === 0 ? index : x, j = axis === 1 ? index : x;
+        expect(slice.hu[x + y * slice.meta.width]).toBe((i + 10 * j + 20 * y) * .25 - 1024);
+        const ras = transformPoint(slice.meta.pixel_to_ras, [x, y, 0]);
+        const expected = [90 - .44 * i - .54 * j + .25 * y, -40 + .33 * i - .72 * j + .5 * y, 110 - 2.5 * y];
+        ras.forEach((value, component) => expect(value).toBeCloseTo(expected[component], 9));
+      }
+    }
+    const large = descriptor([512, 512, 967], [[-.7, 0, 0, 0], [0, .7, 0, 0], [0, 0, 1.2, 0], [0, 0, 0, 1]]);
+    const native = nativeSliceMetadata(large, 'coronal', { axis: 1, index: 100 });
+    expect([native.width, native.height]).toEqual([512, 967]);
+    expect(native.pixel_to_ras).toEqual([[-.7, 0, 0, 0], [0, 0, .7, 70], [0, 1.2, 0, 0], [0, 0, 0, 1]]);
+    const anatomical = sliceMetadata(large, 'coronal', 70);
+    expect([anatomical.width, anatomical.height]).toEqual([512, 1658]);
+    large.quality = 'preview';
+    expect(nativeSliceMetadata(large, 'coronal', { axis: 1, index: 100 }).height).toBe(768);
+    expect(sliceMetadata(large, 'coronal', 70).height).toBe(768);
+  });
+
+  it('fails oversized full rasters explicitly before allocating or pretending they are full resolution', () => {
+    const huge = descriptor([4096, 4096, 1]);
+    expect(() => nativeSliceMetadata(huge, 'axial', { axis: 2, index: 0 })).toThrow('frame limit');
+    expect(() => sliceMetadata(huge, 'axial', 0)).toThrow('frame limit');
+    huge.quality = 'preview';
+    expect(nativeSliceMetadata(huge, 'axial', { axis: 2, index: 0 }).width).toBe(768);
   });
 
   it('clips exact native cropped masks with implicit zero padding, including planes outside the crop', () => {

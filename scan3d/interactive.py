@@ -415,6 +415,8 @@ class InteractiveRuntime:
         self._applied_batches = []
         self._owner_thread = None
         if session is not None:
+            # A vendor session may fail before creating its optional executor.
+            # Cleanup must also work for that partially initialized state.
             executor = getattr(session, "executor", None)
             if executor is not None:
                 executor.shutdown(wait=True, cancel_futures=True)

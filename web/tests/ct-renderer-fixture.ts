@@ -12,15 +12,15 @@ const messages: string[] = [];
 const viewer = new CTRenderer(canvas, message => messages.push(message));
 const fallback = new CTRenderer(fallbackCanvas);
 const gl = canvas.getContext('webgl2')!;
-let textureUploads = 0;
+let textureUploads = 0, rawTextureUploads = 0, maskTextureUploads = 0;
 const nativeTexImage = gl.texImage2D;
 gl.texImage2D = ((...args: unknown[]) => {
-  textureUploads++; return Reflect.apply(nativeTexImage, gl, args);
+  textureUploads++; if (args[2] === gl.R32F) rawTextureUploads++; return Reflect.apply(nativeTexImage, gl, args);
 }) as typeof gl.texImage2D;
 for (const name of ['texImage3D', 'texSubImage3D'] as const) {
   const native = gl[name];
   Reflect.set(gl, name, (...args: unknown[]) => {
-    textureUploads++; return Reflect.apply(native, gl, args);
+    textureUploads++; maskTextureUploads++; return Reflect.apply(native, gl, args);
   });
 }
 const point: Point = [NaN, NaN, NaN];
@@ -162,6 +162,32 @@ async function run() {
   viewer.draw(1000, 0, point); fallback.draw(1000, 0, point); pixels = readGPU();
   checks.clearAllRemovesOverlays = compare(pixels, cpuPixels()).wrong === 0
     && equal(color(pixels, 19, 12), background(19, 12));
+  const opaqueFrame = { ...twoframe, overlayOpacity: .4 };
+  viewer.setFrame(opaqueFrame); fallback.setFrame(opaqueFrame);
+  viewer.draw(1000, 0, point); fallback.draw(1000, 0, point); pixels = readGPU();
+  checks.explicit2DOpacityMatchesCPU = compare(pixels, cpuPixels()).wrong === 0;
+  checks.explicit2DOpacityIsDenser = equal(color(pixels, 16, 15), mix(mix(background(16, 15), colors[0], .4), colors[1], .4));
+  const appearanceUploads = textureUploads;
+  for (const alpha of [0, .1, .4, .9, 1, .1, 0]) {
+    checks.presentationUpdateRetainsData = viewer.setPresentation({ ...opaqueFrame, overlayOpacity: alpha })
+      && fallback.setPresentation({ ...opaqueFrame, overlayOpacity: alpha });
+    viewer.draw(1000, 0, point); fallback.draw(1000, 0, point);
+    checks.opacityUpdatesMatchCPU = compare(readGPU(), cpuPixels()).wrong === 0;
+    if (!checks.presentationUpdateRetainsData || !checks.opacityUpdatesMatchCPU) break;
+  }
+  checks.opacityChangesHaveNoTextureUploads = textureUploads === appearanceUploads;
+  checks.zeroOpacityHidesContourAndFill = equal(color(readGPU(), 4, 8), background(4, 8)) && equal(color(readGPU(), 16, 15), background(16, 15));
+  viewer.setPresentation({ ...opaqueFrame, overlayOpacity: .1 }); fallback.setPresentation({ ...opaqueFrame, overlayOpacity: .1 });
+  viewer.draw(1000, 0, point); fallback.draw(1000, 0, point);
+  checks.contourTracksExplicitOpacity = equal(color(readGPU(), 4, 8), mix(background(4, 8), colors[0], .3));
+  const rawBeforeColor = rawTextureUploads, masksBeforeColor = maskTextureUploads;
+  const recolored = { ...opaqueFrame, overlayOpacity: .1, overlays: opaqueFrame.overlays.map((layer, index) => index ? layer : { ...layer, color: [12, 190, 245] as [number, number, number] }) };
+  checks.colorPresentationAccepted = viewer.setPresentation(recolored) && fallback.setPresentation(recolored);
+  viewer.draw(1000, 0, point); fallback.draw(1000, 0, point);
+  checks.colorUpdateMatchesCPU = compare(readGPU(), cpuPixels()).wrong === 0;
+  checks.colorUpdateKeepsResidentHUAndMasks = rawTextureUploads === rawBeforeColor && maskTextureUploads === masksBeforeColor;
+  checks.presentationRejectsReplacementSamples = !viewer.setPresentation({ ...recolored, hu: recolored.hu.slice() });
+
   viewer.setFrame(comparisonFrame); fallback.setFrame(comparisonFrame);
   viewer.draw(1000, 0, point); pixels = readGPU();
 

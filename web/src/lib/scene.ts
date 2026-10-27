@@ -10,7 +10,7 @@ import { intersectReviewPlane, intersectReviewSurface, reviewPlaneGesture, revie
 import { Review3DPlane } from './review3d-plane';
 import { Review3DMarkers } from './review3d-markers';
 import type { GPUOverlaySources, GPUVolumeSource } from './gpu-volume-data';
-import type { GPUOverlayColor } from './gpu-ct-plane';
+import { GPUCTMaskBudgetError, type GPUOverlayColor } from './gpu-ct-plane';
 import { CTVolumeRenderer } from './ct-volume-renderer';
 import type { CTVolumeSettings } from './volume-presets';
 import { transformPoint } from './ct-reslice';
@@ -435,10 +435,29 @@ export class AnatomyScene {
     // the matching revision/selection is published by the caller.
     const mask = this.ctVolume?.mask;
     this.volumeRenderer?.setMask(undefined, mask?.ids ?? [], mask?.mode ?? 'off');
-    await this.reviewPlane.prepareGPUOverlays(sources, colors, signal, maskSources);
+    let planeReady = true;
+    try { await this.reviewPlane.prepareGPUOverlays(sources, colors, signal, maskSources); }
+    catch (reason) {
+      if (!(reason instanceof GPUCTMaskBudgetError) || !sources.overlays.length || !maskSources?.overlays.length) throw reason;
+      // Exact colored plane labels can be much larger than the presentation
+      // union. Keep the CT and volume mask, and use local full slices for color.
+      await this.reviewPlane.prepareGPUOverlays({ overlays: [] }, [], signal, maskSources);
+      planeReady = false;
+    }
     this.updateReviewData();
+    return planeReady;
   }
-  clearGPUCT() { this.volumeRenderer?.setVolume(undefined); this.reviewPlane.clearGPUCT(); this.updateReviewData(); this.requestRender(); }
+  clearGPUOverlays() {
+    this.volumeRenderer?.setMask(undefined, [], this.ctVolume?.mask?.mode ?? 'off');
+    this.reviewPlane.clearGPUOverlays(); this.updateReviewData(); this.requestRender();
+  }
+  setGPUOverlayColors(colors: readonly GPUOverlayColor[]) {
+    if (this.reviewPlane.setGPUOverlayColors(colors)) this.requestRender();
+  }
+  clearGPUCT() {
+    this.volumeRenderer?.setVolume(undefined); this.volumeRenderer?.releaseTargets();
+    this.reviewPlane.clearGPUCT(); this.updateReviewData(); this.requestRender();
+  }
   setCTVolume(state?: SceneCTVolumeState) {
     const before = this.volumePresentation, oldLayout = this.planeLayout, previous = this.ctVolume;
     this.ctVolume = state;
@@ -449,6 +468,9 @@ export class AnatomyScene {
       this.volumeRenderer.setSettings(state.settings);
       this.volumeRenderer.setMask(state.mask?.ready ? this.reviewPlane.gpuMaskBinding : undefined,
         state.mask?.ids ?? [], state.mask?.mode ?? 'off');
+    } else {
+      // A hidden layer keeps no screen-sized raymarch/peeling allocations.
+      this.volumeRenderer?.setVolume(undefined); this.volumeRenderer?.releaseTargets();
     }
     const after = this.volumePresentation;
     if (after && !before) {
@@ -676,10 +698,23 @@ export class AnatomyScene {
     this.height = this.radius * 2.05; this.view('oblique');
   }
 
+  /** Presentation updates reuse mesh objects, geometry and current camera. */
+  setStructureColors(structures: readonly Structure[]) {
+    let changed = false;
+    for (const structure of structures) {
+      const color = new THREE.Color(colorCss(structure.color));
+      for (const mesh of this.meshes.get(structure.id) ?? []) {
+        const material = mesh.material as SurfaceMaterial;
+        if (!material.color.equals(color)) { material.color.copy(color); changed = true; }
+      }
+    }
+    if (changed) this.requestRender();
+  }
+
   display(states: StructureDisplay, selected: string) {
     this.states = states; this.selected = selected;
     for (const [id, meshes] of this.meshes) for (const mesh of meshes) {
-      const state = states[id] || { visible: true, opacity: 1 };
+      const state = states[id] || { visible: true, opacity: .5 };
       const opacity=state.opacity*this.segmentationLayer.opacity;
       mesh.visible = this.segmentationLayer.visible && state.visible && opacity > 0;
       const material = mesh.material as SurfaceMaterial;

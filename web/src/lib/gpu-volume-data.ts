@@ -7,6 +7,7 @@ export interface RenderCTSession {
   readonly descriptor: VolumeDescriptor | null;
   readonly revisionBase: string;
   readonly networkFree?: boolean;
+  onOverlayChange?(listener: () => void): () => void;
   getGPUVolume(signal?: AbortSignal): Promise<GPUVolumeSource>;
   getGPUOverlays(selection: string | readonly string[] | null, compare?: boolean, signal?: AbortSignal): Promise<GPUOverlaySources>;
   requestSlice(plane: Plane, position: number, selection?: string | readonly string[] | null, compare?: boolean,
@@ -18,6 +19,22 @@ export interface GPUOverlaySourceProvider {
 
 /** One transfer is bounded; the worker retains the only full CPU volume. */
 export const GPU_VOLUME_SLAB_BYTES = 8 * 1024 ** 2;
+/** Presentation masks are pooled independently of exact review/measurement labels. */
+export const GPU_VOLUME_MASK_UNION_BYTES = 8 * 1024 ** 2;
+
+export interface VolumeDisplayUnion extends VolumeDescriptor {
+  quality: 'preview';
+  presentation_only: true;
+  volume_mask_union: true;
+  selected_structure_ids?: string[];
+}
+
+export function isVolumeDisplayUnion(descriptor: VolumeDescriptor): descriptor is VolumeDisplayUnion {
+  const candidate = descriptor as Partial<VolumeDisplayUnion>;
+  return candidate.quality === 'preview' && candidate.presentation_only === true && candidate.volume_mask_union === true
+    && descriptor.kind === 'mask' && descriptor.dtype === 'uint8' && descriptor.byte_length <= GPU_VOLUME_MASK_UNION_BYTES
+    && !!descriptor.reference_geometry && typeof descriptor.reference_image_id === 'string' && descriptor.reference_image_id.length > 0;
+}
 
 export interface GPUVolumeSource {
   readonly descriptor: VolumeDescriptor;

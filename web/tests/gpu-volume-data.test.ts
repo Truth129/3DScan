@@ -76,7 +76,7 @@ describe('resident CT GPU transport', () => {
     vi.stubGlobal('Worker', WorkerHarness);
     vi.stubGlobal('navigator', { deviceMemory: 8 });
     fetcher = vi.fn(async (url: string) => {
-      if (url.includes('/ct-volume')) return Response.json(descriptor(url.startsWith('/other') ? 'other-ct' : 'ct'));
+      if (/\/(?:ct|image)-volume/.test(url)) return Response.json(descriptor(url.startsWith('/other') ? 'other-ct' : 'ct'));
       if (url.includes('/mask-volume')) {
         const current = descriptor(url.startsWith('/revision2') ? 'mask-new' : 'mask', 'uint8', [2, 1, 2]);
         current.origin_ijk = [1, 1, 1];

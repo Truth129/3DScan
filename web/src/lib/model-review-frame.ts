@@ -25,6 +25,15 @@ export interface ModelReviewFrameRequest {
 }
 export interface ModelReviewFrame { context: string; frame: CTFrame; quality: 'preview' | 'full' }
 
+/** CT-only fallback frames remain navigable but cannot unlock target edits. */
+export function modelReviewTargetAvailable(targetId: string | undefined, selected: readonly string[], frame: CTFrame | undefined, gpuReady = false): boolean {
+  if (!targetId || !selected.includes(targetId)) return false;
+  if (gpuReady) return true;
+  if (!frame) return false;
+  // Older detail responses encode a single label in current without an IDs list.
+  return frame.overlays === undefined ? selected.length === 1 : frame.overlays.some(layer => layer.id === targetId);
+}
+
 /** Frame identity includes the immutable mask alias and the exact native plane. */
 export function modelReviewFrameKey(request: ModelReviewFrameRequest): string {
   return JSON.stringify([request.base, request.geometry.shape, request.geometry.affine_ras,

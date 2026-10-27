@@ -1,6 +1,6 @@
 import { validateDescriptor, type VolumeChunk, type VolumeDescriptor } from './ct-reslice';
-import { GPU_VOLUME_SLAB_BYTES, gpuVolumeSlabRange, type GPUOverlaySources, type GPUVolumeSource } from './gpu-volume-data';
-import { normalizeVolumeMaskMargin, volumeMaskSourceId } from './volume-mask';
+import { GPU_VOLUME_SLAB_BYTES, gpuVolumeSlabRange, isVolumeDisplayUnion, type GPUOverlaySources } from './gpu-volume-data';
+import { normalizeVolumeMaskMargin } from './volume-mask';
 
 const MAX_DESCRIPTORS = 256;
 const MAX_MASKS = 128;
@@ -8,19 +8,14 @@ type Slot = { signal: AbortSignal; start: () => void; reject: () => void };
 
 function aborted(): DOMException { return new DOMException('Volume mask preparation cancelled', 'AbortError'); }
 
-/** Identical immutable label bytes can have different authorized download URLs. */
-function storageIdentity(descriptor: VolumeDescriptor): string {
-  return JSON.stringify([descriptor.kind, descriptor.dtype, descriptor.quality, descriptor.shape,
-    descriptor.affine_ras, descriptor.slope, descriptor.intercept, descriptor.byte_length, descriptor.chunk_depth,
-    descriptor.chunks.map(chunk => [chunk.index, chunk.start_k, chunk.depth, chunk.byte_offset, chunk.byte_length])]);
-}
+interface UnionMetadata { current: VolumeDescriptor; sourceId: string }
 
 /**
  * Independent, bounded label transport. It never changes LocalCTSession's
  * review-overlay selection and never allocates a complete CT or mask volume.
  */
 export class VolumeMaskSources {
-  private metadata = new Map<string, VolumeDescriptor>();
+  private metadata = new Map<string, UnionMetadata>();
   private chunks = new Map<string, Uint8Array>();
   private chunkBytes = 0;
   private generation = 0;
@@ -28,6 +23,8 @@ export class VolumeMaskSources {
   private controllers = new Set<AbortController>();
   private activeRequests = 0;
   private slots: Slot[] = [];
+
+  constructor(private readonly requestDebounceMS = 150) {}
 
   get diagnostics() { return { metadataCount: this.metadata.size, chunkCacheBytes: this.chunkBytes,
     activeRequests: this.activeRequests, pendingRequests: this.slots.length }; }
@@ -38,32 +35,21 @@ export class VolumeMaskSources {
     if (typeof base !== 'string' || !base.trim()) throw new Error('A CT revision is required for the volume mask');
     if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)) throw new Error('Invalid volume mask selection');
     marginMM = normalizeVolumeMaskMargin(marginMM);
-    const selected = [...new Set(ids)];
-    // Validate before a request; never alias display padding to review labels.
-    const aliases = selected.map(id => volumeMaskSourceId(id, marginMM));
-    volumeMaskSourceId('', marginMM);
+    const selected = [...new Set(ids)].sort();
     if (selected.length > MAX_MASKS) throw new Error(`Choose up to ${MAX_MASKS} volume mask segments`);
+    if (!selected.length) return { overlays: [] };
     base = base.replace(/\/+$/, '');
     const selection = new AbortController(), abortSelection = () => selection.abort();
+    this.controllers.add(selection);
     signal.addEventListener('abort', abortSelection, { once: true });
     try {
-      const descriptors = await Promise.all(selected.map(id => this.descriptor(base, id, epoch, selection.signal, marginMM)));
+      const metadata = await this.descriptor(base, selected, epoch, selection.signal, marginMM);
       this.assertCurrent(epoch, [signal]);
-      const sources = new Map<string, GPUVolumeSource>();
-      return { overlays: selected.map((id, index) => {
-        const descriptor = descriptors[index];
-        let source = sources.get(descriptor.key);
-        if (!source) {
-          source = { descriptor: structuredClone(descriptor),
-            readSlab: (start, depth, readSignal) => this.slab(descriptor, start, depth, epoch, [signal, readSignal]) };
-          sources.set(descriptor.key, source);
-        } else if (storageIdentity(source.descriptor) !== storageIdentity(descriptor)) {
-          throw new Error('Volume mask descriptors disagree about immutable label storage');
-        }
-        return { id: aliases[index], current: source, parent: null };
-      }) };
+      const descriptor = metadata.current;
+      return { overlays: [{ id: metadata.sourceId, current: { descriptor: structuredClone(descriptor),
+        readSlab: (start, depth, readSignal) => this.slab(descriptor, start, depth, epoch, [signal, readSignal]) }, parent: null }] };
     } catch (error) { selection.abort(); throw error; }
-    finally { signal.removeEventListener('abort', abortSelection); }
+    finally { signal.removeEventListener('abort', abortSelection); this.controllers.delete(selection); }
   }
 
   clear(): void {
@@ -76,21 +62,37 @@ export class VolumeMaskSources {
   private assertCurrent(epoch: number, signals: readonly (AbortSignal | undefined)[]): void {
     if (this.disposed || epoch !== this.generation || signals.some(signal => signal?.aborted)) throw aborted();
   }
-  private async descriptor(base: string, id: string, epoch: number, signal: AbortSignal, marginMM: number): Promise<VolumeDescriptor> {
-    const key = JSON.stringify([base, volumeMaskSourceId(id, marginMM)]), previous = this.metadata.get(key);
+  private async descriptor(base: string, ids: string[], epoch: number, signal: AbortSignal, marginMM: number): Promise<UnionMetadata> {
+    const key = JSON.stringify([base, ids, marginMM]), previous = this.metadata.get(key);
     if (previous) {
       this.metadata.delete(key); this.metadata.set(key, previous);
       return previous;
     }
-    const query = new URLSearchParams({ structure_id: id, compare: 'false', quality: 'full' });
-    if (marginMM > 0) query.set('margin_mm', String(marginMM));
-    const descriptor = await this.request(`${base}/mask-volume?${query}`, 'no-store', epoch, [signal], async response => {
+    // Selection controls often change several times in one gesture. Abort the
+    // pending delay before asking the workstation to build another union.
+    if (this.requestDebounceMS > 0) await new Promise<void>((resolve, reject) => {
+      const finish = () => { signal.removeEventListener('abort', abort); resolve(); };
+      const timer = setTimeout(finish, this.requestDebounceMS);
+      const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(aborted()); };
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+    });
+    this.assertCurrent(epoch, [signal]);
+    const query = new URLSearchParams();
+    for (const id of ids) query.append('structure_ids', id);
+    query.set('margin_mm', String(marginMM));
+    const descriptor = await this.request(`${base}/volume-mask?${query}`, 'no-store', epoch, [signal], async response => {
       const data = await response.json();
       if (data?.schema_version !== 1 || !data.current) throw new Error('Unsupported volume mask descriptor');
       const current = validateDescriptor(data.current as VolumeDescriptor, 'mask');
-      if (current.quality !== 'full') throw new Error('Volume masking requires full-resolution labels');
+      if (!isVolumeDisplayUnion(current) || data.source_id !== `volume-mask-union:${current.key}`)
+        throw new Error('Volume masking requires a bounded presentation union');
+      const selected = current.selected_structure_ids;
+      if (!Array.isArray(selected) || selected.some(id => typeof id !== 'string') || new Set(selected).size !== selected.length
+          || JSON.stringify([...selected].sort()) !== JSON.stringify(ids))
+        throw new Error('Volume mask selection does not match the request');
       if ((current.display_margin_mm ?? 0) !== marginMM) throw new Error('Volume mask display margin does not match the request');
-      return structuredClone(current);
+      return { current: structuredClone(current), sourceId: data.source_id as string };
     });
     this.assertCurrent(epoch, [signal]);
     this.metadata.set(key, descriptor);

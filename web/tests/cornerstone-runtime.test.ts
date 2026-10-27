@@ -9,11 +9,12 @@ const fake = vi.hoisted(() => ({
   destroyGroup: vi.fn(),
   init: vi.fn(),
   observers: [] as Array<() => void>,
+  metadataProvider: undefined as undefined | ((type: string, id: string) => any),
 }));
 
 vi.mock('@cornerstonejs/core', () => ({
   init: fake.init, getShouldUseCPURendering: () => false,
-  imageLoader: { registerImageLoader: vi.fn() }, metaData: { addProvider: vi.fn() },
+  imageLoader: { registerImageLoader: vi.fn() }, metaData: { addProvider: vi.fn(provider => { fake.metadataProvider = provider; }) },
   cache: { setMaxCacheSize: vi.fn(), removeImageLoadObject: vi.fn() }, eventTarget: fake.eventTarget,
   utilities: { VoxelManager: { createImageVoxelManager: vi.fn(() => ({})) } },
   Enums: { ViewportType: { STACK: 'stack' }, VOILUTFunctionType: { LINEAR_EXACT: 'LINEAR_EXACT' },
@@ -22,7 +23,9 @@ vi.mock('@cornerstonejs/core', () => ({
     destroyed = false;
     viewport = {
       camera: { zoom: 1 }, range: undefined as undefined | { lower: number; upper: number }, element: undefined as any,
+      imageIds: [] as string[],
       setStack: async (_images: string[]) => {
+        this.viewport.imageIds = _images;
         await fake.defer;
         // Simulate the image's initial VOI event, which must not replace the
         // controls changed while this asynchronous image load was pending.
@@ -89,12 +92,44 @@ describe('Cornerstone viewport asynchronous ownership', () => {
     expect(cornerstoneFrameCacheStats().images).toBe(0);
   });
 
+  it('repaints color and opacity without changing its image actor, frame buffers or camera', async () => {
+    const viewer = await CornerstoneFrameViewport.create(element());
+    const original = { ...frame, overlays: [{ id: 'lung', current: frame.current, color: [230, 20, 40] as [number, number, number] }] };
+    await viewer.setFrame(original, 400, 40);
+    const viewport = fake.engines[0].viewport, imageId = viewport.imageIds[0];
+    viewer.setCamera({ zoom: 2 } as any);
+    const styled = { ...original, overlayOpacity: .4, overlays: [{ ...original.overlays[0], color: [20, 50, 230] as [number, number, number] }] };
+    expect(viewer.setPresentation(styled)).toBe(true);
+    expect(viewer.frame).toBe(styled); expect(viewport.imageIds).toEqual([imageId]);
+    expect(viewport.camera).toEqual({ zoom: 2 }); expect(cornerstoneFrameCacheStats().images).toBe(1);
+    expect(viewer.frame!.hu).toBe(original.hu); expect(viewer.frame!.current).toBe(original.current);
+    expect(viewer.setPresentation({ ...styled, hu: frame.hu.slice() })).toBe(false);
+    expect(viewer.setPresentation({ ...styled, overlays: [{ ...styled.overlays[0], current: frame.current.slice() }] })).toBe(false);
+    expect(viewer.setPresentation({ ...styled, reference_image_id: 'other-source' })).toBe(false);
+    viewer.dispose(); expect(cornerstoneFrameCacheStats().images).toBe(0);
+  });
+
   it('destroys a partially initialized engine when GPU allocation fails', async () => {
     fake.enableFailure = true;
     await expect(CornerstoneFrameViewport.create(element())).rejects.toThrow('allocation failure');
     expect(fake.engines[0].destroyed).toBe(true);
     expect(fake.destroyGroup).toHaveBeenCalledTimes(1);
     expect(cornerstoneFrameCacheStats().images).toBe(0);
+  });
+
+  it('passes supplied modality, units, photometric interpretation and source coordinates to Cornerstone', async () => {
+    const viewer = await CornerstoneFrameViewport.create(element());
+    await viewer.setFrame({ ...frame, reference_image_id: 'image-mr', modality: 'MR', scalar: { units: 'signal' },
+      source: { frame_of_reference_uid: '1.2.840.7' }, presentation: {
+        units: 'signal', background_value: 0, default_window: 800, default_level: 200,
+        photometric_interpretation: 'MONOCHROME1', preset_group: 'MR', preview_quantization_step: 0,
+      } }, 800, 200);
+    const imageId = fake.engines[0].viewport.imageIds[0], metadata = fake.metadataProvider!;
+    expect(metadata('generalSeriesModule', imageId)).toEqual({ modality: 'MR' });
+    expect(metadata('modalityLutModule', imageId)).toEqual({ rescaleSlope: 1, rescaleIntercept: 0, rescaleType: 'signal' });
+    expect(metadata('imagePixelModule', imageId).photometricInterpretation).toBe('MONOCHROME1');
+    expect(metadata('imagePlaneModule', imageId).frameOfReferenceUID).toBe('1.2.840.7');
+    viewer.dispose();
   });
 
   it('falls back only for its own lost context and removes the listener before disposal', async () => {

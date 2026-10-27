@@ -5,7 +5,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Projects/3DScan
-ExecStart=%h/Projects/3DScan/scripts/run.sh
+ExecStart=%h/Projects/3DScan/scripts/run-production.sh
 Environment=SCAN3D_HOST=127.0.0.1
 Environment=SCAN3D_PORT=9010
 Environment=SCAN3D_DEVICE=gpu

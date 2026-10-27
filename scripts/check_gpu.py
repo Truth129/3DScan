@@ -3,7 +3,9 @@ import argparse
 from datetime import datetime, timezone
 from importlib import metadata
 import json
+import os
 from pathlib import Path
+import platform
 import sys
 import time
 
@@ -11,10 +13,12 @@ import time
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--output", type=Path, default=Path(__file__).resolve().parents[1] / ".runtime/gpu-proof.json")
+    parser.add_argument("--output", type=Path, default=Path(os.environ.get(
+        "SCAN3D_GPU_PROOF", str(Path(__file__).resolve().parents[1] / ".runtime/gpu-proof.json"))))
     args = parser.parse_args()
     result = {"gpu_ready": False, "inference_verified": False, "model_inference_proven": False,
-              "checked_at": datetime.now(timezone.utc).isoformat(), "checks": {}, "errors": []}
+              "checked_at": datetime.now(timezone.utc).isoformat(), "python_version": platform.python_version(),
+              "checks": {}, "errors": []}
     result["checks"]["kfd"] = Path("/dev/kfd").exists()
     result["checks"]["render_nodes"] = [str(p) for p in Path("/dev/dri").glob("renderD*")]
     try:
@@ -22,6 +26,13 @@ def main():
         result["checks"].update(torch_version=torch.__version__, torch_distribution_version=metadata.version("torch"),
                                 hip_version=torch.version.hip,
                                 gpu_available=torch.cuda.is_available())
+        runtime_versions = {"torch": metadata.version("torch")}
+        for package in ("rocm", "rocm-sdk-core", "rocm-sdk-libraries", "rocm-sdk-device-gfx1201"):
+            try:
+                runtime_versions[package] = metadata.version(package)
+            except metadata.PackageNotFoundError:
+                pass
+        result["checks"]["runtime_versions"] = runtime_versions
         if not torch.version.hip:
             raise RuntimeError("This environment does not contain a ROCm PyTorch build.")
         if not torch.cuda.is_available():

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Geometry } from '../src/types';
 import type { CTFrame } from '../src/lib/ct-renderer';
 import { nativeSliceMetadata, type VolumeDescriptor } from '../src/lib/ct-reslice';
-import { ModelReviewFrames, modelReviewFrameKey, modelReviewFrameFamilyKey, validateModelReviewFrame, type ModelReviewFrameRequest } from '../src/lib/model-review-frame';
+import { ModelReviewFrames, modelReviewFrameKey, modelReviewFrameFamilyKey, modelReviewTargetAvailable, validateModelReviewFrame, type ModelReviewFrameRequest } from '../src/lib/model-review-frame';
 import { LocalCTSupersededError, LocalCTUnsupportedError } from '../src/lib/ct-volume';
 
 const geometry: Geometry = {
@@ -27,6 +27,17 @@ function pending<T>() {
 }
 
 describe('shared 3D review CT frames', () => {
+  it('keeps full CT-only and missing-target frames navigable without permitting review edits', () => {
+    const value = frame(request());
+    expect(modelReviewTargetAvailable('liver', ['liver'], { ...value, overlays: [] })).toBe(false);
+    expect(modelReviewTargetAvailable('liver', ['liver'], undefined)).toBe(false);
+    expect(modelReviewTargetAvailable('liver', ['liver'], { ...value, overlays: [{ id: 'other', current: value.current }] })).toBe(false);
+    expect(modelReviewTargetAvailable('liver', ['liver'], { ...value, overlays: [{ id: 'liver', current: value.current }] })).toBe(true);
+    expect(modelReviewTargetAvailable('liver', ['liver'], value)).toBe(true);
+    expect(modelReviewTargetAvailable('liver', ['liver', 'other'], value)).toBe(false);
+    expect(modelReviewTargetAvailable('liver', ['liver'], undefined, true)).toBe(true);
+    expect(modelReviewTargetAvailable('liver', ['other'], undefined, true)).toBe(false);
+  });
   it('uses the existing full CT worker through a separate viewer channel', async () => {
     const input = request(), value = frame(input), detail = vi.fn();
     const session = { requestSlice: vi.fn(async () => value) };

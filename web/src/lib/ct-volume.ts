@@ -1,8 +1,10 @@
 import type { LocalSlice, VolumeChunk, VolumeDescriptor } from './ct-reslice';
+import { imagePresentation, type ImageContext } from './image-domain';
 import { validateDescriptor } from './ct-reslice';
 import { gpuVolumeSlabRange } from './gpu-volume-data';
 import type { GPUOverlaySources, GPUVolumeSource } from './gpu-volume-data';
 import type { Plane, Point } from '../types';
+import { MAX_CT_FRAME_BYTES, MAX_FULL_FRAME_PIXELS } from './ct-frame-budget';
 
 export type { CTOverlay, LocalSlice, VolumeDescriptor } from './ct-reslice';
 export type CTSelection = string | readonly string[] | null;
@@ -17,6 +19,8 @@ export interface LocalCTProgress {
 export interface LocalCTOptions {
   onProgress?: (progress: LocalCTProgress) => void;
   onError?: (error: Error) => void;
+  /** Mask failures do not invalidate or release the resident source image. */
+  onOverlayError?: (error: LocalCTOverlayError | null) => void;
   /** Primarily useful for a constrained device or a deterministic browser fixture. */
   maxCTBytes?: number;
   maxOverlayBytes?: number;
@@ -28,6 +32,9 @@ export class LocalCTUnsupportedError extends Error {
 }
 export class LocalCTSupersededError extends Error {
   constructor() { super('Superseded local CT request'); this.name = 'LocalCTSupersededError'; }
+}
+export class LocalCTOverlayError extends Error {
+  constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'LocalCTOverlayError'; }
 }
 export function isLocalCTUnsupported(error: unknown): error is LocalCTUnsupportedError {
   return error instanceof LocalCTUnsupportedError;
@@ -43,6 +50,7 @@ interface SliceRequest {
   generation: number;
   overlay: number;
   consumer: 'ct' | 'model-review';
+  includeOverlays: boolean;
   native?: { axis: 0 | 1 | 2; index: number };
   resolve: (slice: LocalSlice) => void;
   reject: (error: Error) => void;
@@ -78,6 +86,7 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 export class LocalCTSession {
   ready: Promise<void>;
   descriptor: VolumeDescriptor | null = null;
+  overlayError: LocalCTOverlayError | null = null;
   /** Bind consumers to the requested immutable mask revision before using a frame. */
   get revisionBase(): string { return this.base; }
   private readonly worker: Worker;
@@ -97,6 +106,8 @@ export class LocalCTSession {
   private ctPromise: Promise<void> | null = null;
   private overlayPromise: Promise<void> = Promise.resolve();
   private requestedOverlay = '';
+  private overlayReady = false;
+  private overlayListeners = new Set<() => void>();
   private maskDescriptors = new Map<string, { current: VolumeDescriptor; parent: VolumeDescriptor | null; compared: boolean }>();
   private activeDownloads = 0;
   private downloadWaiters: (() => void)[] = [];
@@ -162,6 +173,7 @@ export class LocalCTSession {
     this.overlayController = new AbortController();
     const controller = this.overlayController;
     const version = ++this.overlayVersion;
+    this.overlayReady = false;
     this.invalidateSlices();
     this.overlayPromise = (async () => {
       await this.descriptorPromise;
@@ -196,7 +208,7 @@ export class LocalCTSession {
       const descriptors = [...unique.values()];
       const budget = this.options.maxOverlayBytes ?? (this.quality === 'full' ? 192 : 64) * 1024 ** 2;
       const totalBytes = descriptors.reduce((sum, entry) => sum + entry.byte_length, 0);
-      if (totalBytes > budget) throw new LocalCTUnsupportedError('The selected overlays exceed this device’s local mask memory budget; server previews remain available.');
+      if (totalBytes > budget) throw new Error(`The selected overlays need ${Math.ceil(totalBytes / 1024 ** 2)} MiB, above the ${Math.floor(budget / 1024 ** 2)} MiB local mask budget.`);
       this.assertOverlay(version, controller);
       const resident = await this.rpc({ type: 'overlay', ctVersion, overlayVersion: version, overlays: entries,
         maxOverlayBytes: budget }) as OverlayResponse;
@@ -217,14 +229,41 @@ export class LocalCTSession {
         loadedBytes += chunk.byte_length; loadedChunks++; report();
       });
       this.assertOverlay(version, controller);
-    })().catch(error => {
+      this.overlayError = null;
+      this.overlayReady = true;
+      this.options.onOverlayError?.(null);
+      this.notifyOverlayChange();
+    })().catch(async error => {
       if (controller.signal.aborted || this.disposed || version !== this.overlayVersion) throw new LocalCTSupersededError();
       controller.abort();
-      this.requestedOverlay = '';
-      throw error;
+      // A partially loaded or formerly selected mask must never appear under
+      // the new selection. Release its allocations before allowing CT-only
+      // frames. Preserve this failed selection key to avoid retrying the same
+      // oversized download on every slider movement.
+      await this.rpc({ type: 'overlay', ctVersion: this.ctVersion, overlayVersion: version, current: null, parent: null });
+      if (this.disposed || version !== this.overlayVersion) throw new LocalCTSupersededError();
+      const navigation = this.quality === 'full' ? 'Full-resolution source' : 'Source image';
+      const reason = new LocalCTOverlayError(`Segmentation overlays are hidden. ${navigation} navigation remains available. ${error instanceof Error ? error.message : String(error)} Select fewer overlays or retry.`, { cause: error });
+      this.overlayError = reason;
+      this.options.onOverlayError?.(reason);
+      this.notifyOverlayChange();
+      throw reason;
     });
     this.overlayPromise.catch(() => {});
     return this.overlayPromise;
+  }
+
+  /** Explicit user retry; ordinary scrolling reuses the clear CT-only state. */
+  retryOverlay(structure: CTSelection, compare = false): Promise<void> {
+    this.requestedOverlay = '';
+    return this.setOverlay(structure, compare);
+  }
+
+  /** Refresh frames when selected labels finish, without replacing the source
+   * worker or resetting the consumer's camera. */
+  onOverlayChange(listener: () => void): () => void {
+    this.overlayListeners.add(listener);
+    return () => this.overlayListeners.delete(listener);
   }
 
   async requestSlice(plane: Plane, position: number, structure?: CTSelection, compare = false, native?: { axis: 0 | 1 | 2; index: number }, consumer: 'ct' | 'model-review' = 'ct'): Promise<LocalSlice> {
@@ -232,19 +271,19 @@ export class LocalCTSession {
     if (consumer !== 'ct' && consumer !== 'model-review') throw new Error('Unsupported local CT slice consumer');
     const baseVersion = this.baseVersion;
     const requestedOverlay = structure === undefined ? null : JSON.stringify([this.base, selectedIds(structure), compare]);
-    if (structure !== undefined) await this.setOverlay(structure, compare);
-    if (baseVersion !== this.baseVersion || (requestedOverlay !== null && requestedOverlay !== this.requestedOverlay)) throw new LocalCTSupersededError();
+    if (structure !== undefined) void this.setOverlay(structure, compare).catch(() => {});
     const generation = this.sliceGeneration, overlay = this.overlayVersion;
     await this.ready;
-    await this.overlayPromise;
-    if (this.disposed || generation !== this.sliceGeneration || overlay !== this.overlayVersion) throw new LocalCTSupersededError();
+    if (this.disposed || baseVersion !== this.baseVersion || generation !== this.sliceGeneration || overlay !== this.overlayVersion
+        || (requestedOverlay !== null && requestedOverlay !== this.requestedOverlay)) throw new LocalCTSupersededError();
+    const includeOverlays = this.overlayReady;
     return new Promise((resolve, reject) => {
       // A model-plane view can request the same anatomical plane as the CT
       // rail. Each has its own latest-only slot; the two bounded consumers
       // share one worker/volume without superseding each other's frames.
       const key = `${consumer}:${plane}`;
       this.slices.get(key)?.reject(new LocalCTSupersededError());
-      this.slices.set(key, { plane, position, generation, overlay, native, consumer, resolve, reject });
+      this.slices.set(key, { plane, position, generation, overlay, native, consumer, includeOverlays, resolve, reject });
       void this.drainSlices();
     });
   }
@@ -337,12 +376,13 @@ export class LocalCTSession {
     this.worker.terminate();
     this.descriptor = null;
     this.maskDescriptors.clear();
+    this.overlayListeners.clear();
   }
 
   private async initialize(base: string, baseVersion: number): Promise<void> {
     const signal = this.descriptorController.signal;
     let descriptor: VolumeDescriptor;
-    try { descriptor = validateDescriptor(await this.json<VolumeDescriptor>(`${base}/ct-volume?quality=${this.quality}`, signal), 'ct'); }
+    try { descriptor = validateDescriptor(await this.json<VolumeDescriptor>(`${base}/image-volume?quality=${this.quality}`, signal), 'ct'); }
     catch (error) {
       if (signal.aborted || this.disposed || baseVersion !== this.baseVersion) throw new LocalCTSupersededError();
       throw error;
@@ -456,7 +496,8 @@ export class LocalCTSession {
         this.slices.delete(plane);
         try {
           const result = await this.rpc({ type: 'slice', ctVersion: this.ctVersion, overlayVersion: request.overlay,
-            plane: request.plane, position: request.position, native: request.native, consumer: request.consumer }) as LocalSlice;
+            plane: request.plane, position: request.position, native: request.native, consumer: request.consumer,
+            includeOverlays: request.includeOverlays }) as LocalSlice;
           // A completed frame is useful during continuous dragging. Only
           // unstarted requests are coalesced; dropping every in-flight result
           // whenever another position is queued would starve the display.
@@ -491,10 +532,15 @@ export class LocalCTSession {
     this.overlayController.abort(); this.overlayController = new AbortController();
     this.overlayVersion++; this.requestedOverlay = '';
     this.overlayPromise = Promise.resolve();
+    this.overlayError = null;
+    this.overlayReady = false;
     this.maskDescriptors.clear();
   }
   private assertOverlay(version: number, controller: AbortController): void {
     if (this.disposed || controller.signal.aborted || version !== this.overlayVersion) throw new LocalCTSupersededError();
+  }
+  private notifyOverlayChange(): void {
+    for (const listener of this.overlayListeners) listener();
   }
   private ensureActive(): void {
     if (this.disposed) throw new LocalCTSupersededError();
@@ -523,12 +569,12 @@ export async function fetchCTDetail(base: string, plane: Plane, position: number
   if (!response.ok) throw new Error(`CT detail request failed (${response.status})`);
   const header = response.headers.get('X-CT-Frame');
   if (!header) throw new Error('CT detail metadata is missing');
-  const frame = JSON.parse(header) as { meta: LocalSlice['meta']; dtype: string; pixels: number; current_offset: number | null;
+  const frame = JSON.parse(header) as ImageContext & { meta: LocalSlice['meta']; dtype: string; pixels: number; current_offset: number | null;
     parent_offset: number | null; hu_encoding?: 'byte-shuffle';
     overlays?: { id: string; current_offset: number; parent_offset: number | null }[] };
   const pixels = frame.meta?.width * frame.meta?.height;
   if (frame.dtype !== 'float32' || !Number.isSafeInteger(frame.meta?.width) || !Number.isSafeInteger(frame.meta?.height)
-      || frame.meta.width < 1 || frame.meta.height < 1 || !Number.isSafeInteger(pixels) || pixels < 1 || pixels > 768 ** 2
+      || frame.meta.width < 1 || frame.meta.height < 1 || !Number.isSafeInteger(pixels) || pixels < 1 || pixels > MAX_FULL_FRAME_PIXELS
       || (frame.hu_encoding !== undefined && frame.hu_encoding !== 'byte-shuffle')
       || frame.pixels !== pixels) throw new Error('Invalid CT detail layout');
   const invalid = () => { throw new Error('Invalid CT detail layout'); };
@@ -554,6 +600,7 @@ export async function fetchCTDetail(base: string, plane: Plane, position: number
         || (frame.parent_offset !== null && (frame.current_offset === null || frame.parent_offset !== pixels * 5))) invalid();
     expectedBytes = frame.parent_offset !== null ? pixels * 6 : frame.current_offset !== null ? pixels * 5 : pixels * 4;
   }
+  if (expectedBytes > MAX_CT_FRAME_BYTES) throw new Error('These CT overlays exceed the 256 MiB frame limit. Select fewer structures.');
   const bytes = await response.arrayBuffer();
   if (bytes.byteLength !== expectedBytes) throw new Error('CT detail has an unexpected byte count');
   const shuffled = frame.hu_encoding === 'byte-shuffle';
@@ -575,6 +622,10 @@ export async function fetchCTDetail(base: string, plane: Plane, position: number
     ...(layer.parent_offset !== null ? { parent: label(layer.parent_offset) } : {}) }));
   const result: LocalSlice = { meta: frame.meta, hu,
     current: overlays?.[0]?.current ?? (frame.current_offset === null ? new Uint8Array(pixels) : label(frame.current_offset)) };
+  for (const key of ['reference_image_id', 'modality', 'scalar', 'presentation', 'source'] as const) {
+    if (frame[key] !== undefined) Object.assign(result, { [key]: frame[key] });
+  }
+  imagePresentation(result);
   if (overlays) {
     result.overlays = overlays;
     if (overlays[0]?.parent) result.parent = overlays[0].parent;

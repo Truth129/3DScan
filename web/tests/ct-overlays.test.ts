@@ -28,3 +28,17 @@ describe('CT overlay presentation', () => {
     expect(ctFrameBytes(input)).toBe(16 + 4 + 4 + 4);
   });
 });
+
+
+describe('2D opacity presentation isolation', () => {
+  it('applies an explicit 2D opacity without modifying data or legacy 3D frames', () => {
+    const input = frame();
+    const styled = colorCTOverlays(input, [{ id: 'total:liver', color: '#cc6619' }], .4);
+    expect(styled.overlayOpacity).toBe(.4); expect(styled.hu).toBe(input.hu);
+    expect(styled.overlays![0].current).toBe(input.overlays![0].current);
+    expect(input.overlayOpacity).toBeUndefined();
+    expect(colorCTOverlays(input, [{ id: 'total:liver', color: '#cc6619' }]).overlayOpacity).toBeUndefined();
+    expect(colorCTOverlays(styled, [{ id: 'total:liver', color: '#cc6619' }], .4)).toBe(styled);
+    expect(colorCTOverlays(input, undefined, 0).overlayOpacity).toBe(0);
+  });
+});

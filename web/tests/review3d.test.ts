@@ -41,11 +41,11 @@ describe('3D correction geometry and isolated targets', () => {
       expect(intersectReviewPlane(rayAt(frame, frame.meta.width + 5, 4), frame.meta)).toBeUndefined();
     }
   });
-  it('accepts actual anisotropic full-native display rasters capped at 768 pixels', () => {
+  it('accepts exact anisotropic full-native rasters without reducing their sample grid', () => {
     const realGrid: Geometry = { shape: [512, 512, 729], affine_ras: [[-.9765625, 0, 0, 240], [0, .9765625, 0, -250], [0, 0, 1.25, -700], [0, 0, 0, 1]],
       spacing: [.9765625, .9765625, 1.25], center_ras: [0, 0, -245], bounds_ras: [[-260, -250, -700], [240, 250, 211.25]] };
     const frame = frameFor(realGrid, 1, 280);
-    expect(frame.meta.width).not.toBe(realGrid.shape[0]); expect(frame.meta.height).toBe(768);
+    expect([frame.meta.width, frame.meta.height]).toEqual([512, 729]);
     expect(() => validateReviewPlane(frame, realGrid)).not.toThrow();
     const moved = { ...frame, meta: { ...frame.meta, native: { axis: 1 as const, index: 281 } } };
     expect(() => validateReviewPlane(moved, realGrid)).toThrow('reference grid');

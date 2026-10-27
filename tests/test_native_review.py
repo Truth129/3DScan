@@ -75,3 +75,36 @@ def test_native_http_geometry_and_frame_cache_are_isolated(tmp_path):
             assert meta.json()["native"] == {"axis": axis, "index": 20}
         for query in ({"native_axis": 0}, {"native_index": 2}, {"native_axis": 4, "native_index": 2}):
             assert client.get(prefix + "/review-frame", params=query).status_code == 400
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_native_frame_matches_original_voxels_without_interpolation(source, axis):
+    path, values = source
+    index = values.shape[axis] // 2
+    result = review_volume.review_frame(path, None, "axial", 0, native_axis=axis, native_index=index)
+    meta = result["frame"]["meta"]
+    expected = np.take(values, index, axis=axis).T
+    assert (meta["height"], meta["width"]) == expected.shape
+    raw = gzip.decompress(result["body"])
+    hu = np.frombuffer(raw, np.uint8).reshape(4, -1).T.copy().view("<f4").reshape(expected.shape)
+    np.testing.assert_array_equal(hu, expected)
+    basis = np.asarray(meta["pixel_to_ras"])[:3, :2]
+    expected_spacing = np.linalg.norm(nib.load(path).affine[:3, :3], axis=0)
+    np.testing.assert_allclose(np.linalg.norm(basis, axis=0), np.delete(expected_spacing, axis))
+
+
+def test_native_and_anatomical_long_scans_have_no_768_pixel_cap():
+    affine = np.diag([1.26953125, -1.26953125, 1., 1.])
+    shape = (512, 512, 967)
+    native, _ = imaging.slice_geometry(shape, affine, "coronal", 0, native_axis=1, native_index=200)
+    assert (native["width"], native["height"]) == (512, 967)
+    anatomical, _ = imaging.slice_geometry(shape, affine, "coronal", -200)
+    assert (anatomical["width"], anatomical["height"]) == (650, 967)
+    assert anatomical["extent_mm"] == [650., 967.]
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_unbounded_full_frame_is_rejected_before_sampling(native):
+    kwargs = {"native_axis": 2, "native_index": 0} if native else {}
+    with pytest.raises(ValueError, match="frame limit"):
+        imaging.slice_geometry((4096, 4096, 2), np.eye(4), "axial", 0, **kwargs)

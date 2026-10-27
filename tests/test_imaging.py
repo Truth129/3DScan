@@ -7,6 +7,7 @@ import shutil
 from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from itertools import product
 import zipfile
 
 import nibabel as nib
@@ -180,8 +181,42 @@ def test_fast_reslice_matches_full_patient_coordinate_sampling(fixed):
         np.testing.assert_allclose(actual, expected, rtol=0, atol=0.0005)
         expected_mask = ndi.map_coordinates(mask, coordinates, order=0,
                                             mode="constant", cval=0, prefilter=False)
-        np.testing.assert_array_equal(
-            imaging._reslice(mask, mapping, rows.shape, order=0, cval=0), expected_mask)
+        actual_mask = imaging._reslice(mask, mapping, rows.shape, order=0, cval=0)
+        # affine_transform evaluates the affine in C; the reference grid is
+        # evaluated by NumPy first. Fused arithmetic can put an exact physical
+        # half-voxel on opposite sides of the tie (SciPy 1.16 builds do this).
+        # Require exact agreement everywhere else. At a few-ULP tie, accept
+        # only the value of an equally nearest physical voxel.
+        for row, column in np.argwhere(actual_mask != expected_mask):
+            point = coordinates[:, row, column]
+            assert np.all((point >= 0) & (point <= np.asarray(mask.shape) - 1)), point
+            lower = np.floor(point).astype(int)
+            tolerance = 4 * np.spacing(np.maximum(1, np.abs(point)))
+            ties = np.abs(point - (lower + .5)) <= tolerance
+            assert np.any(ties), {"pixel": [row, column], "voxel": point}
+            neighbours = [
+                (int(index), int(index + 1)) if tie else (int(np.floor(value + .5)),)
+                for index, value, tie in zip(lower, point, ties)
+            ]
+            allowed = {bool(mask[index]) for index in product(*neighbours)}
+            assert bool(actual_mask[row, column]) in allowed
+
+
+@pytest.mark.parametrize("axis", [0, 1, 2])
+def test_native_slab_half_voxel_selects_upper_slice(axis):
+    """The explicitly fixed native axis retains its deterministic tie rule."""
+    mask = np.zeros((8, 8, 8), dtype=bool)
+    indices = [slice(None)] * 3
+    indices[axis] = slice(5, None)
+    mask[tuple(indices)] = True
+    mapping = np.eye(4)
+    mapping[:3, :2] = 0
+    keep = [index for index in range(3) if index != axis]
+    mapping[keep[0], 0] = 1
+    mapping[keep[1], 1] = 1
+    mapping[axis, 3] = 4.5
+    np.testing.assert_array_equal(
+        imaging._reslice(mask, mapping, (3, 4), order=0, cval=0), np.ones((3, 4), dtype=bool))
 
 
 def test_misaligned_or_nonbinary_masks_rejected(fixture, tmp_path):
@@ -411,6 +446,40 @@ def test_dicom_duplicate_positions_are_not_silently_merged(tmp_path):
     record = dicom.index_dicom(tmp_path)[0]
     assert any("Repeated slice positions" in message for message in record["warnings"])
     with pytest.raises(ValueError, match="Repeated slice positions"):
+        dicom.convert_series(record["files"], tmp_path / "converted")
+
+
+@pytest.mark.parametrize("missing_tag", ["ImagePositionPatient", "ImageOrientationPatient", "PixelSpacing", "Rows", "Columns"])
+def test_dicom_missing_required_geometry_is_reported_before_conversion(tmp_path, missing_tag):
+    series, frame = generate_uid(), generate_uid()
+    for index in range(2):
+        path = tmp_path / f"{index}.dcm"
+        write_dicom(path, series, frame, index)
+    path = tmp_path / "1.dcm"
+    incomplete = pydicom.dcmread(path)
+    del incomplete[missing_tag]
+    incomplete.save_as(path, enforce_file_format=True)
+
+    record = dicom.index_dicom(tmp_path)[0]
+    assert "Missing patient position, orientation or pixel geometry" in record["warnings"]
+    with pytest.raises(ValueError, match="Missing patient position, orientation or pixel geometry"):
+        dicom.convert_series(record["files"], tmp_path / "converted")
+
+
+def test_dicom_missing_coordinate_frame_has_an_explicit_diagnostic(tmp_path):
+    series, frame = generate_uid(), generate_uid()
+    for index in range(2):
+        path = tmp_path / f"{index}.dcm"
+        write_dicom(path, series, frame, index)
+        incomplete = pydicom.dcmread(path)
+        del incomplete["FrameOfReferenceUID"]
+        incomplete.save_as(path, enforce_file_format=True)
+
+    record = dicom.index_dicom(tmp_path)[0]
+    assert record["slice_count"] == 2  # Missing NumberOfFrames defaults to one.
+    assert record["study_uid"] is None and record["frame_of_reference_uid"] is None
+    assert "Series has missing or multiple patient coordinate frames" in record["warnings"]
+    with pytest.raises(ValueError, match="missing or multiple patient coordinate frames"):
         dicom.convert_series(record["files"], tmp_path / "converted")
 
 
@@ -654,6 +723,8 @@ def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixtur
     monkeypatch.setenv("SCAN3D_DEVICE", "gpu")
 
     class Worker:
+        pid = None  # Completed in-process fixture; no native worker to sample.
+
         def __init__(self, command, **_):
             commands.append(command)
             self.returncode = 0

@@ -1,8 +1,19 @@
 # 3DScan
 
-Local chest–abdomen CT reconstruction with TotalSegmentator, linked CT review,
+An AI-assisted case-analysis workbench for radiologists, designed to complement
+established viewers such as OsiriX. Easy access to segmentation and other
+analysis tools, reproducible review, and a high-quality, responsive viewer are
+core product goals.
+
+Local CT and static MRI reconstruction with TotalSegmentator, linked image review,
 in-browser nnInteractive corrections, revisioned mask refinement, optional Slicer
 exchange, and offline 3D HTML export.
+
+The [image foundation](docs/EXPANSION_FOUNDATION.md) separates immutable source
+images, segmentation revisions and modality policies. The expansion branch adds
+classic and single-instance static Enhanced MRI volumes; 2D and cine modalities
+need their own adapters. The
+live service remains on its frozen, qualified CT release during development.
 
 Patient data, model weights, environments and generated artifacts are excluded
 from version control. The synthetic demo is labelled throughout and does not run
@@ -10,13 +21,36 @@ or validate TotalSegmentator.
 
 ## Run
 
-Install the native prerequisites on CachyOS:
+The configured workstation now runs **Python 3.14.8, PyTorch 2.14.0 and ROCm
+Core SDK 10.1.0** through `scan3d.service`. Open **http://127.0.0.1:9010** or
+the existing approved private Tailscale address. The service uses the original
+cases, weights and license configuration. See [production operation and
+rollback](docs/PRODUCTION_RUNTIME.md).
+
+Normal workstation commands select that same runtime:
+
+```bash
+source scripts/production-env.sh
+python -m scan3d doctor
+systemctl --user status scan3d.service
+journalctl --user -u scan3d.service -f
+```
+
+For a foreground server, stop the user service first, then run
+`scripts/run-production.sh`. Both use `data/`; do not run two workers against
+that directory.
+
+### Fresh checkout and retained legacy environment
+
+The original bootstrap remains a complete Python 3.12 / ROCm 7.2.4 setup and
+the runtime rollback path. On a fresh checkout, install its native prerequisites
+on CachyOS:
 
 ```bash
 sudo pacman -S --needed rocm-hip-runtime rocminfo rocm-ml-libraries hipsparselt rocm-smi-lib base-devel cmake pkgconf openjpeg2 zlib
 ```
 
-Provision the isolated environment and frontend:
+Provision that retained environment and the frontend:
 
 ```bash
 scripts/bootstrap.sh full
@@ -32,6 +66,12 @@ Open **http://127.0.0.1:9010**. The production build and API share one origin.
 See [setup and GPU diagnostics](docs/SETUP.md) for native ROCm details, dependency
 pins, allowed hostnames and private access. `scripts/bootstrap.sh core` installs
 basic CT review/demo tools without the inference packages.
+To provision the promoted Python 3.14 family on another checkout, first provide
+the project-local uv and a Python 3.14 interpreter, then use the separate
+hash-locked bootstrap described in [setup](docs/SETUP.md). The current
+workstation is already provisioned. `scripts/bootstrap-rocm10.sh` does not
+install uv or the interpreter itself. The [original experiment](docs/ROCM10_PY314.md)
+records how this runtime was qualified before promotion.
 Full setup builds a pinned native dcm2niix in `.tools/bin/` with JPEG 2000 and
 JPEG-LS decoding. Some AUR builds omit these decoders and cannot import compressed
 CT scans. To upgrade an existing checkout's converter, run
@@ -46,7 +86,7 @@ The full environment pins `nnInteractive==2.6.0` and
 official model separately on the workstation:
 
 ```bash
-source scripts/env.sh
+source scripts/production-env.sh
 python scripts/download_interactive_model.py
 ```
 
@@ -108,7 +148,8 @@ explains its noncommercial license terms.
    **Included structures** previews the selected task's outputs. Search preserves
    your current task and options until you explicitly select another task.
    The catalog uses all 39 current CT tasks in the installed 2.18.0 engine;
-   MRI, legacy and internal test tasks are excluded from this CT workflow.
+   Tasks are scoped to the selected image modality; MRI uses `total_mr` by default.
+   Legacy and internal test tasks are excluded.
    Optional settings include robust organ cropping (`-rc`), initial body cropping
    (`-bs`) and removing small disconnected components below 200 mm³ (`-rmb`).
    Task defaults and unsupported options are explained in the panel. All nonempty
@@ -273,7 +314,7 @@ and a full Cornerstone volume/MPR migration remain later stages. See
 ## Local scripts and recipes
 
 ```bash
-source scripts/env.sh
+source scripts/production-env.sh
 python -m scan3d doctor
 python -m scan3d import /absolute/path/to/dicom.zip --label "Teaching case"
 python -m scan3d process CASE_ID --series SERIES_UID --profile chest_abdomen --phase venous
@@ -360,7 +401,7 @@ to 16 for VTK's available native CPU backend. Inference and browser drawing use
 the GPU; exact voxel counting remains on the CPU after an end-to-end benchmark.
 
 ```bash
-source scripts/env.sh
+source scripts/production-env.sh
 python -m pytest -q
 cd web
 npm run typecheck
@@ -375,3 +416,5 @@ inference and anatomical review are reported separately
 from synthetic workflow tests. The implementation contract is in
 [docs/CONTRACT.md](docs/CONTRACT.md); current evidence and remaining validation
 limits are in [docs/VALIDATION.md](docs/VALIDATION.md).
+The system architecture and scan/correction flowcharts are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

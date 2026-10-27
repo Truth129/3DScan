@@ -117,6 +117,8 @@ export class Review3DPlane {
   prepareGPUCT(source: GPUVolumeSource, signal?: AbortSignal) { return this.gpuVolume.prepare(source, signal); }
   prepareGPUOverlays(sources: GPUOverlaySources, colors: readonly GPUOverlayColor[], signal?: AbortSignal,
                     maskSources?: GPUOverlaySources) { return this.gpuVolume.prepareOverlays(sources, colors, signal, maskSources); }
+  setGPUOverlayColors(colors: readonly GPUOverlayColor[]) { return this.gpuVolume.setOverlayColors(colors); }
+  clearGPUOverlays() { this.gpuVolume.clearOverlays(); }
   clearGPUCT() { this.gpuVolume.clear(); if (this.gpuActive) { this.mesh.visible = false; this.mesh.material = this.cpuMaterial; this.currentMeta = undefined; this.currentFrame = undefined; } }
   /** Release GL-generation callbacks while lost; retain CPU data for restoration. */
   releaseContextResources() {

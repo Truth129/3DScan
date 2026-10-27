@@ -1,6 +1,6 @@
 """Bounded, self-contained exports of explicitly selected rendering layers.
 
-CT and labels use the existing lossless native review slabs. Export preparation
+Scalar images and labels use the existing lossless native review slabs. Export preparation
 touches only derivative caches; original scans, masks and revision records stay
 immutable. Base64 is streamed from files rather than assembling a huge HTML
 string or decoding an entire set of masks at once.
@@ -17,6 +17,8 @@ import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
+
+from .domain import Modality, PhotometricInterpretation
 
 
 MIB = 1024 ** 2
@@ -39,7 +41,7 @@ SUPPORTED_VOLUME_PRESETS = frozenset({
     "CT-MIP", "CT-Muscle", "CT-Pulmonary-Arteries", "CT-Soft-Tissue", "CT-Air", "CT-X-ray",
     "MR-Angio", "MR-Default", "MR-MIP", "MR-T2-Brain", "DTI-FA-Brain", "US-Fetal",
     "uCT-Bone-8bit", "uCT-Bone-16bit", "uCT-Skull", "angiography", "bone", "soft-tissue", "lung",
-    "CT-Cinematic-Heart",
+    "CT-Cinematic-Heart", "MR-SignalWindow",
 })
 
 
@@ -70,7 +72,7 @@ class ExportLayers(PortableInput):
 
 class ExportDisplay(PortableInput):
     visible: StrictBool = True
-    opacity: Unit = 1
+    opacity: Unit = .5
     color: str | None = Field(default=None, pattern=r"^#[a-fA-F0-9]{6}$")
 
 
@@ -87,6 +89,12 @@ class ExportCinematic(PortableInput):
         return self
 
 
+class ExportSignalWindow(PortableInput):
+    window: float = Field(gt=0, strict=True)
+    level: float = Field(strict=True)
+    invert: StrictBool = False
+
+
 class ExportVolume(PortableInput):
     preset: str = Field(default="angiography", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     shift: float = Field(default=0, ge=-500, le=500)
@@ -94,6 +102,7 @@ class ExportVolume(PortableInput):
     quality: Literal["auto", "detail"] = "auto"
     crop: tuple[tuple[Unit, Unit, Unit], tuple[Unit, Unit, Unit]] = ((0, 0, 0), (1, 1, 1))
     cinematic: ExportCinematic = Field(default_factory=ExportCinematic)
+    signal_window: ExportSignalWindow | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def positive_crop(self):
@@ -207,7 +216,7 @@ class ExportPlan:
                 yield part
 
 
-def _portable_manifest(revision, case_id):
+def _portable_manifest(revision, case_id, image_context=None):
     # Use an allowlist, including nested structure fields. Raw DICOM labels,
     # acquisition IDs/dates, paths, operations and runtime/config are absent.
     fields = ("id", "name", "task", "group", "color", "volume_ml", "voxel_count", "centroid_ras", "bounds_ras", "relationship")
@@ -228,7 +237,49 @@ def _portable_manifest(revision, case_id):
     if provenance:
         result["model_provenance"] = {key: provenance[key] for key in ("engine", "engine_version", "resolution") if key in provenance}
         result["model_provenance"]["tasks"] = [item["task"] for item in provenance.get("tasks", []) if "task" in item]
+    if image_context is not None:
+        result["image_context"] = image_context
     return result
+
+
+def _image_context(revision):
+    """Resolve a bound source, exporting display metadata without acquisition IDs.
+
+    Surface-only legacy CT exports intentionally need no original image file.
+    New revisions carry a validated image snapshot, including MRI display policy.
+    """
+    if revision.get("image_asset") is None:
+        return None
+    from .image_assets import reference_image
+    from .modalities import normalize_presentation
+
+    asset = reference_image(revision)
+    return {
+        "reference_image_id": asset["id"], "modality": asset["modality"],
+        "scalar": {key: asset["scalar"][key] for key in ("dtype", "slope", "intercept", "units")},
+        "presentation": normalize_presentation(asset["presentation"]),
+    }
+
+
+def _state_for_image(state, image_context):
+    """Derive missing MR display defaults without mutating the caller's state."""
+    if image_context is None or image_context["modality"] != Modality.MR:
+        return state
+    policy = image_context["presentation"]
+    volume = state.volume
+    if "preset" in volume.model_fields_set and volume.preset != "MR-SignalWindow":
+        raise ValueError("MR exports require the MR signal-window appearance; CT appearances use HU calibration")
+    if volume.shift != 0:
+        raise ValueError("MR signal-window appearances do not support CT HU shifts")
+    signal_window = volume.signal_window or ExportSignalWindow(
+        window=policy["default_window"], level=policy["default_level"],
+        invert=policy["photometric_interpretation"] == PhotometricInterpretation.MONOCHROME1)
+    plane_defaults = {key: policy[f"default_{key}"] for key in ("window", "level")
+                      if key not in state.plane.model_fields_set}
+    return state.model_copy(update={
+        "volume": volume.model_copy(update={"preset": "MR-SignalWindow", "signal_window": signal_window}),
+        "plane": state.plane.model_copy(update=plane_defaults),
+    })
 
 
 def _file(path, maximum, label):
@@ -277,7 +328,9 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
     from . import review_volume
     import numpy as np
 
-    layers, state = request.layers, request.state
+    layers = request.layers
+    image_context = _image_context(revision)
+    state = _state_for_image(request.state, image_context)
     structures = {item["id"]: item for item in revision["structures"]}
     ids = set(structures)
     referenced = set(state.display) | set(state.plane.overlays) | set(state.volume_mask.ids)
@@ -308,30 +361,45 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
             raise ValueError("The CT geometry changed; the saved revision cannot be exported")
         if layers.ct_plane and state.plane.index >= image.shape[state.plane.axis]:
             raise ValueError("The exported CT plane lies outside the reference CT")
-        # Exact plane overlays and padded volume-only masks coexist under
-        # separate aliases. Saved state retains only original structure IDs.
+        # Exact plane overlays remain categorical native masks. The volume
+        # clipping layer uses one bounded presentation-only union instead.
         mask_requests = [(identity, 0.0) for identity in state.plane.overlays] if layers.ct_plane else []
-        if layers.ct_volume and state.volume_mask.enabled:
-            mask_requests += [(identity, review_volume.display_margin(state.volume_mask.margin_mm)) for identity in state.volume_mask.ids]
+        union_ids = state.volume_mask.ids if layers.ct_volume and state.volume_mask.enabled else []
         mask_requests = list(dict.fromkeys(mask_requests))
-        mask_ids = list(dict.fromkeys(identity for identity, _ in mask_requests))
+        mask_ids = list(dict.fromkeys([*(identity for identity, _ in mask_requests), *union_ids]))
         if len(mask_requests) > 256:
             raise ValueError("A portable viewer supports at most 256 embedded exact and volume-margin masks")
         # All source headers are checked before the first dense preparation.
         for identity in mask_ids:
             _source_preflight(structures[identity]["mask_file"])
-        ct = review_volume.ct_volume(revision["ct_file"], cache, "full")
+        reference_image_id = image_context["reference_image_id"] if image_context else None
+        ct = review_volume.scalar_volume(revision["ct_file"], cache, "full",
+            presentation=image_context["presentation"] if image_context else None,
+            reference_image_id=reference_image_id)
+        if image_context is not None:
+            ct = {**ct, **image_context}
         if ct["byte_length"] > MAX_CT_BYTES:
             raise ExportTooLarge("The CT exceeds the portable viewer memory limit")
         mask_bytes = 0
         for identity, margin_mm in mask_requests:
-            descriptor = review_volume.mask_volume(revision["ct_file"], structures[identity]["mask_file"], cache, "full", margin_mm=margin_mm)
+            descriptor = review_volume.mask_volume(revision["ct_file"], structures[identity]["mask_file"], cache, "full",
+                margin_mm=margin_mm, reference_image_id=reference_image_id)
+            if reference_image_id is not None:
+                descriptor = {**descriptor, "reference_image_id": reference_image_id}
             mask_bytes += descriptor["byte_length"]
             if mask_bytes > MAX_MASK_BYTES:
                 raise ExportTooLarge("Selected mask crops exceed the 192 MiB portable viewer limit; select fewer masks")
             masks.append((review_volume.volume_mask_alias(identity, margin_mm), descriptor))
+        if union_ids:
+            from .volume_mask_union import volume_mask_union
+            descriptor = volume_mask_union(revision["ct_file"],
+                [(identity, structures[identity]["mask_file"]) for identity in union_ids], cache,
+                state.volume_mask.margin_mm, reference_image_id=reference_image_id)
+            if mask_bytes + descriptor["byte_length"] > MAX_MASK_BYTES:
+                raise ExportTooLarge("Selected mask crops exceed the 192 MiB portable viewer limit; select fewer plane overlays")
+            masks.append((f"volume-mask-union:{descriptor['key']}", descriptor))
 
-    manifest = _json(_portable_manifest(revision, case_id))
+    manifest = _json(_portable_manifest(revision, case_id, image_context))
     state_json = _json(state.model_dump(mode="json", exclude_none=True))
     if len(manifest) + len(state_json) > MAX_METADATA_BYTES:
         raise ExportTooLarge("The viewer metadata exceeds the portable export size limit")
@@ -356,8 +424,11 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
             # Native cached descriptors contain no paths/URLs. Retain only the
             # public transport schema, with chunk data separate from metadata.
             value = {key: descriptor[key] for key in ("schema_version", "key", "kind", "dtype", "quality", "approximate",
-                "preview_quantization_hu", "reference_geometry", "shape", "affine_ras", "geometry", "slope", "intercept",
-                "byte_length", "chunk_depth", "chunks", "origin_ijk", "empty", "display_margin_mm") if key in descriptor}
+                "preview_quantization_hu", "preview_quantization_error", "reference_image_id", "modality", "scalar", "presentation",
+                "reference_geometry", "shape", "affine_ras", "geometry", "slope", "intercept",
+                "byte_length", "chunk_depth", "chunks", "origin_ijk", "empty", "display_margin_mm",
+                "presentation_only", "volume_mask_union", "selected_structure_ids", "pooling",
+                "native_crop_origin_ijk", "native_crop_shape") if key in descriptor}
             value["chunks"] = [{key: chunk[key] for key in ("index", "start_k", "depth", "byte_offset", "byte_length")}
                                for chunk in descriptor["chunks"]]
             opening = b'{"descriptor":' if identity is None else b'{"id":' + _json(identity) + b',"descriptor":'

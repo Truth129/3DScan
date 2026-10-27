@@ -4,7 +4,7 @@ import { acquisitionBadges,acquisitionRequest,acquisitionSelection,acquisitionSe
 describe('acquisition labels and cardiac timing',()=>{
   it('offers CorCTA, calcium-score and CTA phase choices without a multi-series phase',()=>{
     expect(SCAN_REGION_IDS).toContain('corcta');expect(SCAN_REGION_IDS).toContain('cardiac');
-    expect(SCAN_REGION_IDS).toContain('abdomen_pelvis');expect(SCAN_REGION_IDS).toContain('head_neck');
+    expect(SCAN_REGION_IDS).toContain('abdomen_pelvis');expect(SCAN_REGION_IDS).toContain('head_neck');expect(SCAN_REGION_IDS).toContain('breast');
     expect(CONTRAST_PHASE_IDS).toContain('coronary_arterial');expect(CONTRAST_PHASE_IDS).toContain('pulmonary_arterial');
     expect(CONTRAST_PHASE_IDS).toContain('noncontrast');expect(CONTRAST_PHASE_IDS).not.toContain('dual_phase');
     expect(CARDIAC_PHASE_IDS).toContain('best_diastolic');expect(CARDIAC_PHASE_IDS).toContain('best_systolic');

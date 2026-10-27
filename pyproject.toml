@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "scan3d"
 version = "0.1.0"
 description = "Local chest–abdomen CT reconstruction and revisioned anatomical review"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.15"
 dependencies = [
   "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "python-multipart>=0.0.20",
   "numpy>=2,<3", "scipy>=1.15,<2", "nibabel>=5.3,<6", "pydicom>=3,<4", "python-gdcm>=3.2,<4",

@@ -115,7 +115,7 @@ def test_margin_http_chunks_keep_case_and_margin_ownership(tmp_path):
     ct=save(tmp_path/'ct.nii',np.zeros(shape,np.int16),affine);path=save(tmp_path/'mask.nii',mask,affine)
     app=create_app(Settings(tmp_path/'data',(tmp_path,),web_dir=tmp_path/'missing'))
     service=app.state.service;case=service.new_case('Display margin fixture');rid=identifier()
-    service.store.save('revisions',dict(id=rid,case_id=case['id'],ct_file=str(ct),structures=[dict(id='total:heart',mask_file=str(path))]))
+    service.store.save('revisions',dict(id=rid,case_id=case['id'],ct_file=str(ct),geometry=imaging.geometry(ct),structures=[dict(id='total:heart',mask_file=str(path))]))
     base=f"/api/cases/{case['id']}/revisions/{rid}/mask-volume"
     with TestClient(app,base_url='http://127.0.0.1') as client:
         exact=client.get(base,params={'structure_id':'total:heart'}).json()['current']

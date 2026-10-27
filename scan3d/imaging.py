@@ -324,6 +324,14 @@ def _reslice(values, voxel_from_pixel, shape, order, cval):
                                 order=order, mode="constant", cval=cval, prefilter=False)
 
 
+MAX_FULL_FRAME_PIXELS = 8 * 1024**2
+
+
+def _validate_slice_pixels(width, height):
+    if width * height > MAX_FULL_FRAME_PIXELS:
+        raise ValueError("Full-resolution slice exceeds the 8-million-pixel frame limit")
+
+
 def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, native_index=None):
     """Pixel-centre geometry shared by PNG and exact-HU frame delivery.
 
@@ -340,12 +348,13 @@ def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, nativ
         u, v = [axis for axis in range(3) if axis != native_axis]
         spacing = np.linalg.norm(affine[:3, :3], axis=0)
         extent = [float(shape[u] * spacing[u]), float(shape[v] * spacing[v])]
-        step = max(float(min(spacing[u], spacing[v])), max(extent) / 768)
-        width, height = [max(1, int(math.ceil(value / step))) for value in extent]
+        # Preserve native voxel identity. Pixel aspect comes from the physical
+        # basis, rather than resampling anisotropic voxels into square pixels.
+        width, height = int(shape[u]), int(shape[v])
+        _validate_slice_pixels(width, height)
         mapping = np.zeros((4, 4), dtype=np.float64)
         mapping[3, 3] = 1
-        mapping[u, 0], mapping[v, 1] = shape[u] / width, shape[v] / height
-        mapping[u, 3], mapping[v, 3] = -.5 + shape[u] / width / 2, -.5 + shape[v] / height / 2
+        mapping[u, 0], mapping[v, 1] = 1, 1
         mapping[native_axis, 2], mapping[native_axis, 3] = 1, native_index
         return {"width": width, "height": height, "pixel_to_ras": (affine @ mapping).tolist(),
                 "position_mm": float(native_index), "plane": plane, "extent_mm": extent,
@@ -359,10 +368,10 @@ def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, nativ
     if not bounds[0, fixed] <= position_mm <= bounds[1, fixed]:
         raise ValueError("Slice position lies outside the reference CT")
     extent = bounds[1] - bounds[0]
-    step = max(float(np.linalg.norm(affine[:3, :3], axis=0).min()),
-               float(max(extent[horizontal], extent[vertical])) / 768)
+    step = float(np.linalg.norm(affine[:3, :3], axis=0).min())
     width = max(1, int(math.ceil(extent[horizontal] / step)))
     height = max(1, int(math.ceil(extent[vertical] / step)))
+    _validate_slice_pixels(width, height)
     pixel_to_ras = np.zeros((4, 4), dtype=np.float64)
     pixel_to_ras[3, 3] = 1
     pixel_to_ras[horizontal, 0] = -extent[horizontal] / width
@@ -379,17 +388,27 @@ def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, nativ
 def slice_image(ct_path: Path, mask_path_or_none: Path | None, plane: str,
                 position_mm: float, window: float, level: float,
                 compare_mask_path: Path | None = None, *, overlays=None,
-                native_axis=None, native_index=None) -> dict:
+                native_axis=None, native_index=None, background_value=None, invert=False,
+                overlay_opacity=None) -> dict:
     """Reslice patient planes or exact native editing planes on the source grid."""
     image, affine = _image(ct_path)
     if not all(math.isfinite(float(x)) for x in (window, level)) or window <= 0:
         raise ValueError("Slice level must be finite; window must be positive")
+    if overlay_opacity is not None and (not math.isfinite(overlay_opacity) or not 0 <= overlay_opacity <= 1):
+        raise ValueError("Slice overlay opacity must be finite and between zero and one")
     meta, voxel_from_pixel = slice_geometry(image.shape, affine, plane, position_mm,
                                            native_axis=native_axis, native_index=native_index)
     width, height = meta["width"], meta["height"]
     values = _ct_array(ct_path, image)
-    intensity = _reslice(values, voxel_from_pixel, (height, width), order=1, cval=-1024)
+    if background_value is None:
+        from .modalities import get_modality_adapter
+        background_value = get_modality_adapter("CT").presentation()["background_value"]
+    if not math.isfinite(background_value):
+        raise ValueError("Image background must be finite")
+    intensity = _reslice(values, voxel_from_pixel, (height, width), order=1, cval=background_value)
     grayscale = np.rint(np.clip((intensity - (level - window / 2)) / window, 0, 1) * 255).astype(np.uint8)
+    if invert:
+        grayscale = 255 - grayscale
     rgb = np.repeat(grayscale[..., None], 3, axis=2).astype(np.float32)
 
     def sample_mask(path):
@@ -399,8 +418,11 @@ def slice_image(ct_path: Path, mask_path_or_none: Path | None, plane: str,
     def overlay(selected, color, alpha=0.22):
         nonlocal rgb
         contour = selected & ~ndi.binary_erosion(selected)
-        rgb[selected] = rgb[selected] * (1 - alpha) + np.asarray(color) * alpha
-        rgb[contour] = np.asarray(color)
+        interior = selected & ~contour
+        fill = alpha if overlay_opacity is None else min(1., overlay_opacity * alpha / .22)
+        edge = 1. if overlay_opacity is None else min(1., overlay_opacity * 3)
+        rgb[interior] = rgb[interior] * (1 - fill) + np.asarray(color) * fill
+        rgb[contour] = rgb[contour] * (1 - edge) + np.asarray(color) * edge
 
     if overlays is None:
         current = sample_mask(mask_path_or_none) if mask_path_or_none else None

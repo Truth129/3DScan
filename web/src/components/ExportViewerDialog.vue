@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { PortableRenderSnapshot } from '../lib/portable-viewer';
 
-const props = defineProps<{ base: string; label: string; snapshot: PortableRenderSnapshot; hasStructures: boolean }>();
+const props = defineProps<{ base: string; label: string; snapshot: PortableRenderSnapshot; hasStructures: boolean; modality?: string }>();
+const modalityLabel = computed(() => props.modality ?? 'CT');
 const emit = defineEmits<{ close: [] }>();
 const dialog = ref<HTMLDialogElement>(), firstLayer = ref<HTMLInputElement>();
 const layers = ref({ ...props.snapshot.layers, segmentation: props.hasStructures && props.snapshot.layers.segmentation });
@@ -100,10 +101,10 @@ onBeforeUnmount(() => {
       <fieldset :disabled="busy">
         <legend>Include layers</legend>
         <label :class="{ unavailable: !hasStructures }"><input ref="firstLayer" v-model="layers.segmentation" type="checkbox" :disabled="!hasStructures" aria-label="Export segmentation" /><span><strong>Segmentation</strong><small>{{ hasStructures ? 'Anatomical surfaces, colors, visibility and measurements.' : 'Create segmentation to include anatomical surfaces.' }}</small></span></label>
-        <label><input v-model="layers.ct_volume" type="checkbox" aria-label="Export CT volume" /><span><strong>CT volume</strong><small>Volume appearance, opacity, crop and selected mask.</small></span></label>
-        <label><input v-model="layers.ct_plane" type="checkbox" aria-label="Export CT plane" /><span><strong>CT plane</strong><small>Movable CT plane with window controls and selected overlays.</small></span></label>
+        <label><input v-model="layers.ct_volume" type="checkbox" :aria-label="`Export ${modalityLabel} volume`" /><span><strong>{{ modalityLabel }} volume</strong><small>Volume appearance, opacity, crop and selected mask.</small></span></label>
+        <label><input v-model="layers.ct_plane" type="checkbox" :aria-label="`Export ${modalityLabel} plane`" /><span><strong>{{ modalityLabel }} plane</strong><small>Movable image plane with window controls and selected overlays.</small></span></label>
       </fieldset>
-      <p class="export-scope">Saved revision · {{ label }}<span v-if="includesCT">. CT layers share one embedded volume.</span></p>
+      <p class="export-scope">Saved revision · {{ label }}<span v-if="includesCT">. Image layers share one embedded volume.</span></p>
       <div v-if="busy" class="export-progress" role="status" aria-live="polite"><span class="spinner"></span><span>{{ progress }}</span><progress v-if="total && received" :value="received" :max="total" aria-label="Viewer download progress"></progress></div>
       <p v-else-if="downloaded" class="export-success" role="status">Download started · {{ formatBytes(downloaded) }}. Open the HTML file in a desktop browser.</p>
       <p v-if="error" class="export-error" role="alert">{{ error }}</p>

@@ -1,9 +1,10 @@
 import type { Geometry, OfflineManifest, Plane, Point, Structure, StructureDisplay } from '../types';
 import type { CTFrame } from './ct-renderer';
 import { inverseAffine, transformPoint, validateDescriptor, type VolumeDescriptor } from './ct-reslice';
-import { GPU_VOLUME_SLAB_BYTES, gpuVolumeSlabRange, type GPUOverlaySourceProvider, type GPUOverlaySources, type GPUVolumeSource, type RenderCTSession } from './gpu-volume-data';
+import { GPU_VOLUME_SLAB_BYTES, gpuVolumeSlabRange, isVolumeDisplayUnion, type GPUOverlaySourceProvider, type GPUOverlaySources, type GPUVolumeSource, type RenderCTSession } from './gpu-volume-data';
 import { freshVolumeSettings, VOLUME_PRESETS, type CTVolumeSettings } from './volume-presets';
-import { freshVolumeMaskSettings, volumeMaskSourceId, type VolumeMaskSettings } from './volume-mask';
+import { freshVolumeMaskSettings, normalizeVolumeMaskMargin, volumeMaskSourceId, type VolumeMaskSettings } from './volume-mask';
+import { assertReferenceImage } from './image-domain';
 
 export interface PortableLayers { segmentation: boolean; ct_volume: boolean; ct_plane: boolean }
 export interface PortableCamera {
@@ -55,7 +56,7 @@ export function normalizePortableState(input: Partial<PortableRenderState> | und
   const display: PortableRenderState['display'] = {};
   for (const structure of structures) {
     const item = source.display?.[structure.id];
-    display[structure.id] = { visible: item?.visible !== false, opacity: finite(item?.opacity) ? Math.max(0, Math.min(1, item.opacity)) : .8,
+    display[structure.id] = { visible: item?.visible !== false, opacity: finite(item?.opacity) ? Math.max(0, Math.min(1, item.opacity)) : .5,
       color: typeof item?.color === 'string' && /^#[0-9a-f]{6}$/i.test(item.color) ? item.color : portableColor(structure.color) };
   }
   let camera: PortableCamera | undefined;
@@ -84,14 +85,19 @@ export function portablePoint(state: PortableRenderState, geometry: Geometry): P
 }
 
 export function portableDisplay(state: PortableRenderState): StructureDisplay {
-  return Object.fromEntries(Object.entries(state.display).map(([id, value]) => [id, { visible: value.visible, opacity: value.opacity }]));
+  // Bake the legacy global factor into actual segment alpha. New viewers use
+  // an all-segment editor and render each saved alpha without a second factor.
+  return Object.fromEntries(Object.entries(state.display).map(([id, value]) => [id, {
+    visible: value.visible, opacity: Math.max(0, Math.min(1, value.opacity * state.segmentation_opacity)),
+  }]));
 }
 
-function embeddedDescriptor(input: EmbeddedVolume, kind: 'ct' | 'mask', identity: string): VolumeDescriptor {
+function embeddedDescriptor(input: EmbeddedVolume, kind: 'ct' | 'mask', identity: string, displayUnion = false): VolumeDescriptor {
   if (!input?.descriptor || !Array.isArray(input.chunks) || input.chunks.length !== input.descriptor.chunks?.length) throw new Error('Embedded volume has missing chunks');
   const descriptor = validateDescriptor({ ...structuredClone(input.descriptor),
     chunks: input.descriptor.chunks.map(chunk => ({ ...chunk, url: `embedded:${identity}/${chunk.index}` })) }, kind);
-  if (descriptor.quality !== 'full') throw new Error('Portable CT requires full-resolution data');
+  if (descriptor.quality !== 'full' && !(kind === 'mask' && displayUnion && isVolumeDisplayUnion(descriptor)))
+    throw new Error('Portable CT requires full-resolution data or a bounded presentation union');
   for (let i = 0; i < input.chunks.length; i++) {
     const chunk = input.chunks[i];
     if (chunk.index !== i || typeof chunk.gzip_base64 !== 'string' || !chunk.gzip_base64.length
@@ -182,6 +188,7 @@ export class EmbeddedCTSession implements RenderCTSession, GPUOverlaySourceProvi
   private cache = new EmbeddedSlabCache();
   private ct: EmbeddedSource;
   private masks = new Map<string, EmbeddedSource>();
+  private displayUnion?: { id: string; source: EmbeddedSource; ids: string[] };
   private originalMaskIds: string[] = [];
   private displayMargin = 0;
   private loadedBytes = 0;
@@ -208,34 +215,58 @@ export class EmbeddedCTSession implements RenderCTSession, GPUOverlaySourceProvi
     if (layers.ct_volume && maskSettings.enabled) for (const id of maskSettings.ids) allowed.add(volumeMaskSourceId(id, this.displayMargin));
     let maskBytes = 0;
     for (const [index, mask] of (payload.masks ?? []).entries()) {
+      if (mask.descriptor.volume_mask_union === true) {
+        const descriptor = embeddedDescriptor(mask, 'mask', `mask-${index}`, true);
+        const selected = isVolumeDisplayUnion(descriptor) ? descriptor.selected_structure_ids : undefined;
+        const ids = [...maskSettings.ids].sort();
+        if (!layers.ct_volume || !maskSettings.enabled || this.displayUnion || !isVolumeDisplayUnion(descriptor)
+            || mask.id !== `volume-mask-union:${descriptor.key}` || !Array.isArray(selected)
+            || selected.some(id => typeof id !== 'string') || selected.length !== new Set(selected).size
+            || JSON.stringify([...selected].sort()) !== JSON.stringify(ids)) throw new Error('Invalid embedded volume-mask union selection');
+        if ((descriptor.display_margin_mm ?? 0) !== this.displayMargin) throw new Error('Embedded mask display margin disagrees with its identity');
+        assertReferenceImage(this.descriptor, descriptor);
+        if (JSON.stringify(descriptor.reference_geometry!.shape) !== JSON.stringify(this.descriptor.shape)
+            || JSON.stringify(descriptor.reference_geometry!.affine_ras) !== JSON.stringify(this.descriptor.affine_ras))
+          throw new Error('Embedded volume-mask union differs from the reference CT geometry');
+        this.displayUnion = { id: mask.id, ids, source: new EmbeddedSource(descriptor, mask.chunks, `mask-${index}`, this.cache, progress) };
+        maskBytes += descriptor.byte_length; continue;
+      }
       if (!allowed.has(mask.id) || this.masks.has(mask.id)) throw new Error('Invalid embedded mask selection');
       const descriptor = embeddedDescriptor(mask, 'mask', `mask-${index}`);
       const expectedMargin = this.originalMaskIds.includes(mask.id) ? 0 : this.displayMargin;
       if ((descriptor.display_margin_mm ?? 0) !== expectedMargin) throw new Error('Embedded mask display margin disagrees with its identity');
       maskBytes += descriptor.byte_length;
-      if (maskBytes > MAX_MASK_BYTES) throw new Error('Embedded masks exceed the 192 MiB decoded-volume limit');
       this.masks.set(mask.id, new EmbeddedSource(descriptor, mask.chunks, `mask-${index}`, this.cache, progress));
     }
+    if (maskBytes > MAX_MASK_BYTES) throw new Error('Embedded masks exceed the 192 MiB decoded-volume limit');
     this.totalBytes += maskBytes;
     const required = [...(layers.ct_plane ? payload.state.plane.overlays : []),
-      ...(layers.ct_volume && maskSettings.enabled ? maskSettings.ids.map(id => volumeMaskSourceId(id, this.displayMargin)) : [])];
+      ...(layers.ct_volume && maskSettings.enabled && !this.displayUnion ? maskSettings.ids.map(id => volumeMaskSourceId(id, this.displayMargin)) : [])];
     if (required.some(id => !this.masks.has(id))) throw new Error('A selected CT overlay or volume mask is missing from this export');
   }
   /** UI keeps anatomical provenance; virtual IDs never become segment names. */
-  get maskIds() { return this.originalMaskIds.filter(id => this.masks.has(id) || this.masks.has(volumeMaskSourceId(id, this.displayMargin))); }
+  get maskIds() { return this.originalMaskIds.filter(id => this.masks.has(id) || this.masks.has(volumeMaskSourceId(id, this.displayMargin)) || this.displayUnion?.ids.includes(id)); }
   /** Slice overlays may use only the original categorical segmentation. */
   get overlayIds() { return this.originalMaskIds.filter(id => this.masks.has(id)); }
-  get diagnostics() { return { ...this.cache.diagnostics, maskCount: this.masks.size, fullCPUVolumes: 0, loadedBytes: this.loadedBytes, totalBytes: this.totalBytes }; }
+  get diagnostics() { return { ...this.cache.diagnostics, maskCount: this.masks.size + (this.displayUnion ? 1 : 0), fullCPUVolumes: 0, loadedBytes: this.loadedBytes, totalBytes: this.totalBytes }; }
   async getGPUVolume(signal?: AbortSignal): Promise<GPUVolumeSource> { if (signal?.aborted || this.cache.disposed) throw abortError(); return this.ct; }
   async getGPUOverlays(selection: string | readonly string[] | null, compare = false, signal?: AbortSignal): Promise<GPUOverlaySources> {
     if (compare) throw new Error('Before/after comparison is not included in this portable viewer');
+    if (signal?.aborted || this.cache.disposed) throw abortError();
     const ids = selection === null ? [] : typeof selection === 'string' ? [selection] : [...selection];
-    return this.get(this.revisionBase, ids, signal ?? new AbortController().signal);
+    const unique = [...new Set(ids)]; if (unique.length > 128) throw new Error('Choose up to 128 embedded masks');
+    return { overlays: unique.map(id => {
+      const source = this.masks.get(id); if (!source) throw new Error('This exact segment overlay was not included in the export');
+      return { id, current: source, parent: null };
+    }) };
   }
   async get(base: string, ids: readonly string[], signal: AbortSignal, marginMM = 0): Promise<GPUOverlaySources> {
     if (base.replace(/\/+$/, '') !== this.revisionBase) throw new Error('Embedded mask belongs to a different revision');
     if (signal.aborted || this.cache.disposed) throw abortError();
     const unique = [...new Set(ids)]; if (unique.length > 128) throw new Error('Choose up to 128 embedded masks');
+    marginMM = normalizeVolumeMaskMargin(marginMM);
+    if (this.displayUnion && marginMM === this.displayMargin && JSON.stringify([...unique].sort()) === JSON.stringify(this.displayUnion.ids))
+      return { overlays: [{ id: this.displayUnion.id, current: this.displayUnion.source, parent: null }] };
     return { overlays: unique.map(originalId => { const id = volumeMaskSourceId(originalId, marginMM), source = this.masks.get(id); if (!source) throw new Error('This segment mask or display margin was not included in the export'); return { id, current: source, parent: null }; }) };
   }
   async requestSlice(): Promise<CTFrame> { throw new Error('Portable CT planes use the shared GPU volume. WebGL2 CT rendering is required.'); }

@@ -249,6 +249,8 @@ def refine_whole_mask(session, progress, cancelled, *, autozoom=True):
         raise RuntimeError("Whole-mask refinement requires the pinned nnInteractive 2.6.0 adapter")
     if not isinstance(autozoom, bool):
         raise ValueError("AutoZoom must be an explicit boolean")
+    # These are optional checkpoint capabilities in the vendor session API;
+    # absence means unsupported, rather than a malformed application object.
     if not (getattr(session, "supports_initial_label", False)
             and getattr(session, "supports_zero_shot_label_refinement", False)):
         raise ValueError("The loaded checkpoint does not support whole-mask refinement")

@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1480" viewBox="0 0 1460 1480" role="img" aria-labelledby="title description">
+<title id="title">3DScan system architecture</title>
+<desc id="description">Remote browser uses Cornerstone3D and Three.js with client RAM and GPU caches. Private HTTPS connects it to FastAPI on the workstation. One SQLite-backed worker prepares images, runs optional segmentation and corrections, and builds native-mask measurements and surfaces. ROCm inference uses the workstation GPU. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG. Live deployment is CT-only; static MRI is implemented on the expansion branch.</desc>
+<defs><marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L11 6L1 11Z" fill="#9bb7db"/></marker></defs>
+<style>text{font-family:Inter,"DejaVu Sans",Arial,sans-serif}.title{fill:#edf2fc;font-weight:650;font-size:34px}.subtitle{fill:#a5b2c9;font-size:17px}.lane{font-size:14px;font-weight:650;letter-spacing:1.5px;fill:#93a8c9}.card-title{fill:#f0f4fc;font-size:20px;font-weight:650}.body{fill:#b8c4d8;font-size:16px}.edge-label{fill:#a7bddb;font-size:13px}.small{fill:#b8c4d8;font-size:14px}.edge{fill:none;stroke:#9bb7db;stroke-width:2;stroke-linejoin:round;marker-end:url(#arrow)}.both{marker-start:url(#arrow)}</style>
+<rect width="1460" height="1480" fill="#0c111a"/>
+
+<text x="40" y="63" class="title">3DScan · system architecture</text>
+<text x="40" y="99" class="subtitle">Remote interaction stays local; the workstation owns processing and durable case data.</text>
+<rect x="40" y="140" width="1380" height="260" rx="15" fill="#101824" stroke="#29364b"/>
+<text x="64" y="170" class="lane">REMOTE DESKTOP BROWSER  ·  CLIENT RAM + CLIENT GPU</text>
+<rect x="40" y="460" width="1380" height="430" rx="15" fill="#101824" stroke="#29364b"/>
+<text x="64" y="490" class="lane">WORKSTATION  ·  FASTAPI + SINGLE WORKER + ROCm INFERENCE</text>
+<rect x="40" y="980" width="1380" height="170" rx="15" fill="#101824" stroke="#29364b"/>
+<text x="64" y="1010" class="lane">DURABLE STATE  ·  SQLITE + FILESYSTEM</text>
+<rect x="40" y="1210" width="1380" height="145" rx="15" fill="#101824" stroke="#29364b"/>
+<text x="64" y="1240" class="lane">EXCHANGE &amp; EXPORTS</text>
+<path d="M265 356V515" class="edge both"/>
+<text x="478" y="435" class="edge-label" text-anchor="middle">LAN / WAN · private Tailscale HTTPS</text>
+<path d="M460 273H535" class="edge"/>
+<text x="498" y="259" class="edge-label" text-anchor="middle">linked</text>
+<path d="M925 273H1000" class="edge"/>
+<text x="963" y="259" class="edge-label" text-anchor="middle">source</text>
+<path d="M460 575H535" class="edge"/>
+<text x="498" y="560" class="edge-label" text-anchor="middle">jobs</text>
+<path d="M925 575H1000" class="edge"/>
+<text x="963" y="560" class="edge-label" text-anchor="middle">GPU tasks</text>
+<path d="M620 635V670H265V700" class="edge"/>
+<text x="425" y="659" class="edge-label" text-anchor="middle">open scan</text>
+<path d="M730 635V700" class="edge"/>
+<text x="770" y="674" class="edge-label" text-anchor="middle">CPU jobs</text>
+<path d="M1195 635V670H835V700" class="edge"/>
+<text x="1060" y="659" class="edge-label" text-anchor="middle">native masks</text>
+<path d="M460 772H535" class="edge"/>
+<text x="498" y="756" class="edge-label" text-anchor="middle">grid</text>
+<path d="M925 772H1000" class="edge"/>
+<text x="963" y="756" class="edge-label" text-anchor="middle">artifacts</text>
+<path d="M1390 730H1436V438H430V515" class="edge"/>
+<text x="1120" y="429" class="edge-label" text-anchor="middle">authorized slabs, masks and mesh assets</text>
+<path d="M265 845V914H615V980" class="edge"/>
+<text x="410" y="904" class="edge-label" text-anchor="middle">source image</text>
+<path d="M730 845V980" class="edge"/>
+<text x="846" y="925" class="edge-label" text-anchor="middle">native masks + new revision</text>
+<path d="M1195 845V980" class="edge both"/>
+<text x="1275" y="925" class="edge-label" text-anchor="middle">read / reuse / cache</text>
+<path d="M70 575H24V1060H40" class="edge both"/>
+<path d="M730 1150V1210" class="edge"/>
+<text x="830" y="1185" class="edge-label" text-anchor="middle">saved case artifacts</text>
+<rect x="70" y="190" width="390" height="166" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="70" y="202" width="4" height="142" rx="2" fill="#7194c4"/>
+<text x="89" y="221" class="card-title">Workspace controls</text>
+<text x="89" y="248" class="body">Vue 3 + TypeScript</text>
+<text x="89" y="270" class="body">Case, series, task and panel controls</text>
+<text x="89" y="292" class="body">Linked structure selection + crosshairs</text>
+<text x="89" y="314" class="body">Review gestures and progress feedback</text>
+<rect x="535" y="190" width="390" height="166" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="535" y="202" width="4" height="142" rx="2" fill="#7194c4"/>
+<text x="554" y="221" class="card-title">CT review + client source cache</text>
+<text x="554" y="248" class="body">Cornerstone3D + reslice worker</text>
+<text x="554" y="270" class="body">Preview → full native CT in client RAM</text>
+<text x="554" y="292" class="body">Local scrolling, windowing and overlays</text>
+<text x="554" y="314" class="body">DICOM parsing happens on the server</text>
+<rect x="1000" y="190" width="390" height="166" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="1000" y="202" width="4" height="142" rx="2" fill="#7194c4"/>
+<text x="1019" y="221" class="card-title">3D on the client GPU</text>
+<text x="1019" y="248" class="body">Three.js / WebGL2</text>
+<text x="1019" y="270" class="body">Segmentation surfaces + CT planes</text>
+<text x="1019" y="292" class="body">Ray-marched CT volume + display mask</text>
+<text x="1019" y="314" class="body">Warm navigation avoids image requests</text>
+<rect x="70" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="70" y="527" width="4" height="96" rx="2" fill="#7194c4"/>
+<text x="89" y="546" class="card-title">FastAPI service</text>
+<text x="89" y="573" class="body">Imports, jobs, revisions and review</text>
+<text x="89" y="595" class="body">Image / mask chunks, GLB and exports</text>
+<text x="89" y="617" class="body">Local service behind private access</text>
+<rect x="535" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="535" y="527" width="4" height="96" rx="2" fill="#7194c4"/>
+<text x="554" y="546" class="card-title">One queued background worker</text>
+<text x="554" y="573" class="body">SQLite job queue + one process lock</text>
+<text x="554" y="595" class="body">Progress, cancellation and recovery</text>
+<text x="554" y="617" class="body">Open, segment, refine and review jobs</text>
+<rect x="1000" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="1000" y="527" width="4" height="96" rx="2" fill="#c7a16d"/>
+<text x="1019" y="546" class="card-title">ROCm inference · R9700</text>
+<text x="1019" y="573" class="body">TotalSegmentator + nnU-Net</text>
+<text x="1019" y="595" class="body">Optional nnInteractive corrections</text>
+<text x="1019" y="617" class="body">PyTorch runs on the workstation GPU</text>
+<rect x="70" y="700" width="390" height="145" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="70" y="712" width="4" height="121" rx="2" fill="#7194c4"/>
+<text x="89" y="731" class="card-title">1. Validate and prepare source</text>
+<text x="89" y="758" class="body">pydicom: index, select and check series</text>
+<text x="89" y="780" class="body">dcm2niix: reference NIfTI + geometry</text>
+<text x="89" y="802" class="body">One physical grid per source image</text>
+<text x="89" y="824" class="body">Opening a scan does not segment it</text>
+<rect x="535" y="700" width="390" height="145" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="535" y="712" width="4" height="121" rx="2" fill="#a69bd0"/>
+<text x="554" y="731" class="card-title">2. Native processing · CPU</text>
+<text x="554" y="758" class="body">Geometry, QC and voxel measurements</text>
+<text x="554" y="780" class="body">Direct edits, cut and refinement rules</text>
+<text x="554" y="802" class="body">VTK surfaces → GLB for saved masks</text>
+<text x="554" y="824" class="body">Accept corrections into a new revision</text>
+<rect x="1000" y="700" width="390" height="145" rx="10" fill="#172131" stroke="#3b4a62"/>
+<rect x="1000" y="712" width="4" height="121" rx="2" fill="#7194c4"/>
+<text x="1019" y="731" class="card-title">3. Prepare browser artifacts</text>
+<text x="1019" y="758" class="body">Compressed scalar slabs + mask crops</text>
+<text x="1019" y="780" class="body">3D display union capped at 8 MiB</text>
+<text x="1019" y="802" class="body">Content-addressed caches and GLB</text>
+<text x="1019" y="824" class="body">Presentation never rewrites masks</text>
+<text x="70" y="1042" class="card-title">SQLite records</text>
+<text x="70" y="1070" class="body">Cases · image assets · jobs</text>
+<text x="70" y="1094" class="body">Revisions · review sessions</text>
+<text x="535" y="1042" class="card-title">Native case files</text>
+<text x="535" y="1070" class="body">Copied DICOM · reference NIfTI</text>
+<text x="535" y="1094" class="body">Voxel masks · provenance · logs</text>
+<text x="1000" y="1042" class="card-title">Derived caches</text>
+<text x="1000" y="1070" class="body">Conversion · inference · meshes</text>
+<text x="1000" y="1094" class="body">Scalar slabs · display unions</text>
+<text x="70" y="1128" class="small">Authority: native image + voxel masks. Meshes and display unions do not change measurements.</text>
+<text x="70" y="1274" class="card-title">Offline HTML</text>
+<text x="70" y="1302" class="body">Chosen segmentation / volume / CT plane</text>
+<text x="70" y="1326" class="body">Self-contained viewer; no server needed</text>
+<text x="535" y="1274" class="card-title">Slicer correction round trip</text>
+<text x="535" y="1302" class="body">Source CT + named .seg.nrrd masks</text>
+<text x="535" y="1326" class="body">Geometry checked before a new revision</text>
+<text x="1000" y="1274" class="card-title">PNG capture</text>
+<text x="1000" y="1302" class="body">Generated by the browser renderer</text>
+<text x="1000" y="1326" class="body">Current view and presentation settings</text>
+<rect x="40" y="1390" width="1380" height="70" rx="10" fill="#121b28" stroke="#627390" stroke-dasharray="7 5"/>
+<text x="60" y="1418" class="small">Deployment boundary · 27 October 2026</text>
+<text x="60" y="1442" class="small">Live: CT-only. Static 3D MRI is implemented and tested on expansion; other imaging adapters remain future work.</text>
+</svg>

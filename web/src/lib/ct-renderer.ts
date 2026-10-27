@@ -1,5 +1,6 @@
 import type { Point, SliceMeta } from '../types';
 import { rasToPixel } from './geometry';
+import { imagePresentation, type ImageContext } from './image-domain';
 
 export interface CTOverlay {
   id: string;
@@ -10,12 +11,32 @@ export interface CTOverlay {
 }
 
 /** Top-left, row-major samples on the exact plane described by meta. */
-export interface CTFrame {
+export interface CTFrame extends ImageContext {
   meta: SliceMeta;
   hu: Float32Array;
   current: Uint8Array;
   parent?: Uint8Array;
   overlays?: CTOverlay[];
+  /** 2D presentation only; undefined retains the established 3D-plane appearance. */
+  overlayOpacity?: number;
+}
+
+/** One explicit 2D opacity controls fill, contour and comparison emphasis. */
+export function ctOverlayAppearance(opacity: number | undefined, layers = 1) {
+  if (opacity === undefined) return { current: .22, difference: .45, contour: layers > 1 ? .85 : 1 };
+  if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error('CT overlay opacity must be between 0 and 1.');
+  return { current: opacity, difference: Math.min(1, opacity * .45 / .22), contour: Math.min(1, opacity * 3) };
+}
+
+/** A presentation update may never replace image geometry or segmentation samples. */
+export function sameCTFrameSamples(left: CTFrame, right: CTFrame): boolean {
+  if (left.meta !== right.meta || left.hu !== right.hu || left.current !== right.current || left.parent !== right.parent
+      || left.reference_image_id !== right.reference_image_id || left.modality !== right.modality
+      || left.presentation !== right.presentation || left.source !== right.source) return false;
+  const first = left.overlays ?? [{ id: 'selected', current: left.current, parent: left.parent }];
+  const second = right.overlays ?? [{ id: 'selected', current: right.current, parent: right.parent }];
+  return first.length === second.length && first.every((layer, index) => layer.id === second[index].id
+    && layer.current === second[index].current && layer.parent === second[index].parent);
 }
 
 const MAX_OVERLAYS = 128;
@@ -38,6 +59,8 @@ uniform int uLayers;
 uniform ivec2 uSize;
 uniform float uWindow;
 uniform float uLevel;
+uniform vec3 uOverlayAlpha;
+uniform bool uInvert;
 uniform vec2 uPoint;
 uniform bool uCrosshair;
 out vec4 outColor;
@@ -54,7 +77,7 @@ vec3 overlay(vec3 rgb, ivec2 p, int layer, int previousLayer, int kind, vec3 col
   bool interior = selected(p + ivec2(-1,0), layer, previousLayer, kind) && selected(p + ivec2(1,0), layer, previousLayer, kind)
     && selected(p + ivec2(0,-1), layer, previousLayer, kind) && selected(p + ivec2(0,1), layer, previousLayer, kind);
   // Translucent contours keep coincident boundaries visible for multiple masks.
-  float coverage = interior ? alpha : (uLayers > 1 ? 0.85 : 1.0);
+  float coverage = interior ? alpha : uOverlayAlpha.z;
   return mix(rgb, color, coverage);
 }
 void main() {
@@ -62,14 +85,14 @@ void main() {
   ivec2 p = ivec2(int(gl_FragCoord.x), uSize.y - 1 - int(gl_FragCoord.y));
   float hu = texelFetch(uHU, p, 0).r;
   float gray = floor(clamp((hu - (uLevel - uWindow * 0.5)) / uWindow, 0.0, 1.0) * 255.0 + 0.5);
-  vec3 rgb = vec3(gray);
+  vec3 rgb = vec3(uInvert ? 255.0 - gray : gray);
   for (int layer = 0; layer < uLayers; layer++) {
     vec4 appearance = texelFetch(uPalette, ivec2(layer, 0), 0);
     int previousLayer = int(appearance.a);
-    rgb = overlay(rgb, p, layer, previousLayer, 0, appearance.rgb, 0.22);
+    rgb = overlay(rgb, p, layer, previousLayer, 0, appearance.rgb, uOverlayAlpha.x);
     if (previousLayer >= 0) {
-      rgb = overlay(rgb, p, layer, previousLayer, 1, vec3(244.0,63.0,94.0), 0.45);
-      rgb = overlay(rgb, p, layer, previousLayer, 2, vec3(34.0,197.0,94.0), 0.45);
+      rgb = overlay(rgb, p, layer, previousLayer, 1, vec3(244.0,63.0,94.0), uOverlayAlpha.y);
+      rgb = overlay(rgb, p, layer, previousLayer, 2, vec3(34.0,197.0,94.0), uOverlayAlpha.y);
     }
   }
   rgb = floor(rgb + 0.5) / 255.0;
@@ -164,7 +187,7 @@ export class CTRenderer {
     this.vao = gl.createVertexArray() || undefined;
     if (!this.vao) { gl.deleteProgram(program); this.program = undefined; throw new Error('CT display vertex state could not be allocated.'); }
     this.uniforms.clear();
-    for (const name of ['uHU','uCurrent','uParent','uPalette','uLayers','uSize','uWindow','uLevel','uPoint','uCrosshair']) {
+    for (const name of ['uHU','uCurrent','uParent','uPalette','uLayers','uSize','uWindow','uLevel','uOverlayAlpha','uInvert','uPoint','uCrosshair']) {
       const location = gl.getUniformLocation(program, name);
       if (location === null) throw new Error(`CT display parameter ${name} is unavailable.`);
       this.uniforms.set(name, location);
@@ -187,6 +210,7 @@ export class CTRenderer {
 
   setFrame(frame: CTFrame) {
     if (this.disposed) return;
+    imagePresentation(frame); ctOverlayAppearance(frame.overlayOpacity);
     const { width, height } = frame.meta, count = width * height;
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 4096 || height > 4096
         || frame.hu.length !== count || frame.current.length !== count || (frame.parent && frame.parent.length !== count)) {
@@ -237,6 +261,13 @@ export class CTRenderer {
           gl.UNSIGNED_BYTE, index === 1 ? layers[layer].current : layers[layer].parent!);
       }
     }
+    this.uploadPalette();
+    const error = gl.getError();
+    if (error !== gl.NO_ERROR) throw new Error(`CT image could not be uploaded to the GPU (${error}).`);
+  }
+
+  private uploadPalette() {
+    const gl = this.gl!;
     const palette = new Float32Array(Math.max(1, this.layers.length) * 4);
     let previousLayer = 0;
     this.layers.forEach((layer, index) => {
@@ -245,8 +276,22 @@ export class CTRenderer {
     });
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, this.textures[3]);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, Math.max(1, this.layers.length), 1, 0, gl.RGBA, gl.FLOAT, palette);
-    const error = gl.getError();
-    if (error !== gl.NO_ERROR) throw new Error(`CT image could not be uploaded to the GPU (${error}).`);
+  }
+
+  /** Repaint color/opacity using the resident HU and masks. No image uploads. */
+  setPresentation(frame: CTFrame): boolean {
+    if (this.disposed || !this.frame || !sameCTFrameSamples(this.frame, frame)) return false;
+    ctOverlayAppearance(frame.overlayOpacity);
+    const layers = frame.overlays ?? [{ id: 'selected', current: frame.current, parent: frame.parent }];
+    if (layers.some(layer => layer.color && (layer.color.length !== 3 || layer.color.some(value => !Number.isFinite(value) || value < 0 || value > 255)))) {
+      throw new Error('CT overlay colors are invalid.');
+    }
+    const paletteChanged = layers.some((layer, index) => (layer.color ?? DEFAULT_COLOR)
+      .some((value, channel) => value !== (this.layers[index].color ?? DEFAULT_COLOR)[channel]));
+    if (!paletteChanged && frame.overlayOpacity === this.frame.overlayOpacity) return true;
+    this.frame = frame; this.layers = layers; this.pixelsDirty = true;
+    if (paletteChanged && this.gl && !this.lost) this.uploadPalette();
+    return true;
   }
 
   draw(windowWidth: number, level: number, point: Point) {
@@ -266,6 +311,9 @@ export class CTRenderer {
       gl.uniform1i(uniform('uPalette'), 3); gl.uniform1i(uniform('uLayers'), this.layers.length);
       gl.uniform2i(uniform('uSize'), this.canvas.width, this.canvas.height);
       gl.uniform1f(uniform('uWindow'), windowWidth); gl.uniform1f(uniform('uLevel'), level);
+      const alpha = ctOverlayAppearance(this.frame.overlayOpacity, this.layers.length);
+      gl.uniform3f(uniform('uOverlayAlpha'), alpha.current, alpha.difference, alpha.contour);
+      gl.uniform1i(uniform('uInvert'), this.frame.presentation?.photometric_interpretation === 'MONOCHROME1' ? 1 : 0);
       gl.uniform2f(uniform('uPoint'), crosshair ? x : 0, crosshair ? y : 0); gl.uniform1i(uniform('uCrosshair'), crosshair ? 1 : 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     } else {
@@ -288,9 +336,10 @@ export class CTRenderer {
       const rgb = [0,0,0];
       const prepared = this.layers.map(layer => ({ layer, colors: [layer.color ?? DEFAULT_COLOR, [244,63,94], [34,197,94]] }));
       const minimum = this.lastLevel - this.lastWindow / 2;
+      const appearance = ctOverlayAppearance(frame.overlayOpacity, this.layers.length);
       for (let index = 0; index < width * height; index++) {
         const gray = Math.round(Math.max(0, Math.min(1, (frame.hu[index] - minimum) / this.lastWindow)) * 255);
-        rgb.fill(gray);
+        rgb.fill(frame.presentation?.photometric_interpretation === 'MONOCHROME1' ? 255 - gray : gray);
         for (const { layer, colors } of prepared) {
           for (let kind = 0; kind < (layer.parent ? 3 : 1); kind++) {
             if (!selected(layer, index, kind)) continue;
@@ -298,7 +347,7 @@ export class CTRenderer {
             const interior = x > 0 && y > 0 && x < width - 1 && y < height - 1
               && selected(layer, index - 1, kind) && selected(layer, index + 1, kind)
               && selected(layer, index - width, kind) && selected(layer, index + width, kind);
-            const alpha = interior ? (kind === 0 ? .22 : .45) : (this.layers.length > 1 ? .85 : 1);
+            const alpha = interior ? (kind === 0 ? appearance.current : appearance.difference) : appearance.contour;
             for (let c = 0; c < 3; c++) rgb[c] = rgb[c] * (1 - alpha) + colors[kind][c] * alpha;
           }
         }

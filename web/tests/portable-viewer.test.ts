@@ -75,6 +75,42 @@ describe('portable rendering state and data selection',()=>{
 });
 
 describe('embedded CT transport without a network or external worker',()=>{
+  function unionPayload() {
+    const data=payload(),union=embedded(new Uint8Array([0,1,1,0]),[2,2,1],'mask',1);
+    data.ct!.descriptor.reference_image_id='source-image';
+    data.state.volume_mask={enabled:true,mode:'inside',ids:['liver','vessel'],margin_mm:2.5};
+    Object.assign(union.descriptor,{key:'display-union',quality:'preview',presentation_only:true,volume_mask_union:true,
+      selected_structure_ids:['liver','vessel'],display_margin_mm:2.5,reference_image_id:'source-image',reference_geometry:geometry});
+    data.masks=[data.masks![0],{id:'volume-mask-union:display-union',...union}];return data;
+  }
+  it('shares one bounded display union while exact overlays retain original anatomical IDs',async()=>{
+    const data=unionPayload(),forbidden=vi.fn(()=>{throw new Error('Network forbidden');});vi.stubGlobal('fetch',forbidden);
+    const value=session(data),signal=new AbortController().signal;
+    expect(value.maskIds).toEqual(['liver','vessel']);expect(value.overlayIds).toEqual(['liver']);
+    const selected=await value.get(base,['vessel','liver','vessel'],signal,2.5);
+    expect(selected.overlays).toHaveLength(1);expect(selected.overlays[0].id).toBe('volume-mask-union:display-union');
+    expect([...new Uint8Array(await selected.overlays[0].current.readSlab(0,1))]).toEqual([0,1,1,0]);
+    const native=await value.getGPUOverlays(['liver']);expect(native.overlays[0].id).toBe('liver');
+    expect(native.overlays[0].current.descriptor.quality).toBe('full');
+    await expect(value.getGPUOverlays(['vessel'])).rejects.toThrow('exact segment overlay');
+    await expect(value.get(base,['vessel'],signal,2.5)).rejects.toThrow('not included');
+    await expect(value.get(base,['liver','vessel'],signal,3)).rejects.toThrow('not included');
+    await expect(value.get('/other-revision',['liver','vessel'],signal,2.5)).rejects.toThrow('different revision');
+    expect(data.state.volume_mask.ids).toEqual(['liver','vessel']);expect(forbidden).not.toHaveBeenCalled();
+  });
+  it('rejects forged union provenance, source geometry, identity and margin before decode',()=>{
+    const original=unionPayload();
+    for(const mutate of [
+      (data:PortablePayload)=>{Object.assign(data.masks![1].descriptor,{selected_structure_ids:['vessel']});},
+      (data:PortablePayload)=>{Object.assign(data.masks![1].descriptor,{selected_structure_ids:['liver','vessel','vessel']});},
+      (data:PortablePayload)=>{data.masks![1].id='volume-mask-union:wrong';},
+      (data:PortablePayload)=>{data.masks![1].descriptor.reference_image_id='different-image';},
+      (data:PortablePayload)=>{data.masks![1].descriptor.reference_geometry!.shape=[99,7,3];},
+      (data:PortablePayload)=>{data.masks![1].descriptor.display_margin_mm=0;},
+      (data:PortablePayload)=>{data.masks![1].descriptor.presentation_only=false;},
+    ]) {const data=structuredClone(original);mutate(data);expect(()=>session(data)).toThrow();}
+    const duplicate=unionPayload();duplicate.masks!.push(duplicate.masks![1]);expect(()=>session(duplicate)).toThrow('union selection');
+  });
   it('keeps padded volume masks separate from exact slice overlays without losing original IDs',async()=>{
     const data=payload();data.state.volume_mask={enabled:true,mode:'inside',ids:['liver'],margin_mm:2.5};
     data.masks=[{id:'liver',...embedded(new Uint8Array(5*7*3),[5,7,3],'mask',2)},

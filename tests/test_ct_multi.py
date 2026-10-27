@@ -124,9 +124,9 @@ def api(source, tmp_path):
     parent_id, revision_id = uuid.uuid4().hex, uuid.uuid4().hex
     structures = [{"id": "total:liver", "mask_file": str(first), "color": "#000000", "group": "Abdominal organs"},
                   {"id": "total:spleen", "mask_file": str(second), "color": "#ffffff", "group": "Abdominal organs"}]
-    service.store.save("revisions", {"case_id": case["id"], "ct_file": str(ct), "id": parent_id,
+    service.store.save("revisions", {"case_id": case["id"], "ct_file": str(ct), "geometry": imaging.geometry(ct), "id": parent_id,
         "parent_id": None, "structures": [{**structures[0], "mask_file": str(previous)}]})
-    service.store.save("revisions", {"case_id": case["id"], "ct_file": str(ct), "id": revision_id,
+    service.store.save("revisions", {"case_id": case["id"], "ct_file": str(ct), "geometry": imaging.geometry(ct), "id": revision_id,
         "parent_id": parent_id, "structures": structures})
     with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client, service, case["id"], revision_id
@@ -140,7 +140,11 @@ def test_api_multi_legacy_identity_dedup_and_unknown_rejected_before_decode(api,
     base = [("plane", "axial"), ("position_mm", str(position)), ("compare", "true")]
     single = client.get(prefix + "/review-frame", params=[*base, ("structure_id", "total:liver")])
     old = review_volume.review_frame(ct, paths[0], "axial", position, paths[2])
-    assert json.loads(single.headers["x-ct-frame"]) == old["frame"]
+    presented = json.loads(single.headers["x-ct-frame"])
+    assert {key: presented[key] for key in old['frame']} == old['frame']
+    assert presented['modality'] == 'CT' and presented['scalar']['units'] == 'HU'
+    assert presented['reference_image_id'] == service.store.resolve_reference(
+        service.store.revision(case_id, revision_id))['id']
     assert single.content == gzip.decompress(old["body"])
     query = [*base, ("structure_ids", "total:liver"), ("structure_ids", "total:spleen"),
              ("structure_ids", "total:liver")]

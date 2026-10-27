@@ -50,3 +50,24 @@ describe('Cornerstone physical frame bridge', () => {
     expect(pixels[4 * 7 + 3]).toBe(0); // No label means fully transparent.
   });
 });
+
+
+describe('2D overlay opacity', () => {
+  it('increases fill by default, hides fill and contours at zero, and retains comparison semantics', () => {
+    const mask = new Uint8Array(25), parent = new Uint8Array(25);
+    for (let y = 1; y <= 3; y++) for (let x = 1; x <= 3; x++) mask[y * 5 + x] = parent[y * 5 + x] = 1;
+    parent[2 * 5 + 1] = 0; parent[0] = 1;
+    const frame = { meta: { ...meta, width: 5, height: 5 }, hu: new Float32Array(25), current: mask,
+      overlays: [{ id: 'test', current: mask, parent, color: [210, 20, 40] as [number, number, number] }] };
+    const legacy = cornerstoneOverlayPixels(frame), full = cornerstoneOverlayPixels({ ...frame, overlayOpacity: .4 });
+    expect(legacy[12 * 4 + 3]).toBe(Math.round(.22 * 255));
+    expect(full[12 * 4 + 3]).toBe(Math.round(.4 * 255));
+    expect(cornerstoneOverlayPixels({ ...frame, overlayOpacity: 0 }).every(value => value === 0)).toBe(true);
+    const light = cornerstoneOverlayPixels({ ...frame, overlayOpacity: .1 });
+    expect(light[12 * 4 + 3]).toBe(26);
+    expect(light[0]).toBe(244); expect(light[1]).toBe(63); expect(light[2]).toBe(94);
+    expect(light[3]).toBe(77); // Removed contour: min(1, 3 * .1).
+    expect(light[(2 * 5 + 1) * 4 + 1]).toBeGreaterThan(light[(2 * 5 + 1) * 4]);
+    expect(mask[12]).toBe(1); expect(parent[0]).toBe(1);
+  });
+});

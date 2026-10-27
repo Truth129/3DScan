@@ -1,6 +1,6 @@
 import type { Point, SliceMeta } from '../types';
 import { pixelToRas } from './geometry';
-import type { CTFrame, CTOverlay } from './ct-renderer';
+import { ctOverlayAppearance, type CTFrame, type CTOverlay } from './ct-renderer';
 
 /** Cornerstone uses patient LPS millimetres; the app uses patient RAS. */
 export function rasToLps([r, a, s]: readonly number[]): Point { return [-r, -a, s]; }
@@ -48,6 +48,7 @@ export function cornerstoneOverlayPixels(frame: CTFrame): Uint8ClampedArray {
     throw new Error('Invalid CT overlay layout');
   }
   const pixels = new Uint8ClampedArray(count * 4);
+  const appearance = ctOverlayAppearance(frame.overlayOpacity, layers.length);
   const selected = (layer: CTOverlay, index: number, kind: number) => kind === 0 ? !!layer.current[index]
     : kind === 1 ? !!layer.parent?.[index] && !layer.current[index] : !!layer.current[index] && !layer.parent?.[index];
   for (let index = 0; index < count; index++) {
@@ -60,7 +61,7 @@ export function cornerstoneOverlayPixels(frame: CTFrame): Uint8ClampedArray {
         const interior = x > 0 && y > 0 && x < width - 1 && y < height - 1
           && selected(layer, index - 1, kind) && selected(layer, index + 1, kind)
           && selected(layer, index - width, kind) && selected(layer, index + width, kind);
-        const opacity = interior ? (kind === 0 ? .22 : .45) : (layers.length > 1 ? .85 : 1);
+        const opacity = interior ? (kind === 0 ? appearance.current : appearance.difference) : appearance.contour;
         // Premultiplied accumulation retains overlapping structures independently.
         for (let channel = 0; channel < 3; channel++) rgb[channel] = rgb[channel] * (1 - opacity) + colors[kind][channel] * opacity;
         alpha = alpha * (1 - opacity) + opacity;

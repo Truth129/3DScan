@@ -5,7 +5,7 @@ export const SCAN_REGION_OPTIONS = [
     { id: 'corcta', label: 'Coronary CTA (CorCTA)' }, { id: 'cardiac', label: 'Cardiac CT' },
   ] },
   { group: 'Chest and abdomen', options: [
-    { id: 'chest', label: 'Chest' }, { id: 'chest_abdomen', label: 'Chest + abdomen' },
+    { id: 'chest', label: 'Chest' }, { id: 'breast', label: 'Breast' }, { id: 'chest_abdomen', label: 'Chest + abdomen' },
     { id: 'chest_abdomen_pelvis', label: 'Chest + abdomen + pelvis' },
     { id: 'abdomen', label: 'Abdomen' }, { id: 'abdomen_pelvis', label: 'Abdomen + pelvis' }, { id: 'pelvis', label: 'Pelvis' },
   ] },

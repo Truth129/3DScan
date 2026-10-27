@@ -92,13 +92,24 @@ def test_demo_review_refine_undo_slices_and_slicer_roundtrip(client):
     assert http.get("/api/cases/00000000000000000000000000000000/jobs").status_code == 404
 
 
-def test_slice_image_and_metadata_share_render_and_invalidate_replaced_files(client, monkeypatch):
+def test_legacy_slice_image_and_metadata_share_render_and_invalidate_replaced_files(client, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
+    from copy import deepcopy
     from scan3d import imaging
+    from scan3d.store import identifier
 
     http, service = client
     case = http.post("/api/cases/demo").json()
-    revision = service.store.revision(case["id"], case["active_revision_id"])
+    current = service.store.revision(case["id"], case["active_revision_id"])
+    # This is an explicit legacy record, predating immutable image bindings.
+    # Its source stat signature still exercises decoded-image/PNG cache
+    # invalidation. Bound references reject changed pixels in test_image_assets.
+    revision = deepcopy(current)
+    revision['id'] = identifier()
+    revision.pop('reference_image_id', None)
+    revision.pop('image_asset', None)
+    for entry in revision['structures']:
+        entry.pop('reference_image_id', None)
     # Uncompressed input keeps exactly the same file length after replacing HU
     # values, isolating ctime invalidation from changes to compressed length.
     ct_path = Path(revision["ct_file"]).with_name("cache-test-reference.nii")
@@ -111,11 +122,11 @@ def test_slice_image_and_metadata_share_render_and_invalidate_replaced_files(cli
     calls = []
     started = threading.Event()
 
-    def render(*args):
+    def render(*args, **kwargs):
         calls.append(args)
         started.set()
         time.sleep(0.08)  # Force concurrent image/metadata cache misses.
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(imaging, "slice_image", render)
     with ThreadPoolExecutor(max_workers=2) as executor:

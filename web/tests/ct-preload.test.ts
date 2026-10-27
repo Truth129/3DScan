@@ -1,8 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
-import { preloadCTSelection } from '../src/lib/ct-preload';
+import { preloadCTSelection, preloadCTSource } from '../src/lib/ct-preload';
 import { LocalCTSupersededError } from '../src/lib/ct-volume';
 
 describe('CT preload selection changes', () => {
+  it('promotes a completed native source while selected mask download remains pending', async () => {
+    let finishSource!: () => void, finishMasks!: () => void;
+    const ready = new Promise<void>(resolve => { finishSource = resolve; });
+    const setOverlay = vi.fn(() => new Promise<void>(resolve => { finishMasks = resolve; }));
+    const promoted = preloadCTSource({ ready, setOverlay }, () => ({ ids: ['large-mask'], compare: true }), () => true);
+    expect(setOverlay).toHaveBeenCalledWith(['large-mask'], true);
+    finishSource();
+    expect(await promoted).toBe(true);
+    finishMasks();
+  });
+
+  it('retains a ready source after oversized masks fail and never revives a cancelled source', async () => {
+    const setOverlay = vi.fn(async () => { throw new Error('Mask memory budget exceeded'); });
+    expect(await preloadCTSource({ ready: Promise.resolve(), setOverlay }, () => ({ ids: ['huge'], compare: false }), () => true)).toBe(true);
+    expect(await preloadCTSource({ ready: Promise.resolve(), setOverlay }, () => ({ ids: [], compare: false }), () => false)).toBe(false);
+    const failure = new Error('Source download failed');
+    await expect(preloadCTSource({ ready: Promise.reject(failure), setOverlay }, () => ({ ids: [], compare: false }), () => true)).rejects.toBe(failure);
+  });
   it('retains CT and finishes the newest multi-mask comparison after queue replacement', async () => {
     let selection = { ids: ['target'], compare: false };
     const setOverlay = vi.fn(async () => {

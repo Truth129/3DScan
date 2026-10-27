@@ -33,10 +33,10 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
 
 <template>
   <section class="segmentation-panel" aria-label="Segmentation settings">
-    <header><div><h2>Run segmentation</h2><p>View the CT now. Start an anatomical task when you need segments.</p></div><button type="button" class="icon-button" aria-label="Close segmentation settings" title="Close segmentation settings" :disabled="licensePending" @click="emit('close')">×</button></header>
+    <header><div><h2>Run segmentation</h2><p>Start a task compatible with the current source image when you need segments.</p></div><button type="button" class="icon-button" aria-label="Close segmentation settings" title="Close segmentation settings" :disabled="licensePending" @click="emit('close')">×</button></header>
     <div class="segmentation-search-row">
       <label class="segmentation-task-search">Find a task or structure<input v-model="search" type="search" aria-label="Find a task or structure" placeholder="e.g. skull, lung, heart…" :disabled="working || loading || !catalog" /></label>
-      <p v-if="catalog" class="segmentation-catalog-caption">{{ catalog.tasks.length }} CT tasks · TotalSegmentator {{ catalog.engine_version }}</p>
+      <p v-if="catalog" class="segmentation-catalog-caption">{{ catalog.tasks.length }} {{ catalog.tasks[0]?.modality || '' }} tasks · TotalSegmentator {{ catalog.engine_version }}</p>
     </div>
     <p v-if="search.trim() && catalog" class="segmentation-search-status" role="status">{{ searchedTasks.matches.length ? `${searchedTasks.matches.length} matching ${searchedTasks.matches.length === 1 ? 'task' : 'tasks'}.` : 'No matching tasks.' }}<span v-if="searchedTasks.retainedSelection"> Your current selection is retained.</span> <button type="button" class="text-button" :disabled="working || loading" @click="search = ''">Clear search</button></p>
     <form @submit.prevent="!working && !loading && !unavailable && !error && emit('run')">
@@ -49,7 +49,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
       </fieldset>
       <button class="button primary" :disabled="working || loading || unavailable || !!error" type="submit">{{ busy ? 'Processing…' : licensePending ? 'Updating license…' : 'Run segmentation' }}</button>
     </form>
-    <p v-if="loading" class="segmentation-status" role="status">Loading installed CT tasks…</p>
+    <p v-if="loading" class="segmentation-status" role="status">Loading compatible segmentation tasks…</p>
     <p v-else-if="error" class="segmentation-error" role="status">{{ error }} <button type="button" class="text-button" @click="emit('retry')">Retry tasks</button></p>
     <p v-else-if="task" class="segmentation-description">{{ task.description || task.label }}<span v-if="task.class_count"> · {{ task.class_count }} structures</span></p>
     <details v-if="task?.classes?.length" class="segmentation-outputs">

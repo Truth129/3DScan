@@ -458,7 +458,7 @@ export class CTVolumeRenderer {
   }
   setSettings(settings: CTVolumeSettings) {
     const next=freshVolumeSettings(settings);
-    const presetChanged = next.preset !== this.settings.preset || (next.preset==='CT-Cinematic-Heart'
+    const presetChanged = next.preset !== this.settings.preset || (next.preset === 'MR-SignalWindow' && (next.signal_window.window !== this.settings.signal_window.window || next.signal_window.level !== this.settings.signal_window.level || next.signal_window.invert !== this.settings.signal_window.invert)) || (next.preset==='CT-Cinematic-Heart'
       && (next.cinematic.myocardiumHU!==this.settings.cinematic.myocardiumHU || next.cinematic.bloodHU!==this.settings.cinematic.bloodHU));
     this.settings = next;
     this.material.uniforms.uShift.value = this.settings.shift; this.material.uniforms.uDensity.value = this.settings.density;
@@ -467,7 +467,7 @@ export class CTVolumeRenderer {
   }
   setInteracting(value: boolean) { this.interacting = value; }
   private updateTransfer() {
-    const preset=getVolumePreset(this.settings.preset,this.settings.cinematic), range=preset.transferRange;
+    const preset=getVolumePreset(this.settings.preset,this.settings.cinematic,this.settings.signal_window), range=preset.transferRange;
     this.material.uniforms.uTransferRange.value.set(...range);
     const pixels = this.transfer.image.data as Float32Array;
     const cinematic=this.settings.preset==='CT-Cinematic-Heart';
@@ -606,15 +606,24 @@ export class CTVolumeRenderer {
     integrate(layers.renderTail(camera,peels,previous!.depth));integrate();
     this.displayQuad.material.uniforms.uImage.value=this.stackAccum[(iteration-1)%2].texture;
   }
+  /** Release framebuffer storage while the layer is hidden; borrowed CT stays owned by the scene. */
+  releaseTargets() {
+    this.target?.dispose(); this.target=undefined;
+    this.planeTarget?.dispose(); this.planeTarget=undefined;
+    this.surfaceLayers?.dispose(); this.surfaceLayers=undefined;
+    this.stackAccum.forEach(target=>target.dispose()); this.stackAccum=[];
+    this.lastWidth=0;this.lastHeight=0;this.planeActive=false;
+    this.stackActive=false;this.stackSurfaceCount=0;this.stackPeels=0;this.stackTail=false;
+    for (const name of ['uPlaneColor','uPlaneDepth','uStackAccum','uStackStartDepth','uStackEndColor','uStackEndDepth'])
+      this.material.uniforms[name].value=null;
+    this.displayQuad.material.uniforms.uImage.value=null;
+    this.planeScene.clear();this.planeMirror=undefined;
+  }
   dispose() {
     if (this.disposed) return;
     this.disposed=true;this.binding=undefined;this.maskBinding=undefined;this.maskIDs=[];this.planeActive=false;this.material.uniforms.uVolume.value=null;
     this.updateMask();
-    this.transfer.dispose();this.emptyMask.dispose();this.target?.dispose();this.target=undefined;
-    this.planeTarget?.dispose();this.planeTarget=undefined;
-    this.surfaceLayers?.dispose();this.surfaceLayers=undefined;this.stackAccum.forEach(target=>target.dispose());this.stackAccum=[];
-    this.material.uniforms.uPlaneColor.value=null;this.material.uniforms.uPlaneDepth.value=null;
-    this.planeScene.clear();this.planeMirror=undefined;
+    this.transfer.dispose();this.emptyMask.dispose();this.releaseTargets();
     this.quad.geometry.dispose();this.displayQuad.geometry.dispose();this.material.dispose();this.displayQuad.material.dispose();
     this.rayScene.clear();this.displayScene.clear();
   }

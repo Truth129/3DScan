@@ -104,7 +104,7 @@ def main():
     manifests = [entry["data"] for entry in evidence["manifests"]]
     runtime = next((m["runtime"] for m in manifests), {})
     verified = evidence["verified"]
-    proof_file = ROOT / ".runtime/gpu-proof.json"
+    proof_file = Path(os.environ.get("SCAN3D_GPU_PROOF", str(ROOT / ".runtime/gpu-proof.json")))
     proof = json.loads(proof_file.read_text()) if proof_file.exists() else {}
     weights_directory = Path(os.environ.get("TOTALSEG_HOME_DIR", ROOT / ".runtime/totalsegmentator"))
     proof.update(inference_verified=verified, model_inference_proven=verified,

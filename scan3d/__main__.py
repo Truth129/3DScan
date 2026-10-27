@@ -31,7 +31,7 @@ def main():
     segment = sub.add_parser("segment", help="Run a selected TotalSegmentator task on a prepared CT")
     segment.add_argument("case")
     segment.add_argument("--revision", help="Input revision (defaults to the active revision)")
-    segment.add_argument("--task", default="total")
+    segment.add_argument("--task", help="Model task (default: total for CT, total_mr for MRI)")
     segment.add_argument("--robust-crop", action="store_true")
     segment.add_argument("--body-seg", action="store_true")
     segment.add_argument("--remove-small-blobs", action="store_true")

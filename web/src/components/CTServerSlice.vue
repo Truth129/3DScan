@@ -5,8 +5,9 @@ import CTReviewInput from './CTReviewInput.vue';
 import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/interactive-review';
 import { revisionUrl, request } from '../lib/api';
 import { pixelToRas, rasToPixel, planeAxis } from '../lib/geometry';
-import type { CTOverlaySelection } from '../lib/ct-overlays';
-const props = defineProps<{ caseId: string; revisionId: string; geometry: Geometry; plane: Plane; point: Point; window: number; level: number; structure: string; overlays?: CTOverlaySelection[]; compare: boolean; reviewTool?: InteractiveTool; reviewPrompts?: InteractivePrompt[]; reviewDisabled?: boolean; reviewInclude?: boolean; reviewRadius?: number; nativeReview?: boolean }>();
+import { ctOverlayColor, type CTOverlaySelection } from '../lib/ct-overlays';
+const props = defineProps<{ modality?: string; caseId: string; revisionId: string; geometry: Geometry; plane: Plane; point: Point; window: number; level: number; structure: string; overlays?: CTOverlaySelection[]; overlayOpacity?: number; compare: boolean; reviewTool?: InteractiveTool; reviewPrompts?: InteractivePrompt[]; reviewDisabled?: boolean; reviewInclude?: boolean; reviewRadius?: number; nativeReview?: boolean }>();
+const modalityLabel = computed(() => props.modality ?? 'CT');
 const emit = defineEmits<{ point: [point: Point]; prompt: [point: Point]; gesture: [prompt: InteractivePrompt] }>();
 const canvas = ref<HTMLCanvasElement>();
 const loading = ref(false), error = ref('');
@@ -24,7 +25,7 @@ const axis = computed(() => planeAxis(props.plane));
 const nativeSlice = computed(() => props.nativeReview ? nativeSliceFor(props.geometry, props.plane, props.point) : undefined);
 const position = computed(() => nativeSlice.value?.index ?? props.point[axis.value]);
 const range = computed(() => nativeSlice.value ? [0, props.geometry.shape[nativeSlice.value.axis] - 1] : [props.geometry.bounds_ras[0][axis.value], props.geometry.bounds_ras[1][axis.value]]);
-const overlayKey = computed(() => JSON.stringify(props.overlays?.map(item => item.id)));
+const overlayKey = computed(() => JSON.stringify(props.overlays?.map(item => [item.id, item.color])));
 const labels: Record<Plane, string[]> = { axial: ['A', 'R', 'L', 'P'], coronal: ['S', 'R', 'L', 'I'], sagittal: ['S', 'A', 'P', 'I'] };
 function draw() {
   if (!canvas.value || !image || !meta) return;
@@ -74,7 +75,7 @@ async function pump() {
       controller = new AbortController();
       try {
         const response = await fetch(`${current.base}/slice?${current.query}`, { signal: controller.signal });
-        if (!response.ok) throw new Error('CT slice could not be loaded.');
+        if (!response.ok) throw new Error(`The ${modalityLabel.value} slice could not be loaded.`);
         // One response binds the image to its exact patient-coordinate mapping.
         // Keep compatibility with a server that has not yet been restarted.
         const header = response.headers.get('X-Slice-Meta');
@@ -91,7 +92,7 @@ async function pump() {
       } catch (reason) {
         if (disposed) break;
         if (current.context !== desired.context || current.key !== desired.key) continue;
-        if (!(reason instanceof DOMException && reason.name === 'AbortError')) error.value = reason instanceof Error ? reason.message : 'CT unavailable.';
+        if (!(reason instanceof DOMException && reason.name === 'AbortError')) error.value = reason instanceof Error ? reason.message : `${modalityLabel.value} unavailable.`;
         break;
       }
     }
@@ -99,7 +100,11 @@ async function pump() {
 }
 function load() {
   const params = new URLSearchParams({ plane: props.plane, window: String(props.window), level: String(props.level), compare: String(props.compare) });
-  if (props.overlays) for (const overlay of props.overlays) params.append('structure_ids', overlay.id);
+  if (props.structure || props.overlays?.length) params.set('overlay_opacity', String(props.overlayOpacity ?? .4));
+  if (props.overlays) for (const overlay of props.overlays) {
+    params.append('structure_ids', overlay.id);
+    params.append('structure_colors', '#' + ctOverlayColor(overlay.color).map(channel => channel.toString(16).padStart(2, '0')).join(''));
+  }
   else if (props.structure) params.set('structure_id', props.structure);
   if (nativeSlice.value) { params.set('native_axis', String(nativeSlice.value.axis)); params.set('native_index', String(nativeSlice.value.index)); }
   const base = revisionUrl(props.caseId, props.revisionId), nextContext = `${base}?${params}`;
@@ -127,7 +132,7 @@ function click(event: MouseEvent) {
   if (marking.value) emit('prompt', ras); else emit('point', ras);
 }
 function slide(event: Event) { const value = Number((event.target as HTMLInputElement).value); if (nativeSlice.value) emit('point', moveNativeSlice(props.geometry, props.point, nativeSlice.value.axis, value)); else { const next: Point = [...props.point]; next[axis.value] = value; emit('point', next); } }
-watch(() => [props.caseId, props.revisionId, props.plane, position.value, props.window, props.level, props.structure, overlayKey.value, props.compare, props.nativeReview], load, { immediate: true });
+watch(() => [props.caseId, props.revisionId, props.plane, position.value, props.window, props.level, props.structure, overlayKey.value, props.overlayOpacity, props.compare, props.nativeReview], load, { immediate: true });
 watch(() => props.point, queueDraw, { deep: true });
 onBeforeUnmount(() => { disposed = true; controller?.abort(); cancelAnimationFrame(drawFrame); clearFrames(); });
 </script>
@@ -136,7 +141,7 @@ onBeforeUnmount(() => { disposed = true; controller?.abort(); cancelAnimationFra
   <section class="ct-slice">
     <header><h3>{{ nativeReview ? `Native ${['i', 'j', 'k'][nativeSlice!.axis]}` : plane }}</h3><span :title="loading ? `Loading ${position.toFixed(1)} mm` : undefined">{{ nativeReview ? `Slice ${Math.round(displayedPosition ?? position) + 1} / ${geometry.shape[nativeSlice!.axis]}` : `${(displayedPosition ?? position).toFixed(1)} mm` }}</span><span v-if="loading" class="tiny-loading">•••</span></header>
     <div class="ct-image" :class="{ 'is-loading': loading, 'ct-marking': marking && !reviewDisabled }">
-      <canvas ref="canvas" :aria-label="`${plane} CT slice. Click to select patient coordinates.`" @click="click"></canvas>
+      <canvas ref="canvas" :aria-label="`${plane} ${modalityLabel} slice. Click to select patient coordinates.`" @click="click"></canvas>
       <CTReviewInput v-if="markerMeta" :meta="markerMeta" :geometry="geometry" :prompts="reviewPrompts || []" :tool="reviewTool || 'navigate'" :include="reviewInclude !== false" :radius="reviewRadius || 3" :disabled="!!reviewDisabled || loading || Math.abs((displayedPosition ?? Infinity) - position) >= .01" @gesture="emit('gesture', $event)" />
       <span class="slice-direction top">{{ (markerMeta?.native ? nativeEdgeLabels(markerMeta) : labels[plane])[0] }}</span><span class="slice-direction left">{{ (markerMeta?.native ? nativeEdgeLabels(markerMeta) : labels[plane])[1] }}</span><span class="slice-direction right">{{ (markerMeta?.native ? nativeEdgeLabels(markerMeta) : labels[plane])[2] }}</span><span class="slice-direction bottom">{{ (markerMeta?.native ? nativeEdgeLabels(markerMeta) : labels[plane])[3] }}</span>
       <div v-if="error" class="slice-error">{{ error }} <button class="text-button" @click="load">Retry</button></div>

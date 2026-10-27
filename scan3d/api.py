@@ -24,6 +24,7 @@ from .service import Service, extract_zip, safe_relative
 from .store import ReviewConflict, public_case, public_job, public_revision
 from .portable_export import ExportRequest
 from .acquisition import CardiacPhase, StudyProfile
+from .domain import Modality, VolumeQuality
 
 
 class ViewerStaticFiles(StaticFiles):
@@ -63,7 +64,7 @@ class Process(Input):
 
 class Segment(Input):
     revision_id: str
-    task: str = Field(default="total", min_length=1, max_length=80)
+    task: str | None = Field(default=None, min_length=1, max_length=80)
     robust_crop: bool = False
     body_seg: bool = False
     remove_small_blobs: bool = False
@@ -376,9 +377,25 @@ def create_app(settings: Settings | None = None):
             cardiac_phase=body.cardiac_phase, rr_percent=body.rr_percent))
 
     @app.get("/api/segmentation-options")
-    def segmentation_options():
+    def segmentation_options(modality: Modality = Modality.CT):
         from .segmentation_options import segmentation_catalog
-        return segmentation_catalog()
+        return segmentation_catalog(modality)
+
+    @app.get("/api/imaging-capabilities")
+    def imaging_capabilities():
+        from .modalities import modality_capabilities
+        return modality_capabilities()
+
+    @app.get("/api/cases/{case_id}/images")
+    def image_assets(case_id: str):
+        from .image_assets import public_image_asset
+        service.store.get("cases", case_id)
+        return [public_image_asset(asset) for asset in service.store.image_assets(case_id)]
+
+    @app.get("/api/cases/{case_id}/images/{image_id}")
+    def image_asset(case_id: str, image_id: str):
+        from .image_assets import public_image_asset
+        return public_image_asset(service.store.image_asset(case_id, image_id))
 
     @app.get("/api/totalsegmentator/license")
     def total_segmentator_license_status(response: Response):
@@ -488,7 +505,7 @@ def create_app(settings: Settings | None = None):
             raise KeyError("Candidate models are available through their surface manifest")
         revision = service.store.revision(case_id, revision_id)
         if not revision["structures"]:
-            raise ValueError("This CT has no segmentation surfaces yet")
+            raise ValueError("This image has no segmentation surfaces yet")
         target = service.ensure_detailed(case_id, revision_id) if detail else Path(revision["directory"]) / "model.glb"
         return FileResponse(target, media_type="model/gltf-binary")
 
@@ -525,9 +542,17 @@ def create_app(settings: Settings | None = None):
         return service.store.revision(case_id, revision_id)
 
     def review_ct(case_id, revision_id, quality="full"):
-        from .review_volume import ct_volume
+        from .review_volume import scalar_volume
         revision = ct_revision(case_id, revision_id)
-        return ct_volume(revision["ct_file"], review_cache, quality)
+        asset = service.store.resolve_reference(revision)
+        descriptor = scalar_volume(asset["file_path"], review_cache, quality,
+                                   presentation=asset["presentation"], reference_image_id=asset["id"])
+        return with_image_context(descriptor, asset)
+
+    def with_image_context(value, asset):
+        return {**value, "reference_image_id": asset["id"], "modality": asset["modality"],
+                "scalar": {"units": asset["scalar"]["units"]},
+                "presentation": asset["presentation"], "source": asset["source"]}
 
     def review_mask(case_id, revision_id, structure_id, parent=False, quality="full", margin_mm=0):
         from .review_volume import mask_volume
@@ -540,7 +565,30 @@ def create_app(settings: Settings | None = None):
                 return None
             selected = ct_revision(case_id, revision["parent_id"])
         structure = next((s for s in selected["structures"] if s["id"] == structure_id), None)
-        return mask_volume(revision["ct_file"], structure["mask_file"], review_cache, quality, margin_mm=margin_mm) if structure else None
+        if structure is None:
+            return None
+        asset = service.store.resolve_reference(revision)
+        selected_asset = service.store.resolve_reference(selected)
+        if selected_asset["id"] != asset["id"]:
+            raise ValueError("Comparison masks must belong to the same reference image")
+        descriptor = mask_volume(asset["file_path"], structure["mask_file"], review_cache, quality,
+                                 margin_mm=margin_mm, reference_image_id=asset["id"])
+        return with_image_context(descriptor, asset)
+
+    def review_volume_mask(case_id, revision_id, structure_ids, margin_mm=0, cancelled=None):
+        from .volume_mask_union import volume_mask_union
+        revision = ct_revision(case_id, revision_id)
+        asset = service.store.resolve_reference(revision)
+        selected_ids = sorted(set(structure_ids))
+        if not selected_ids:
+            raise ValueError("Select at least one structure for volume masking")
+        structures = {structure["id"]: structure for structure in revision["structures"]}
+        if any(structure_id not in structures for structure_id in selected_ids):
+            raise ValueError("Unknown structure")
+        descriptor = volume_mask_union(asset["file_path"],
+            [(structure_id, structures[structure_id]["mask_file"]) for structure_id in selected_ids],
+            review_cache, margin_mm, reference_image_id=asset["id"], cancelled=cancelled)
+        return with_image_context(descriptor, asset)
 
     def with_chunk_urls(descriptor, prefix, query=""):
         return {**descriptor, "chunks": [
@@ -559,7 +607,7 @@ def create_app(settings: Settings | None = None):
                             })
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/ct-volume")
-    def ct_volume_manifest(case_id: str, revision_id: str, quality: Literal["preview", "full"] = "full"):
+    def ct_volume_manifest(case_id: str, revision_id: str, quality: VolumeQuality = VolumeQuality.FULL):
         descriptor = review_ct(case_id, revision_id, quality)
         prefix = f"/api/cases/{case_id}/revisions/{revision_id}/ct-volume"
         return JSONResponse(with_chunk_urls(descriptor, prefix, f"?quality={quality}"),
@@ -567,12 +615,24 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/ct-volume/{key}/chunks/{index}")
     def ct_volume_chunk(case_id: str, revision_id: str, key: str, index: int,
-                        quality: Literal["preview", "full"] = "full"):
+                        quality: VolumeQuality = VolumeQuality.FULL):
+        return volume_chunk(review_ct(case_id, revision_id, quality), key, index)
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/image-volume")
+    def image_volume_manifest(case_id: str, revision_id: str, quality: VolumeQuality = VolumeQuality.FULL):
+        descriptor = review_ct(case_id, revision_id, quality)
+        prefix = f"/api/cases/{case_id}/revisions/{revision_id}/image-volume"
+        return JSONResponse(with_chunk_urls(descriptor, prefix, f"?quality={quality}"),
+                            headers={"Cache-Control": "private, no-store"})
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/image-volume/{key}/chunks/{index}")
+    def image_volume_chunk(case_id: str, revision_id: str, key: str, index: int,
+                           quality: VolumeQuality = VolumeQuality.FULL):
         return volume_chunk(review_ct(case_id, revision_id, quality), key, index)
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/mask-volume")
     def mask_volume_manifest(case_id: str, revision_id: str, structure_id: str, compare: bool = False,
-                             quality: Literal["preview", "full"] = "full",
+                             quality: VolumeQuality = VolumeQuality.FULL,
                              margin_mm: float = Query(0, ge=0, le=5)):
         from urllib.parse import urlencode
         prefix = f"/api/cases/{case_id}/revisions/{revision_id}/mask-volume"
@@ -588,27 +648,63 @@ def create_app(settings: Settings | None = None):
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/mask-volume/{key}/chunks/{index}")
     def mask_volume_chunk(case_id: str, revision_id: str, key: str, index: int,
                           structure_id: str, parent: bool = False,
-                          quality: Literal["preview", "full"] = "full",
+                          quality: VolumeQuality = VolumeQuality.FULL,
                           margin_mm: float = Query(0, ge=0, le=5)):
         return volume_chunk(review_mask(case_id, revision_id, structure_id, parent, quality, margin_mm), key, index)
 
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-mask")
+    async def volume_mask_manifest(request: Request, case_id: str, revision_id: str,
+                                   structure_ids: list[str] = Query(default=[]),
+                                   margin_mm: float = Query(0, ge=0, le=5)):
+        from urllib.parse import urlencode
+        import asyncio
+        from .review_volume import display_margin
+        cancelled = threading.Event()
+        work = asyncio.create_task(asyncio.to_thread(review_volume_mask, case_id, revision_id,
+            structure_ids, margin_mm, cancelled.is_set))
+        try:
+            while not work.done():
+                await asyncio.wait({work}, timeout=.1)
+                if not work.done() and await request.is_disconnected():
+                    raise HTTPException(499, "Volume mask request cancelled")
+            current = await work
+        finally:
+            cancelled.set()
+            if not work.done():
+                # A native decode already in progress finishes into its reusable
+                # cache; the cooperative union runner then stops before publish.
+                work.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        prefix = f"/api/cases/{case_id}/revisions/{revision_id}/volume-mask"
+        query = "?" + urlencode([*(('structure_ids', value) for value in sorted(set(structure_ids))),
+                                  ('margin_mm', display_margin(margin_mm))])
+        return JSONResponse({"schema_version": 1, "source_id": f"volume-mask-union:{current['key']}",
+                             "current": with_chunk_urls(current, prefix, query)},
+                            headers={"Cache-Control": "private, no-store"})
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-mask/{key}/chunks/{index}")
+    def volume_mask_chunk(case_id: str, revision_id: str, key: str, index: int,
+                          structure_ids: list[str] = Query(default=[]),
+                          margin_mm: float = Query(0, ge=0, le=5)):
+        return volume_chunk(review_volume_mask(case_id, revision_id, structure_ids, margin_mm), key, index)
+
     frame_cache = _FrameCache()
 
-    def cached_review_frame(ct, mask, parent, plane, position_mm, overlays=None, native_axis=None, native_index=None):
+    def cached_review_frame(ct, mask, parent, plane, position_mm, overlays=None, native_axis=None, native_index=None,
+                            background_value=-1024.0):
         from .review_volume import review_frame
-        key = (ct, mask, parent, plane, position_mm, overlays, native_axis, native_index)
+        key = (ct, mask, parent, plane, position_mm, overlays, native_axis, native_index, background_value)
         return frame_cache.get_or_create(key, lambda: review_frame(
             Path(ct[0]), Path(mask[0]) if mask else None, plane, position_mm,
             Path(parent[0]) if parent else None, overlays=None if overlays is None else tuple(
                 (structure_id, Path(current[0]), Path(previous[0]) if previous else None)
                 for structure_id, current, previous in overlays),
-            native_axis=native_axis, native_index=native_index))
+            native_axis=native_axis, native_index=native_index, background_value=background_value))
 
     def selected_slice_masks(case_id, revision, structure_id, structure_ids, compare):
         requested = ([structure_id] if structure_id else []) + (structure_ids or [])
         ids = tuple(dict.fromkeys(requested))
         if len(ids) > 128:
-            raise ValueError("Select at most 128 structures for CT review")
+            raise ValueError("Select at most 128 structures for image review")
         structures = {s["id"]: s for s in revision["structures"]}
         # Check every selected id before stat'ing or decompressing any mask.
         if any(structure_id not in structures for structure_id in ids):
@@ -616,6 +712,8 @@ def create_app(settings: Settings | None = None):
         previous = {}
         if compare and ids and revision.get("parent_id"):
             parent = ct_revision(case_id, revision["parent_id"])
+            if service.store.resolve_reference(parent)["id"] != service.store.resolve_reference(revision)["id"]:
+                raise ValueError("Comparison masks must belong to the same reference image")
             previous = {s["id"]: s for s in parent["structures"]}
         return tuple((structures[structure_id], previous.get(structure_id)) for structure_id in ids)
 
@@ -625,6 +723,7 @@ def create_app(settings: Settings | None = None):
                          structure_ids: list[str] | None = Query(None), native_axis: int | None = None,
                          native_index: int | None = None):
         revision = ct_revision(case_id, revision_id)
+        asset = service.store.resolve_reference(revision)
         selected = selected_slice_masks(case_id, revision, structure_id, structure_ids, compare)
         structure, previous = selected[0] if selected else (None, None)
         overlays = None if structure_ids is None else tuple(
@@ -633,10 +732,11 @@ def create_app(settings: Settings | None = None):
         result = cached_review_frame(slice_file_key(revision["ct_file"]),
                                      slice_file_key(structure["mask_file"]) if structure else None,
                                      slice_file_key(previous["mask_file"]) if previous else None,
-                                     plane, position_mm, overlays, native_axis, native_index)
+                                     plane, position_mm, overlays, native_axis, native_index,
+                                     asset["presentation"]["background_value"])
         return Response(result["body"], media_type="application/octet-stream", headers={
             "Content-Encoding": "gzip", "Vary": "Accept-Encoding", "Cache-Control": "private, no-store",
-            "X-CT-Frame": json.dumps(result["frame"], separators=(",", ":"), allow_nan=False),
+            "X-CT-Frame": json.dumps(with_image_context(result["frame"], asset), separators=(",", ":"), allow_nan=False),
             "X-Content-Type-Options": "nosniff",
         })
 
@@ -654,49 +754,79 @@ def create_app(settings: Settings | None = None):
         return (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
     @lru_cache(maxsize=48)
-    def cached_slice(ct, mask, parent_mask, plane, position, window, level, overlays=None, native_axis=None, native_index=None):
+    def cached_slice(ct, mask, parent_mask, plane, position, window, level, overlays=None, native_axis=None, native_index=None,
+                     background_value=None, invert=False, overlay_opacity=None):
         from . import imaging
         arguments = (Path(ct[0]), Path(mask[0]) if mask else None, plane, position, window, level,
                      Path(parent_mask[0]) if parent_mask else None)
         native = {"native_axis": native_axis, "native_index": native_index} if native_axis is not None or native_index is not None else {}
+        if background_value is not None:
+            from .modalities import get_modality_adapter
+            if background_value != get_modality_adapter("CT").presentation()["background_value"]:
+                native["background_value"] = background_value
+        if invert:
+            native["invert"] = True
+        if overlay_opacity is not None:
+            native["overlay_opacity"] = overlay_opacity
         if overlays is None:
             return imaging.slice_image(*arguments, **native)
         return imaging.slice_image(*arguments, overlays=tuple(
             (structure_id, Path(current[0]), Path(previous[0]) if previous else None, color)
             for structure_id, current, previous, color in overlays), **native)
 
-    def slice_data(ct, mask, parent_mask, plane, position, window, level, native_axis=None, native_index=None):
+    def slice_data(ct, mask, parent_mask, plane, position, window, level, native_axis=None, native_index=None,
+                   background_value=None, invert=False, overlay_opacity=None):
         key = (slice_file_key(ct), slice_file_key(mask), slice_file_key(parent_mask),
-               plane, position, window, level, None, native_axis, native_index)
+               plane, position, window, level, None, native_axis, native_index, background_value, invert, overlay_opacity)
         with slice_locks[hash(key) % len(slice_locks)]:
             return cached_slice(*key)
 
     def get_slice(case_id, revision_id, plane, position_mm, window, level, structure_id, compare, structure_ids=None,
-                  native_axis=None, native_index=None):
+                  native_axis=None, native_index=None, structure_colors=None, overlay_opacity=.4):
         if plane not in ("axial", "coronal", "sagittal"):
             raise ValueError("Unknown anatomical plane")
+        revision = ct_revision(case_id, revision_id)
+        asset = service.store.resolve_reference(revision)
+        window = asset["presentation"]["default_window"] if window is None else window
+        level = asset["presentation"]["default_level"] if level is None else level
         if not all(math.isfinite(v) for v in (position_mm, window, level)) or window <= 0:
             raise ValueError("Window and positions must be finite, with a positive window")
-        revision = ct_revision(case_id, revision_id)
+        background_value = asset["presentation"]["background_value"]
+        invert = asset["presentation"]["photometric_interpretation"] == "MONOCHROME1"
         selected = selected_slice_masks(case_id, revision, structure_id, structure_ids, compare)
+        # Colors affect the derived PNG only. Keep the saved masks/palette and
+        # the exact scalar/binary frame transport independent from presentation.
+        if structure_colors is not None:
+            if len(structure_colors) > 128 or len(structure_colors) != len(selected):
+                raise ValueError("Provide one display color for each selected structure")
+            if any(not re.fullmatch(r"#[0-9a-fA-F]{6}", color) for color in structure_colors):
+                raise ValueError("Structure display colors must use #RRGGBB format")
+            colors = {current["id"]: color.lower() for (current, _), color in zip(selected, structure_colors)}
+        else:
+            colors = {}
         structure, previous = selected[0] if selected else (None, None)
-        if structure_ids is not None:
+        if structure_ids is not None or structure_colors is not None:
             from .imaging import presentation_color
             overlays = tuple((current["id"], slice_file_key(current["mask_file"]),
-                              slice_file_key(old["mask_file"]) if old else None, presentation_color(current))
+                              slice_file_key(old["mask_file"]) if old else None,
+                              colors.get(current["id"], presentation_color(current)))
                              for current, old in selected)
-            key = (slice_file_key(revision["ct_file"]), None, None, plane, position_mm, window, level, overlays, native_axis, native_index)
+            key = (slice_file_key(revision["ct_file"]), None, None, plane, position_mm, window, level, overlays,
+                   native_axis, native_index, background_value, invert, overlay_opacity)
             with slice_locks[hash(key) % len(slice_locks)]:
                 return cached_slice(*key)
         return slice_data(revision["ct_file"], structure["mask_file"] if structure else None,
-                          previous["mask_file"] if previous else None, plane, position_mm, window, level, native_axis, native_index)
+                          previous["mask_file"] if previous else None, plane, position_mm, window, level,
+                          native_axis, native_index, background_value, invert, overlay_opacity)
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/slice")
     def slice_png(case_id: str, revision_id: str, plane: str = "axial", position_mm: float = 0,
-                  window: float = 400, level: float = 40, structure_id: str | None = None, compare: bool = False,
+                  window: float | None = None, level: float | None = None, structure_id: str | None = None, compare: bool = False,
                   structure_ids: list[str] | None = Query(None), native_axis: int | None = None,
-                         native_index: int | None = None):
-        result = get_slice(case_id, revision_id, plane, position_mm, window, level, structure_id, compare, structure_ids, native_axis, native_index)
+                  native_index: int | None = None, structure_colors: list[str] | None = Query(None),
+                  overlay_opacity: float = Query(.4, ge=0, le=1)):
+        result = get_slice(case_id, revision_id, plane, position_mm, window, level, structure_id, compare, structure_ids,
+                           native_axis, native_index, structure_colors, overlay_opacity)
         return Response(result["image"], media_type="image/png", headers={
             # The bitmap and its coordinate transform must describe the same
             # requested frame, including during rapid crosshair changes.
@@ -706,16 +836,21 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/slice-meta")
     def slice_meta(case_id: str, revision_id: str, plane: str = "axial", position_mm: float = 0,
-                   window: float = 400, level: float = 40, structure_id: str | None = None, compare: bool = False,
+                   window: float | None = None, level: float | None = None, structure_id: str | None = None, compare: bool = False,
                    structure_ids: list[str] | None = Query(None), native_axis: int | None = None,
-                         native_index: int | None = None):
-        return get_slice(case_id, revision_id, plane, position_mm, window, level, structure_id, compare, structure_ids, native_axis, native_index)["meta"]
+                   native_index: int | None = None, structure_colors: list[str] | None = Query(None),
+                   overlay_opacity: float = Query(.4, ge=0, le=1)):
+        return get_slice(case_id, revision_id, plane, position_mm, window, level, structure_id, compare, structure_ids,
+                         native_axis, native_index, structure_colors, overlay_opacity)["meta"]
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/probe")
     def probe(case_id: str, revision_id: str, x: float, y: float, z: float):
         from . import imaging
         revision = ct_revision(case_id, revision_id)
-        return imaging.probe(Path(revision["ct_file"]), [x, y, z])
+        asset = service.store.resolve_reference(revision)
+        sample = imaging.probe(Path(asset["file_path"]), [x, y, z])
+        return {**sample, "value": sample["hu"], "units": asset["scalar"]["units"],
+                "reference_image_id": asset["id"]}
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/slicer.zip")
     def slicer_bundle(case_id: str, revision_id: str):

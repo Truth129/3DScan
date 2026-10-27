@@ -11,11 +11,13 @@ import type { CTFrame } from '../lib/ct-renderer';
 import { cornerstoneOverlayPixels } from '../lib/cornerstone-frame';
 import { CornerstoneFrameViewport } from '../lib/cornerstone-runtime';
 
-const props = defineProps<{ caseId: string; revisionId: string; geometry: Geometry; plane: Plane; point: Point; window: number; level: number; structure: string; overlays?: CTOverlaySelection[]; compare: boolean; session: LocalCTSession; fullResolution?: boolean; reviewTool?: InteractiveTool; reviewPrompts?: InteractivePrompt[]; reviewDisabled?: boolean; reviewInclude?: boolean; reviewRadius?: number; nativeReview?: boolean }>();
+const props = withDefaults(defineProps<{ modality?: string; caseId: string; revisionId: string; geometry: Geometry; plane: Plane; point: Point; window: number; level: number; structure: string; overlays?: CTOverlaySelection[]; overlayOpacity?: number; compare: boolean; session: LocalCTSession; fullResolution?: boolean; reviewTool?: InteractiveTool; reviewPrompts?: InteractivePrompt[]; reviewDisabled?: boolean; reviewInclude?: boolean; reviewRadius?: number; nativeReview?: boolean }>(), { overlayOpacity: .4 });
+const modalityLabel = computed(() => props.modality ?? 'CT');
 const emit = defineEmits<{ point: [point: Point]; prompt: [point: Point]; gesture: [prompt: InteractivePrompt]; fallback: [reason: string]; windowLevel: [value: [number, number]] }>();
 const element = ref<HTMLDivElement>(), overlay = ref<HTMLCanvasElement>();
 const displayMeta = shallowRef<SliceMeta>();
 const quality = ref<'preview' | 'full'>('preview'), loading = ref(true), error = ref(''), detailError = ref('');
+const overlaysAvailable = ref(true);
 const displayedPosition = ref<number>(), paintedContext = ref('');
 const axis = computed(() => planeAxis(props.plane));
 const nativeSlice = computed(() => props.nativeReview ? nativeSliceFor(props.geometry, props.plane, props.point) : undefined);
@@ -23,7 +25,7 @@ const position = computed(() => nativeSlice.value?.index ?? props.point[axis.val
 const range = computed(() => nativeSlice.value ? [0, props.geometry.shape[nativeSlice.value.axis] - 1]
   : [props.geometry.bounds_ras[0][axis.value], props.geometry.bounds_ras[1][axis.value]]);
 const marking = computed(() => !!props.reviewTool && props.reviewTool !== 'navigate');
-const canMark = computed(() => !props.reviewDisabled && !loading.value && paintedContext.value === context
+const canMark = computed(() => !props.reviewDisabled && overlaysAvailable.value && !loading.value && paintedContext.value === context
   && quality.value === 'full' && Math.abs((displayedPosition.value ?? Infinity) - position.value) < .01);
 const overlayIds = computed(() => props.overlays?.map(item => item.id) ?? (props.structure ? [props.structure] : []));
 const overlayKey = computed(() => JSON.stringify(overlayIds.value));
@@ -32,6 +34,7 @@ let viewer: CornerstoneFrameViewport | undefined;
 let disposed = false, generation = 0, context = '', grid = '', drawRequest = 0, detailTimer = 0;
 let previewRequested = 0, previewPainted = 0;
 let detailController: AbortController | undefined, lastOverlayFrame: CTFrame | undefined;
+let unsubscribeOverlay: (() => void) | undefined;
 let pointerStart: [number, number] | undefined;
 const details = new Map<string, CTFrame>();
 const delivery = new WeakMap<CTFrame, { context: string; quality: 'preview' | 'full' }>();
@@ -44,6 +47,7 @@ function refreshCamera() {
   if (!info) return;
   const meta = viewer.displayMeta(); if (!meta) return;
   displayMeta.value = meta; quality.value = info.quality; paintedContext.value = info.context;
+  overlaysAvailable.value = !overlayIds.value.length || frame.overlays?.length !== 0;
   displayedPosition.value = frame.meta.position_mm; loading.value = info.context !== context;
   const host = element.value;
   host.dataset.nativeAxis = meta.native ? String(meta.native.axis) : '';
@@ -85,6 +89,13 @@ function drawOverlay() {
   ctx.beginPath(); ctx.moveTo(point[0], 0); ctx.lineTo(point[0], rect.height); ctx.moveTo(0, point[1]); ctx.lineTo(rect.width, point[1]); ctx.stroke();
   ctx.setLineDash([]); ctx.strokeStyle = '#e4ecff'; ctx.beginPath(); ctx.arc(point[0], point[1], 3, 0, Math.PI * 2); ctx.stroke();
 }
+function refreshPresentation() {
+  const current = viewer?.frame, info = current ? delivery.get(current) : undefined;
+  if (!viewer || !current || !info || disposed || info.context !== context) return;
+  const colored = colorCTOverlays(current, props.overlays, props.overlayOpacity);
+  delivery.set(colored, info);
+  if (viewer.setPresentation(colored)) queueOverlay();
+}
 function remember(key: string, value: CTFrame) {
   details.delete(key); details.set(key, value);
   let bytes = [...details.values()].reduce((sum, item) => sum + ctFrameBytes(item), 0);
@@ -95,11 +106,11 @@ function remember(key: string, value: CTFrame) {
 }
 async function present(value: CTFrame, resolution: 'preview' | 'full', requestContext: string) {
   if (!viewer || disposed || requestContext !== context) return;
-  const colored = colorCTOverlays(value, props.overlays);
+  const colored = colorCTOverlays(value, props.overlays, props.overlayOpacity);
   delivery.set(colored, { context: requestContext, quality: resolution });
   const nextGrid = `${props.caseId}:${referenceGridKey(props.geometry)}:${props.plane}:${!!props.nativeReview}`;
   const reset = nextGrid !== grid; grid = nextGrid;
-  if (await viewer.setFrame(colored, props.window, props.level, reset)) { refreshCamera(); await nextTick(); queueOverlay(); }
+  if (await viewer.setFrame(colored, props.window, props.level, reset)) { refreshPresentation(); refreshCamera(); await nextTick(); queueOverlay(); }
 }
 async function detail(id: number, key: string, at: number, requestContext: string) {
   if (disposed || id !== generation || props.fullResolution) return;
@@ -133,7 +144,7 @@ async function load() {
     await present(value, props.fullResolution ? 'full' : 'preview', requestContext);
   } catch (reason) {
     if (disposed || id !== generation || details.has(key) || (reason instanceof Error && reason.name.includes('Superseded'))) return;
-    error.value = reason instanceof Error ? reason.message : 'Cornerstone could not display this CT frame.'; loading.value = false;
+    error.value = reason instanceof Error ? reason.message : `Cornerstone could not display this ${modalityLabel.value} frame.`; loading.value = false;
   }
 }
 function click(event: MouseEvent) {
@@ -173,11 +184,14 @@ onMounted(async () => {
 });
 watch(() => [props.session, props.caseId, props.revisionId, props.plane, position.value, overlayKey.value,
   props.compare, props.fullResolution, props.nativeReview], () => { void load(); });
+watch(() => props.session, session => { unsubscribeOverlay?.(); unsubscribeOverlay = session.onOverlayChange(() => { details.clear(); void load(); }); }, { immediate: true });
 watch(() => [props.window, props.level], () => viewer?.setWindow(props.window, props.level));
+watch(() => [props.overlayOpacity, props.overlays?.map(item => [item.id, item.color])], refreshPresentation, { deep: true });
 watch(() => props.point, queueOverlay, { deep: true });
 watch(marking, value => viewer?.setEditing(value));
 onBeforeUnmount(() => {
   disposed = true; generation++; cancelAnimationFrame(drawRequest); clearTimeout(detailTimer); detailController?.abort();
+  unsubscribeOverlay?.();
   details.clear(); viewer?.dispose(); lastOverlayFrame = undefined; bitmap.width = bitmap.height = 0;
 });
 defineExpose({
@@ -194,7 +208,7 @@ defineExpose({
       <span>{{ displayMeta?.native ? `Slice ${displayMeta.native.index + 1} / ${geometry.shape[displayMeta.native.axis]}` : `${(displayedPosition ?? position).toFixed(1)} mm` }}</span>
       <span class="ct-quality" :class="quality">{{ quality === 'full' ? 'Full' : 'Preview' }}</span></header>
     <div class="ct-image cornerstone-image" :class="{ 'is-loading': loading, 'ct-marking': marking && canMark }">
-      <div ref="element" class="cornerstone-viewport" :aria-label="`${plane} Cornerstone CT viewport`" @contextmenu.prevent
+      <div ref="element" class="cornerstone-viewport" :aria-label="`${plane} Cornerstone ${modalityLabel} viewport`" @contextmenu.prevent
         @pointerdown.capture="pointerStart = [$event.clientX, $event.clientY]" @click="click">
         <canvas ref="overlay" class="cornerstone-overlay" aria-hidden="true"></canvas>
         <div v-if="displayMeta" class="cornerstone-annotations" :style="{ clipPath: annotationClip }">
@@ -209,7 +223,7 @@ defineExpose({
       <div v-if="error" class="slice-error">{{ error }} <button class="text-button" @click="load">Retry</button>
         <button class="text-button" @click="emit('fallback', error)">Use standard viewer</button></div>
       <span v-if="loading" class="ct-local-loading" :class="{ 'ct-updating': !!displayMeta }">{{ displayMeta ? 'Updating overlay…' : 'Preparing Cornerstone…' }}</span>
-      <span v-else-if="marking && !canMark" class="ct-local-loading ct-updating">{{ reviewDisabled ? 'Editing paused' : 'Waiting for full-resolution detail' }}</span>
+      <span v-else-if="marking && !canMark" class="ct-local-loading ct-updating">{{ reviewDisabled ? 'Editing paused' : !overlaysAvailable ? 'Editing paused: selected overlays are unavailable' : 'Waiting for full-resolution detail' }}</span>
       <button class="cornerstone-reset text-button" title="Reset Cornerstone pan and zoom" @click="viewer?.reset()">Reset view</button>
     </div>
     <p v-if="detailError" class="ct-detail-error" role="status">{{ detailError }}</p>

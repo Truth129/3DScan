@@ -1,3 +1,5 @@
+import type { ImageAsset, ImageContext } from './lib/image-domain';
+
 export type Point = [number, number, number];
 export type Bounds = [Point, Point];
 export type Plane = 'axial' | 'coronal' | 'sagittal';
@@ -22,8 +24,24 @@ export interface Structure {
   bounds_ras: Bounds | null;
   qc: string[];
   relationship?: SegmentRelationship;
+  reference_image_id?: string;
 }
 export interface Series {
+  sequence_name?: string | null;
+  scanning_sequence?: string[] | string | null;
+  sequence_variant?: string[] | string | null;
+  acquisition_type?: string | null;
+  echo_time_ms?: number | null;
+  echo_number?: number | null;
+  repetition_time_ms?: number | null;
+  inversion_time_ms?: number | null;
+  photometric_interpretation?: string | null;
+  window_center?: number | null;
+  window_width?: number | null;
+  supported?: boolean;
+  unsupported_reason?: string | null;
+  voi_lut_function?: string | null;
+
   uid: string;
   description: string;
   modality: string;
@@ -67,7 +85,7 @@ export interface SegmentationTask {
   id: string;
   label: string;
   description?: string;
-  modality: 'CT';
+  modality: 'CT' | 'MR';
   classes: string[];
   license_required: boolean;
   license_available: boolean;
@@ -104,9 +122,11 @@ export interface Revision {
   created_at: string;
   review_status: ReviewStatus;
   source: string;
-  kind?: 'ct' | 'segmentation';
+  kind?: 'ct' | 'image' | 'segmentation';
   operation?: Record<string, unknown>;
   geometry: Geometry;
+  reference_image_id?: string;
+  image_asset?: ImageAsset;
   structures: Structure[];
   qc: string[];
   model_url: string | null;
@@ -141,6 +161,8 @@ export interface SliceMeta {
 export interface DisplayState { visible: boolean; opacity: number }
 export type StructureDisplay = Record<string, DisplayState>;
 export interface OfflineManifest {
+  image_context?: ImageContext;
+  image_asset?: ImageAsset;
   label: string;
   review_status: ReviewStatus;
   source?: string;

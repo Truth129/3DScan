@@ -12,7 +12,7 @@ function drop(event: DragEvent) { dragging.value = false; files.value = Array.fr
   <div class="dialog-backdrop" @click.self="!busy && emit('close')" @keydown.esc="!busy && emit('close')">
     <section class="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title">
       <header><span class="eyebrow">NEW CASE</span><button class="icon-button" aria-label="Close import" :disabled="busy" @click="emit('close')">×</button></header>
-      <h2 id="import-title">Start with a CT scan.</h2><p class="muted">Import a DICOM folder or ZIP archive. Choose the reconstruction and contrast phase before processing.</p>
+      <h2 id="import-title">Start with an imaging study.</h2><p class="muted">Import a DICOM folder or ZIP archive. Choose a CT reconstruction or static 3D MR sequence before processing.</p>
       <label class="field">Case label <span class="optional">optional · pseudonymous</span><input v-model="label" placeholder="e.g. Chest–abdomen 01" :disabled="busy" autofocus /></label>
       <div class="drop-zone" :class="{ dragging }" @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop.prevent="drop">
         <svg viewBox="0 0 40 40" fill="none"><path d="M7 12h10l4 4h12v17H7V12Z"/><path d="M20 26V18m0 0-4 4m4-4 4 4"/></svg>
