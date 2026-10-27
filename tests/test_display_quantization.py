@@ -283,6 +283,32 @@ def test_import_quantizes_legacy_display_models_without_mask_decode(tmp_path, mo
     assert (tmp_path / "combined.glb").read_bytes() == (tmp_path / "fresh.glb").read_bytes()
 
 
+def test_optimize_migrates_a_legacy_revision_to_the_assets_a_fresh_build_writes(tmp_path):
+    from scan3d.config import Settings
+    from scan3d.demo import create_demo
+    from scan3d.service import Service
+
+    service = Service(Settings(tmp_path / "data", (tmp_path,)))
+    case = create_demo(service)
+    revision = service.store.revision(case["id"], case["active_revision_id"])
+    fresh = {asset["id"]: surfaces.surface_asset_path(service.surface_cache, asset["key"]).read_bytes()
+             for asset in revision["surface_assets"]}
+    # A revision from the previous release: float32 model.glb, no current-key assets.
+    legacy_display_model([(item, surfaces._mesh(item["mask_file"], detailed=False)) for item in revision["structures"]],
+                         Path(revision["directory"]) / "model.glb")
+    for asset in revision["surface_assets"]:
+        path = surfaces.surface_asset_path(service.surface_cache, asset["key"])
+        path.unlink()
+        surfaces._metadata_path(path).unlink()
+    report = service.optimize_assets(case["id"])
+    assert report["cache"]["surface_misses"] == len(fresh) == len(revision["structures"])
+    migrated = service.store.revision(case["id"], case["active_revision_id"])
+    structures = {item["id"]: item for item in migrated["structures"]}
+    for asset in migrated["surface_assets"]:
+        assert asset["key"] == surfaces._surface_identity(structures[asset["id"]], detailed=False)[1]
+        assert surfaces.surface_asset_path(service.surface_cache, asset["key"]).read_bytes() == fresh[asset["id"]]
+
+
 def test_build_model_packages_a_float_asset_like_a_quantized_one(tmp_path):
     path = mask_file(tmp_path / "mask.nii.gz")
     entry = structure("total:liver", path)
