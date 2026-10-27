@@ -115,6 +115,13 @@ owns 3D volume/surface composition, picking and portable export. Warm navigation
 windowing and camera changes use resident client data. The client browser GPU
 handles viewing; the workstation ROCm GPU handles model inference.
 
+An isolated synthetic [3D renderer comparison](VOLUME_RENDERING_COMPARISON.md)
+tests direct vtk.js and a fourth Cornerstone volume viewport. The latter reuses
+the MPR ImageVolume, CT texture and WebGL context. These adapters are outside
+both application build entries; they do not replace Three.js scene composition
+or portable export. Direct vtk's current worker bridge assembles another CPU
+scalar buffer and owns a separate GPU texture.
+
 Native reference images and masks remain authoritative for editing and
 measurements. GLB meshes and the bounded 3D mask union are derived presentation
 artifacts. Their simplification never changes mask-derived volumes.

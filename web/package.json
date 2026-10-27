@@ -16,6 +16,7 @@
   "dependencies": {
     "@cornerstonejs/core": "5.13.1",
     "@cornerstonejs/tools": "5.13.1",
+    "@kitware/vtk.js": "36.4.1",
     "events": "3.3.0",
     "three": "0.180.0",
     "vue": "3.5.44"

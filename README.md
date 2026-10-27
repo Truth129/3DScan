@@ -362,6 +362,10 @@ portable export continue using the existing rendering pipeline. See
 [the Cornerstone plan](docs/CORNERSTONE_PLAN.md) and
 [the new-segment workflow](docs/NNINTERACTIVE_PLAN.md).
 
+An isolated [Three.js / vtk.js / Cornerstone3D comparison](docs/VOLUME_RENDERING_COMPARISON.md)
+records synthetic R9700 rendering, memory sharing and the remaining 3D migration
+gates. It does not replace the application or offline viewer.
+
 ## Local scripts and recipes
 
 ```bash
