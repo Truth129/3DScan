@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model
 
 from . import __version__
 from .config import Settings
+from .errors import NotFound
 from .service import Service, extract_zip, safe_relative
 from .store import ReviewConflict, public_case, public_job, public_revision
 from .uploads import ImportConflict, Uploads
@@ -285,9 +286,10 @@ def create_app(settings: Settings | None = None):
     async def bad_request(request, exc):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    @app.exception_handler(KeyError)
+    # Only explicit NotFound means 404; any other KeyError is a defect (500).
+    @app.exception_handler(NotFound)
     async def not_found(request, exc):
-        return JSONResponse(status_code=404, content={"detail": str(exc).strip("'")})
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
 
     @app.exception_handler(ReviewConflict)
     async def review_conflict(request, exc):
@@ -544,7 +546,7 @@ def create_app(settings: Settings | None = None):
         # Statistics apply to an immutable saved revision, never an unsaved
         # candidate. Ownership is checked before cached statistics are read.
         if revision_id.startswith("review-"):
-            raise KeyError("Save the segmentation before measuring cinematic references")
+            raise NotFound("Save the segmentation before measuring cinematic references")
         selected = service.store.revision(case_id, revision_id)
         result = reference_values(selected, service.settings.data_dir / "cinematic-cache")
         return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
@@ -567,7 +569,7 @@ def create_app(settings: Settings | None = None):
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/model.glb")
     def model(case_id: str, revision_id: str, detail: bool = False):
         if revision_id.startswith("review-"):
-            raise KeyError("Candidate models are available through their surface manifest")
+            raise NotFound("Candidate models are available through their surface manifest")
         revision = service.store.revision(case_id, revision_id)
         if not revision["structures"]:
             raise ValueError("This image has no segmentation surfaces yet")
@@ -578,7 +580,7 @@ def create_app(settings: Settings | None = None):
     def model_manifest(case_id: str, revision_id: str):
         revision = ct_revision(case_id, revision_id)
         if revision_id.startswith("review-") and not revision.get("preview_3d_ready"):
-            raise KeyError("This candidate has no prepared 3D preview")
+            raise NotFound("This candidate has no prepared 3D preview")
         prefix = f"/api/cases/{case_id}/revisions/{revision_id}/surfaces"
         result = {"schema_version": 1, "structures": [
             {"id": asset["id"], "key": asset["key"], "url": f"{prefix}/{asset['key']}.glb"}
@@ -590,7 +592,7 @@ def create_app(settings: Settings | None = None):
         from .surfaces import surface_asset_path
         revision = ct_revision(case_id, revision_id)
         if key not in {asset["key"] for asset in revision.get("surface_assets", [])}:
-            raise KeyError("Surface does not belong to this revision")
+            raise NotFound("Surface does not belong to this revision")
         target = surface_asset_path(service.surface_cache, key)
         if not target.is_file():
             raise HTTPException(503, "Cached surface is unavailable; regenerate the model")
@@ -663,7 +665,7 @@ def create_app(settings: Settings | None = None):
     def volume_chunk(descriptor, key, index):
         from .review_volume import chunk_path
         if descriptor is None:
-            raise KeyError("Review volume does not belong to this revision")
+            raise NotFound("Review volume does not belong to this revision")
         return FileResponse(chunk_path(review_cache, descriptor, key, index),
                             media_type="application/octet-stream", headers={
                                 "Content-Encoding": "gzip", "Vary": "Accept-Encoding",

@@ -17,6 +17,7 @@ import shutil
 import numpy as np
 
 from . import __version__, imaging
+from .errors import NotFound
 from .interactive_prompts import normalize_options, normalize_prompts
 from .relationships import (INDEPENDENT, ancestors, effective_relationship, normalize_relationship,
                             reciprocal_updates, relationship_dirty, relationship_suggestions)
@@ -275,17 +276,17 @@ class ReviewManager:
     def candidate_revision(self, case_id, alias):
         match = _ALIAS.fullmatch(alias)
         if match is None:
-            raise KeyError("Correction candidate not found")
+            raise NotFound("Correction candidate not found")
         review = self.get(case_id, match[1])
         if review["status"] == "discarded":
-            raise KeyError("Correction candidate was discarded")
+            raise NotFound("Correction candidate was discarded")
         base, selected = self._base(review)
         candidate = review.get("candidates", {}).get(match[2])
         if candidate is None and review.get("new_structure") and match[2] == "0":
             candidate = dict(revision_id=alias, mask_file=selected["mask_file"],
                              summary={"after_volume_ml": 0., "after_voxels": 0})
         if not candidate or candidate["revision_id"] != alias or not Path(candidate["mask_file"]).is_file():
-            raise KeyError("Correction candidate not found")
+            raise NotFound("Correction candidate not found")
         changes = _candidate_changes(candidate, selected)
         structures = [_changed_structure(structure, changes[structure["id"]]) if structure["id"] in changes else dict(structure)
                       for structure in base["structures"]]

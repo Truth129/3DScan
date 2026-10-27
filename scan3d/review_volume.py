@@ -26,6 +26,7 @@ import numpy as np
 from scipy import ndimage as ndi
 
 from . import imaging
+from .errors import NotFound
 
 
 _IMPLEMENTATION = "native-review-slabs-v2"
@@ -394,9 +395,9 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, r
 def chunk_path(cache_dir, descriptor, key, index):
     """The caller must resolve the descriptor from an authorized case revision."""
     if key != descriptor["key"]:
-        raise KeyError("Review volume does not belong to this revision")
+        raise NotFound("Review volume does not belong to this revision")
     if index < 0 or index >= len(descriptor["chunks"]):
-        raise KeyError("Review volume chunk not found")
+        raise NotFound("Review volume chunk not found")
     return _entry(cache_dir, key) / f"{index}.bin.gz"
 
 

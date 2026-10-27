@@ -16,6 +16,7 @@ import shutil
 import time
 import zipfile
 
+from .errors import NotFound
 from .service import atomic_json, extract_zip, safe_relative
 from .store import identifier, now, safe_id
 
@@ -59,14 +60,14 @@ class Uploads:
         try:
             lock = (directory / "lock").open("a")
         except FileNotFoundError:
-            raise KeyError("Upload not found") from None
+            raise NotFound("Upload not found") from None
         with lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:
                 # Re-read after waiting: a concurrent cancel may have removed it.
                 state = json.loads((directory / "state.json").read_text())
             except FileNotFoundError:
-                raise KeyError("Upload not found") from None
+                raise NotFound("Upload not found") from None
             yield directory, state
 
     def _discard_stale(self):

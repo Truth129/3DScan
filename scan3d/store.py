@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sqlite3
 
+from .errors import NotFound
 from .identifiers import identifier
 from .relationships import INDEPENDENT, relationship_dirty
 
@@ -65,7 +66,7 @@ class Store:
         with self.connection() as con:
             row = con.execute(f"SELECT data FROM {table} WHERE id=?", (record_id,)).fetchone()
         if row is None:
-            raise KeyError(f"{table[:-1].capitalize()} not found")
+            raise NotFound(f"{table[:-1].capitalize()} not found")
         record = json.loads(row["data"])
         return self._upgrade_review(record) if table == "review_sessions" else record
 
@@ -107,7 +108,7 @@ class Store:
     def revision(self, case_id, revision_id):
         revision = self.get("revisions", revision_id)
         if revision["case_id"] != case_id:
-            raise KeyError("Revision does not belong to this case")
+            raise NotFound("Revision does not belong to this case")
         return revision
 
     def register_image_asset(self, record):
@@ -121,7 +122,7 @@ class Store:
         with self.connection() as con:
             con.execute("BEGIN IMMEDIATE")
             if con.execute("SELECT 1 FROM cases WHERE id=?", (record["case_id"],)).fetchone() is None:
-                raise KeyError("Case not found")
+                raise NotFound("Case not found")
             row = con.execute("SELECT data FROM image_assets WHERE id=?", (record["id"],)).fetchone()
             if row is not None:
                 existing = json.loads(row["data"])
@@ -141,9 +142,9 @@ class Store:
         except KeyError:
             record = next((entry for entry in self.image_assets(case_id) if entry["id"] == image_id), None)
             if record is None:
-                raise KeyError("Image not found") from None
+                raise NotFound("Image not found") from None
         if record["case_id"] != case_id:
-            raise KeyError("Image does not belong to this case")
+            raise NotFound("Image does not belong to this case")
         return record
 
     def image_assets(self, case_id):
@@ -196,7 +197,7 @@ class Store:
                 row = con.execute("SELECT data FROM review_sessions WHERE id=? AND case_id=?",
                                   (review_guard["session_id"], revision["case_id"])).fetchone()
                 if row is None:
-                    raise KeyError("Review session not found")
+                    raise NotFound("Review session not found")
                 review = json.loads(row["data"])
                 if (not job or review["generation"] != review_guard["generation"]
                         or review["status"] != "accepting" or review.get("job_id") != job["id"]
@@ -246,10 +247,10 @@ class Store:
         safe_id(session_id)
         row = con.execute("SELECT data FROM review_sessions WHERE id=?", (session_id,)).fetchone()
         if row is None:
-            raise KeyError("Review session not found")
+            raise NotFound("Review session not found")
         review = json.loads(row["data"])
         if case_id is not None and review["case_id"] != case_id:
-            raise KeyError("Review session does not belong to this case")
+            raise NotFound("Review session does not belong to this case")
         return Store._upgrade_review(review)
 
     @staticmethod
@@ -433,7 +434,7 @@ class Store:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
             if row is None:
-                raise KeyError("Revision not found")
+                raise NotFound("Revision not found")
             revision = json.loads(row["data"])
             revision.setdefault("mesh_statistics", {})["detailed"] = report
             revision.setdefault("processing_timings", {})["detailed_export_seconds"] = seconds
@@ -446,7 +447,7 @@ class Store:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
             if row is None:
-                raise KeyError("Revision not found")
+                raise NotFound("Revision not found")
             revision = json.loads(row["data"])
             if not revision["structures"]:
                 raise ValueError("This CT has no segmentation to review")
@@ -461,7 +462,7 @@ class Store:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
             if row is None:
-                raise KeyError("Revision not found")
+                raise NotFound("Revision not found")
             revision = json.loads(row["data"])
             revision["surface_assets"] = [{k: asset[k] for k in ("id", "key", "triangles")} for asset in assets]
             revision["model_manifest_url"] = f"/api/cases/{case_id}/revisions/{revision_id}/model-manifest"
@@ -492,7 +493,7 @@ class Store:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT data FROM jobs WHERE id=?", (job_id,)).fetchone()
             if not row:
-                raise KeyError("Job not found")
+                raise NotFound("Job not found")
             job = json.loads(row["data"])
             job.update(changes)
             con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job_id))
