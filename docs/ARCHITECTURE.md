@@ -5,8 +5,8 @@ viewers such as OsiriX. A high-quality, responsive viewer supports testing,
 comparing, correcting and using segmentation and other analysis tools.
 
 This describes the implementation as of **27 October 2026**. The live service is
-the CT-only `ct-appearance-20261027` release. Static 3D MRI is implemented and
-tested separately on `expansion`; X-ray, mammography, ultrasound, catheter
+the CT-only `ct-hardening-20261027` release, where `SCAN3D_MODALITIES=CT` keeps
+MRI turned off. Static 3D MRI is implemented and tested on `expansion`; X-ray, mammography, ultrasound, catheter
 angiography and cine ingestion still need their own adapters. Modality enum
 values alone do not enable those workflows.
 
