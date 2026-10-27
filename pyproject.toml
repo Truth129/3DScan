@@ -15,6 +15,8 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "httpx>=0.28,<1"]
+# Keep in step with the ruff-pre-commit `rev` in .pre-commit-config.yaml.
+lint = ["ruff==0.17.0"]
 
 [project.scripts]
 scan3d = "scan3d.__main__:main"
@@ -24,4 +26,41 @@ include = ["scan3d*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The code is hand-wrapped at roughly 110-130 columns, with a tail out to ~200. A 160 limit
+# keeps the future reformat closest to that shape: narrower re-wraps far more code, and
+# wider joins many wrapped lines into very long ones.
+line-length = 160
+target-version = "py312"
+# Agent worktrees under .claude/ are full copies of this repository.
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+# Correctness checks that pass on the current code. Style rules (E4, E7, I, UP, B, ...)
+# wait for the one-time reformat commit; see .git-blame-ignore-revs.
+select = [
+  "E9",     # syntax and I/O errors
+  "F",      # pyflakes: undefined names, unused imports and variables, redefinitions
+  "W",      # pycodestyle warnings: trailing whitespace, invalid escape sequences
+  "PLE",    # pylint errors: bad format strings, invalid __all__, misplaced await
+  "PGH",    # blanket noqa or type: ignore, misspelled mock assertions
+  "T10",    # leftover breakpoint() or pdb
+  "NPY",    # NumPy 2 removals and deprecated aliases
+  "ASYNC",  # blocking calls inside async handlers
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests share fixtures by importing them from sibling modules (from test_ct_multi import api)
+# and requesting them as same-named parameters. Pyflakes reports that as an unused import
+# (F401) that is later redefined (F811). Moving shared fixtures to tests/conftest.py
+# would let this go.
+"tests/**" = ["F401", "F811"]
+
+[tool.ruff.format]
+# For the future one-time reformat commit; `ruff format` has not been run on this code.
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
 
