@@ -23,7 +23,7 @@ export function defaultVolumeMemoryLimit(deviceMemory = (globalThis.navigator as
 }
 
 /** Reserve retained copies and one bounded upload slab before allocating them. */
-export function volumeMemoryRequest(descriptor: VolumeDescriptor, consumer: 'cornerstone' | 'three', overlayBytes = 0): VolumeMemoryRequest {
+export function volumeMemoryRequest(descriptor: VolumeDescriptor, consumer: 'cornerstone' | 'three', overlayBytes = 0, uploading = true): VolumeMemoryRequest {
   const voxels = descriptor.shape.reduce((count, size) => count * size, 1);
   if (
     descriptor.shape.length !== 3 ||
@@ -36,7 +36,7 @@ export function volumeMemoryRequest(descriptor: VolumeDescriptor, consumer: 'cor
     !descriptor.key
   )
     throw new Error('Invalid volume memory estimate');
-  const slabBytes = Math.min(descriptor.byte_length, GPU_VOLUME_SLAB_BYTES);
+  const slabBytes = uploading ? Math.min(descriptor.byte_length, GPU_VOLUME_SLAB_BYTES) : 0;
   const imageBytes = descriptor.kind === 'mask' || (descriptor.slope === 1 && descriptor.intercept === 0) ? descriptor.byte_length : voxels * 4;
   return {
     sourceKey: JSON.stringify([descriptor.reference_image_id ?? null, descriptor.key]),

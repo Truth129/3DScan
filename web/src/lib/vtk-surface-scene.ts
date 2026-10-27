@@ -16,7 +16,11 @@ interface SurfacePart {
   bytes: number;
   triangles: number;
   gpuBytes: number;
-  memoryBytes: number;
+}
+interface GeometryMemory {
+  cpuBytes: number;
+  gpuBytes: number;
+  uploadScratchBytes: number;
 }
 interface Entry {
   key: string;
@@ -29,9 +33,26 @@ export interface VTKSurfaceLoadOptions {
 }
 const cancelled = () => new DOMException('Surface loading cancelled.', 'AbortError');
 const dataBytes = (part: VTKSurfacePartData) => part.positions.byteLength + part.normals.byteLength + part.polys.byteLength;
-// vtk.js expands indexed triangles to position+normal vertex records. Include
-// both its temporary packed Float32 upload array and the matching GPU buffer.
-const memoryBytes = (bytes: number, triangles: number) => Math.max(bytes * 2, bytes + triangles * 72 * 2);
+const emptyMemory = (): GeometryMemory => ({ cpuBytes: 0, gpuBytes: 0, uploadScratchBytes: 0 });
+// vtk.js retains one expanded position+normal GPU record per triangle vertex.
+// Its packed CPU upload array is local to synchronous createVBO(), so only one
+// part's scratch is live at once. Keep the largest allowance even when warm,
+// covering later buffer rebuilds without a render-completion or private GL hook.
+const GPU_BYTES_PER_TRIANGLE = 3 * 6 * Float32Array.BYTES_PER_ELEMENT;
+function combineMemory(...groups: GeometryMemory[]): GeometryMemory {
+  return groups.reduce(
+    (total, group) => ({
+      cpuBytes: total.cpuBytes + group.cpuBytes,
+      gpuBytes: total.gpuBytes + group.gpuBytes,
+      uploadScratchBytes: Math.max(total.uploadScratchBytes, group.uploadScratchBytes),
+    }),
+    emptyMemory(),
+  );
+}
+function memoryBytes(...groups: GeometryMemory[]) {
+  const { cpuBytes, gpuBytes, uploadScratchBytes } = combineMemory(...groups);
+  return cpuBytes + gpuBytes + uploadScratchBytes;
+}
 const MAX_ENCODED_SURFACE_BYTES = 256 * 1024 ** 2;
 
 function color(value: Structure['color']): Point {
@@ -82,13 +103,20 @@ export class VTKSurfaceScene {
       this.staging.clear();
       this.staging = undefined;
     }
-    this.reserve(this.memory());
+    this.reserve(memoryBytes(this.memory()));
   }
   private bytes(entries: Iterable<Entry> = this.entries.values()) {
     return [...entries].reduce((sum, entry) => sum + entry.parts.reduce((total, part) => total + part.bytes, 0), 0);
   }
   private memory(entries: Iterable<Entry> = this.entries.values()) {
-    return [...entries].reduce((sum, entry) => sum + entry.parts.reduce((total, part) => total + part.memoryBytes, 0), 0);
+    const memory = emptyMemory();
+    for (const entry of entries)
+      for (const part of entry.parts) {
+        memory.cpuBytes += part.bytes;
+        memory.gpuBytes += part.gpuBytes;
+        memory.uploadScratchBytes = Math.max(memory.uploadScratchBytes, part.gpuBytes);
+      }
+    return memory;
   }
   private release(entry: Entry, attached: boolean) {
     for (const { actor, mapper, data } of entry.parts) {
@@ -113,6 +141,9 @@ export class VTKSurfaceScene {
         const mapper = vtkMapper.newInstance();
         mapper.setInputData(data);
         mapper.setScalarVisibility(false);
+        // Hardware point/cell picking is not used here. The default otherwise
+        // retains two expanded Int32 ID maps (another 24 bytes per triangle).
+        mapper.set({ populateSelectionSettings: false });
         const actor = vtkActor.newInstance();
         actor.setMapper(mapper);
         actor.getProperty().setInterpolationToPhong();
@@ -127,8 +158,7 @@ export class VTKSurfaceScene {
           actor,
           bytes: dataBytes(part),
           triangles: part.triangles,
-          gpuBytes: part.triangles * 72,
-          memoryBytes: memoryBytes(dataBytes(part), part.triangles),
+          gpuBytes: part.triangles * GPU_BYTES_PER_TRIANGLE,
         });
       }
       return created;
@@ -169,7 +199,7 @@ export class VTKSurfaceScene {
     let completed = 0,
       cursor = 0,
       stagedBytes = 0,
-      stagedMemory = 0,
+      stagedMemory = emptyMemory(),
       reused = 0;
     const changed = selected.filter(item => {
       const previous = this.entries.get(item.id);
@@ -194,27 +224,31 @@ export class VTKSurfaceScene {
           if (Number.isSafeInteger(declaredBytes) && declaredBytes > 0) {
             if (declaredBytes > MAX_ENCODED_SURFACE_BYTES) throw new Error('The encoded surface exceeds its memory limit.');
             responses.set(item.id, declaredBytes);
-            this.reserve(this.memory() + stagedMemory + responseBytes());
+            this.reserve(memoryBytes(this.memory(), stagedMemory) + responseBytes());
           }
           const buffer = await response.arrayBuffer();
           if (!current()) throw cancelled();
           if (buffer.byteLength > MAX_ENCODED_SURFACE_BYTES) throw new Error('The encoded surface exceeds its memory limit.');
           responses.set(item.id, buffer.byteLength);
-          this.reserve(this.memory() + stagedMemory + responseBytes());
+          this.reserve(memoryBytes(this.memory(), stagedMemory) + responseBytes());
           let decodedBytes = 0,
             decodedTriangles = 0,
-            decodedMemory = 0;
+            decodedMemory = emptyMemory();
           const decoded = decodeSurfaceGLB(buffer, [item.id], Math.max(0, this.maxBytes - this.bytes() - stagedBytes), (bytes, triangles) => {
             if (!current()) throw cancelled();
             // Include retained and staged CPU arrays plus conservative GPU
             // storage before the decoder allocates its next primitive.
-            decodedMemory += memoryBytes(bytes - decodedBytes, triangles - decodedTriangles);
+            decodedMemory = combineMemory(decodedMemory, {
+              cpuBytes: bytes - decodedBytes,
+              gpuBytes: (triangles - decodedTriangles) * GPU_BYTES_PER_TRIANGLE,
+              uploadScratchBytes: (triangles - decodedTriangles) * GPU_BYTES_PER_TRIANGLE,
+            });
             decodedBytes = bytes;
             decodedTriangles = triangles;
-            this.reserve(this.memory() + stagedMemory + decodedMemory + responseBytes());
+            this.reserve(memoryBytes(this.memory(), stagedMemory, decodedMemory) + responseBytes());
           });
           stagedBytes += decoded.reduce((sum, part) => sum + dataBytes(part), 0);
-          stagedMemory += decodedMemory;
+          stagedMemory = combineMemory(stagedMemory, decodedMemory);
           // Old and replacement geometry coexist until the whole revision is
           // ready. Bound that peak before constructing any replacement actor.
           if (this.bytes() + stagedBytes > this.maxBytes) throw new Error('The native surface geometry exceeds its memory limit.');
@@ -222,7 +256,7 @@ export class VTKSurfaceScene {
           staged.set(item.id, entry);
           next.set(item.id, entry);
           responses.delete(item.id);
-          this.reserve(this.memory() + stagedMemory + responseBytes());
+          this.reserve(memoryBytes(this.memory(), stagedMemory) + responseBytes());
           completed++;
           progress();
         }
@@ -244,13 +278,13 @@ export class VTKSurfaceScene {
       this.reused = reused;
       this.commit(next);
       staged.clear();
-      this.reserve(this.memory());
+      this.reserve(memoryBytes(this.memory()));
     } catch (reason) {
       active.abort();
       for (const entry of staged.values()) this.release(entry, false);
       staged.clear();
       // A cancelled older request must not lower its replacement's lease.
-      if (this.staging === staged) this.reserve(this.memory());
+      if (this.staging === staged) this.reserve(memoryBytes(this.memory()));
       throw reason;
     } finally {
       options.signal?.removeEventListener('abort', abort);
@@ -266,19 +300,23 @@ export class VTKSurfaceScene {
     const next = new Map<string, Entry>();
     try {
       if (buffer.byteLength > MAX_ENCODED_SURFACE_BYTES) throw new Error('The encoded surface exceeds its memory limit.');
-      this.reserve(this.memory() + buffer.byteLength);
+      this.reserve(memoryBytes(this.memory()) + buffer.byteLength);
       let decodedBytes = 0,
         decodedTriangles = 0,
-        decodedMemory = 0;
+        decodedMemory = emptyMemory();
       const decoded = decodeSurfaceGLB(
         buffer,
         structures.map(item => item.id),
         Math.max(0, this.maxBytes - this.bytes()),
         (bytes, triangles) => {
-          decodedMemory += memoryBytes(bytes - decodedBytes, triangles - decodedTriangles);
+          decodedMemory = combineMemory(decodedMemory, {
+            cpuBytes: bytes - decodedBytes,
+            gpuBytes: (triangles - decodedTriangles) * GPU_BYTES_PER_TRIANGLE,
+            uploadScratchBytes: (triangles - decodedTriangles) * GPU_BYTES_PER_TRIANGLE,
+          });
           decodedBytes = bytes;
           decodedTriangles = triangles;
-          this.reserve(this.memory() + decodedMemory + buffer.byteLength);
+          this.reserve(memoryBytes(this.memory(), decodedMemory) + buffer.byteLength);
         },
       );
       if (this.bytes() + decoded.reduce((sum, part) => sum + dataBytes(part), 0) > this.maxBytes)
@@ -290,10 +328,10 @@ export class VTKSurfaceScene {
       }
       this.reused = 0;
       this.commit(next);
-      this.reserve(this.memory());
+      this.reserve(memoryBytes(this.memory()));
     } catch (reason) {
       for (const [id, entry] of next) if (this.entries.get(id) !== entry) this.release(entry, false);
-      this.reserve(this.memory());
+      this.reserve(memoryBytes(this.memory()));
       throw reason;
     }
   }
@@ -318,13 +356,16 @@ export class VTKSurfaceScene {
   }
 
   stats() {
-    const parts = [...this.entries.values()].flatMap(entry => entry.parts);
+    const parts = [...this.entries.values()].flatMap(entry => entry.parts),
+      memory = this.memory();
     return {
       structures: this.entries.size,
       parts: parts.length,
       triangles: parts.reduce((sum, part) => sum + part.triangles, 0),
       retainedGeometryBytes: this.bytes(),
-      estimatedGPUBytes: parts.reduce((sum, part) => sum + part.gpuBytes, 0),
+      estimatedGPUBytes: memory.gpuBytes,
+      retainedMemoryBytes: memory.cpuBytes + memory.gpuBytes,
+      uploadScratchBytes: memory.uploadScratchBytes,
       reservedMemoryBytes: this.reservedBytes,
       visibleActors: parts.filter(part => part.actor.getVisibility()).length,
       reusedStructures: this.reused,

@@ -221,6 +221,71 @@ describe('native surface revision ownership', () => {
     renderer.delete();
   });
 
+  it('shares one largest-part upload allowance across retained and staged geometry without selection maps', async () => {
+    const renderer = vtkRenderer.newInstance(),
+      charges: number[] = [],
+      first = syntheticSurfaceGLB({ triangles: 2 }),
+      replacement = syntheticSurfaceGLB({ parts: 3 }),
+      structures = [structure()];
+    let limit = Infinity;
+    const scene = new VTKSurfaceScene(renderer, undefined, bytes => {
+      if (bytes > limit) throw new Error('Shared surface budget denied');
+      charges.push(bytes);
+    });
+    scene.loadBuffer(first, structures);
+    expect(scene.stats()).toMatchObject({ retainedGeometryBytes: 104, estimatedGPUBytes: 144, retainedMemoryBytes: 248, uploadScratchBytes: 144 });
+    const peak = 104 + 144 + 3 * (88 + 72) + 144 + replacement.byteLength;
+    // The old two-triangle part sets the scratch peak during atomic replacement;
+    // the three new parts do not each need another concurrent upload array.
+    limit = peak;
+    charges.length = 0;
+    const fetcher = vi.fn(async () => new Response(replacement));
+    await scene.load(manifest(['synthetic:organ']), structures, { fetcher });
+    expect(Math.max(...charges)).toBe(peak);
+    expect(scene.stats()).toMatchObject({
+      retainedGeometryBytes: 264,
+      estimatedGPUBytes: 216,
+      retainedMemoryBytes: 480,
+      uploadScratchBytes: 72,
+      reservedMemoryBytes: 552,
+    });
+    for (const { actor } of scene.actors) expect(actor.getMapper()!.get('populateSelectionSettings')).toEqual({ populateSelectionSettings: false });
+    const actors = scene.actors.map(({ actor }) => actor),
+      completedCharges = charges.slice();
+    await scene.load(manifest(['synthetic:organ']), structures, { fetcher });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(scene.actors.map(({ actor }) => actor)).toEqual(actors);
+    expect(charges).toEqual(completedCharges);
+    scene.dispose();
+    expect(charges.at(-1)).toBe(0);
+    renderer.delete();
+  });
+
+  it('rejects a multi-part upload peak before attachment and can retry within the same hard limit', async () => {
+    const renderer = vtkRenderer.newInstance(),
+      buffer = syntheticSurfaceGLB({ parts: 3, triangles: 2 }),
+      structures = [structure()],
+      peak = buffer.byteLength + 3 * (104 + 144) + 144;
+    let limit = peak - 1,
+      reserved = 0;
+    const scene = new VTKSurfaceScene(renderer, undefined, bytes => {
+      if (bytes > limit) throw new Error('Shared surface budget denied');
+      reserved = bytes;
+    });
+    const load = () => scene.load(manifest(['synthetic:organ']), structures, { fetcher: async () => new Response(buffer) });
+    await expect(load()).rejects.toThrow('Shared surface budget');
+    expect(scene.stats().retainedGeometryBytes).toBe(0);
+    expect(renderer.getActors()).toHaveLength(0);
+    expect(reserved).toBe(0);
+    limit = peak;
+    await load();
+    expect(renderer.getActors()).toHaveLength(3);
+    expect(reserved).toBe(3 * (104 + 144) + 144);
+    scene.dispose();
+    expect(reserved).toBe(0);
+    renderer.delete();
+  });
+
   it('rolls back a rejected multi-part decode to its previous actor and reservation', () => {
     const renderer = vtkRenderer.newInstance();
     let reserved = 0,

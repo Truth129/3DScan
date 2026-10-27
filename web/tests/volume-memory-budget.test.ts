@@ -93,6 +93,16 @@ describe('shared source-volume memory budget', () => {
     expect(floating.workerBytes).toBe(descriptor.byte_length * 2);
   });
 
+  it('keeps retained CT copies charged after bounded upload staging ends', () => {
+    const uploading = volumeMemoryRequest(descriptor, 'cornerstone', 50);
+    const retained = volumeMemoryRequest(descriptor, 'cornerstone', 50, false);
+    expect(uploading.cpuBytes - retained.cpuBytes).toBe(8 * 1024 ** 2);
+    expect(retained.workerBytes).toBe(uploading.workerBytes);
+    expect(retained.gpuBytes).toBe(uploading.gpuBytes);
+    expect(retained.overlayBytes).toBe(50);
+    expect(retained.cpuBytes).toBe(descriptor.byte_length);
+  });
+
   it('rejects malformed byte estimates and notifies only when memory changes', () => {
     const budget = new VolumeMemoryBudget(1000);
     const changed = vi.fn();

@@ -4,6 +4,7 @@ export function syntheticSurfaceGLB(
     id?: string;
     quantized?: boolean;
     parts?: number;
+    triangles?: number;
     node?: Record<string, unknown>;
     parent?: Record<string, unknown>;
     normal?: [number, number, number];
@@ -17,9 +18,13 @@ export function syntheticSurfaceGLB(
     normals = quantized
       ? new Int8Array(Array.from({ length: 3 }, () => [...normal.map(value => Math.round(value * 127)), 0]).flat())
       : new Float32Array([...normal, ...normal, ...normal]),
-    indices = quantized ? new Uint16Array([0, 1, 2]) : new Uint32Array([0, 1, 2]),
+    triangles = options.triangles ?? 1,
+    indices = quantized
+      ? new Uint16Array(Array.from({ length: triangles }, () => [0, 1, 2]).flat())
+      : new Uint32Array(Array.from({ length: triangles }, () => [0, 1, 2]).flat()),
     arrays = [positions, normals, indices];
   const document = surfaceDocument(id, quantized, options.parts ?? 1);
+  document.accessors[2].count = triangles * 3;
   let binaryLength = 0;
   for (const [index, array] of arrays.entries()) {
     binaryLength = Math.ceil(binaryLength / 4) * 4;

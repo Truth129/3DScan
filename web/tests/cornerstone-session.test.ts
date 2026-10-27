@@ -92,7 +92,7 @@ describe('session-scoped Cornerstone source leases', () => {
     expect(raw.getGPUVolume).toHaveBeenCalledOnce();
     expect(factory.create).toHaveBeenCalledOnce();
     expect(budget.stats.consumers).toBe(1);
-    const estimate = volumeMemoryRequest(volume.source.descriptor, 'cornerstone');
+    const estimate = volumeMemoryRequest(volume.source.descriptor, 'cornerstone', 0, false);
     expect(budget.stats.usedBytes).toBe(estimate.workerBytes + estimate.cpuBytes + estimate.gpuBytes);
     mpr.setOverlayBytes(240);
     volume.setOverlayBytes(100);
@@ -105,6 +105,37 @@ describe('session-scoped Cornerstone source leases', () => {
     expect(volume.owner.isDisposed).toBe(true);
     expect(budget.stats.usedBytes).toBe(0);
     expect(cornerstoneSessionStats(session).consumers).toBe(0);
+  });
+
+  it('removes stale upload staging from the reported 2053 MiB combined view', async () => {
+    const MiB = 1024 ** 2,
+      ct = source();
+    ct.descriptor.shape = [512, 512, 512];
+    ct.descriptor.byte_length = 256 * MiB;
+    const session = { descriptor: ct.descriptor, revisionBase: '/synthetic', getGPUVolume: async () => ct } as RenderCTSession;
+    const budget = new VolumeMemoryBudget(2048 * MiB);
+    let finish!: () => void;
+    const ready = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    factory.create.mockImplementationOnce(async (data, options) => {
+      await ready;
+      return makeOwner(data, options);
+    });
+    const waiting = acquireCornerstoneSource(session, { budget });
+    await vi.waitFor(() => expect(factory.create).toHaveBeenCalledOnce());
+    expect(budget.stats.cpuBytes).toBe(264 * MiB);
+    expect(budget.stats.usedBytes + 1021 * MiB).toBe(2053 * MiB);
+    finish();
+    const lease = await waiting;
+    expect(budget.stats.cpuBytes).toBe(256 * MiB);
+    lease.setOverlayBytes(1021 * MiB);
+    expect(budget.stats.usedBytes).toBe(2045 * MiB);
+    lease.setOverlayBytes(1024 * MiB);
+    expect(budget.stats.usedBytes).toBe(budget.limitBytes);
+    expect(() => lease.setOverlayBytes(1024 * MiB + 1)).toThrow(VolumeMemoryBudgetError);
+    lease.release();
+    expect(budget.stats.usedBytes).toBe(0);
   });
 
   it('aborts one waiting panel without cancelling another panel shared upload', async () => {

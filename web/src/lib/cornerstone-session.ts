@@ -58,7 +58,7 @@ function close(entry: SourceEntry, reason: unknown = cancelled()) {
 function reserve(entry: SourceEntry, changed?: Consumer, overlays?: number) {
   if (!entry.source || entry.closed) throw cancelled();
   const total = [...entry.consumers].reduce((sum, consumer) => sum + (consumer === changed ? overlays! : consumer.overlays), 0);
-  entry.reservation = entry.budget.reserve(entry.id, volumeMemoryRequest(entry.source.descriptor, 'cornerstone', total));
+  entry.reservation = entry.budget.reserve(entry.id, volumeMemoryRequest(entry.source.descriptor, 'cornerstone', total, !entry.owner));
 }
 function start(session: RenderCTSession, budget: VolumeMemoryBudget): SourceEntry {
   const entry: SourceEntry = {
@@ -89,6 +89,9 @@ function start(session: RenderCTSession, budget: VolumeMemoryBudget): SourceEntr
         throw cancelled();
       }
       entry.owner = owner;
+      // The image cache owns its slices now; the bounded transfer slab no
+      // longer coexists with surface or labelmap allocations.
+      reserve(entry);
       entry.remove.push(owner.onBeforeDispose(() => close(entry)));
       return { owner, source };
     } catch (reason) {
