@@ -84,7 +84,9 @@ def main():
             service.store.revision(args.case, args.revision)
             job = service.store.enqueue(args.case, "refine", payload)
         print(f"Job {job['id']}", flush=True)
-        service.start()
+        from .store import job_lane
+        # Only this job's lane: stopping after it must not cancel other work.
+        service.start(lanes=(job_lane(job),))
         try:
             result = service.wait(job["id"])
             print(json.dumps(public_job(result), indent=2))

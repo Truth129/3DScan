@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import __version__
 from .config import Settings
-from .store import Store, identifier, now
+from .store import LANES, Store, identifier, job_lane, now
 
 log = logging.getLogger(__name__)
 
@@ -69,10 +69,18 @@ class Service:
         self.settings = settings or Settings.from_env()
         self.store = Store(self.settings.data_dir)
         self.stop_event = threading.Event()
-        self.thread = None
+        self.threads = {}
         self.worker_lock = None
         self.interactive_runtime = None
         self._reviews = None
+        self._lane_guard = threading.Lock()
+        self._running_lanes = 0
+        self._preparation_slots = None
+
+    @property
+    def thread(self):
+        """The GPU lane's thread; health checks also report the CPU lane."""
+        return self.threads.get("gpu")
 
     @property
     def reviews(self):
@@ -92,8 +100,14 @@ class Service:
         if runtime is not None:
             runtime.release()
 
-    def start(self):
-        if self.thread and self.thread.is_alive():
+    def start(self, lanes=LANES):
+        """Run one thread per lane while this process holds the data-dir lock.
+
+        The GPU lane runs TotalSegmentator and nnInteractive one job at a time;
+        the CPU lane runs work that never touches the GPU. A CLI command starts
+        only the lane its job needs, so it never begins unrelated work there.
+        """
+        if any(thread.is_alive() for thread in self.threads.values()):
             return
         lock = (self.settings.data_dir / "worker.lock").open("a")
         try:
@@ -104,32 +118,44 @@ class Service:
         self.worker_lock = lock
         self.store.recover()
         self.stop_event.clear()
-        self.thread = threading.Thread(target=self._loop, daemon=True, name="scan3d-single-worker")
-        self.thread.start()
+        self._running_lanes = len(lanes)
+        self.threads = {lane: threading.Thread(target=self._loop, args=(lane,), daemon=True,
+                                               name=f"scan3d-{lane}-worker") for lane in lanes}
+        for thread in self.threads.values():
+            thread.start()
 
     def stop(self):
         self.stop_event.set()
-        if self.thread:
-            self.thread.join(timeout=10)
+        # Running jobs observe the stop as a cancellation; one deadline bounds
+        # the whole shutdown rather than each lane in turn.
+        deadline = time.monotonic() + 15
+        for thread in self.threads.values():
+            thread.join(timeout=max(0, deadline - time.monotonic()))
 
-    def _loop(self):
+    def _loop(self, lane):
         try:
             while not self.stop_event.is_set():
                 try:
-                    job = self.store.claim()
+                    job = self.store.claim(lane)
                     if job:
                         self.execute(job)
                     else:
                         self.stop_event.wait(.25)
                 except Exception:
-                    log.exception("Worker iteration failed")
+                    log.exception("%s worker iteration failed", lane.upper())
                     self.stop_event.wait(1)
         finally:
-            try:
-                self._release_interactive()
-            except Exception:
-                log.exception("Could not release the interactive inference runtime")
-            if self.worker_lock:
+            if lane == "gpu":
+                try:
+                    self._release_interactive()
+                except Exception:
+                    log.exception("Could not release the interactive inference runtime")
+            with self._lane_guard:
+                self._running_lanes -= 1
+                last = not self._running_lanes
+            # Hold the lock until every lane has finished its job, so no other
+            # process can start workers or recover a job still running here.
+            if last and self.worker_lock:
                 self.worker_lock.close()
                 self.worker_lock = None
 
@@ -260,10 +286,27 @@ class Service:
         return analysis, False
 
     @staticmethod
-    def _preparation_workers(geometry):
+    def _requested_workers():
         requested = int(os.environ.get("SCAN3D_POSTPROCESS_WORKERS", "4"))
         if requested < 1:
             raise ValueError("SCAN3D_POSTPROCESS_WORKERS must be positive")
+        return min(requested, os.cpu_count() or 1)
+
+    def _preparation_budget(self):
+        """Both lanes, and API demo builds, can prepare revisions at once.
+
+        Their mask workers share one service-wide budget, so concurrent jobs
+        never hold more dense-mask workspaces or native CPU threads together
+        than one job could before.
+        """
+        with self._lane_guard:
+            if self._preparation_slots is None:
+                self._preparation_slots = threading.BoundedSemaphore(self._requested_workers())
+            return self._preparation_slots
+
+    @staticmethod
+    def _preparation_workers(geometry):
+        requested = Service._requested_workers()
         available = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
         try:
             for line in Path("/proc/meminfo").read_text().splitlines():
@@ -278,7 +321,7 @@ class Service:
         for extent in geometry["shape"]:
             voxels *= extent
         memory_limit = max(1, available // max(1, voxels * 12 * 4))
-        return max(1, min(requested, os.cpu_count() or 1, memory_limit))
+        return max(1, min(requested, memory_limit))
 
     def execute(self, job):
         try:
@@ -289,8 +332,8 @@ class Service:
                 self._release_interactive()
                 revision = self._segment(job)
             elif job["kind"] == "review_predict":
-                no_inference = job["payload"].get("relationship_only") or job["payload"].get("method") == "direct"
-                self.reviews.run_predict(job, None if no_inference else self._interactive())
+                # The lane decision also decides runtime use: CPU work gets none.
+                self.reviews.run_predict(job, self._interactive() if job_lane(job) == "gpu" else None)
                 return
             elif job["kind"] == "review_accept":
                 revision = self.reviews.run_accept(job)
@@ -525,10 +568,16 @@ class Service:
             entry.setdefault("qc", [])
             return index, entry, hit, analysis_seconds, surface
 
+        slots = self._preparation_budget()
+
+        def budgeted(index, structure):
+            with slots:
+                return prepare(index, structure)
+
         # Limit both concurrent dense-mask workspaces and native CPU work. A
         # decoded mask feeds QC and contour extraction in the same worker.
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="scan3d-mask") as executor:
-            futures = [executor.submit(prepare, index, structure) for index, structure in enumerate(structures)]
+            futures = [executor.submit(budgeted, index, structure) for index, structure in enumerate(structures)]
             try:
                 for completed_count, future in enumerate(as_completed(futures), 1):
                     index, entry, hit, elapsed, surface = future.result()
