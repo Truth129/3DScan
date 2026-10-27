@@ -84,7 +84,7 @@ export function portablePoint(state: PortableRenderState, geometry: Geometry): P
   return transformPoint(geometry.affine_ras, ijk);
 }
 
-export function portableDisplay(state: PortableRenderState): StructureDisplay {
+export function portableDisplay(state: Pick<PortableRenderState, 'display' | 'segmentation_opacity'>): StructureDisplay {
   // Bake the legacy global factor into actual segment alpha. New viewers use
   // an all-segment editor and render each saved alpha without a second factor.
   return Object.fromEntries(Object.entries(state.display).map(([id, value]) => [id, {
