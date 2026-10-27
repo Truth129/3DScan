@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit",
+    "lint": "eslint --max-warnings=0 .",
+    "format:check": "prettier --check .",
     "build": "vue-tsc --noEmit && vite build && vite build --config vite.offline.config.ts",
     "test": "vitest run",
     "preview": "vite preview --host 127.0.0.1"
@@ -24,12 +26,19 @@
     }
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@types/node": "22.15.30",
     "@types/three": "0.180.0",
     "@vitejs/plugin-vue": "6.0.1",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-vue": "10.11.1",
+    "prettier": "3.9.10",
     "typescript": "5.9.3",
+    "typescript-eslint": "8.71.2",
     "vite": "7.3.7",
     "vitest": "4.1.11",
+    "vue-eslint-parser": "10.4.1",
     "vue-tsc": "3.1.1"
   }
 }
