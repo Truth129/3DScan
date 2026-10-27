@@ -12,8 +12,8 @@ exchange, and offline 3D HTML export.
 The [image foundation](docs/EXPANSION_FOUNDATION.md) separates immutable source
 images, segmentation revisions and modality policies. The expansion branch adds
 classic and single-instance static Enhanced MRI volumes; 2D and cine modalities
-need their own adapters. The
-live service remains on its frozen, qualified CT release during development.
+need their own adapters. On 28 October 2026 the user selected the development
+checkout for the primary service; the live modality policy remains CT-only.
 
 Patient data, model weights, environments and generated artifacts are excluded
 from version control. The synthetic demo is labelled throughout and does not run
@@ -28,6 +28,12 @@ Core SDK 10.1.0** through `scan3d.service`. Open **http://127.0.0.1:9010** or
 the existing approved private Tailscale address. The service uses the original
 cases, weights and license configuration. See [production operation and
 rollback](docs/PRODUCTION_RUNTIME.md).
+
+The usual address now serves the current development checkout, including native
+Cornerstone MPR and the opt-in VTK CT preview. It serves built frontend assets;
+frontend changes require a build and backend changes require a restart. The
+previous frozen release is retained for rollback. Test servers must use scratch
+data and separate ports.
 
 Normal workstation commands select that same runtime. Run them in bash: zsh and
 fish cannot source `scripts/production-env.sh`, and it refuses them.

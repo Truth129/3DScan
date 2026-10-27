@@ -22,12 +22,14 @@ Read before changing anything:
 - **`data/` is the live case library and holds patient scans.** Never read case contents,
   copy them into the repository, tests, logs or reports, or point experiments at it. Use a
   temporary data directory (`Settings(<tmp>/data, ...)` or `SCAN3D_DATA_DIR`).
-- **The live service is a frozen release.** `scan3d.service` is a systemd user unit on
+- **The live service now uses this development checkout**, at the user's explicit
+  request on 28 October 2026. `scan3d.service` is a systemd user unit on
   `127.0.0.1:9010`, published on the tailnet at
-  `https://scan3d-host.example.ts.net:8443`. It runs the release named in
-  `.runtime/rocm10/code-dir`, under `.runtime/releases/<name>/`. Editing the checkout does
-  not change it. The exceptions are `scripts/run-production.sh` and
-  `scripts/production-env.sh`, which it sources whenever it starts.
+  `https://scan3d-host.example.ts.net:8443`. `.runtime/rocm10/code-dir`
+  selects `/home/user/Projects/3DScan`. Python loads at startup; frontend changes
+  become live when built assets replace `web/dist`. Do not treat this checkout
+  as isolated from the live app. Test builds must still go to scratch directories.
+  The previous frozen `ct-hardening-20261027` release is retained for rollback.
 - **Ask the user first** before stopping or restarting the service, switching releases,
   using the R9700 GPU, pushing, or anything outward-facing. Run test servers on other
   ports (9011, 9031–9034 were used) against temporary data.
@@ -114,16 +116,22 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 - `/tmp` is RAM-backed on this workstation. Delete large scratch builds and venvs when
   done.
 
-## State on 27 October 2026
+## State on 28 October 2026
 
 - **Branch:** `expansion`; the Cornerstone phase 1/2 changes are local and unpushed.
   The earlier CI baseline is green on Python 3.14 and the web job.
-- **Live release:** `ct-hardening-20261027` (commit `971b05c`, CT-only).
-- **Library:** reset to empty at the user's request. The previous library is at
+- **Live code:** development checkout, activated from `09ff189`, CT-only. The
+  previous frozen `ct-hardening-20261027` release (`971b05c`) remains available.
+  Audit and guarded rollback: `.runtime/development-cutover-20261027T185251Z/`
+  (directory timestamp is UTC). The existing service, runtime and library were
+  retained; aggregate record counts were unchanged. 884 backend tests and both
+  viewer builds passed before switching.
+- **Library:** the user has added cases since the 27 October reset; preserve them.
+  The library archived at that reset is at
   `.runtime/archive/data-20261027T143742Z`, waiting for the user to delete it.
   `test_data/` and `.runtime/migrations/` (the 25 October cutover audit, which includes a
   database backup) still hold case-derived data and were left untouched.
-- **Shipped today:**
+- **Shipped on 27 October:**
   - staged, resumable browser import
   - HTTP compression
   - explicit 404 mapping
@@ -146,7 +154,8 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    rendering; it passed, including a 400 MiB source and scattering. This does
    not qualify native editing or migrate the 3D scene. See
    `docs/VOLUME_RENDERING_COMPARISON.md` and `docs/CORNERSTONE_PLAN.md` before
-   further viewer work. Patient review is user-only; production remains frozen.
+   further viewer work. Patient review is user-only. The user has now selected
+   the development checkout for the primary service; do not assume it is frozen.
    A live-app **VTK CT preview** now borrows that MPR owner, with Standard retained
    for combined anatomy, masks, corrections and HTML export. The portable entry
    does not import the new Cornerstone runtime. Actual-component SwiftShader and
