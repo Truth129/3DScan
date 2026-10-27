@@ -91,8 +91,10 @@ class Service:
 
     def _interactive(self):
         if self.interactive_runtime is None:
-            from .interactive import InteractiveRuntime
-            self.interactive_runtime = InteractiveRuntime()
+            # The warm engine runs in a supervised child process that the
+            # first prediction starts; this process never imports torch.
+            from .interactive_worker import InteractiveWorker
+            self.interactive_runtime = InteractiveWorker()
         return self.interactive_runtime
 
     def _release_interactive(self):
@@ -328,7 +330,8 @@ class Service:
             if job["kind"] == "process":
                 revision = self._process(job)
             elif job["kind"] == "segment":
-                # Release the warm review model only when inference is requested.
+                # Stop the warm review worker, returning its VRAM, only when
+                # TotalSegmentator inference is requested.
                 self._release_interactive()
                 revision = self._segment(job)
             elif job["kind"] == "review_predict":
