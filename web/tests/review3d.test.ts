@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import type { Geometry, InteractivePrompt, Point } from '../src/types';
+import type { Geometry, Point } from '../src/types';
 import type { CTFrame } from '../src/lib/ct-renderer';
 import { nativeSliceMetadata, inverseAffine, transformPoint, type VolumeDescriptor } from '../src/lib/ct-reslice';
 import { pixelToRas, rasToScene, sceneToRas } from '../src/lib/geometry';

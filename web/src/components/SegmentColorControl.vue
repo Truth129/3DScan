@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useId } from 'vue';
-const props = defineProps<{ color: string; name: string; customized: boolean }>();
+defineProps<{ color: string; name: string; customized: boolean }>();
 const emit = defineEmits<{ update: [value: string]; reset: [] }>();
 const id = useId();
 </script>

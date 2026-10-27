@@ -208,7 +208,7 @@ export function sampleNearest(volume: ResidentVolume, x: number, y: number, z: n
 export function probeVolume(volume: ResidentVolume, ras: Point): { hu: number | null; voxel?: Point } {
   if (ras.length !== 3 || ras.some(value => !Number.isFinite(value))) return { hu: null };
   const voxel = transformPoint(volume.inverse, ras).map(value => Math.floor(value + .5)) as Point;
-  const [nx, ny, nz] = volume.descriptor.shape;
+  const [nx, ny] = volume.descriptor.shape;
   if (voxel.some((value, axis) => value < 0 || value >= volume.descriptor.shape[axis])) return { hu: null };
   const hu = Math.fround(volume.values[voxel[0] + nx * (voxel[1] + ny * voxel[2])] * volume.descriptor.slope + volume.descriptor.intercept);
   return { hu: Number.isFinite(hu) ? hu : null, voxel };
