@@ -147,6 +147,11 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    not qualify native editing or migrate the 3D scene. See
    `docs/VOLUME_RENDERING_COMPARISON.md` and `docs/CORNERSTONE_PLAN.md` before
    further viewer work. Patient review is user-only; production remains frozen.
+   A live-app **VTK CT preview** now borrows that MPR owner, with Standard retained
+   for combined anatomy, masks, corrections and HTML export. The portable entry
+   does not import the new Cornerstone runtime. Actual-component SwiftShader and
+   approved R9700 checks pass; 377 web tests pass. The browser startup reload
+   observed before qualification is documented in `docs/VALIDATION.md`.
 2. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SEG/SR export, which adds a dependency to the pinned runtime

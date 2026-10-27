@@ -122,6 +122,17 @@ both application build entries; they do not replace Three.js scene composition
 or portable export. Direct vtk's current worker bridge assembles another CPU
 scalar buffer and owns a separate GPU texture.
 
+The live app also exposes an opt-in CT-only VTK preview. App passes the native
+MPR owner and a lazy volume component to ModelViewport; the offline entry never
+imports the Cornerstone 3D runtime. A fourth viewport borrows the existing CT
+ImageVolume, scalar texture and context under the MPR reservation. Entering the
+preview releases Three's CT allocation, and owner disposal synchronously detaches
+the borrowed viewport before releasing its source. No hidden MPR owner is kept
+alive. Camera state uses patient RAS and preserves the visible orthographic span,
+including portrait aspect fitting, when switching renderers. Shared appearance
+changes remain local. Native VTK scattering is a separate lighting model from
+Three's reference shader.
+
 Native reference images and masks remain authoritative for editing and
 measurements. GLB meshes and the bounded 3D mask union are derived presentation
 artifacts. Their simplification never changes mask-derived volumes.

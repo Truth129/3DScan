@@ -41,6 +41,7 @@ const emit = defineEmits<{
   gesture: [prompt: InteractivePrompt];
   windowLevel: [value: [number, number]];
   memoryUnavailable: [reason: string];
+  volumeOwner: [owner: CornerstoneMPR | undefined];
 }>();
 const planes: Plane[] = ['axial', 'coronal', 'sagittal'];
 const elements: Partial<Record<Plane, HTMLDivElement>> = {};
@@ -139,6 +140,7 @@ function release() {
   overlayController?.abort();
   const previous = viewer;
   viewer = undefined;
+  emit('volumeOwner', undefined);
   previous?.dispose();
   lease?.release();
   lease = undefined;
@@ -256,6 +258,7 @@ async function initialize() {
     viewer = instance;
     configure();
     loading.value = false;
+    emit('volumeOwner', instance);
     await loadOverlays();
   } catch (reason) {
     if (!disposed && !active.signal.aborted && id === generation) fail(reason);

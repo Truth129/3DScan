@@ -38,8 +38,9 @@ const props = withDefaults(
     maskMessage?: string;
     maskError?: boolean;
     maskMarginFixed?: boolean;
+    maskSupported?: boolean;
   }>(),
-  { mask: () => freshVolumeMaskSettings(), structures: () => [], selected: '', display: () => ({}) },
+  { mask: () => freshVolumeMaskSettings(), structures: () => [], selected: '', display: () => ({}), maskSupported: true },
 );
 const emit = defineEmits<{
   'update:enabled': [value: boolean];
@@ -236,7 +237,9 @@ watch(maskOpen, layout);
           Heart view faces the same side as the supplied Slicer scene. Oblique exposes a different face and can show brighter blood or chamber interiors.
         </p>
         <p class="volume-preset-note">
-          Crimson myocardium, ivory blood and a camera-following key light. For an isolated heart, enable Mask to segmentation below and choose its segments.
+          Crimson myocardium and ivory blood.
+          <template v-if="maskSupported">For an isolated heart, enable Mask to segmentation below and choose its segments.</template>
+          <template v-else>VTK lighting is a preview; use Standard for segmentation isolation.</template>
         </p>
         <div class="volume-cinematic-reference">
           <!-- prettier-ignore -->
@@ -294,7 +297,7 @@ watch(maskOpen, layout);
       </div>
       <p v-if="otherModality" class="volume-preset-note">This preset is designed for another modality and may need adjustment for CT.</p>
       <p v-if="projectionNamed" class="volume-preset-note">Slicer’s {{ preset.label }} appearance, shown with composite volume rendering.</p>
-      <div class="volume-mask">
+      <div v-if="maskSupported" class="volume-mask">
         <div class="volume-mask-header">
           <label
             class="volume-toggle"

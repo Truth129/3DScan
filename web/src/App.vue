@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import type { CornerstoneMPR } from './lib/cornerstone-mpr';
 import AnatomyPanel from './components/AnatomyPanel.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
 import {
@@ -276,6 +277,12 @@ const segmentationCatalog = shallowRef<SegmentationCatalog>();
 const segmentationSettings = ref<SegmentationSettings>(restoreSegmentationSettings());
 const model = ref<InstanceType<typeof ModelViewport>>(),
   correctionInput = ref<HTMLInputElement>();
+const mprOwner = shallowRef<CornerstoneMPR>();
+const vtkPreview = ref(false);
+function createVolumeView() {
+  return defineAsyncComponent(() => import('./components/CornerstoneVolumeView.vue'));
+}
+const CornerstoneVolumeView = shallowRef(createVolumeView());
 const exportSnapshot = shallowRef<PortableRenderSnapshot>();
 const interactivePanel = ref<InstanceType<typeof InteractiveReviewPanel>>();
 const catalogGate = new SourceRequestGate();
@@ -384,6 +391,7 @@ watch(
 const ctBase = computed(() => (activeCase.value && ctRevisionId.value ? revisionUrl(activeCase.value.id, ctRevisionId.value) : ''));
 const synthetic = computed(() => activeCase.value?.synthetic || revision.value?.synthetic || /synthetic|demo/i.test(revision.value?.source || ''));
 const exportDisabledReason = computed(() => {
+  if (vtkPreview.value) return 'Switch the 3D renderer to Standard before exporting an HTML viewer. PNG is available in the VTK preview.';
   if (busy.value) return 'Wait for the current operation to finish before exporting.';
   if (before.value || compare.value) return 'Return to the current revision and turn off comparison before exporting.';
   const draft = interactiveDraft.value;
@@ -1543,6 +1551,8 @@ onBeforeUnmount(() => {
             :image-context="imageContext(revision.image_asset)"
             :capabilities="sourceCapabilities"
             :local-session="localCT"
+            :mpr-owner="mprOwner"
+            :volume-view-component="CornerstoneVolumeView"
             :local-ready="localCTReady"
             :full-resolution="localCTFull"
             :overlays="ctOverlayStructures"
@@ -1553,6 +1563,8 @@ onBeforeUnmount(() => {
             @point="setPoint"
             @gesture="interactivePanel?.addGesture($event)"
             @opacity="allSegmentOpacity"
+            @renderer="vtkPreview = $event === 'vtk'"
+            @retry-volume-view="CornerstoneVolumeView = createVolumeView()"
           />
           <div v-if="before" class="before-label">Parent surface and measurements · {{ sourceLabel }} retains the active revision</div>
           <div v-if="synthetic" class="demo-label">
@@ -1808,6 +1820,7 @@ onBeforeUnmount(() => {
             @prompt="interactivePanel?.addPrompt($event)"
             @gesture="interactivePanel?.addGesture($event)"
             @window-level="cornerstoneWindowLevel"
+            @volume-owner="mprOwner = $event"
           />
           <div class="probe-readout">
             <span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span

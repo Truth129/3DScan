@@ -6,6 +6,7 @@ import type { Geometry, InteractivePrompt, InteractiveTool, Point } from '../typ
 import type { LocalCTSession } from '../lib/ct-volume';
 import type { CTOverlaySelection } from '../lib/ct-overlays';
 import { hasCornerstoneShear } from '../lib/cornerstone-volume';
+import type { CornerstoneMPR } from '../lib/cornerstone-mpr';
 
 const props = withDefaults(
   defineProps<{
@@ -38,6 +39,7 @@ const emit = defineEmits<{
   prompt: [point: Point];
   gesture: [prompt: InteractivePrompt];
   windowLevel: [value: [number, number]];
+  volumeOwner: [owner: CornerstoneMPR | undefined];
 }>();
 const memoryError = ref('');
 const sheared = computed(() => hasCornerstoneShear(props.geometry.affine_ras));
@@ -64,6 +66,7 @@ watch(
     @gesture="emit('gesture', $event)"
     @window-level="emit('windowLevel', $event)"
     @memory-unavailable="memoryError = $event"
+    @volume-owner="emit('volumeOwner', $event)"
   />
   <template v-else-if="active">
     <p v-if="memoryError" class="ct-detail-error" role="status">

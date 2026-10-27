@@ -128,6 +128,7 @@ export class CornerstoneMPR {
   private staged = new Set<OwnedVolume>();
   private serial = 0;
   private disposed = false;
+  private beforeDispose = new Set<() => void>();
   private applying = false;
   private preservingCamera = false;
   private pointRAS: Point;
@@ -907,6 +908,21 @@ export class CornerstoneMPR {
       disposed: this.disposed,
     };
   }
+  get sourceDescriptor() {
+    return this.descriptor;
+  }
+  get isDisposed() {
+    return this.disposed;
+  }
+  /** Borrowed viewports must detach before the source texture and engine go. */
+  onBeforeDispose(callback: () => void) {
+    if (this.disposed) {
+      callback();
+      return () => {};
+    }
+    this.beforeDispose.add(callback);
+    return () => this.beforeDispose.delete(callback);
+  }
   private releaseOverlay(entry: OverlayEntry) {
     for (const id of entry.segmentationIds) this.libs.tools.segmentation.removeSegmentation(id);
     entry.segmentationIds = [];
@@ -933,6 +949,15 @@ export class CornerstoneMPR {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    const borrowers = [...this.beforeDispose];
+    this.beforeDispose.clear();
+    for (const detach of borrowers) {
+      try {
+        detach();
+      } catch (reason) {
+        console.error('A borrowed MPR viewport failed to detach', reason);
+      }
+    }
     this.controller.abort();
     this.overlayController?.abort();
     this.observer?.disconnect();

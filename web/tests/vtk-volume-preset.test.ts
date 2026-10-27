@@ -1,0 +1,88 @@
+import { describe, expect, it } from 'vitest';
+import vtkVolume from '@kitware/vtk.js/Rendering/Core/Volume';
+import vtkVolumeMapper from '@kitware/vtk.js/Rendering/Core/VolumeMapper';
+import { applyVTKVolumePreset } from '../src/lib/vtk-volume-preset';
+import { freshVolumeSettings } from '../src/lib/volume-presets';
+
+function volume() {
+  const actor = vtkVolume.newInstance(),
+    mapper = vtkVolumeMapper.newInstance();
+  actor.setMapper(mapper);
+  return {
+    actor,
+    mapper,
+    dispose() {
+      actor.getProperty().getRGBTransferFunction(0).delete();
+      actor.getProperty().getScalarOpacity(0).delete();
+      actor.getProperty().delete();
+      actor.delete();
+      mapper.delete();
+    },
+  };
+}
+
+describe('native VTK volume settings', () => {
+  it('maps cinematic shadow strength and reach while retaining preset shading when shadows are off', () => {
+    const source = freshVolumeSettings({ preset: 'CT-Cinematic-Heart', cinematic: { myocardiumHU: 90, bloodHU: 450, shadows: 2, shadowReach: 0.8 } });
+    const original = structuredClone(source),
+      fixture = volume();
+    try {
+      expect(applyVTKVolumePreset(fixture.actor, source, { sampleDistanceMM: 0.4 })).toMatchObject({
+        shade: true,
+        scattering: 1,
+        giReach: 0.8,
+        adaptiveSampling: false,
+      });
+      source.cinematic.shadows = 0;
+      expect(applyVTKVolumePreset(fixture.actor, source, { sampleDistanceMM: 0.4 })).toMatchObject({ shade: true, scattering: 0, giReach: 0.8 });
+      source.preset = 'bone';
+      source.cinematic.shadows = 2;
+      expect(applyVTKVolumePreset(fixture.actor, source, { sampleDistanceMM: 0.4 }).scattering).toBe(0);
+      source.preset = original.preset;
+      source.cinematic.shadows = original.cinematic.shadows;
+      expect(source).toEqual(original);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it('keeps explicit comparison lighting separate from the user shadow setting', () => {
+    const fixture = volume(),
+      settings = freshVolumeSettings({ preset: 'CT-Cinematic-Heart' });
+    try {
+      expect(applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.4, lighting: 'off' })).toMatchObject({ shade: false, scattering: 0 });
+      expect(applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.4, lighting: 'scattering', scattering: 0.6, giReach: 0.25 })).toMatchObject({
+        shade: true,
+        scattering: 0.6,
+        giReach: 0.25,
+      });
+      expect(settings).toEqual(freshVolumeSettings({ preset: 'CT-Cinematic-Heart' }));
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it('rejects invalid ray sampling and lighting before mutating the live actor', () => {
+    const fixture = volume(),
+      settings = freshVolumeSettings();
+    try {
+      const before = applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.7 });
+      const transfer = fixture.actor.getProperty().getRGBTransferFunction(0),
+        changed = transfer.getMTime();
+      for (const quality of [
+        { sampleDistanceMM: 0 },
+        { sampleDistanceMM: NaN },
+        { sampleDistanceMM: 0.2, scattering: 1.1 },
+        { sampleDistanceMM: 0.2, giReach: -1 },
+        { sampleDistanceMM: 0.2, imageSampleDistance: Infinity },
+        { sampleDistanceMM: 0.2, aoKernelSize: 2.5 },
+      ])
+        expect(() => applyVTKVolumePreset(fixture.actor, settings, quality)).toThrow(/VTK/i);
+      expect(transfer.getMTime()).toBe(changed);
+      expect(fixture.mapper.getSampleDistance()).toBe(before.sampleDistanceMM);
+      expect(fixture.actor.getProperty().getVolumetricScatteringBlending()).toBe(before.scattering);
+    } finally {
+      fixture.dispose();
+    }
+  });
+});

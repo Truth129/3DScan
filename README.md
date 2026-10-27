@@ -366,6 +366,15 @@ An isolated [Three.js / vtk.js / Cornerstone3D comparison](docs/VOLUME_RENDERING
 records synthetic R9700 rendering, memory sharing and the remaining 3D migration
 gates. It does not replace the application or offline viewer.
 
+The live app now offers **3D renderer → VTK CT preview** in the Rendering stack.
+Open source review and let full native CT MPR finish loading first. The preview
+shares that CT volume and supports orbit, pan, zoom, named views, crop, presets,
+native VTK scattering through the cinematic shadow controls, and PNG capture.
+It shows CT only. **Standard** restores the saved segment, plane and mask choices;
+appearance settings and the current camera carry back. Use Standard for HTML
+export, combined anatomy, tilted scans, MRI and corrections. Closing source
+review releases the shared volume; reopening it resumes the selected preview.
+
 ## Local scripts and recipes
 
 ```bash
