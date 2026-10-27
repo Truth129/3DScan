@@ -355,9 +355,9 @@ Source hashes record the exact processing code and downloaded model checkpoints.
 - FastAPI + SQLite persists case, job, revision and assisted-review draft records. A filesystem lock
   enforces one worker set across API and CLI processes. Its GPU lane runs
   TotalSegmentator and nnInteractive one job at a time. Its CPU lane runs
-  preparation, direct edits, saves, refinement and imports, which therefore do
-  not wait behind a segmentation. Each lane takes review work before queued
-  batch work. Jobs interrupted by restart remain retryable, and completed
+  preparation, direct edits, saves, refinement, Slicer imports and include-all,
+  which therefore do not wait behind a segmentation. Each lane takes review work
+  before queued batch work. Jobs interrupted by restart remain retryable, and completed
   conversion/inference stages are reused.
 - Assisted review keeps one model and CT warm for successive Apply batches in a
   supervised worker process; the API process never imports torch. A crash or
