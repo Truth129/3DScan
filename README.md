@@ -17,7 +17,9 @@ live service remains on its frozen, qualified CT release during development.
 
 Patient data, model weights, environments and generated artifacts are excluded
 from version control. The synthetic demo is labelled throughout and does not run
-or validate TotalSegmentator.
+or validate TotalSegmentator. The bundled models are research tools, so real
+cases and portable exports are labelled **Research use only · not for
+diagnostic use**.
 
 ## Run
 

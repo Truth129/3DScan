@@ -64,7 +64,7 @@ onBeforeUnmount(() => session.value?.dispose());
       <span class="offline-badge"><span class="live-dot"></span> Works offline · embedded rendering stack</span>
       <button class="button secondary compact" @click="model?.screenshot()">Save PNG ↗</button>
     </header>
-    <div class="case-toolbar"><div class="case-title"><span class="eyebrow">{{ synthetic ? 'SYNTHETIC DEMONSTRATION · OFFLINE VIEWER' : 'OFFLINE VIEWER' }}</span><h1>{{ manifest.label }}</h1></div><span class="status-dot" :class="manifest.review_status">{{ manifest.review_status }}</span><div class="portable-note">{{ included }}</div></div>
+    <div class="case-toolbar"><div class="case-title"><span class="eyebrow">{{ synthetic ? 'SYNTHETIC DEMONSTRATION · OFFLINE VIEWER' : 'OFFLINE VIEWER · RESEARCH USE ONLY' }}</span><h1>{{ manifest.label }}</h1></div><span class="status-dot" :class="manifest.review_status">{{ manifest.review_status }}</span><div class="portable-note">{{ included }}</div></div>
     <div v-if="session" class="offline-ct-controls">
       <label>Window <input v-model.number="windowWidth" type="number" :aria-label="`Offline ${modality} window`" :min="modality === 'CT' ? 1 : undefined" step="any" /></label>
       <label>Level <input v-model.number="level" type="number" :aria-label="`Offline ${modality} level`" step="any" /></label>

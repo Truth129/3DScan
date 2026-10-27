@@ -200,6 +200,8 @@ const workerText = computed(() => {
 });
 const series = computed(() => activeCase.value?.series.find(s => s.uid === seriesUid.value));
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
+// The bundled models are research tools without regulatory clearance.
+const researchNotice = 'Research use only · not for diagnostic use';
 
 function fail(reason: unknown) { error.value = reason instanceof Error ? reason.message : String(reason); }
 function openExport() {
@@ -610,13 +612,14 @@ onBeforeUnmount(() => {
       <div class="welcome-orbit"><svg viewBox="0 0 180 200" fill="none"><path d="M78 29c-10 19-8 35-19 52-9 14-32 28-32 56 0 30 19 41 38 32 18-8 17-40 17-69V29Zm24 0c10 19 8 35 19 52 9 14 32 28 32 56 0 30-19 41-38 32-18-8-17-40-17-69V29Z"/><path d="M90 20v56m0-10L68 91m22-25 22 25"/><circle cx="90" cy="100" r="82" stroke-dasharray="3 7"/></svg></div>
       <span class="eyebrow">FROM SCAN TO SPATIAL UNDERSTANDING</span><h1>A clearer view of anatomy.</h1><p>Explore CT and static 3D MR scans with linked slices and 3D views.<br />Segment locally. Review the source images. Refine with confidence.</p>
       <div class="button-row"><button class="button primary large" @click="importOpen = true">Import your first scan →</button><button class="button secondary large" :disabled="importing" @click="demo">Explore synthetic demo</button></div>
+      <p class="eyebrow welcome-notice">{{ researchNotice }}</p>
       <div class="welcome-features"><span>01 <strong>Local GPU inference</strong></span><span>02 <strong>Revisioned corrections</strong></span><span>03 <strong>Portable 3D viewer</strong></span></div>
     </main>
     <main v-else-if="loading && !revision" class="app-loading"><span class="spinner"></span><p>Opening case workspace…</p></main>
 
     <template v-else-if="activeCase">
       <div class="case-toolbar">
-        <div class="case-title"><span class="eyebrow">{{ synthetic ? 'SYNTHETIC DEMONSTRATION' : 'LOCAL CASE' }}</span><h1>{{ activeCase.label }}</h1></div>
+        <div class="case-title"><span class="eyebrow" :title="researchNotice">{{ synthetic ? 'SYNTHETIC DEMONSTRATION' : 'LOCAL CASE · RESEARCH USE ONLY' }}</span><h1>{{ activeCase.label }}</h1></div>
         <div v-if="revision" class="case-tags acquisition-tags"><span v-for="tag in acquisitionTags" :key="tag" class="pill">{{ tag }}</span><span v-if="ctOnly" class="pill">{{ sourceLabel }} ready</span><span v-else class="status-dot" :class="revision.review_status">{{ reviewLabels[revision.review_status] }}</span></div>
         <div v-if="revision && sourceChoices.length > 1" class="source-image-picker"><label>Source image<select aria-label="Source image" :value="activeImageId" :disabled="busy" @change="activate(sourceChoices.find(item => item.id === ($event.target as HTMLSelectElement).value)?.revision.id || revision.id)"><option v-for="item in sourceChoices" :key="item.id" :value="item.id">{{ item.label }}</option></select></label></div><div v-if="revision" class="case-actions"><WorkspacePanels v-model="panels" :review-label="`${sourceLabel} review`" /><button v-if="!synthetic && activeCase.series.length" class="button secondary compact reprocess-action" :disabled="busy" aria-label="Select series or reprocess scan" @click="openPrepare"><span class="reprocess-long">Select series</span><span class="reprocess-short">Series</span></button><button v-if="!synthetic" class="button secondary compact" :disabled="busy" :aria-expanded="segmentationOpen" @click="openSegmentation">Segment {{ sourceLabel }}…</button><button v-if="!ctOnly" class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button><button class="button primary compact export-viewer-button" :disabled="!!exportDisabledReason" :title="exportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'" @click="openExport">Export viewer ↗</button></div>
       </div>
@@ -690,6 +693,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.welcome-notice{margin-top:24px;text-transform:uppercase}
 .signal-window-controls{display:grid;grid-template-columns:repeat(2,minmax(90px,1fr));gap:8px}
 .signal-window-controls>.text-button{grid-column:1/-1;justify-self:start}
 .signal-window-controls input{width:100%;min-width:90px;font-size:11px;padding:7px}
