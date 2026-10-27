@@ -26,7 +26,8 @@ def job_lane(job):
     preparation, refinement, Slicer import and include-all never touch the
     GPU, so they run on the CPU lane rather than behind minutes of inference.
     """
-    payload = job["payload"]
+    # Claims classify every queued row; a malformed one fails in its job, not here.
+    payload = job.get("payload") or {}
     inference = job["kind"] == "review_predict" and not (
         payload.get("relationship_only") or payload.get("method") == "direct")
     return "gpu" if job["kind"] == "segment" or inference else "cpu"

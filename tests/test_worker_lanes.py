@@ -139,8 +139,10 @@ def test_claim_orders_interactive_review_before_batch_work_within_each_lane(tmp_
     accept = queued("review_accept", method="nninteractive")
     legacy = queued("review_predict")  # Sessions predating direct editing are nnInteractive.
     refine, correction = queued("refine"), queued("correction")
+    # A malformed row must fail in its own job rather than wedge a lane's claims.
+    malformed = store.enqueue(case["id"], "refine", None)["id"]
     assert drained("gpu") == [model, legacy, segment]
-    assert drained("cpu") == [direct, policy, accept, process, include_all, refine, correction]
+    assert drained("cpu") == [direct, policy, accept, process, include_all, refine, correction, malformed]
     assert store.claim() is None
     batch, review = queued("segment"), queued("review_accept")
     assert drained() == [review, batch]
