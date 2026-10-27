@@ -8,8 +8,12 @@ test_data/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Vitest started from the repository root caches here.
+/node_modules/
 web/node_modules/
 web/dist/
 web/test-results/
 web/playwright-report/
 *.egg-info/
+# Isolated git worktrees used by coding agents.
+/.claude/worktrees/

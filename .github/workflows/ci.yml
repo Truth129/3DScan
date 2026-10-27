@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    # Ubuntu 26.04 packages dcm2niix 1.0.20250506, the release scripts/build_dcm2niix.sh
+    # builds; 24.04 ships the July 2022 release.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported version and the production runtime.
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install dcm2niix
+        # Tests that run the real converter skip without it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends dcm2niix
+      - name: Install scan3d with the test and lint extras (CPU only, no Torch or ROCm)
+        run: python -m pip install --editable ".[test,lint]"
+      - name: Install TotalSegmentator's task registry without its dependencies
+        # 85 tests read TotalSegmentator's task and label metadata, which is pure Python.
+        # --no-deps keeps Torch and nnU-Net out; the version follows the production pin.
+        run: |
+          python -m pip install --no-deps "$(grep -m1 '^TotalSegmentator==' requirements/rocm10-py314.in)"
+      - name: Lint
+        run: ruff check --output-format=github
+      - name: Test
+        run: pytest -ra
+
+  web:
+    name: Web
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx vue-tsc --noEmit
+      - run: npx vitest run
+      - run: npx vite build
+      - run: npx vite build --config vite.offline.config.ts

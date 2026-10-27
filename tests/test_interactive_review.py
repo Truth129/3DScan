@@ -372,7 +372,7 @@ def test_apply_boundaries_persist_only_after_publication_and_pending_undo_is_exa
     assert restored["candidate"]["mask_file"] == draft["candidate"]["mask_file"]
     assert restored["candidate"]["revision_id"] != draft["candidate"]["revision_id"]
     assert len(service.interactive_runtime.calls) == 1
-    next_state = service.reviews.update(case["id"], draft["id"], 3, [prompt, extra])
+    service.reviews.update(case["id"], draft["id"], 3, [prompt, extra])
     job = service.reviews.predict(case["id"], draft["id"], 4)
     assert len(service.reviews.get(case["id"], draft["id"])["batches"]) == 1
     assert job["payload"]["batches"][-1]["end"] == 2

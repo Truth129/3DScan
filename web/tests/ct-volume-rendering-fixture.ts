@@ -62,7 +62,7 @@ function rayLength(ct: ResidentVolume, camera: THREE.OrthographicCamera, crop = 
 }
 function read(camera: THREE.OrthographicCamera, plane?: THREE.Mesh) {
   renderer.setRenderTarget(null); renderer.setClearColor(0,0); renderer.clear();
-  try {volume.render(camera,plane);} catch(error) {throw new Error(`${String(error)}; fixture samples=${samples.length}, GL=${lastGLError}, mask=${JSON.stringify(volume.diagnostics)}`);}
+  try {volume.render(camera,plane);} catch(error) {throw new Error(`${String(error)}; fixture samples=${samples.length}, GL=${lastGLError}, mask=${JSON.stringify(volume.diagnostics)}`, { cause: error });}
   const data = new Uint8Array(96*96*4); gl.readPixels(0,0,96,96,gl.RGBA,gl.UNSIGNED_BYTE,data);
   if(gl.getError()!==gl.NO_ERROR)throw new Error('Ray casting readback failed');
   return data;

@@ -1,5 +1,4 @@
 """Clearly labelled synthetic CT phantom for testing the entire review workflow."""
-from pathlib import Path
 
 
 def create_demo(service):
