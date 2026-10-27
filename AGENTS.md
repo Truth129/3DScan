@@ -121,9 +121,11 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 - **Branch:** `expansion`; the Cornerstone phase 1/2 changes are local and unpushed.
   The earlier CI baseline is green on Python 3.14 and the web job.
 - **Live code:** development checkout, initially activated from `09ff189`, CT-only.
-  The frontend now serves native Cornerstone3D/vtk.js from `d35fffb`, installed
+  The frontend now serves native Cornerstone3D/vtk.js with bounded masking from
+  `2ea391e` (memory fix `ff291c5`), installed
   without restarting the backend. Frontend audit/rollback:
-  `.runtime/cornerstone-primary-frontend-20261027T204309Z/`. The
+  `.runtime/native-mask-frontend-20261027T224248Z/`. The earlier native-port audit
+  remains at `.runtime/cornerstone-primary-frontend-20261027T204309Z/`. The
   previous frozen `ct-hardening-20261027` release (`971b05c`) remains available.
   Audit and guarded rollback: `.runtime/development-cutover-20261027T185251Z/`
   (directory timestamp is UTC). The existing service, runtime and library were
@@ -163,11 +165,18 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    source sharing independent of MPR panel visibility, native CT plane and enabled
    quantized surfaces. CT-visible surfaces are solid. Three.js loads lazily for
    legacy review, shear/MR and portable HTML; native picking/marking, scissors,
-   markers and cropped mask ray casting remain unported. 419 web tests, software
+   and markers remain unported. Native masking now supports inside/outside, explicit
+   segment selection and physical display margin with one <=8 MiB crop texture,
+   retaining source/MPR independence and hiding CT for empty/pending/error masks.
+   The pinned streaming-mapper bridge uses actor-local factories and needs
+   qualification on Core/vtk dependency upgrades. 440 web tests, software
    and approved R9700 browser gates pass. The user authorized one read-only actual
    CT check; it passed without retaining clinical artifacts. This does not grant
    broader patient-data access. Large combined MPR/all-surface views can exceed
    the conservative memory budget; closing MPR or hiding surfaces frees capacity.
+   Completed CT transfer staging is now released; mesh memory charges only one
+   largest-part upload scratch and disables unused picking maps. The 2 GiB cap
+   is unchanged. Masking/memory qualification used synthetic data only.
    See the newest `docs/VALIDATION.md` section for evidence and browser-startup notes.
 2. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
