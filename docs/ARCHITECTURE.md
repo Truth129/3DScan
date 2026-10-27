@@ -40,15 +40,15 @@ flowchart LR
   subgraph HOST["Processing workstation"]
     direction TB
     API["FastAPI<br/>Import, jobs, revisions, review, transport and exports"]
-    QUEUE["SQLite-backed job queue<br/>One locked background worker<br/>Progress, cancellation and restart recovery"]
+    QUEUE["SQLite-backed job queue<br/>One locked worker set: GPU lane + CPU lane<br/>Progress, cancellation and restart recovery"]
     PREP["Source preparation<br/>pydicom indexing and geometry checks<br/>dcm2niix conversion to a reference NIfTI grid"]
-    GPU["Workstation GPU: PyTorch / ROCm / R9700<br/>TotalSegmentator with nnU-Net<br/>Optional warm nnInteractive runtime"]
+    GPU["Workstation GPU: PyTorch / ROCm / R9700<br/>TotalSegmentator subprocess with nnU-Net<br/>Optional warm nnInteractive worker process"]
     CPU["Bounded CPU processing<br/>Native-mask QC and voxel measurements<br/>Direct edits, refinement and overlap rules<br/>VTK surfaces and GLB generation"]
     TRANSPORT["Presentation transport<br/>Compressed scalar slabs, native overlay crops, GLB<br/>Cropped display-mask union at most 8 MiB"]
     API --> QUEUE
-    QUEUE --> PREP
-    QUEUE --> GPU
-    QUEUE --> CPU
+    QUEUE -->|"CPU lane"| PREP
+    QUEUE -->|"GPU lane · one job at a time"| GPU
+    QUEUE -->|"CPU lane"| CPU
     PREP --> CPU
     GPU --> CPU
     CPU --> TRANSPORT
@@ -106,26 +106,60 @@ flowchart TD
   SAVE --> VIEW
 
   VIEW --> METHOD{"Correction method"}
-  METHOD --> DIRECT["Direct paint / erase / 3D cut<br/>CPU mask operations"]
-  METHOD --> AI["Optional nnInteractive prompts<br/>Workstation GPU inference"]
+  METHOD --> DIRECT["Direct paint / erase / 3D cut<br/>CPU lane mask operations"]
+  METHOD --> AI["Optional nnInteractive prompts<br/>GPU lane, supervised worker process"]
   DIRECT --> CANDIDATE["Candidate mask<br/>Geometry / overlap checks and change summary"]
   AI --> CANDIDATE
   CANDIDATE --> PREVIEW["Linked CT / 3D candidate preview"]
   PREVIEW -->|"Keep editing"| METHOD
   PREVIEW -->|"Discard"| VIEW
-  PREVIEW -->|"Explicit acceptance"| NEW["Create a new mask revision<br/>Preserve its parent and original masks"]
+  PREVIEW -->|"Explicit acceptance"| NEW["Create a new mask revision on the CPU lane<br/>Preserve its parent and original masks"]
   NEW --> ARTIFACTS
   SAVE -->|"Undo: activate an earlier revision"| VIEW
 ```
 
-The worker serializes queued processing; it is a background thread backed by
-SQLite and a filesystem process lock, not an external broker. Dense mask
-analysis and surface preparation use a bounded CPU thread pool internally.
-Completed stages remain reusable after cancellation or restart.
+## Job lanes and the nnInteractive worker
+
+```mermaid
+flowchart LR
+  CLIENTS["FastAPI and CLI"] -->|"enqueue"| JOBS[("SQLite jobs")]
+  subgraph WORKERS["Worker set · one per data directory, held by worker.lock"]
+    direction TB
+    GPULANE["GPU lane thread<br/>one job at a time"]
+    CPULANE["CPU lane thread<br/>one job at a time"]
+    BUDGET["Shared measurement and surface budget<br/>SCAN3D_POSTPROCESS_WORKERS"]
+    GPULANE --> BUDGET
+    CPULANE --> BUDGET
+  end
+  JOBS -->|"claim: review work first"| GPULANE
+  JOBS -->|"claim: review work first"| CPULANE
+  GPULANE -->|"segment"| TS["TotalSegmentator subprocess"]
+  GPULANE <-->|"JSON lines on a socket pair<br/>predict / cancel / shutdown<br/>ready / progress / result / error"| CHILD["nnInteractive worker process<br/>warm model and CT on the R9700<br/>imports torch; the API process never does"]
+  CPULANE --> CPUWORK["Preparation, direct edits, relationship-only Apply,<br/>saves, refinement, Slicer import, include-all"]
+```
+
+Queued processing runs on two background threads backed by SQLite and one
+filesystem process lock, not an external broker. The GPU lane runs
+TotalSegmentator and nnInteractive predictions strictly one at a time. The CPU
+lane runs everything that never touches the GPU, so direct edits and saves no
+longer wait behind a segmentation. Each lane takes review work before queued
+batch work. Transactional active-revision and generation guards, not queue
+order, decide between jobs that finish on different lanes.
+
+nnInteractive runs in a supervised child process that the GPU lane starts on
+demand, keeping its model warm between Apply batches. A crash, hang or GPU
+failure fails only that job; the next request starts a fresh child. Ignored
+cancellation is enforced by killing the child's process group after a grace
+period. Before TotalSegmentator runs, the child exits to return all of its VRAM.
+
+Dense mask analysis and surface preparation use bounded CPU thread pools that
+share one service-wide budget across both lanes. Completed stages remain
+reusable after cancellation or restart.
 
 ## Code map
 
-- [API and transport](../scan3d/api.py), [job dispatch and revision building](../scan3d/service.py), [SQLite and activation](../scan3d/store.py).
+- [API and transport](../scan3d/api.py), [job lanes, dispatch and revision building](../scan3d/service.py), [SQLite, claims and activation](../scan3d/store.py).
+- [nnInteractive engine](../scan3d/interactive.py) and its [supervised worker process](../scan3d/interactive_worker.py).
 - [DICOM preparation](../scan3d/dicom.py), [inference](../scan3d/segmentation.py), [native operations and measurements](../scan3d/imaging.py), [CPU surfaces](../scan3d/surfaces.py).
 - [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display union](../scan3d/volume_mask_union.py).
 - [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone adapter](../web/src/lib/cornerstone-runtime.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).

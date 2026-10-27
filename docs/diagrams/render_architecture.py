@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape
 OUT = Path(__file__).with_name('architecture.svg')
 parts = ['''<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1480" viewBox="0 0 1460 1480" role="img" aria-labelledby="title description">
 <title id="title">3DScan system architecture</title>
-<desc id="description">Remote browser uses Cornerstone3D and Three.js with client RAM and GPU caches. Private HTTPS connects it to FastAPI on the workstation. One SQLite-backed worker prepares images, runs optional segmentation and corrections, and builds native-mask measurements and surfaces. ROCm inference uses the workstation GPU. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG. Live deployment is CT-only; static MRI is implemented on the expansion branch.</desc>
+<desc id="description">Remote browser uses Cornerstone3D and Three.js with client RAM and GPU caches. Private HTTPS connects it to FastAPI on the workstation. One locked SQLite-backed worker set runs a GPU lane for segmentation and nnInteractive corrections, one job at a time, and a CPU lane that prepares images, applies direct edits, saves corrections and builds native-mask measurements and surfaces. ROCm inference uses the workstation GPU from child processes. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG. Live deployment is CT-only; static MRI is implemented on the expansion branch.</desc>
 <defs><marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L11 6L1 11Z" fill="#9bb7db"/></marker></defs>
 <style>text{font-family:Inter,"DejaVu Sans",Arial,sans-serif}.title{fill:#edf2fc;font-weight:650;font-size:34px}.subtitle{fill:#a5b2c9;font-size:17px}.lane{font-size:14px;font-weight:650;letter-spacing:1.5px;fill:#93a8c9}.card-title{fill:#f0f4fc;font-size:20px;font-weight:650}.body{fill:#b8c4d8;font-size:16px}.edge-label{fill:#a7bddb;font-size:13px}.small{fill:#b8c4d8;font-size:14px}.edge{fill:none;stroke:#9bb7db;stroke-width:2;stroke-linejoin:round;marker-end:url(#arrow)}.both{marker-start:url(#arrow)}</style>
 <rect width="1460" height="1480" fill="#0c111a"/>
@@ -36,7 +36,7 @@ def edge(path,label=None,x=0,y=0,both=False):
 text(40,63,'3DScan · system architecture','title')
 text(40,99,'Remote interaction stays local; the workstation owns processing and durable case data.','subtitle')
 region(40,140,1380,260,'REMOTE DESKTOP BROWSER  ·  CLIENT RAM + CLIENT GPU')
-region(40,460,1380,430,'WORKSTATION  ·  FASTAPI + SINGLE WORKER + ROCm INFERENCE')
+region(40,460,1380,430,'WORKSTATION  ·  FASTAPI + GPU AND CPU WORKER LANES + ROCm INFERENCE')
 region(40,980,1380,170,'DURABLE STATE  ·  SQLITE + FILESYSTEM')
 region(40,1210,1380,145,'EXCHANGE & EXPORTS')
 
@@ -78,14 +78,14 @@ card(70,515,390,120,'FastAPI service',[
  'Imports, jobs, revisions and review',
  'Image / mask chunks, GLB and exports',
  'Local service behind private access'])
-card(535,515,390,120,'One queued background worker',[
- 'SQLite job queue + one process lock',
- 'Progress, cancellation and recovery',
- 'Open, segment, refine and review jobs'])
+card(535,515,390,120,'Two worker lanes, one lock',[
+ 'GPU lane: segment + nnInteractive',
+ 'CPU lane: open, edits, saves, refine',
+ 'Progress, cancellation and recovery'])
 card(1000,515,390,120,'ROCm inference · R9700',[
  'TotalSegmentator + nnU-Net',
- 'Optional nnInteractive corrections',
- 'PyTorch runs on the workstation GPU'], '#c7a16d')
+ 'nnInteractive in a supervised process',
+ 'PyTorch runs only in child processes'], '#c7a16d')
 card(70,700,390,145,'1. Validate and prepare source',[
  'pydicom: index, select and check series',
  'dcm2niix: reference NIfTI + geometry',
