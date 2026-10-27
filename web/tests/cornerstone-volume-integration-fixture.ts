@@ -2,11 +2,12 @@ import { createApp, h, nextTick, reactive, shallowRef } from 'vue';
 import CornerstoneMPRView from '../src/components/CornerstoneMPRView.vue';
 import CornerstoneVolumeView from '../src/components/CornerstoneVolumeView.vue';
 import ModelViewport from '../src/components/ModelViewport.vue';
-import { cornerstoneMPRCacheStats, type CornerstoneMPR } from '../src/lib/cornerstone-mpr';
+import { cornerstoneMPRCacheStats } from '../src/lib/cornerstone-mpr';
 import { cornerstoneLibraries } from '../src/lib/cornerstone-runtime';
+import { cornerstoneSessionStats } from '../src/lib/cornerstone-session';
 import { transformPoint, type VolumeDescriptor } from '../src/lib/ct-reslice';
 import { gpuVolumeSlabRange, type GPUVolumeSource } from '../src/lib/gpu-volume-data';
-import { sharedVolumeMemoryBudget } from '../src/lib/volume-memory-budget';
+import { sharedVolumeMemoryBudget, type VolumeMemoryLease } from '../src/lib/volume-memory-budget';
 import type { LocalCTSession } from '../src/lib/ct-volume';
 import type { Geometry, Point } from '../src/types';
 import '../src/style.css';
@@ -116,27 +117,52 @@ window.fetch = (input, init) => {
   }
   return nativeFetch(input, init);
 };
-const session = {
-  descriptor,
-  revisionBase: '/api/cases/fixture/revisions/reference',
-  ready: Promise.resolve(),
-  onOverlayChange: () => () => {},
-  async getGPUVolume() {
-    sourceRequests++;
-    return source;
-  },
-  async getGPUOverlays() {
-    return { overlays: [] };
-  },
-} as unknown as LocalCTSession;
+type FixtureSession = LocalCTSession & { dispose(): void };
+function makeSession(version: number): FixtureSession {
+  const listeners = new Set<() => void>();
+  let disposed = false;
+  const currentSource = {
+    ...source,
+    descriptor: { ...descriptor, key: descriptor.key + ':' + version, reference_image_id: descriptor.reference_image_id + ':' + version },
+  };
+  return {
+    descriptor: currentSource.descriptor,
+    revisionBase: '/api/cases/fixture/revisions/reference',
+    ready: Promise.resolve(),
+    get isDisposed() {
+      return disposed;
+    },
+    onDispose(callback: () => void) {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+    onOverlayChange: () => () => {},
+    async getGPUVolume(signal?: AbortSignal) {
+      if (disposed || signal?.aborted) throw new DOMException('Fixture source released', 'AbortError');
+      sourceRequests++;
+      return currentSource;
+    },
+    async getGPUOverlays() {
+      return { overlays: [] };
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const listener of listeners) listener();
+      listeners.clear();
+    },
+  } as unknown as FixtureSession;
+}
+let sourceVersion = 1;
+const session = shallowRef(makeSession(sourceVersion));
 type Model = {
   volumeDiagnostics(): Record<string, unknown> | undefined;
   captureVolumePNG(): Promise<string>;
   screenshot(): void | Promise<void>;
   exportSnapshot(): unknown;
 };
-const state = reactive({ showMPR: true, showModel: true, reviewActive: false, window: 1400, level: 100, point: [0, 0, 0] as Point });
-const owner = shallowRef<CornerstoneMPR>();
+const state = reactive({ showMPR: false, showModel: true, planeAvailable: false, reviewActive: false, window: 1400, level: 100, point: [0, 0, 0] as Point });
+let pressure: VolumeMemoryLease | undefined;
 let model: Model | null = null;
 const memoryFailures: string[] = [];
 const app = createApp({
@@ -154,10 +180,9 @@ const app = createApp({
             structure: '',
             overlays: [],
             compare: false,
-            session,
+            session: session.value,
             nativeReview: false,
             onPoint: (point: Point) => (state.point = point),
-            onVolumeOwner: (value: CornerstoneMPR | undefined) => (owner.value = value),
             onMemoryUnavailable: (reason: string) => memoryFailures.push(reason),
           })
         : h('p', 'Source MPR closed'),
@@ -173,16 +198,16 @@ const app = createApp({
             revisionId: 'reference',
             geometry,
             point: state.point,
-            localSession: session,
+            localSession: session.value,
             localReady: true,
             fullResolution: true,
             viewportActive: true,
             reviewActive: state.reviewActive,
             window: state.window,
             level: state.level,
-            availableLayers: { segmentation: false, ct_plane: false, ct_volume: true },
-            mprOwner: owner.value,
+            availableLayers: { segmentation: false, ct_plane: state.planeAvailable, ct_volume: true },
             volumeViewComponent: CornerstoneVolumeView,
+            onPoint: (point: Point) => (state.point = point),
           })
         : null,
     ]),
@@ -216,10 +241,13 @@ function standardHost() {
 }
 async function stats() {
   const { core } = await cornerstoneLibraries();
+  const shared = cornerstoneSessionStats(session.value);
   return {
     pageIdentity,
     mode: selectedMode(),
-    owner: owner.value?.stats(),
+    owner: shared.source,
+    shared,
+    visibility: { mpr: state.showMPR, model: state.showModel },
     preview: model?.volumeDiagnostics?.(),
     previewMounted: !!document.querySelector('#model .cornerstone-volume-view'),
     standard: { ...standardHost()?.dataset },
@@ -240,8 +268,9 @@ async function stats() {
 async function ready(mode = selectedMode()) {
   for (let attempt = 0; attempt < 600; attempt++) {
     const current = await stats();
-    const mprReady = !state.showMPR || (owner.value && document.querySelectorAll('#mpr .cornerstone-viewport[data-quality="full"]').length === 3);
-    const volumeReady = mode === 'vtk' ? !!current.preview?.ready : standardHost()?.dataset.ctVolumeReady === 'true';
+    const mprReady =
+      !state.showMPR || (current.owner?.mprAttached && document.querySelectorAll('#mpr .cornerstone-viewport[data-quality="full"]').length === 3);
+    const volumeReady = !state.showModel || (mode === 'vtk' ? !!current.preview?.ready : standardHost()?.dataset.ctVolumeReady === 'true');
     if (mprReady && volumeReady) {
       await frames();
       return stats();
@@ -330,8 +359,8 @@ Object.assign(window, {
     interactionHitTest,
     failNextVolumeRender: async () => {
       const { core } = await cornerstoneLibraries();
-      const engine = owner.value && core.getRenderingEngine(owner.value.id);
       const viewportId = model?.volumeDiagnostics?.()?.viewportId;
+      const engine = (core.getRenderingEngines() ?? []).find(candidate => candidate.getViewports().some(viewport => viewport.id === viewportId));
       if (!engine || typeof viewportId !== 'string') throw new Error('The visible volume viewport is unavailable for fault injection');
       const render = engine.renderViewport;
       engine.renderViewport = function (id: string) {
@@ -343,9 +372,27 @@ Object.assign(window, {
       };
       return true;
     },
+    loseSharedContext: async () => {
+      const { core } = await cornerstoneLibraries();
+      const viewportId = model?.volumeDiagnostics?.()?.viewportId;
+      const engine = (core.getRenderingEngines() ?? []).find(candidate => candidate.getViewports().some(viewport => viewport.id === viewportId));
+      if (!engine || typeof viewportId !== 'string') throw new Error('The visible volume context is unavailable');
+      const context = engine.getOffscreenMultiRenderWindow(viewportId).getOpenGLRenderWindow().getContext();
+      const extension = context.getExtension('WEBGL_lose_context');
+      if (!extension) throw new Error('The browser does not expose deterministic WebGL context loss');
+      extension.loseContext();
+      await new Promise(resolve => setTimeout(resolve, 150));
+      return stats();
+    },
     setWindowLevel: async (window: number, level: number) => {
       state.window = window;
       state.level = level;
+      await nextTick();
+      await frames();
+      return stats();
+    },
+    setPlaneAvailable: async (available: boolean) => {
+      state.planeAvailable = available;
       await nextTick();
       await frames();
       return stats();
@@ -367,11 +414,43 @@ Object.assign(window, {
       await nextTick();
       return ready();
     },
+    toggleModel: async (visible: boolean, waitForReady = true) => {
+      state.showModel = visible;
+      await nextTick();
+      await frames();
+      return visible && waitForReady ? ready() : stats();
+    },
+    replaceSource: async () => {
+      const previous = session.value;
+      session.value = makeSession(++sourceVersion);
+      previous.dispose();
+      await nextTick();
+      return ready();
+    },
+    reservePressure: async () => {
+      pressure = sharedVolumeMemoryBudget.reserve('fixture-pressure', {
+        sourceKey: 'virtual-test-pressure',
+        workerBytes: 0,
+        cpuBytes: sharedVolumeMemoryBudget.limitBytes,
+        gpuBytes: 0,
+      });
+      await frames();
+      return stats();
+    },
+    releasePressure: async () => {
+      pressure?.release();
+      pressure = undefined;
+      await frames();
+      return stats();
+    },
     cleanup: async () => {
       state.showModel = false;
       await nextTick();
       state.showMPR = false;
       await nextTick();
+      pressure?.release();
+      pressure = undefined;
+      session.value.dispose();
       await frames();
       return stats();
     },

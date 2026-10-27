@@ -1,15 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, useId, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point, SliceMeta } from '../types';
 import type { LocalCTSession } from '../lib/ct-volume';
 import type { GPUVolumeSource } from '../lib/gpu-volume-data';
 import type { CTOverlaySelection } from '../lib/ct-overlays';
-import { CornerstoneMPR } from '../lib/cornerstone-mpr';
+import type { CornerstoneMPR, MPRViewportLease } from '../lib/cornerstone-mpr';
+import { acquireCornerstoneSource, type CornerstoneSourceLease } from '../lib/cornerstone-session';
 import { inverseAffine, transformPoint } from '../lib/ct-reslice';
 import { planeAxis } from '../lib/geometry';
 import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/interactive-review';
 import { revisionUrl } from '../lib/api';
-import { sharedVolumeMemoryBudget, VolumeMemoryBudgetError, volumeMemoryRequest, type VolumeMemoryLease } from '../lib/volume-memory-budget';
+import { sharedVolumeMemoryBudget, VolumeMemoryBudgetError } from '../lib/volume-memory-budget';
 import CTReviewInput from './CTReviewInput.vue';
 
 const props = withDefaults(
@@ -61,8 +62,11 @@ const overlayIds = computed(() => props.overlays?.map(item => item.id) ?? (props
 const selections = computed(() => props.overlays ?? overlayIds.value.map(id => ({ id, color: '#38bdf8' })));
 const overlayKey = computed(() => JSON.stringify([props.revisionId, overlayIds.value, props.compare]));
 const marking = computed(() => !!props.reviewTool && props.reviewTool !== 'navigate' && props.reviewTool !== 'scissors');
-const owner = 'cornerstone-mpr-' + useId();
-let viewer: CornerstoneMPR | undefined, source: GPUVolumeSource | undefined, lease: VolumeMemoryLease | undefined;
+let viewer: CornerstoneMPR | undefined,
+  source: GPUVolumeSource | undefined,
+  lease: CornerstoneSourceLease | undefined,
+  attachment: MPRViewportLease | undefined;
+let removeOwnerListener: (() => void) | undefined;
 let controller: AbortController | undefined, overlayController: AbortController | undefined;
 let generation = 0,
   overlayGeneration = 0,
@@ -136,12 +140,14 @@ function refresh(plane?: Plane) {
 function release() {
   generation++;
   overlayGeneration++;
-  controller?.abort();
   overlayController?.abort();
-  const previous = viewer;
   viewer = undefined;
   emit('volumeOwner', undefined);
-  previous?.dispose();
+  removeOwnerListener?.();
+  removeOwnerListener = undefined;
+  attachment?.release();
+  attachment = undefined;
+  controller?.abort();
   lease?.release();
   lease = undefined;
   source = undefined;
@@ -194,10 +200,10 @@ async function loadOverlays() {
     const masks = await session.getGPUOverlays(overlayIds.value, props.compare, active.signal);
     if (!current()) return;
     const staged = instance.overlayUpdateMemoryBytes(masks, props.compare);
-    lease = sharedVolumeMemoryBudget.reserve(owner, volumeMemoryRequest(source.descriptor, 'cornerstone', instance.overlayBytes + staged));
+    lease!.setOverlayBytes(instance.overlayBytes + staged);
     await instance.setOverlays(masks, selections.value, props.compare, props.overlayOpacity);
     if (!current()) return;
-    lease = sharedVolumeMemoryBudget.reserve(owner, volumeMemoryRequest(source.descriptor, 'cornerstone', instance.overlayBytes));
+    lease!.setOverlayBytes(instance.overlayBytes);
     presentation();
     overlayLoading.value = false;
     committedContext = revisionUrl(props.caseId, props.revisionId) + ':' + JSON.stringify(overlayIds.value) + ':' + props.compare + ':volume';
@@ -210,7 +216,7 @@ async function loadOverlays() {
     }
     overlayLoading.value = false;
     overlayError.value = reason instanceof Error ? reason.message : 'The selected overlays could not load.';
-    if (source) lease = sharedVolumeMemoryBudget.reserve(owner, volumeMemoryRequest(source.descriptor, 'cornerstone', instance.overlayBytes));
+    if (source) lease?.setOverlayBytes(instance.overlayBytes);
     refresh();
   }
 }
@@ -225,13 +231,16 @@ async function initialize() {
   await nextTick();
   if (disposed || active.signal.aborted) return;
   try {
-    const nextSource = await props.session.getGPUVolume(active.signal);
-    if (disposed || active.signal.aborted || id !== generation) return;
-    source = nextSource;
-    lease = sharedVolumeMemoryBudget.reserve(owner, volumeMemoryRequest(source.descriptor, 'cornerstone'));
-    const instance = await CornerstoneMPR.create(
+    const retained = await acquireCornerstoneSource(props.session, { signal: active.signal });
+    if (disposed || active.signal.aborted || id !== generation) {
+      retained.release();
+      return;
+    }
+    lease = retained;
+    source = retained.source;
+    const instance = retained.owner;
+    const attached = await instance.attachMPR(
       elements as Record<Plane, HTMLDivElement>,
-      source,
       {
         camera: refresh,
         point: ras => {
@@ -249,13 +258,18 @@ async function initialize() {
           if (!disposed && id === generation) fail(new Error(reason));
         },
       },
-      { signal: active.signal, maxBytes: sharedVolumeMemoryBudget.limitBytes },
+      active.signal,
     );
     if (disposed || active.signal.aborted || id !== generation) {
-      instance.dispose();
+      attached.release();
+      retained.release();
       return;
     }
+    attachment = attached;
     viewer = instance;
+    removeOwnerListener = instance.onBeforeDispose(() => {
+      if (!disposed && id === generation) fail(new Error('The shared source volume changed. Retry to restore the slice views.'));
+    });
     configure();
     loading.value = false;
     emit('volumeOwner', instance);

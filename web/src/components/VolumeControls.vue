@@ -239,7 +239,7 @@ watch(maskOpen, layout);
         <p class="volume-preset-note">
           Crimson myocardium and ivory blood.
           <template v-if="maskSupported">For an isolated heart, enable Mask to segmentation below and choose its segments.</template>
-          <template v-else>VTK lighting is a preview; use Standard for segmentation isolation.</template>
+          <template v-else>Native scattering controls the lighting. Segmentation isolation is available in the legacy viewer.</template>
         </p>
         <div class="volume-cinematic-reference">
           <!-- prettier-ignore -->

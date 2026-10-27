@@ -14,6 +14,10 @@ const descriptor = {
   reference_image_id: 'source-a',
   shape: [512, 512, 100],
   byte_length: 512 * 512 * 100 * 2,
+  kind: 'ct',
+  dtype: 'int16',
+  slope: 1,
+  intercept: 0,
 } as VolumeDescriptor;
 const request = (sourceKey = 'a') => ({ sourceKey, workerBytes: 100, cpuBytes: 20, gpuBytes: 80 });
 
@@ -72,12 +76,21 @@ describe('shared source-volume memory budget', () => {
     expect(three.cpuBytes).toBe(8 * 1024 ** 2);
     expect(three.gpuBytes).toBe(descriptor.byte_length);
     expect(mpr.workerBytes).toBe(descriptor.byte_length);
-    expect(mpr.cpuBytes).toBe(8 * 1024 ** 2 + descriptor.byte_length * 2);
+    expect(mpr.cpuBytes).toBe(8 * 1024 ** 2 + descriptor.byte_length);
     expect(mpr.gpuBytes).toBe(descriptor.byte_length * 2);
     expect(mpr.overlayBytes).toBe(50);
     expect(defaultVolumeMemoryLimit(2)).toBe(LOW_MEMORY_VOLUME_BYTES);
     expect(defaultVolumeMemoryLimit(4)).toBe(LOW_MEMORY_VOLUME_BYTES);
     expect(defaultVolumeMemoryLimit(8)).toBe(DESKTOP_VOLUME_MEMORY_BYTES);
+  });
+
+  it('reserves scaled float image samples only when the source needs rescaling', () => {
+    const scaled = volumeMemoryRequest({ ...descriptor, slope: 0.5, intercept: -1024 }, 'cornerstone');
+    const floating = volumeMemoryRequest({ ...descriptor, dtype: 'float32', byte_length: descriptor.byte_length * 2 }, 'cornerstone');
+    expect(scaled.cpuBytes).toBe(8 * 1024 ** 2 + descriptor.byte_length * 2);
+    expect(floating.cpuBytes).toBe(scaled.cpuBytes);
+    expect(scaled.gpuBytes).toBe(floating.gpuBytes);
+    expect(floating.workerBytes).toBe(descriptor.byte_length * 2);
   });
 
   it('rejects malformed byte estimates and notifies only when memory changes', () => {

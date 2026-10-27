@@ -31,8 +31,8 @@ flowchart LR
     direction TB
     UI["Vue 3 / TypeScript workspace<br/>Cases, series, panels, tasks and review controls"]
     RAM["Shared source cache in client RAM<br/>Preview then native volume; local reslice worker"]
-    CT["Cornerstone3D<br/>Native volume MPR, slabs and labelmaps<br/>Worker stacks for preview / shear / memory limits"]
-    WEBGL["Three.js / WebGL2 on the client GPU<br/>Segmentation surfaces, CT planes and volume rendering"]
+    CT["Cornerstone3D / vtk.js<br/>Shared CT volume, MPR, slabs and labelmaps<br/>Worker stacks for preview / shear / memory limits"]
+    WEBGL["Client GPU<br/>Native VTK CT planes and segmentation surfaces<br/>Three.js for legacy review and offline export"]
     UI --> CT
     UI --> WEBGL
     RAM --> CT
@@ -109,31 +109,40 @@ reservations, retaining the App-owned worker for reuse. These are allocation
 estimates, not measurements of driver VRAM. A volume that cannot fit uses the
 existing Cornerstone stack path with an explanation and Retry.
 
-Source download, renderer and overlay errors have distinct Retry paths. An MPR
-context failure releases the shared engine, labelmaps, tools and image cache
-before rebuilding from the resident CT. Candidate changes replace mask display
-copies while retaining the source volume and camera. The Three.js scene still
-owns 3D volume/surface composition, picking and portable export. Warm navigation,
+Source download, renderer and overlay errors have distinct Retry paths. A shared
+context failure releases the engine, labelmaps, tools and image cache before
+rebuilding from the resident CT. Candidate changes replace mask display copies
+while retaining the source volume and camera. Warm navigation,
 windowing and camera changes use resident client data. The client browser GPU
 handles viewing; the workstation ROCm GPU handles model inference.
 
-An isolated synthetic [3D renderer comparison](VOLUME_RENDERING_COMPARISON.md)
-tests direct vtk.js and a fourth Cornerstone volume viewport. The latter reuses
-the MPR ImageVolume, CT texture and WebGL context. These adapters are outside
-both application build entries; they do not replace Three.js scene composition
-or portable export. Direct vtk's current worker bridge assembles another CPU
-scalar buffer and owns a separate GPU texture.
+Following the synthetic [3D renderer comparison](VOLUME_RENDERING_COMPARISON.md),
+the live orthogonal CT view defaults to **Cornerstone3D**, using vtk.js ray
+casting, native lighting/scattering, crop planes and PNG capture. A session-owned
+source lease shares one ImageVolume, texture, context and memory reservation
+between visible 3D and MPR consumers. Either panel can open first or close
+independently; there are no hidden MPR canvases. The final consumer releases the
+engine, images and texture. The App-owned worker remains available for reuse.
 
-The live app also exposes an opt-in CT-only VTK preview. App passes the native
-MPR owner and a lazy volume component to ModelViewport; the offline entry never
-imports the Cornerstone 3D runtime. A fourth viewport borrows the existing CT
-ImageVolume, scalar texture and context under the MPR reservation. Entering the
-preview releases Three's CT allocation, and owner disposal synchronously detaches
-the borrowed viewport before releasing its source. No hidden MPR owner is kept
-alive. Camera state uses patient RAS and preserves the visible orthographic span,
-including portrait aspect fitting, when switching renderers. Shared appearance
-changes remain local. Native VTK scattering is a separate lighting model from
-Three's reference shader.
+Native VTK actors load only enabled revision surfaces from quantized GLBs and display an optional exact native CT
+plane. The plane gathers only one bounded 2D raster from Cornerstone's voxel
+manager, without assembling another full CT buffer. Plane CPU/GPU bytes and
+retained/staged surface geometry join the shared memory budget. A hidden native
+plane retains its bounded raster/texture cache and reservation until the 3D
+feature is disposed. With CT visible,
+surfaces are opaque for correct depth composition; surface-only views support
+transparency. Pending or failed mesh replacements hide the previous revision's
+actors until an atomic replacement succeeds. Plane/surface errors leave CT
+rendering available. Source masks remain authoritative.
+
+Three.js loads on demand for the legacy renderer, corrections, sheared grids,
+MRI and portable HTML. Native 3D does not implement cropped mask ray casting,
+surface marking, scissors or markers. Correction entry shows the legacy target
+surface and preserves the earlier layer choices on return. HTML export requires
+the legacy renderer; the offline entry contains no Cornerstone runtime. Camera
+state remains patient RAS, including parallel scale and finite ordered clipping
+ranges that may cross zero. VTK scattering differs from Three's reference shader;
+the migration does not establish Slicer rendering equivalence.
 
 Native reference images and masks remain authoritative for editing and
 measurements. GLB meshes and the bounded 3D mask union are derived presentation

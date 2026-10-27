@@ -141,6 +141,8 @@ export class LocalCTSession {
   private requestedOverlay = '';
   private overlayReady = false;
   private overlayListeners = new Set<() => void>();
+  private disposeListeners = new Set<() => void>();
+  private sourceListeners = new Set<() => void>();
   private maskDescriptors = new Map<string, { current: VolumeDescriptor; parent: VolumeDescriptor | null; compared: boolean }>();
   private activeDownloads = 0;
   private downloadWaiters: (() => void)[] = [];
@@ -327,6 +329,21 @@ export class LocalCTSession {
     this.overlayListeners.add(listener);
     return () => this.overlayListeners.delete(listener);
   }
+  get isDisposed() {
+    return this.disposed;
+  }
+  onDispose(listener: () => void): () => void {
+    if (this.disposed) {
+      listener();
+      return () => {};
+    }
+    this.disposeListeners.add(listener);
+    return () => this.disposeListeners.delete(listener);
+  }
+  onSourceChange(listener: () => void): () => void {
+    this.sourceListeners.add(listener);
+    return () => this.sourceListeners.delete(listener);
+  }
 
   async requestSlice(
     plane: Plane,
@@ -458,6 +475,9 @@ export class LocalCTSession {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const listener of [...this.disposeListeners]) listener();
+    this.disposeListeners.clear();
+    this.sourceListeners.clear();
     this.descriptorController.abort();
     this.ctController.abort();
     this.overlayController.abort();
@@ -492,6 +512,7 @@ export class LocalCTSession {
       throw new LocalCTUnsupportedError(
         `This CT needs ${Math.ceil(descriptor.byte_length / 1024 ** 2)} MiB, above this device’s ${Math.floor(budget / 1024 ** 2)} MiB local CT budget.`,
       );
+    if (this.ctVersion > 0) for (const listener of [...this.sourceListeners]) listener();
     this.ctController.abort();
     this.ctController = new AbortController();
     const controller = this.ctController;

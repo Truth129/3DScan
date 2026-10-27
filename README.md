@@ -30,7 +30,7 @@ cases, weights and license configuration. See [production operation and
 rollback](docs/PRODUCTION_RUNTIME.md).
 
 The usual address now serves the current development checkout, including native
-Cornerstone MPR and the opt-in VTK CT preview. It serves built frontend assets;
+Cornerstone MPR and the default Cornerstone3D/vtk.js CT renderer. It serves built frontend assets;
 frontend changes require a build and backend changes require a restart. The
 previous frozen release is retained for rollback. Test servers must use scratch
 data and separate ports.
@@ -308,10 +308,13 @@ display surface; it does not change the voxel mask used for volumes. Named
 bronchopulmonary territories and automated lesion characterization are outside
 this version's scope.
 
-The 3D view's **Rendering stack** lets you show **Segmentation**, **CT volume**
-and **CT plane** together or independently. Segmentation opacity scales the
-currently visible structures without changing their individual opacity settings.
-Open **CT volume settings** for its presets, opacity, masking and cropping.
+The 3D view defaults to **Cornerstone3D**, using vtk.js ray casting. Its
+**Rendering stack** shows **Segmentation**, **CT volume** and **CT plane** together
+or independently. With CT visible, surfaces are solid for correct depth;
+turn CT off to adjust their transparency. **CT volume settings** provides
+presets, native lighting/scattering, opacity and cropping. **Three.js (legacy)**
+retains the previous renderer, including mask-based volume isolation and HTML
+export. The following cinematic-heart recipe describes that legacy renderer.
 
 Choose **Cinematic heart** under Appearance for the supplied Slicer script's
 crimson myocardium and ivory blood colors, camera-following lighting and
@@ -338,10 +341,11 @@ interiors even in native Slicer. Saved offline cameras are retained on opening.
 
 The **CT plane** toggle shows a native i/j/k plane. Choose a plane,
 move its slice slider, or use **Face plane** to align the camera. It follows the
-linked CT position, window/level and overlay selection while retaining normal
-orbit and anatomy picking. Local overview frames appear during full CT preload;
-once cached, moving the plane needs no workstation slice requests. Review uses
-the same plane and requires an exact full-detail frame before accepting marks.
+linked CT position and window/level while retaining normal orbit. The native
+plane shows scalar CT; the legacy plane also supports overlays and anatomy
+picking. Local overview frames appear during full CT preload in the legacy
+renderer; once cached, moving the plane needs no workstation slice requests.
+Review uses the legacy plane and requires exact full detail before accepting marks.
 
 Use **Expand ↗** in the top-right corner of the 3D view to fill the screen.
 **Restore ↙** or **Escape** returns to the workspace. The camera, loaded CT,
@@ -361,25 +365,31 @@ views from the shared worker. Sheared native planes are orthogonalized for
 display only; gestures still map to original source voxels. WebGL errors show
 **Retry**, which rebuilds rendering from the resident CT session.
 
-The 2D and Three.js CT layers share a memory budget. Hidden views release their
-volume resources; the worker keeps the source for local reuse. If native MPR
-cannot fit, frame navigation remains available. The Three.js 3D scene and its
-portable export continue using the existing rendering pipeline. See
+Native 2D and 3D share one CT source, texture, context and memory reservation.
+Either panel can open first or close independently. Closing both releases their
+native resources; the worker keeps the source for local reuse. Plane and surface
+allocations also join the budget. If native MPR cannot fit, frame navigation
+remains available. Three.js and its portable export remain available. See
 [the Cornerstone plan](docs/CORNERSTONE_PLAN.md) and
 [the new-segment workflow](docs/NNINTERACTIVE_PLAN.md).
 
 An isolated [Three.js / vtk.js / Cornerstone3D comparison](docs/VOLUME_RENDERING_COMPARISON.md)
-records synthetic R9700 rendering, memory sharing and the remaining 3D migration
-gates. It does not replace the application or offline viewer.
+records synthetic R9700 rendering and the memory-sharing basis for this change.
+The default native view adds quantized segmentation surfaces and a linked CT
+plane without another full CT copy. Only enabled surfaces are loaded; use
+**Show selected only** to reduce mesh memory. Rendering starts after full preload and does
+not require the CT review panel to be open. Opening that panel attaches MPR to
+the same source. PNG captures the current view. Plane/surface failures keep CT
+available; a renderer failure offers **Retry 3D view**.
 
-The live app now offers **3D renderer → VTK CT preview** in the Rendering stack.
-Open source review and let full native CT MPR finish loading first. The preview
-shares that CT volume and supports orbit, pan, zoom, named views, crop, presets,
-native VTK scattering through the cinematic shadow controls, and PNG capture.
-It shows CT only. **Standard** restores the saved segment, plane and mask choices;
-appearance settings and the current camera carry back. Use Standard for HTML
-export, combined anatomy, tilted scans, MRI and corrections. Closing source
-review releases the shared volume; reopening it resumes the selected preview.
+Use **Three.js (legacy)** for cropped mask ray casting or HTML export. Tilted
+scans, MRI and corrections use that existing renderer automatically. Native 3D
+does not yet implement surface picking/marking, scissors or markers; entering
+corrections shows the target in the legacy renderer. The native plane currently
+shows scalar CT without segmentation coloring. This port changes display, not
+source masks, measurements, revision history or inference. Native scattering has
+a different appearance from the earlier renderer and requires its own visual
+comparison before claiming Slicer equivalence.
 
 ## Local scripts and recipes
 
@@ -407,7 +417,13 @@ outputs cause an explicit error.
 Example recipe, in patient **RAS millimetres**:
 
 ```json
-{"type":"erase_region","bounds_ras":[[-80,-60,-40],[-40,20,30]]}
+{
+  "type": "erase_region",
+  "bounds_ras": [
+    [-80, -60, -40],
+    [-40, 20, 30]
+  ]
+}
 ```
 
 Supported operations are `keep_component` and `remove_component` with

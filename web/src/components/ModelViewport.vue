@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, onMounted, onBeforeUnmount, onErrorCaptured, useId, watch, type Component } from 'vue';
-import type { CornerstoneMPR } from '../lib/cornerstone-mpr';
 import type { CornerstoneVolumeCameraRAS } from '../lib/cornerstone-volume-3d';
-import { namedVolumeCamera, portableCameraFromVolume, volumeCameraFromPortable } from '../lib/volume-camera';
+import { fitVolumeCameraClipping, namedVolumeCamera, portableCameraFromVolume, volumeCameraFromPortable } from '../lib/volume-camera';
 import type {
   CameraView,
   Geometry,
@@ -16,11 +15,12 @@ import type {
   StructureDisplay,
   SurfaceManifest,
 } from '../types';
-import { AnatomyScene, type OrientationAxis, type SurfaceProgress } from '../lib/scene';
+import type { AnatomyScene, OrientationAxis, SurfaceProgress } from '../lib/scene';
+import { hasCornerstoneShear } from '../lib/cornerstone-volume';
 import { colorCTOverlays, ctOverlayColor, type CTOverlaySelection } from '../lib/ct-overlays';
 import type { GPUOverlaySourceProvider, GPUOverlaySources, RenderCTSession } from '../lib/gpu-volume-data';
 import { sharedVolumeMemoryBudget, volumeMemoryRequest, type VolumeMemoryLease, type VolumeMemoryRequest } from '../lib/volume-memory-budget';
-import { nativeSliceMetadata } from '../lib/ct-reslice';
+import { nativeSliceMetadata, transformPoint } from '../lib/ct-reslice';
 import { api, revisionUrl } from '../lib/api';
 import { moveNativeSlice, nativeSliceFor } from '../lib/interactive-review';
 import {
@@ -83,7 +83,6 @@ const props = defineProps<{
   maskSourceProvider?: GPUOverlaySourceProvider;
   availableLayers?: PortableLayers;
   initialSnapshot?: PortableRenderSnapshot;
-  mprOwner?: CornerstoneMPR;
   /** Supplied only by the live app so the portable bundle keeps its own renderer. */
   volumeViewComponent?: Component;
 }>();
@@ -102,7 +101,9 @@ interface VolumePreview {
   retry(): Promise<void>;
 }
 const volumePreview = ref<VolumePreview>();
-const volumeRenderer = ref<'three' | 'vtk'>('three'),
+const preferCornerstone =
+  !!props.volumeViewComponent && !props.initialSnapshot && (props.imageContext?.modality ?? props.localSession?.descriptor?.modality ?? 'CT') === 'CT';
+const volumeRenderer = ref<'three' | 'vtk'>(preferCornerstone ? 'vtk' : 'three'),
   vtkReady = ref(false),
   vtkError = ref('');
 const vtkComponentFailed = ref(false),
@@ -196,7 +197,7 @@ const gpuFamilyReady = ref(''),
   gpuPreparing = ref(false),
   gpuFallback = ref('');
 const gpuMemoryBytes = ref(0);
-const showSegmentation = ref(props.initialSnapshot?.layers.segmentation ?? true),
+const showSegmentation = ref(props.initialSnapshot?.layers.segmentation ?? !preferCornerstone),
   volumeOptionsOpen = ref(false);
 const segmentOpacities = computed(() => props.structures.map(item => props.display[item.id]?.opacity ?? 0.5));
 const segmentationOpacityMixed = computed(() => segmentOpacities.value.some(value => Math.abs(value - (segmentOpacities.value[0] ?? 0.5)) > 0.0001));
@@ -211,7 +212,7 @@ const modality = computed(() => props.imageContext?.modality ?? props.localSessi
 const sourcePresentation = computed(() => imagePresentation(props.imageContext ?? props.localSession?.descriptor ?? undefined));
 const signalVolume = computed(() => modality.value !== 'CT');
 const allows = (capability: ImageCapability) => !props.capabilities || props.capabilities.includes(capability);
-const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? false),
+const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? preferCornerstone),
   volumeSettings = shallowRef(freshVolumeSettings(props.initialSnapshot?.state.volume)),
   volumeError = ref(''),
   volumeFamilyReady = ref('');
@@ -237,17 +238,16 @@ const heartCamera = computed(() =>
 );
 let automaticHeartCase = '';
 function showHeartView() {
-  if (scene && heartCamera.value && !props.reviewActive) {
-    if (vtkSelected.value) {
-      const portable = heartCamera.value;
-      vtkCamera.value = volumeCameraFromPortable(
-        portable,
-        (portable.height_mm * cameraFitFactor()) / portable.zoom,
-        scene.camera.near * 1000,
-        scene.camera.far * 1000,
-      );
-    } else scene.restoreCamera(heartCamera.value);
-  }
+  const portable = heartCamera.value;
+  if (!portable || props.reviewActive) return;
+  if (vtkSelected.value) {
+    if (!vtkCamera.value) return;
+    vtkCamera.value = fitVolumeCameraClipping(
+      volumeCameraFromPortable(portable, (portable.height_mm * cameraFitFactor()) / portable.zoom, vtkCamera.value.nearMM, vtkCamera.value.farMM),
+      props.geometry!.bounds_ras,
+    );
+    view.value = 'Heart';
+  } else scene?.restoreCamera(portable);
 }
 const volumeMaskIds = computed(() => [...volumeMask.value.ids].sort());
 // Display transport may supply one combined union or per-mask portable sources.
@@ -279,20 +279,16 @@ const vtkAvailable = computed(
     !props.initialSnapshot &&
     !props.localSession?.networkFree &&
     !props.reviewActive &&
+    !!props.geometry &&
+    !hasCornerstoneShear(props.geometry.affine_ras) &&
     ctVolumeAvailable.value,
 );
 const vtkSelected = computed(() => vtkAvailable.value && volumeRenderer.value === 'vtk');
-const vtkOwner = computed(() => {
-  const owner = props.mprOwner,
-    descriptor = props.localSession?.descriptor;
-  return owner &&
-    !owner.isDisposed &&
-    descriptor?.key === owner.sourceDescriptor.key &&
-    descriptor?.reference_image_id === owner.sourceDescriptor.reference_image_id &&
-    props.localReady &&
-    props.fullResolution
-    ? owner
-    : undefined;
+const vtkSession = computed(() => (props.localReady && props.fullResolution ? props.localSession : undefined));
+const vtkPlane = computed(() => {
+  if (!props.geometry || !props.point || !showPlane.value) return undefined;
+  const native = nativeSliceFor(props.geometry, reviewPlane.value, props.point);
+  return { visible: true, axis: native.axis as 0 | 1 | 2, index: native.index, window: props.window || 400, level: props.level ?? 40 };
 });
 const controlsVisible = computed(() => !!props.reviewActive || planeAvailable.value || props.structures.length > 0);
 const planeLayout = computed(() => controlsVisible.value);
@@ -349,7 +345,7 @@ const volumeMaskMessage = computed(
 const volumeMessage = computed(
   () =>
     (vtkSelected.value
-      ? vtkError.value || (vtkReady.value ? 'VTK CT only · drag to rotate; scroll to zoom.' : 'Open source review and wait for full CT volume MPR.')
+      ? vtkError.value || (vtkReady.value ? 'Cornerstone3D · drag to rotate; scroll to zoom.' : 'Waiting for the full CT to finish loading.')
       : '') ||
     volumeError.value ||
     (!props.fullResolution
@@ -361,7 +357,7 @@ const volumeMessage = computed(
         : `Preparing ${modality.value} volume…`),
 );
 const volumeStackStatus = computed(() => {
-  if (vtkSelected.value) return vtkError.value ? 'Unavailable' : vtkReady.value ? 'Visible · VTK' : 'Waiting for volume MPR';
+  if (vtkSelected.value) return vtkError.value ? 'Unavailable' : vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
   if (volumeError.value) return 'Unavailable';
   if (volumeMask.value.enabled) {
     if (!volumeMaskIds.value.length) return 'Choose mask segments';
@@ -446,6 +442,7 @@ const reviewHint = computed(() => {
     : `Draw directly on the ${modality.value} plane. Right drag rotates; scroll zooms.`;
 });
 let scene: AnatomyScene | undefined;
+let legacyInitialization = 0;
 let controller: AbortController | undefined;
 let loadId = 0,
   planeLoadId = 0,
@@ -1079,8 +1076,12 @@ async function load() {
     }
   }
 }
-onMounted(() => {
+async function initializeThree() {
+  if (scene || disposed) return;
+  const id = ++legacyInitialization;
   try {
+    const { AnatomyScene } = await import('../lib/scene');
+    if (disposed || vtkSelected.value || id !== legacyInitialization) return;
     scene = new AnatomyScene(
       surface.value!,
       (id, point) => {
@@ -1120,7 +1121,7 @@ onMounted(() => {
       fallbackToCTPlane();
       syncReview();
     };
-    if (ctOnly.value && !props.initialSnapshot && ctVolumeAvailable.value) setVolumeEnabled(true);
+    if (ctOnly.value && !props.initialSnapshot && !props.reviewActive && ctVolumeAvailable.value) setVolumeEnabled(true);
     load();
     syncReview();
     queueReviewPlane();
@@ -1130,8 +1131,16 @@ onMounted(() => {
     error.value = `WebGL is unavailable. You can still review ${modality.value} slices and export the segmentation.`;
     loading.value = false;
   }
+}
+onMounted(() => {
+  if (vtkSelected.value) {
+    loading.value = false;
+    emit('renderer', 'vtk');
+    void observeReviewControls();
+  } else initializeThree();
 });
 onBeforeUnmount(() => {
+  legacyInitialization++;
   emit('renderer', 'three');
   void setExpanded(false, false);
   disposed = true;
@@ -1201,10 +1210,11 @@ watch(
       props.localReady,
       props.localSession?.revisionBase,
       loading.value,
+      vtkReady.value,
     ] as const,
   ([caseId, preset, visible, camera, reviewing]) => {
     if (
-      !scene ||
+      (vtkSelected.value ? !vtkReady.value || !vtkCamera.value : !scene) ||
       !caseId ||
       caseId === automaticHeartCase ||
       preset !== CINEMATIC_HEART_PRESET ||
@@ -1259,7 +1269,7 @@ watch(
   () => props.caseId,
   () => {
     void setExpanded(false, false);
-    chooseRenderer('three');
+    volumeRenderer.value = preferCornerstone ? 'vtk' : 'three';
     pendingVolumeCamera = undefined;
     vtkCamera.value = undefined;
   },
@@ -1310,10 +1320,20 @@ watch(
     syncReview();
   },
 );
+let volumeBeforeReview = showVolume.value;
+let segmentationBeforeReview = showSegmentation.value;
 watch(
   () => props.reviewActive,
   active => {
-    if (active) setVolumeEnabled(false);
+    if (active) {
+      volumeBeforeReview = showVolume.value;
+      segmentationBeforeReview = showSegmentation.value;
+      showSegmentation.value = true;
+      setVolumeEnabled(false);
+    } else {
+      showSegmentation.value = segmentationBeforeReview;
+      if (volumeRenderer.value === 'vtk') setVolumeEnabled(volumeBeforeReview);
+    }
   },
 );
 watch(
@@ -1372,11 +1392,14 @@ watch(
 );
 const cameras: CameraView[] = ['anterior', 'posterior', 'right', 'left', 'superior', 'oblique'];
 function cameraFitFactor() {
-  if (!scene) return 1;
+  if (!scene) {
+    const rect = viewport.value?.querySelector('.cornerstone-volume-view canvas')?.getBoundingClientRect();
+    return rect?.width && rect.height ? Math.max(1, rect.height / rect.width) : 1;
+  }
   return ((scene.camera.top - scene.camera.bottom) * 1000) / scene.captureCamera().height_mm;
 }
 function chooseRenderer(mode: 'three' | 'vtk') {
-  if (mode === volumeRenderer.value || (mode === 'vtk' && (!vtkAvailable.value || !vtkOwner.value))) return;
+  if (mode === volumeRenderer.value || (mode === 'vtk' && !vtkAvailable.value)) return;
   if (mode === 'vtk' && scene) {
     // A source can be ready in MPR before Three has fitted any anatomy.
     // Let the volume adapter fit its physical CT bounds in that case.
@@ -1389,19 +1412,15 @@ function chooseRenderer(mode: 'three' | 'vtk') {
             scene.camera.far * 1000,
           )
         : undefined;
-    showVolume.value = true;
   } else if (vtkCamera.value) pendingVolumeCamera = vtkCamera.value;
   vtkReady.value = false;
   vtkError.value = '';
   vtkComponentFailed.value = false;
   volumeRenderer.value = mode;
-  emit('renderer', mode);
-  syncReview();
-  void prepareGPUPlane();
 }
 function selectView(name: CameraView) {
   if (vtkSelected.value && vtkCamera.value) {
-    vtkCamera.value = namedVolumeCamera(vtkCamera.value, name, props.geometry?.center_ras);
+    vtkCamera.value = fitVolumeCameraClipping(namedVolumeCamera(vtkCamera.value, name, props.geometry?.center_ras), props.geometry!.bounds_ras);
     view.value = name;
   } else scene?.view(name);
 }
@@ -1413,6 +1432,36 @@ function zoomView(factor: number) {
 function focusView() {
   if (vtkSelected.value) volumePreview.value?.resetView();
   else scene?.focus();
+}
+function nativeReady(value: boolean) {
+  vtkReady.value = value;
+  if (value) vtkError.value = '';
+  window.__SCAN3D_RENDER_READY__ = value;
+}
+function facePlane() {
+  if (!vtkSelected.value) return scene?.focusReviewPlane();
+  const state = vtkPlane.value,
+    geometry = props.geometry,
+    camera = vtkCamera.value;
+  if (!state || !geometry || !camera) return;
+  const axes = [0, 1, 2].filter(axis => axis !== state.axis),
+    voxel = geometry.shape.map(size => (size - 1) / 2) as Point;
+  voxel[state.axis] = state.index;
+  const focal = transformPoint(geometry.affine_ras, voxel);
+  const normal = geometry.affine_ras.slice(0, 3).map(row => row[state.axis]),
+    up = geometry.affine_ras.slice(0, 3).map(row => row[axes[1]]);
+  const length = Math.hypot(...normal),
+    upLength = Math.hypot(...up),
+    distance = Math.hypot(...camera.positionRAS.map((value, axis) => value - camera.focalPointRAS[axis]));
+  vtkCamera.value = fitVolumeCameraClipping(
+    {
+      ...camera,
+      focalPointRAS: focal,
+      positionRAS: focal.map((value, axis) => value + (normal[axis] / length) * distance) as Point,
+      viewUpRAS: up.map(value => value / upLength) as Point,
+    },
+    geometry.bounds_ras,
+  );
 }
 async function screenshot() {
   if (!vtkSelected.value) return scene?.screenshot(props.label);
@@ -1427,8 +1476,30 @@ async function screenshot() {
     vtkError.value = reason instanceof Error ? reason.message : 'PNG capture failed.';
   }
 }
-watch(vtkAvailable, available => {
-  if (!available) chooseRenderer('three');
+watch(vtkSelected, active => {
+  vtkReady.value = false;
+  vtkError.value = '';
+  if (active) {
+    legacyInitialization++;
+    // The primary scene owns its source; the legacy context is not kept idle.
+    controller?.abort();
+    loadId++;
+    gpuController?.abort();
+    releaseGPUVolume();
+    scene?.dispose();
+    scene = undefined;
+    hasModel.value = false;
+    loading.value = false;
+    volumeFamilyReady.value = '';
+    gpuFamilyReady.value = '';
+    maskFamilyReady.value = '';
+    atlasFamilyReady.value = '';
+  } else {
+    if (vtkCamera.value) pendingVolumeCamera = vtkCamera.value;
+    initializeThree();
+  }
+  emit('renderer', active ? 'vtk' : 'three');
+  void observeReviewControls();
 });
 onErrorCaptured(reason => {
   if (!vtkSelected.value) return;
@@ -1493,7 +1564,7 @@ defineExpose({
     ref="viewport"
     :id="viewportId"
     class="model-viewport"
-    :class="{ 'model-review': reviewActive, 'model-plane': !reviewActive && planeLayout, 'viewport-expanded': expanded }"
+    :class="{ 'model-review': reviewActive, 'model-plane': !reviewActive && planeLayout, 'viewport-expanded': expanded, 'cornerstone-primary': vtkSelected }"
     :data-expanded="expanded"
     :role="expanded ? 'dialog' : undefined"
     :aria-modal="expanded ? true : undefined"
@@ -1530,25 +1601,31 @@ defineExpose({
     <div ref="surface" class="model-canvas" :style="{ visibility: vtkSelected ? 'hidden' : undefined }"></div>
     <component
       :is="volumeViewComponent"
-      v-if="vtkSelected && showVolume && viewportActive !== false"
+      v-if="vtkSelected && viewportActive !== false"
       ref="volumePreview"
       :key="vtkComponentVersion"
       class="model-canvas"
-      :owner="vtkOwner"
+      :session="vtkSession"
       :source-key="localSession?.descriptor?.key"
       :settings="renderVolumeSettings"
       :camera="vtkCamera"
-      @ready="
-        vtkReady = $event;
-        if ($event) vtkError = '';
-      "
+      :volume-visible="showVolume"
+      :segmentation-visible="showSegmentation"
+      :plane="vtkPlane"
+      :manifest-url="manifestUrl"
+      :model-url="modelUrl"
+      :model-data="modelData"
+      :structures="structures"
+      :display="display"
+      :selected="selected"
+      @ready="nativeReady"
       @error="vtkError = $event"
       @camera="vtkCamera = $event"
     />
     <div v-if="vtkSelected && vtkComponentFailed" class="viewport-state error-state" role="alert">
-      <strong>VTK preview unavailable</strong>
+      <strong>Cornerstone3D unavailable</strong>
       <p>{{ vtkError }}</p>
-      <button class="button" @click="retryVolume">Retry VTK view</button>
+      <button class="button" @click="retryVolume">Retry 3D view</button>
     </div>
     <div class="viewport-caption">
       {{ ctOnly ? `${modality} view` : '3D anatomy' }} <span class="divider">·</span> <span>{{ sourceViewLabel(view, modality) }}</span>
@@ -1570,14 +1647,13 @@ defineExpose({
         <label v-if="vtkAvailable" class="rendering-stack-layer"
           >3D renderer
           <select aria-label="3D renderer" :value="volumeRenderer" @change="chooseRenderer(($event.target as HTMLSelectElement).value as 'three' | 'vtk')">
-            <option value="three">Standard</option>
-            <option value="vtk" :disabled="!vtkOwner">VTK CT preview</option>
+            <option value="vtk">Cornerstone3D</option>
+            <option value="three">Three.js (legacy)</option>
           </select>
         </label>
         <p v-if="vtkSelected" class="volume-preview-note" role="status">
-          CT only. Standard restores segments, planes and masks. Use Standard for HTML export; PNG captures this preview.
+          With CT volume visible, segmentation surfaces are solid. Turn CT volume off to adjust surface transparency. PNG captures the current view.
         </p>
-        <p v-else-if="vtkAvailable && !vtkOwner" class="volume-preview-note">Open source review and wait for full CT volume MPR to try VTK.</p>
         <div class="rendering-stack-layer">
           <label
             class="rendering-stack-toggle"
@@ -1585,8 +1661,8 @@ defineExpose({
             ><input
               type="checkbox"
               aria-label="Show segmentation"
-              :checked="!vtkSelected && showSegmentation && segmentationAvailable"
-              :disabled="vtkSelected || !segmentationAvailable"
+              :checked="showSegmentation && segmentationAvailable"
+              :disabled="!segmentationAvailable"
               @change="showSegmentation = ($event.target as HTMLInputElement).checked"
             />
             Segmentation</label
@@ -1594,7 +1670,7 @@ defineExpose({
           <label
             class="rendering-stack-opacity"
             title="Set every segment’s opacity together. Visibility stays unchanged; 100% makes every visible segment opaque."
-            >All segment opacity
+            >{{ vtkSelected && showVolume ? 'Solid with CT' : 'All segment opacity' }}
             <input
               type="range"
               aria-label="All segment opacity"
@@ -1603,8 +1679,10 @@ defineExpose({
               max="1"
               step="0.01"
               v-model.number="segmentationOpacity"
-              :disabled="vtkSelected || !segmentationAvailable || !showSegmentation"
-            /><output>{{ segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%` }}</output></label
+              :disabled="(vtkSelected && showVolume) || !segmentationAvailable || !showSegmentation"
+            /><output>{{
+              vtkSelected && showVolume ? 'Solid' : segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%`
+            }}</output></label
           >
         </div>
         <div v-if="ctVolumeAvailable && !reviewActive" class="rendering-stack-layer">
@@ -1624,13 +1702,12 @@ defineExpose({
             ><input
               type="checkbox"
               :aria-label="`Show ${modality} plane`"
-              :checked="!vtkSelected && showPlane"
-              :disabled="vtkSelected"
+              :checked="showPlane"
               @change="showPlane = ($event.target as HTMLInputElement).checked"
             />
             {{ modality }} plane</label
           >
-          <button v-if="showPlane && !vtkSelected" class="text-button" :disabled="!planeReady" @click="scene?.focusReviewPlane()">Face plane</button>
+          <button v-if="showPlane" class="text-button" :disabled="vtkSelected ? !vtkReady : !planeReady" @click="facePlane">Face plane</button>
         </div>
       </section>
       <details
@@ -1651,7 +1728,7 @@ defineExpose({
           :enabled="showVolume"
           :settings="renderVolumeSettings"
           :modality="modality"
-          :heart-view-available="!!heartCamera && !reviewActive"
+          :heart-view-available="!!heartCamera && !reviewActive && (!vtkSelected || vtkReady)"
           @heart-view="showHeartView"
           :reference-available="referenceAvailable"
           :reference-loading="referenceLoading"
@@ -1687,7 +1764,7 @@ defineExpose({
           </select></label
         >
       </div>
-      <div v-if="!vtkSelected && (showPlane || (reviewActive && reviewMode === 'plane'))" class="model-review-row model-plane-navigation">
+      <div v-if="showPlane || (reviewActive && reviewMode === 'plane')" class="model-review-row model-plane-navigation">
         <select :aria-label="`3D ${modality} plane`" :value="reviewPlane" @change="changePlane">
           <option value="axial">Native k</option>
           <option value="coronal">Native j</option>
@@ -1705,7 +1782,7 @@ defineExpose({
         />
         <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
       </div>
-      <p v-if="reviewHint" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
+      <p v-if="!vtkSelected && reviewHint" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
         {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
       </p>
     </div>
@@ -1734,6 +1811,7 @@ defineExpose({
         v-if="volumeSettings.preset === CINEMATIC_HEART_PRESET && heartCamera && !reviewActive"
         :class="{ active: view === 'Heart' }"
         aria-label="Heart view"
+        :disabled="vtkSelected && !vtkReady"
         title="Face the red outer wall using the supplied Slicer heart orientation"
         @click="showHeartView"
       >
@@ -1810,6 +1888,50 @@ defineExpose({
   color: #d8e2ef;
   font-size: 10px;
   font-weight: 600;
+}
+.cornerstone-primary .model-review-controls {
+  max-height: min(30%, 300px);
+}
+.cornerstone-primary {
+  container: native-volume / inline-size;
+}
+@media (max-height: 850px) {
+  @container native-volume (min-width: 620px) {
+    .cornerstone-primary .model-review-controls {
+      left: auto;
+      width: 280px;
+      max-height: calc(100% - 170px);
+    }
+    .model-viewport.cornerstone-primary .model-canvas {
+      top: 42px;
+      right: 310px;
+      bottom: 24px;
+    }
+    .cornerstone-primary .camera-strip {
+      left: auto;
+      right: 10px;
+      bottom: 54px;
+      width: 280px;
+      max-width: 280px;
+      flex-wrap: wrap;
+      justify-content: center;
+      transform: none;
+    }
+    .cornerstone-primary .viewport-tools {
+      left: auto;
+      right: 10px;
+      bottom: 14px;
+      width: 280px;
+      justify-content: center;
+      transform: none;
+    }
+    .cornerstone-primary .viewport-tools button {
+      padding: 7px 8px;
+    }
+    .cornerstone-primary .viewport-hint {
+      right: 310px;
+    }
+  }
 }
 .rendering-stack-heading > span {
   font-weight: 400;

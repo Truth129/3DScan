@@ -60,7 +60,12 @@ function setup() {
     [0, 0, 0, 1],
   ];
   const texture = { delete: vi.fn(), releaseGraphicsResources: vi.fn() };
-  const source = { volumeId: 'shared-ct', vtkOpenGLTexture: texture, imageData: {} };
+  const source = {
+    volumeId: 'shared-ct',
+    vtkOpenGLTexture: texture,
+    imageData: {},
+    voxelManager: { getAtIJK: vi.fn((i: number, j: number, k: number) => i + 10 * j + 100 * k) },
+  };
   const element = Object.assign(new EventTarget(), { clientWidth: 320, clientHeight: 240 }) as unknown as HTMLDivElement;
   const context = { finish: vi.fn(), isContextLost: () => false, getExtension: () => null, getParameter: () => 'synthetic-context' };
   const nativeCanvas = { getContext: () => context };
@@ -192,6 +197,62 @@ afterEach(() => {
 });
 
 describe('physical shared CT volume', () => {
+  it.each([
+    [0, 1e6],
+    [-1e6, 1e6],
+    [-2, -1],
+  ])('round-trips the finite orthographic clipping interval [%s, %s]', (nearMM, farMM) => {
+    const converted = volumeCameraLPS({ ...camera, nearMM, farMM });
+    expect(converted.clippingRange).toEqual([nearMM, farMM]);
+    expect(volumeCameraRAS(converted)).toMatchObject({ nearMM, farMM });
+  });
+
+  it('publishes the real Cornerstone parallel-camera reset interval through camera events', async () => {
+    const fixture = setup(),
+      onCamera = vi.fn(),
+      onError = vi.fn();
+    const adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera, onCamera, onError });
+    adapters.push(adapter);
+    onCamera.mockClear();
+    // Pinned Cornerstone resetCamera emits CAMERA_MODIFIED with this interval
+    // before VolumeViewport3D refits it to the visible actors' bounds.
+    adapter.nativeRenderer.getActiveCamera().setClippingRange(-1e6, 1e6);
+    fixture.element.dispatchEvent(event('camera', {}));
+    expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining({ nearMM: -1e6, farMM: 1e6 }));
+    await adapter.render();
+    expect(onError).not.toHaveBeenCalled();
+    expect(adapter.isDisposed).toBe(false);
+  });
+
+  it('renders independently with zero MPR viewports and detaches native features while the renderer is alive', async () => {
+    const fixture = setup();
+    for (const id of ['axial', 'coronal', 'sagittal']) fixture.engine.disableElement(id);
+    let adapter: CornerstoneVolume3D;
+    const detach = vi.fn(() => {
+      expect(fixture.engine.getViewport(adapter.id)).toBeDefined();
+      expect(adapter.nativeRenderer).toBeDefined();
+    });
+    adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, {
+      settings: freshVolumeSettings(),
+      camera,
+      volumeVisible: false,
+      onBeforeDispose: detach,
+    });
+    adapters.push(adapter);
+    expect(adapter.stats()).toMatchObject({ mprViewportCount: 0, viewportCount: 1, sourceContextAvailable: true, volumeVisible: false, sharedCTTexture: true });
+    expect(adapter.sourceVoxelValue(1, 2, 3)).toBe(321);
+    expect(fixture.source.voxelManager.getAtIJK).toHaveBeenCalledWith(1, 2, 3);
+    expect(() => adapter.sourceVoxelValue(-1, 0, 0)).toThrow(/outside/i);
+    adapter.setVolumeVisible(true);
+    await adapter.render();
+    expect(adapter.stats()).toMatchObject({ volumeVisible: true });
+    adapter.dispose();
+    expect(detach).toHaveBeenCalledOnce();
+    expect(fixture.engine.getViewports()).toHaveLength(0);
+    expect(fixture.texture.delete).not.toHaveBeenCalled();
+    expect(() => adapter.nativeRenderer).toThrow(/no longer available/i);
+  });
+
   it('bounds native VTK ray work for long, fine, oblique CT fields of view', () => {
     const source = descriptor(),
       angle = Math.PI / 5,
@@ -238,6 +299,8 @@ describe('physical shared CT volume', () => {
     for (const invalid of [
       { ...camera, parallelScaleMM: 0 },
       { ...camera, farMM: Infinity },
+      { ...camera, nearMM: -Infinity },
+      { ...camera, nearMM: 1, farMM: 1 },
       { ...camera, viewUpRAS: [70, -120, 90] },
       { ...camera, positionRAS: camera.focalPointRAS },
     ])

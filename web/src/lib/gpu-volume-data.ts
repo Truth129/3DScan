@@ -7,6 +7,10 @@ export interface RenderCTSession {
   readonly descriptor: VolumeDescriptor | null;
   readonly revisionBase: string;
   readonly networkFree?: boolean;
+  readonly isDisposed?: boolean;
+  onDispose?(listener: () => void): () => void;
+  /** A different CT key invalidates borrowed renderers before worker reuse. */
+  onSourceChange?(listener: () => void): () => void;
   onOverlayChange?(listener: () => void): () => void;
   getGPUVolume(signal?: AbortSignal): Promise<GPUVolumeSource>;
   getGPUOverlays(selection: string | readonly string[] | null, compare?: boolean, signal?: AbortSignal): Promise<GPUOverlaySources>;

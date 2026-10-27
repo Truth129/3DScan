@@ -37,12 +37,13 @@ export function volumeMemoryRequest(descriptor: VolumeDescriptor, consumer: 'cor
   )
     throw new Error('Invalid volume memory estimate');
   const slabBytes = Math.min(descriptor.byte_length, GPU_VOLUME_SLAB_BYTES);
+  const imageBytes = descriptor.kind === 'mask' || (descriptor.slope === 1 && descriptor.intercept === 0) ? descriptor.byte_length : voxels * 4;
   return {
     sourceKey: JSON.stringify([descriptor.reference_image_id ?? null, descriptor.key]),
     workerBytes: descriptor.byte_length,
-    // Cornerstone may retain scaled Float32 values even for a 16-bit source.
-    // Its GPU texture estimate is also conservative across driver formats.
-    cpuBytes: slabBytes + (consumer === 'cornerstone' ? voxels * 4 : 0),
+    // The image cache retains native scalars unless rescaling needs float32.
+    // Keep GPU storage conservative across driver-specific texture formats.
+    cpuBytes: slabBytes + (consumer === 'cornerstone' ? imageBytes : 0),
     gpuBytes: consumer === 'cornerstone' ? voxels * 4 : descriptor.byte_length,
     overlayBytes,
   };

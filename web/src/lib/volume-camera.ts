@@ -22,7 +22,7 @@ function validate(camera: CornerstoneVolumeCameraRAS) {
   if (
     ![camera.positionRAS, camera.focalPointRAS, camera.viewUpRAS].every(validPoint) ||
     !positive(camera.parallelScaleMM) ||
-    !positive(camera.nearMM) ||
+    !Number.isFinite(camera.nearMM) ||
     !Number.isFinite(camera.farMM) ||
     camera.farMM <= camera.nearMM
   )
@@ -82,4 +82,37 @@ export function namedVolumeCamera(camera: CornerstoneVolumeCameraRAS, name: Came
     focalPointRAS: [...center],
     viewUpRAS: name === 'superior' ? [0, 1, 0] : [0, 0, 1],
   };
+}
+
+/** Reframing changes physical depth even when orthographic scale is unchanged.
+ * Project the complete source bounds instead of reusing a previous view's
+ * actor-fitted interval, which can clip a long CT or a closer heart view. */
+export function fitVolumeCameraClipping(camera: CornerstoneVolumeCameraRAS, boundsRAS: readonly [Point, Point]): CornerstoneVolumeCameraRAS {
+  validate(camera);
+  if (boundsRAS.length !== 2 || !boundsRAS.every(validPoint) || boundsRAS[0].some((value, axis) => value > boundsRAS[1][axis]))
+    throw new Error('Invalid volume camera bounds.');
+  const [low, high] = boundsRAS;
+  const forward = camera.focalPointRAS.map((value, axis) => value - camera.positionRAS[axis]);
+  const distance = Math.hypot(...forward);
+  const direction = forward.map(value => value / distance);
+  const diagonal = Math.hypot(...high.map((value, axis) => value - low[axis]));
+  const depths = [0, 1].flatMap(i =>
+    [0, 1].flatMap(j =>
+      [0, 1].map(k =>
+        [boundsRAS[i][0], boundsRAS[j][1], boundsRAS[k][2]].reduce((sum, value, axis) => sum + (value - camera.positionRAS[axis]) * direction[axis], 0),
+      ),
+    ),
+  );
+  if (!Number.isFinite(diagonal) || !depths.every(Number.isFinite)) throw new Error('Invalid volume camera bounds.');
+  const margin = Math.max(1, diagonal * 0.01);
+  const fitted = {
+    ...camera,
+    positionRAS: [...camera.positionRAS] as Point,
+    focalPointRAS: [...camera.focalPointRAS] as Point,
+    viewUpRAS: [...camera.viewUpRAS] as Point,
+    nearMM: Math.min(...depths) - margin,
+    farMM: Math.max(...depths) + margin,
+  };
+  validate(fitted);
+  return fitted;
 }

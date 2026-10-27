@@ -15,16 +15,19 @@ export interface CornerstoneVolumeCameraRAS {
   focalPointRAS: Point;
   viewUpRAS: Point;
   parallelScaleMM: number;
+  /** Orthographic clipping may straddle the camera; require finite near < far. */
   nearMM: number;
   farMM: number;
 }
 export interface CornerstoneVolume3DOptions {
   settings: CTVolumeSettings;
   camera?: CornerstoneVolumeCameraRAS;
+  volumeVisible?: boolean;
   signal?: AbortSignal;
   onCamera?: (camera: CornerstoneVolumeCameraRAS) => void;
   onError?: (reason: string) => void;
   onDispose?: () => void;
+  onBeforeDispose?: () => void;
 }
 type Libraries = { core: typeof Core; tools: typeof Tools };
 type SharedMapper = NonNullable<ReturnType<Core.Types.VolumeActor['getMapper']>> & { getScalarTexture(): unknown };
@@ -42,7 +45,6 @@ export function volumeCameraLPS(camera: CornerstoneVolumeCameraRAS): Core.Types.
   if (
     ![camera.parallelScaleMM, camera.nearMM, camera.farMM].every(Number.isFinite) ||
     camera.parallelScaleMM <= 0 ||
-    camera.nearMM <= 0 ||
     camera.farMM <= camera.nearMM ||
     length < 1e-8 ||
     upLength < 1e-8
@@ -119,6 +121,7 @@ export class CornerstoneVolume3D {
   private listeners: (() => void)[] = [];
   private clipping: { plane: ReturnType<typeof vtkPlane.newInstance>; normal: Point; origin: Point }[] = [];
   private applyingCamera = false;
+  private detachingFeatures = false;
   private ready = false;
   private frames = 0;
   private pending?: { promise: Promise<void>; resolve(): void; reject(reason: unknown): void; timer: ReturnType<typeof setTimeout> };
@@ -172,6 +175,7 @@ export class CornerstoneVolume3D {
                 instance.assertAlive();
               }
               instance.actor = volumeActor;
+              volumeActor.setVisibility(options.volumeVisible ?? true);
               instance.assertAlive();
               instance.configurePreset();
             },
@@ -204,6 +208,31 @@ export class CornerstoneVolume3D {
   }
   get isDisposed() {
     return this.disposed;
+  }
+  get nativeViewport() {
+    if (!this.detachingFeatures) this.assertAlive();
+    if (!this.viewport || this.engine.hasBeenDestroyed) throw new Error('The native viewport is unavailable.');
+    return this.viewport!;
+  }
+  get nativeRenderer() {
+    return this.nativeViewport.getRenderer();
+  }
+  get sourceImageData() {
+    this.assertAlive();
+    return this.source.imageData;
+  }
+  sourceVoxelValue(i: number, j: number, k: number): number {
+    this.assertAlive();
+    if ([i, j, k].some((value, axis) => !Number.isSafeInteger(value) || value < 0 || value >= this.owner.sourceDescriptor.shape[axis]))
+      throw new Error('The requested CT voxel is outside its source grid.');
+    const value = this.source.voxelManager?.getAtIJK(i, j, k);
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('The shared CT voxel is unavailable.');
+    return value;
+  }
+  setVolumeVisible(visible: boolean) {
+    this.assertAlive();
+    this.actor!.setVisibility(visible);
+    this.requestRender();
   }
 
   private assertAlive() {
@@ -389,11 +418,13 @@ export class CornerstoneVolume3D {
       context = this.context();
     const openGLWindow = this.engine.getOffscreenMultiRenderWindow(this.id).getOpenGLRenderWindow();
     const native = openGLWindow.getCanvas().getContext('webgl2') ?? openGLWindow.getCanvas().getContext('webgl');
-    const mpr = (['axial', 'coronal', 'sagittal'] as const).map(plane => ({
-      window: this.engine.getOffscreenMultiRenderWindow(this.owner.viewportId(plane)).getOpenGLRenderWindow(),
-      actor: (this.engine.getViewport(this.owner.viewportId(plane)) as Core.VolumeViewport).getActor(this.source.volumeId)?.actor as
-        Core.Types.VolumeActor | undefined,
-    }));
+    const mpr = (['axial', 'coronal', 'sagittal'] as const)
+      .filter(plane => this.engine.getViewports().some(viewport => viewport.id === this.owner.viewportId(plane)))
+      .map(plane => ({
+        window: this.engine.getOffscreenMultiRenderWindow(this.owner.viewportId(plane)).getOpenGLRenderWindow(),
+        actor: (this.engine.getViewport(this.owner.viewportId(plane)) as Core.VolumeViewport).getActor(this.source.volumeId)?.actor as
+          Core.Types.VolumeActor | undefined,
+      }));
     const debug = context.getExtension('WEBGL_debug_renderer_info');
     return {
       ...this.presetStats,
@@ -402,6 +433,9 @@ export class CornerstoneVolume3D {
       frames: this.frames,
       viewportId: this.id,
       viewportCount: this.engine.getViewports().length,
+      mprViewportCount: mpr.length,
+      sourceContextAvailable: !!native,
+      volumeVisible: this.actor!.getVisibility(),
       volumeId: this.source.volumeId,
       sourceKey: this.owner.sourceDescriptor.key,
       sourceVolumeIsMPROwner: this.libs.core.cache.getVolume(this.source.volumeId) === this.source,
@@ -443,6 +477,14 @@ export class CornerstoneVolume3D {
     if (this.disposed) return;
     this.disposed = true;
     this.settleFrame(new DOMException('The experimental CT viewer was disposed.', 'AbortError'));
+    this.detachingFeatures = true;
+    try {
+      this.options.onBeforeDispose?.();
+    } catch (reason) {
+      console.error('A native 3D feature failed to detach', reason);
+    } finally {
+      this.detachingFeatures = false;
+    }
     for (const remove of this.listeners.splice(0)) remove();
     this.stopRotation();
     if (this.group) {

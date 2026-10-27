@@ -82,6 +82,12 @@ const fake = vi.hoisted(() => {
           worldToCanvas: ([x, y]: number[]) => [x, y],
         });
     }
+    enableElement(entry: any) {
+      this.setViewports([entry]);
+    }
+    disableElement(id: string) {
+      this.viewports.delete(id);
+    }
     getViewport(id: string) {
       return this.viewports.get(id);
     }
@@ -140,6 +146,7 @@ const fake = vi.hoisted(() => {
           setToolActive: vi.fn(),
           setToolEnabled: vi.fn(),
           setToolDisabled: vi.fn(),
+          removeViewports: vi.fn(),
           getToolInstance: () => crosshair,
         };
         groups.set(id, group);
@@ -222,6 +229,69 @@ afterEach(() => {
 });
 
 describe('shared native Cornerstone MPR ownership', () => {
+  it('creates no hidden slice viewport and independently detaches and reattaches MPR around another visible view', async () => {
+    const input = source();
+    const owner = await CornerstoneMPR.createSource(input, { maxBytes: 1024 * 1024 });
+    owners.push(owner);
+    const engine = fake.engines[0],
+      volume = [...fake.volumes.values()][0];
+    expect(engine.getViewports()).toHaveLength(0);
+    expect(owner.stats()).toMatchObject({ mprAttached: false, mprViewports: 0, volumeCopies: 1 });
+    engine.viewports.set('visible-3d', { id: 'visible-3d' });
+    const original = await owner.attachMPR(hosts());
+    expect(engine.getViewports()).toHaveLength(4);
+    original.release();
+    expect(engine.getViewports()).toEqual([{ id: 'visible-3d' }]);
+    expect(fake.groups.size).toBe(0);
+    expect(fake.volumes.size).toBe(1);
+    expect(volume.vtkOpenGLTexture.delete).not.toHaveBeenCalled();
+    const current = await owner.attachMPR(hosts());
+    original.release();
+    expect(owner.stats()).toMatchObject({ mprAttached: true, mprViewports: 3, viewports: 4 });
+    expect(input.readSlab).toHaveBeenCalledOnce();
+    current.release();
+    expect(engine.getViewports()).toHaveLength(1);
+  });
+
+  it('does not detach replacement MPR when an older attachment finishes after cancellation', async () => {
+    const owner = await CornerstoneMPR.createSource(source(), { maxBytes: 1024 * 1024 });
+    owners.push(owner);
+    let unblock!: () => void;
+    fake.actorDelay(
+      new Promise<void>(resolve => {
+        unblock = resolve;
+      }),
+    );
+    const cancel = new AbortController();
+    const old = owner.attachMPR(hosts(), {}, cancel.signal);
+    const rejected = expect(old).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.waitFor(() => expect(fake.engines[0].getViewports()).toHaveLength(3));
+    const oldIds = fake.engines[0].getViewports().map((viewport: any) => viewport.id);
+    cancel.abort();
+    fake.actorDelay();
+    const current = await owner.attachMPR(hosts());
+    const currentIds = fake.engines[0].getViewports().map((viewport: any) => viewport.id);
+    expect(currentIds.every((id: string) => !oldIds.includes(id))).toBe(true);
+    unblock();
+    await rejected;
+    expect(owner.stats()).toMatchObject({ mprAttached: true, mprViewports: 3, disposed: false });
+    expect(fake.engines[0].getViewports().map((viewport: any) => viewport.id)).toEqual(currentIds);
+    expect(fake.volumes.size).toBe(1);
+    current.release();
+  });
+
+  it('restores source-native edit orientation when the review panel reattaches', async () => {
+    const owner = await create();
+    owner.setNativeReview(true);
+    const engine = fake.engines[0];
+    const orientations = ['axial', 'coronal', 'sagittal'].map(plane => structuredClone(engine.getViewport(owner.viewportId(plane as any)).orientation));
+    owner.detachMPR();
+    const attachment = await owner.attachMPR(hosts());
+    owner.setNativeReview(true);
+    expect(['axial', 'coronal', 'sagittal'].map(plane => engine.getViewport(owner.viewportId(plane as any)).orientation)).toEqual(orientations);
+    attachment.release();
+  });
+
   it('uploads one reflected native volume once for all three viewports and releases every owned image', async () => {
     const input = source(),
       owner = await create(input);

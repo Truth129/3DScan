@@ -34,6 +34,9 @@ export interface MPRCreateOptions {
   /** CPU cache reservation granted by the shared viewer memory budget. */
   maxBytes: number;
 }
+export interface MPRViewportLease {
+  release(): void;
+}
 const planes: Plane[] = ['axial', 'coronal', 'sagittal'];
 const imageRecords = new Map<string, ImageRecord>();
 const cacheReservations = new Map<string, number>();
@@ -144,6 +147,11 @@ export class CornerstoneMPR {
   private overlayStyle = { fill: true, outline: true };
   private selections: readonly CTOverlaySelection[] = [];
   private listeners: Array<() => void> = [];
+  private sourceListeners: Array<() => void> = [];
+  private mprAttached = false;
+  private mprGeneration = 0;
+  private mprViewportGeneration = 0;
+  private fallbackCanvas?: HTMLCanvasElement;
   private observer?: ResizeObserver;
   private controller = new AbortController();
   private overlayController?: AbortController;
@@ -189,30 +197,37 @@ export class CornerstoneMPR {
   }
 
   static async create(elements: Record<Plane, HTMLDivElement>, source: GPUVolumeSource, callbacks: MPRCallbacks = {}, options: MPRCreateOptions) {
+    const instance = await CornerstoneMPR.createSource(source, options);
+    try {
+      await instance.attachMPR(elements, callbacks, options.signal);
+      return instance;
+    } catch (reason) {
+      instance.dispose();
+      throw reason;
+    }
+  }
+
+  /** Source storage and the pooled engine outlive any individual visible view. */
+  static async createSource(source: GPUVolumeSource, options: MPRCreateOptions) {
     const geometry = cornerstoneVolumeGeometry(source.descriptor);
     if (source.descriptor.quality !== 'full' || geometry.sheared) throw new Error('Native MPR requires a full orthogonal source grid.');
     if (!Number.isSafeInteger(options.maxBytes) || options.maxBytes < descriptorBytes(source.descriptor))
       throw new Error('MPR volume exceeds its memory reservation.');
-    const instance = new CornerstoneMPR(elements, source, await cornerstoneLibraries(), callbacks, options);
+    const instance = new CornerstoneMPR({} as Record<Plane, HTMLDivElement>, source, await cornerstoneLibraries(), {}, options);
     try {
-      instance.initialize();
+      installMetadata(instance.libs);
+      cacheReservations.set(instance.id, options.maxBytes);
+      cacheLimit(instance.libs.core);
+      instance.engine = new instance.libs.core.RenderingEngine(instance.id);
       if (options.signal) {
         const cancel = () => instance.dispose();
         options.signal.addEventListener('abort', cancel, { once: true });
-        instance.listeners.push(() => options.signal!.removeEventListener('abort', cancel));
+        instance.sourceListeners.push(() => options.signal!.removeEventListener('abort', cancel));
         if (options.signal.aborted) instance.dispose();
       }
       instance.sourceVolume = await instance.uploadVolume(source, instance.controller.signal);
       instance.staged.delete(instance.sourceVolume);
       aborted(instance.controller.signal);
-      await Promise.all(
-        planes.map(plane => instance.viewport(plane).setVolumes([{ volumeId: instance.sourceVolume!.id, actorUID: instance.sourceVolume!.id }], false, true)),
-      );
-      aborted(instance.controller.signal);
-      instance.setWindow(instance.windowWidth, instance.level);
-      instance.updateCrosshairs();
-      instance.setPointRAS(instance.pointRAS);
-      instance.engine!.render();
       return instance;
     } catch (error) {
       instance.dispose();
@@ -220,21 +235,58 @@ export class CornerstoneMPR {
     }
   }
 
-  private initialize() {
+  async attachMPR(elements: Record<Plane, HTMLDivElement>, callbacks: MPRCallbacks = {}, signal?: AbortSignal): Promise<MPRViewportLease> {
+    aborted(this.controller.signal);
+    if (!this.sourceVolume || !this.engine || this.disposed) throw new Error('The shared source is no longer available.');
+    this.detachMPR();
+    const generation = ++this.mprGeneration;
+    this.mprViewportGeneration = generation;
+    const release = () => {
+      if (generation === this.mprGeneration) this.detachMPR();
+    };
+    this.elements = elements;
+    this.callbacks = callbacks;
+    this.mprAttached = true;
+    try {
+      this.initializeMPR();
+      if (signal) {
+        signal.addEventListener('abort', release, { once: true });
+        this.listeners.push(() => signal.removeEventListener('abort', release));
+        if (signal.aborted) release();
+      }
+      if (!this.mprAttached || generation !== this.mprGeneration) throw new DOMException('MPR attachment cancelled.', 'AbortError');
+      await Promise.all(
+        planes.map(plane => this.viewport(plane).setVolumes([{ volumeId: this.sourceVolume!.id, actorUID: this.sourceVolume!.id }], false, true)),
+      );
+      aborted(this.controller.signal);
+      if (!this.mprAttached || generation !== this.mprGeneration) throw new DOMException('MPR attachment cancelled.', 'AbortError');
+      // A source can survive a closed review panel. Newly attached slice
+      // actors still need the retained native orientation and slab state.
+      if (this.nativeReview)
+        for (const plane of planes)
+          this.viewport(plane).setOrientation(nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, plane, this.pointRAS).axis), false, true);
+      this.setWindow(this.windowWidth, this.level);
+      this.setSlab(this.slabMode, this.slabMM);
+      this.updateCrosshairs();
+      this.setPointRAS(this.pointRAS);
+      this.engine.render();
+      return { release };
+    } catch (reason) {
+      release();
+      throw reason;
+    }
+  }
+
+  private initializeMPR() {
     const { core, tools } = this.libs;
-    installMetadata(this.libs);
-    cacheReservations.set(this.id, this.options.maxBytes);
-    cacheLimit(core);
-    this.engine = new core.RenderingEngine(this.id);
-    this.engine.setViewports(
-      planes.map(plane => ({
+    for (const plane of planes)
+      this.engine!.enableElement({
         viewportId: this.viewportId(plane),
         type: core.Enums.ViewportType.ORTHOGRAPHIC,
         element: this.elements[plane],
         defaultOptions: { orientation: this.patientOrientation(plane), background: [0.025, 0.03, 0.04] },
-      })),
-    );
-    this.group = tools.ToolGroupManager.createToolGroup(this.id)!;
+      });
+    this.group = tools.ToolGroupManager.createToolGroup(this.mprGroupId)!;
     for (const tool of [tools.WindowLevelTool, tools.PanTool, tools.ZoomTool]) this.group.addTool(tool.toolName);
     this.group.addTool(tools.CrosshairsTool.toolName, {
       getReferenceLineColor: (viewportId: string) =>
@@ -277,7 +329,7 @@ export class CornerstoneMPR {
     this.group.setToolActive(tools.ZoomTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Wheel }] });
     const crosshair = (event: Event) => {
       const detail = (event as CustomEvent<{ toolGroupId: string; toolCenter: Point }>).detail;
-      if (!this.disposed && !this.applying && !this.preservingCamera && detail.toolGroupId === this.id && detail.toolCenter?.every(Number.isFinite)) {
+      if (!this.disposed && !this.applying && !this.preservingCamera && detail.toolGroupId === this.mprGroupId && detail.toolCenter?.every(Number.isFinite)) {
         this.pointRAS = lpsToRas(detail.toolCenter);
         this.callbacks.point?.([...this.pointRAS]);
       }
@@ -315,7 +367,10 @@ export class CornerstoneMPR {
     }[plane];
   }
   viewportId(plane: Plane) {
-    return `${this.id}-${plane}`;
+    return `${this.id}-mpr-${this.mprViewportGeneration}-${plane}`;
+  }
+  private get mprGroupId() {
+    return `${this.id}-mpr-tools-${this.mprViewportGeneration}`;
   }
   private viewport(plane: Plane) {
     return this.engine!.getViewport(this.viewportId(plane)) as Core.VolumeViewport;
@@ -380,7 +435,7 @@ export class CornerstoneMPR {
           rowPixelSpacing: geometry.spacing[1],
           sizeInBytes: values.byteLength,
           getPixelData: () => values,
-          getCanvas: () => this.viewport('axial').canvas,
+          getCanvas: () => this.sourceCanvas(),
           voiLUTFunction: core.Enums.VOILUTFunctionType.LINEAR_EXACT,
           isPreScaled: true,
           preScale: { enabled: true, scaled: true, scalingParameters: { modality: descriptor.modality ?? 'CT', rescaleSlope: 1, rescaleIntercept: 0 } },
@@ -430,6 +485,7 @@ export class CornerstoneMPR {
   setPointRAS(point: Point) {
     if (this.disposed || !this.sourceVolume || !point.every(Number.isFinite)) return;
     this.pointRAS = [...point];
+    if (!this.mprAttached) return;
     this.applying = true;
     try {
       if (this.nativeReview) {
@@ -474,6 +530,7 @@ export class CornerstoneMPR {
     if (this.disposed || !this.sourceVolume) return;
     if (this.nativeReview === native) return;
     this.nativeReview = native;
+    if (!this.mprAttached) return;
     this.applying = true;
     try {
       for (const plane of planes) {
@@ -512,6 +569,7 @@ export class CornerstoneMPR {
     if (this.disposed || !this.sourceVolume || !Number.isFinite(width) || width <= 0 || !Number.isFinite(level)) return;
     this.windowWidth = width;
     this.level = level;
+    if (!this.mprAttached) return;
     this.applying = true;
     try {
       for (const plane of planes)
@@ -535,6 +593,7 @@ export class CornerstoneMPR {
       throw new Error('Invalid MPR slab thickness.');
     this.slabMode = this.nativeReview ? 'mpr' : mode;
     this.slabMM = this.slabMode === 'mpr' ? 1 : Math.max(1, millimetres);
+    if (!this.mprAttached) return;
     const blend =
       this.slabMode === 'mip'
         ? this.libs.core.Enums.BlendModes.MAXIMUM_INTENSITY_BLEND
@@ -551,7 +610,7 @@ export class CornerstoneMPR {
     }
   }
   displayMeta(plane: Plane): SliceMeta | undefined {
-    if (this.disposed || !this.sourceVolume) return;
+    if (this.disposed || !this.sourceVolume || !this.mprAttached) return;
     const rect = this.elements[plane].getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const meta = cornerstoneMPRDisplayMeta(this.geometry, plane, rect.width, rect.height, point => this.viewport(plane).canvasToWorld(point));
@@ -568,7 +627,7 @@ export class CornerstoneMPR {
     return this.viewport(plane).worldToCanvas(rasToLps(point));
   }
   reset(plane?: Plane) {
-    if (this.disposed || !this.sourceVolume) return;
+    if (this.disposed || !this.sourceVolume || !this.mprAttached) return;
     for (const value of plane ? [plane] : planes) {
       this.viewport(value).setOrientation(
         this.nativeReview ? nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, value, this.pointRAS).axis) : this.patientOrientation(value),
@@ -592,7 +651,7 @@ export class CornerstoneMPR {
   }
 
   async setOverlays(sources: GPUOverlaySources, selections: readonly CTOverlaySelection[], compare = false, opacity = 0.4) {
-    if (this.disposed) return false;
+    if (this.disposed || !this.mprAttached) return false;
     if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error('MPR overlay opacity must be between zero and one.');
     this.overlayController?.abort();
     const controller = new AbortController(),
@@ -843,7 +902,7 @@ export class CornerstoneMPR {
     this.setOverlayPresentation(this.selections, this.overlayOpacity);
   }
   setOverlayPresentation(selections: readonly CTOverlaySelection[], opacity = this.overlayOpacity, style?: { fill: boolean; outline: boolean }) {
-    if (this.disposed) return;
+    if (this.disposed || !this.mprAttached) return;
     if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error('MPR overlay opacity must be between zero and one.');
     this.selections = selections;
     if (style) this.overlayStyle = { ...style };
@@ -897,6 +956,8 @@ export class CornerstoneMPR {
       volumeId: this.sourceVolume?.id,
       volumeCopies: this.sourceVolume ? 1 : 0,
       viewports: this.engine?.getViewports().length ?? 0,
+      mprAttached: this.mprAttached,
+      mprViewports: this.mprAttached ? planes.filter(plane => this.engine?.getViewports().some(viewport => viewport.id === this.viewportId(plane))).length : 0,
       cpuBytes:
         (this.sourceVolume?.bytes ?? 0) + [...this.overlays.values()].reduce((sum, entry) => sum + entry.current.bytes + (entry.removed?.bytes ?? 0), 0),
       overlayIds: [...this.overlays.keys()],
@@ -913,6 +974,48 @@ export class CornerstoneMPR {
   }
   get isDisposed() {
     return this.disposed;
+  }
+  get renderingEngine() {
+    if (this.disposed || !this.engine) throw new Error('The shared source has been disposed.');
+    return this.engine;
+  }
+  get imageData() {
+    if (this.disposed || !this.sourceVolume) throw new Error('The shared source has been disposed.');
+    return this.sourceVolume.volume.imageData;
+  }
+  private sourceCanvas() {
+    return this.engine?.getViewports()[0]?.canvas ?? (this.fallbackCanvas ??= document.createElement('canvas'));
+  }
+  /** Remove slice-only resources while other views keep the shared CT alive. */
+  detachMPR() {
+    if (!this.mprAttached) return;
+    this.mprAttached = false;
+    this.mprGeneration++;
+    this.overlayGeneration++;
+    this.overlayController?.abort();
+    this.observer?.disconnect();
+    this.observer = undefined;
+    if (this.group) {
+      for (const tool of [this.libs.tools.CrosshairsTool, this.libs.tools.WindowLevelTool, this.libs.tools.PanTool, this.libs.tools.ZoomTool])
+        this.group.setToolDisabled(tool.toolName);
+      this.group.removeViewports(this.id);
+      this.libs.tools.ToolGroupManager.destroyToolGroup(this.mprGroupId);
+      this.group = undefined;
+    }
+    for (const remove of this.listeners.splice(0)) remove();
+    for (const entry of this.overlays.values()) this.releaseOverlay(entry);
+    this.overlays.clear();
+    this.presentationKey = '';
+    for (const volume of [...this.staged]) if (volume !== this.sourceVolume) this.releaseVolume(volume);
+    if (this.engine && !this.engine.hasBeenDestroyed)
+      for (const plane of planes) {
+        const id = this.viewportId(plane);
+        if (this.engine.getViewports().some(viewport => viewport.id === id)) this.engine.disableElement(id);
+      }
+    for (const element of Object.values(this.elements)) for (const key of ['renderer', 'rendererId', 'viewportId']) delete element.dataset[key];
+    this.elements = {} as Record<Plane, HTMLDivElement>;
+    this.callbacks = {};
+    this.inactiveViewports.clear();
   }
   /** Borrowed viewports must detach before the source texture and engine go. */
   onBeforeDispose(callback: () => void) {
@@ -959,14 +1062,8 @@ export class CornerstoneMPR {
       }
     }
     this.controller.abort();
-    this.overlayController?.abort();
-    this.observer?.disconnect();
-    this.group?.setToolDisabled(this.libs.tools.CrosshairsTool.toolName);
-    for (const remove of this.listeners) remove();
-    this.listeners = [];
-    for (const entry of this.overlays.values()) this.releaseOverlay(entry);
-    this.overlays.clear();
-    this.libs.tools.ToolGroupManager.destroyToolGroup(this.id);
+    this.detachMPR();
+    for (const remove of this.sourceListeners.splice(0)) remove();
     this.engine?.destroy();
     if (this.sourceVolume) this.releaseVolume(this.sourceVolume);
     this.sourceVolume = undefined;
