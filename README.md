@@ -42,6 +42,22 @@ For a foreground server, stop the user service first, then run
 `scripts/run-production.sh`. Both use `data/`; do not run two workers against
 that directory.
 
+### Back up the case library
+
+```bash
+source scripts/production-env.sh
+python -m scan3d backup /path/on/another/disk/scan3d-backups
+```
+
+Each run writes `scan3d-<UTC time>/` with a consistent database snapshot, the
+case folders (original DICOM, reference images, model outputs and accepted
+masks), the surface cache and a `manifest.json`. It only reads live data, so the
+service can keep running. Later runs hard-link files unchanged since the previous
+snapshot and copy only new data. Review, analysis and cinematic caches are
+skipped because they rebuild on demand. Records store absolute paths: to
+restore, stop the service and copy a snapshot's contents back into the same data
+directory.
+
 ### Fresh checkout and retained legacy environment
 
 The original bootstrap remains a complete Python 3.12 / ROCm 7.2.4 setup and

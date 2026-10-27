@@ -13,6 +13,8 @@ def main():
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=9010)
     sub.add_parser("doctor")
+    backup = sub.add_parser("backup", help="Snapshot the database and case files into DESTINATION/scan3d-<UTC time>")
+    backup.add_argument("destination", type=Path)
     sub.add_parser("demo")
     optimize = sub.add_parser("optimize", help="Prepare incremental viewer assets for an existing case without resegmenting")
     optimize.add_argument("case")
@@ -52,6 +54,12 @@ def main():
     if args.command == "doctor":
         from .doctor import diagnose
         print(json.dumps(diagnose(), indent=2))
+        return
+    if args.command == "backup":
+        # Only reads the live database and files, so it is safe while the service runs.
+        from .backup import backup as write_backup
+        from .config import Settings
+        print(json.dumps(write_backup(Settings.from_env().data_dir, args.destination), indent=2))
         return
     from .service import Service
     from .store import public_case, public_job
