@@ -36,6 +36,15 @@ def glb_document(path):
     return json.loads(data[20:20 + length])
 
 
+def assert_display_matches(arrays, expected):
+    """Quantized display arrays decode to the float mesh within the grid bound."""
+    assert isinstance(arrays, surfaces._Quantized)
+    positions, normals, faces = surfaces._float_arrays(arrays)
+    assert np.abs(positions - expected[0]).max() <= arrays.scale / 2
+    assert np.abs(normals - expected[1]).max() <= 0.5 / 127 + 1e-6
+    np.testing.assert_array_equal(faces, expected[2])
+
+
 def test_cache_reuses_unchanged_structure_and_only_rebuilds_changed_mask(tmp_path, monkeypatch):
     first = mask_file(tmp_path / "first.nii.gz")
     second = mask_file(tmp_path / "second.nii.gz", offset=1)
@@ -91,9 +100,9 @@ def test_detailed_export_reuses_base_with_exact_oblique_reflected_geometry(tmp_p
     assert detailed["cache"]["base_hits"] == 1
     assert detailed["cache"]["surface_misses"] == 1
     assert detailed["timings_seconds"]["contour"] == 0
-    for expected, actual in zip(direct_display, surfaces._asset_arrays(display["path"])):
-        np.testing.assert_array_equal(actual, expected)
-    for expected, actual in zip(direct_detailed, surfaces._asset_arrays(detailed["path"])):
+    assert_display_matches(surfaces._asset_arrays(display["path"]), direct_display)
+    # Detailed exports stay exact, interoperable float32.
+    for expected, actual in zip(direct_detailed, surfaces._asset_arrays(detailed["path"]), strict=True):
         np.testing.assert_array_equal(actual, expected)
     report = surfaces.build_model([entry], tmp_path / "combined.glb", detailed=True, cache_dir=cache)
     assert report["cache"]["surface_hits"] == 1
@@ -194,8 +203,7 @@ def test_predecoded_mask_is_reused_without_second_decode_and_keeps_geometry(tmp_
     monkeypatch.setattr(surfaces, "_binary", forbidden)
     prepared = surfaces.prepare_surface(entry, tmp_path / "cache", decoded_mask=decoded)
     assert prepared["cache"]["base_misses"] == 1
-    for actual, original in zip(surfaces._asset_arrays(prepared["path"]), expected):
-        np.testing.assert_array_equal(actual, original)
+    assert_display_matches(surfaces._asset_arrays(prepared["path"]), expected)
     # Cache hits must not inspect the supplied tuple or perform any mask decode.
     cached = surfaces.prepare_surface(entry, tmp_path / "cache", decoded_mask=object())
     assert cached["key"] == prepared["key"]
