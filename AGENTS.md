@@ -7,15 +7,15 @@ Python/FastAPI in `scan3d/`. Frontend: Vue 3/TypeScript in `web/`.
 
 Read before changing anything:
 
-| Topic | Document |
-|---|---|
-| System overview and diagrams | `docs/ARCHITECTURE.md` |
-| HTTP API, data model, geometry rules | `docs/CONTRACT.md` |
+| Topic                                  | Document                     |
+| -------------------------------------- | ---------------------------- |
+| System overview and diagrams           | `docs/ARCHITECTURE.md`       |
+| HTTP API, data model, geometry rules   | `docs/CONTRACT.md`           |
 | Production runtime, releases, rollback | `docs/PRODUCTION_RUNTIME.md` |
-| Setup and development checks | `docs/SETUP.md` |
-| Evidence, newest first | `docs/VALIDATION.md` |
-| Next viewer work | `docs/CORNERSTONE_PLAN.md` |
-| Clinic integration direction | `docs/CLINIC_INTEGRATION.md` |
+| Setup and development checks           | `docs/SETUP.md`              |
+| Evidence, newest first                 | `docs/VALIDATION.md`         |
+| Next viewer work                       | `docs/CORNERSTONE_PLAN.md`   |
+| Clinic integration direction           | `docs/CLINIC_INTEGRATION.md` |
 
 ## Ground rules
 
@@ -64,7 +64,7 @@ Prettier, both enforced by CI (`.github/workflows/ci.yml`) and `.pre-commit-conf
 
 ## Conventions
 
-- **Style:** match the surrounding code. Docstrings and comments explain *why*. Keep
+- **Style:** match the surrounding code. Docstrings and comments explain _why_. Keep
   changes surgical.
 - **Geometry:**
   - Patient RAS millimetres everywhere, with the full affine.
@@ -120,7 +120,10 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 
 - **Branch:** `expansion`; the Cornerstone phase 1/2 changes are local and unpushed.
   The earlier CI baseline is green on Python 3.14 and the web job.
-- **Live code:** development checkout, activated from `09ff189`, CT-only. The
+- **Live code:** development checkout, initially activated from `09ff189`, CT-only.
+  The frontend now serves native Cornerstone3D/vtk.js from `d35fffb`, installed
+  without restarting the backend. Frontend audit/rollback:
+  `.runtime/cornerstone-primary-frontend-20261027T204309Z/`. The
   previous frozen `ct-hardening-20261027` release (`971b05c`) remains available.
   Audit and guarded rollback: `.runtime/development-cutover-20261027T185251Z/`
   (directory timestamp is UTC). The existing service, runtime and library were
@@ -151,16 +154,21 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    Cornerstone-only slices, native volume MPR, slabs/crosshairs/labelmaps, shared
    memory budgeting and exact sheared-stack review. The user approved a synthetic
    R9700 comparison of Three.js, direct vtk.js and shared Cornerstone3D volume
-   rendering; it passed, including a 400 MiB source and scattering. This does
-   not qualify native editing or migrate the 3D scene. See
+   rendering; it passed, including a 400 MiB source and scattering. That comparison
+   does not qualify native editing. See
    `docs/VOLUME_RENDERING_COMPARISON.md` and `docs/CORNERSTONE_PLAN.md` before
-   further viewer work. Patient review is user-only. The user has now selected
+   further viewer work. Clinical accuracy review remains user-only. The user has now selected
    the development checkout for the primary service; do not assume it is frozen.
-   A live-app **VTK CT preview** now borrows that MPR owner, with Standard retained
-   for combined anatomy, masks, corrections and HTML export. The portable entry
-   does not import the new Cornerstone runtime. Actual-component SwiftShader and
-   approved R9700 checks pass; 377 web tests pass. The browser startup reload
-   observed before qualification is documented in `docs/VALIDATION.md`.
+   The live CT 3D view now defaults to **Cornerstone3D/vtk.js**, with session-owned
+   source sharing independent of MPR panel visibility, native CT plane and enabled
+   quantized surfaces. CT-visible surfaces are solid. Three.js loads lazily for
+   legacy review, shear/MR and portable HTML; native picking/marking, scissors,
+   markers and cropped mask ray casting remain unported. 419 web tests, software
+   and approved R9700 browser gates pass. The user authorized one read-only actual
+   CT check; it passed without retaining clinical artifacts. This does not grant
+   broader patient-data access. Large combined MPR/all-surface views can exceed
+   the conservative memory budget; closing MPR or hiding surfaces frees capacity.
+   See the newest `docs/VALIDATION.md` section for evidence and browser-startup notes.
 2. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SEG/SR export, which adds a dependency to the pinned runtime
@@ -170,5 +178,5 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    - precompress GLBs instead of gzipping per request
    - warm the agreement cache when a revision is committed
    - age review priority so segmentations cannot starve
-   - fix the workspace overflowing at 768 px tall
+   - finish 768 px workspace sizing outside the native 3D pane
    - surface Dice or the maximum surface distance for small local edits
