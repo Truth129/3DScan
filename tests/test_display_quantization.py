@@ -2,6 +2,9 @@
 
 The synthetic browser fixtures in web/tests/fixtures come from
 ``write_browser_fixtures``; a test below keeps them identical to the writer.
+After an intended format change, regenerate them from the repository root with
+``PYTHONPATH=.:tests python -c "import test_display_quantization as t; t.write_browser_fixtures(t.FIXTURES)"``
+and bump ``surfaces._DISPLAY_ASSET_IMPLEMENTATION``.
 """
 
 from pathlib import Path
