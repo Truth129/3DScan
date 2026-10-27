@@ -38,8 +38,7 @@ def save(path, values, affine, slope=1.0, intercept=0.0, units="mm"):
 def source(tmp_path):
     angle = np.deg2rad(31)
     affine = np.eye(4)
-    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0],
-                              [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.8, 1.4, 2.2])
+    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.8, 1.4, 2.2])
     affine[:3, 3] = [31, -52, 87]
     values = (np.arange(7 * 9 * 35).reshape((7, 9, 35)) - 1100).astype(np.int16)
     mask = np.zeros(values.shape, np.uint8)
@@ -56,14 +55,20 @@ def decoded(cache, descriptor):
         raw = gzip.decompress(path.read_bytes())
         assert len(raw) == chunk["byte_length"]
         blocks.append(raw)
-    return np.frombuffer(b"".join(blocks), dtype=np.dtype(descriptor["dtype"]).newbyteorder("<")).reshape(
-        descriptor["shape"], order="F")
+    return np.frombuffer(b"".join(blocks), dtype=np.dtype(descriptor["dtype"]).newbyteorder("<")).reshape(descriptor["shape"], order="F")
 
 
-@pytest.mark.parametrize("dtype,slope,intercept", [
-    ("int16", 1, 0), ("uint16", 1, -1024), (">i2", .1, 1024.3),
-    ("float32", .3, -17.7), ("float64", 1, 0), ("uint8", 2, -1024),
-])
+@pytest.mark.parametrize(
+    "dtype,slope,intercept",
+    [
+        ("int16", 1, 0),
+        ("uint16", 1, -1024),
+        (">i2", 0.1, 1024.3),
+        ("float32", 0.3, -17.7),
+        ("float64", 1, 0),
+        ("uint8", 2, -1024),
+    ],
+)
 def test_native_slabs_exact_float32_hu_and_little_endian(tmp_path, dtype, slope, intercept):
     values = np.linspace(0, 4095, 7 * 9 * 35).reshape((7, 9, 35)).astype(dtype)
     ct = save(tmp_path / "ct.nii", values, np.diag([-0.8, 1.4, 2.2, 1]), slope, intercept)
@@ -76,8 +81,7 @@ def test_native_slabs_exact_float32_hu_and_little_endian(tmp_path, dtype, slope,
     assert [chunk["depth"] for chunk in descriptor["chunks"]] == [16, 16, 3]
     item_size = np.dtype(descriptor["dtype"]).itemsize
     assert descriptor["byte_length"] == values.size * item_size
-    assert [chunk["byte_offset"] for chunk in descriptor["chunks"]] == [0, 7 * 9 * 16 * item_size,
-                                                                            7 * 9 * 32 * item_size]
+    assert [chunk["byte_offset"] for chunk in descriptor["chunks"]] == [0, 7 * 9 * 16 * item_size, 7 * 9 * 32 * item_size]
     assert descriptor["dtype"] == ("uint16" if dtype == "uint16" else "int16" if dtype in ("int16", ">i2") else "float32")
 
 
@@ -106,7 +110,7 @@ def test_oblique_reflected_crop_roundtrip_and_empty(source, tmp_path):
 def test_units_geometry_validation_and_invalid_values(source, tmp_path):
     ct, mask_path, values, mask = source
     cache = tmp_path / "cache"
-    affine = np.diag([.001, -.002, .003, 1])
+    affine = np.diag([0.001, -0.002, 0.003, 1])
     save(ct, values, affine, units="meter")
     descriptor = review_volume.ct_volume(ct, cache)
     np.testing.assert_allclose(np.diag(descriptor["affine_ras"]), [1, -2, 3, 1], atol=1e-6)
@@ -134,8 +138,10 @@ def test_cache_reuse_corruption_repair_and_same_mtime_replacement(source, tmp_pa
     timestamp = first_path.stat().st_mtime_ns
     # Warm access performs no native decode or compression.
     original_write = review_volume._write
+
     def no_write(*args, **kwargs):
         pytest.fail("Warm descriptor regenerated its volume")
+
     monkeypatch.setattr(review_volume, "_write", no_write)
     assert review_volume.ct_volume(plain, cache) == first
     assert first_path.stat().st_mtime_ns == timestamp
@@ -159,10 +165,12 @@ def test_concurrent_requests_share_one_generation(source, tmp_path, monkeypatch)
     original = review_volume._write
     calls = []
     lock = threading.Lock()
+
     def write(*args, **kwargs):
         with lock:
             calls.append(1)
         return original(*args, **kwargs)
+
     monkeypatch.setattr(review_volume, "_write", write)
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: review_volume.ct_volume(ct, tmp_path / "cache"), range(4)))
@@ -175,12 +183,14 @@ def test_preview_selection_is_not_blocked_by_native_volume_generation(source, tm
     original = review_volume._write
     full_started = threading.Event()
     release_full = threading.Event()
+
     def write(cache, descriptor, *args, **kwargs):
         if descriptor["quality"] == "full":
             full_started.set()
             if not release_full.wait(5):
                 raise AssertionError("Full-volume test generation was not released")
         return original(cache, descriptor, *args, **kwargs)
+
     monkeypatch.setattr(review_volume, "_write", write)
     with ThreadPoolExecutor(max_workers=2) as pool:
         full = pool.submit(review_volume.ct_volume, ct, tmp_path / "cache", "full")
@@ -198,8 +208,8 @@ def test_small_preview_preserves_exact_oblique_fov_and_mask_grid(tmp_path):
     shape = (83, 61, 221)
     ii, jj, kk = np.indices(shape)
     values = (ii * 3 + jj * 2 + kk - 900).astype(np.int16)
-    affine = np.array([[-.8, -.3, 0, 31], [-.2, 1.4, 0, -52], [0, 0, 2.2, 87], [0, 0, 0, 1]])
-    ct = save(tmp_path / "ct.nii.gz", values, affine, .5, 17)
+    affine = np.array([[-0.8, -0.3, 0, 31], [-0.2, 1.4, 0, -52], [0, 0, 2.2, 87], [0, 0, 0, 1]])
+    ct = save(tmp_path / "ct.nii.gz", values, affine, 0.5, 17)
     binary = (ii > 7) & (ii < 62) & (jj > 11) & (jj < 43) & (kk > 34) & (kk < 175)
     mask_path = save(tmp_path / "mask.nii.gz", binary.astype(np.uint8), affine)
     cache = tmp_path / "cache"
@@ -208,24 +218,20 @@ def test_small_preview_preserves_exact_oblique_fov_and_mask_grid(tmp_path):
     assert preview["quality"] == "preview" and preview["dtype"] == "int16" and preview["approximate"]
     assert preview["slope"] == 1 and preview["intercept"] == 0
     reference = imaging.geometry(ct)
-    np.testing.assert_allclose(imaging._bounds(preview["shape"], np.asarray(preview["affine_ras"])),
-                               reference["bounds_ras"], atol=1e-10)
+    np.testing.assert_allclose(imaging._bounds(preview["shape"], np.asarray(preview["affine_ras"])), reference["bounds_ras"], atol=1e-10)
     assert preview["reference_geometry"] == reference
     step = np.asarray(shape) / preview["shape"]
     origin = (step - 1) / 2
     pi, pj, pk = np.indices(preview["shape"], dtype=np.float64)
-    expected_hu = ((pi * step[0] + origin[0]) * 3 + (pj * step[1] + origin[1]) * 2
-                   + pk * step[2] + origin[2] - 900) * .5 + 17
-    np.testing.assert_allclose(decoded(cache, preview), expected_hu.astype(np.float32), rtol=0, atol=.5001)
+    expected_hu = ((pi * step[0] + origin[0]) * 3 + (pj * step[1] + origin[1]) * 2 + pk * step[2] + origin[2] - 900) * 0.5 + 17
+    np.testing.assert_allclose(decoded(cache, preview), expected_hu.astype(np.float32), rtol=0, atol=0.5001)
     mask = review_volume.mask_volume(ct, mask_path, cache, "preview")
-    sampled = ndi.affine_transform(binary, np.diag(step), origin, output_shape=preview["shape"],
-                                   output=bool, order=0, mode="constant", cval=0, prefilter=False)
+    sampled = ndi.affine_transform(binary, np.diag(step), origin, output_shape=preview["shape"], output=bool, order=0, mode="constant", cval=0, prefilter=False)
     unboxed = np.zeros(preview["shape"], np.uint8)
     low = mask["origin_ijk"]
     unboxed[tuple(slice(a, a + n) for a, n in zip(low, mask["shape"]))] = decoded(cache, mask)
     np.testing.assert_array_equal(unboxed, sampled)
-    np.testing.assert_allclose(np.asarray(mask["affine_ras"])[:3, 3],
-                               imaging._world(np.asarray(preview["affine_ras"]), low))
+    np.testing.assert_allclose(np.asarray(mask["affine_ras"])[:3, 3], imaging._world(np.asarray(preview["affine_ras"]), low))
     assert mask["geometry"] == preview["geometry"]
     assert mask["reference_geometry"] == reference
 
@@ -263,9 +269,7 @@ def test_raw_settled_frame_matches_png_geometry_hu_and_comparison(source, tmp_pa
     assert meta == png["meta"]
     grayscale = np.rint(np.clip((hu - (-700 - 400 / 2)) / 400, 0, 1) * 255).astype(np.uint8)
     expected = np.repeat(grayscale[..., None], 3, axis=2).astype(np.float32)
-    for selected, color, alpha in ((current, [56, 189, 248], .22),
-                                   (parent & ~current, [244, 63, 94], .45),
-                                   (current & ~parent, [34, 197, 94], .45)):
+    for selected, color, alpha in ((current, [56, 189, 248], 0.22), (parent & ~current, [244, 63, 94], 0.45), (current & ~parent, [34, 197, 94], 0.45)):
         expected[selected] = expected[selected] * (1 - alpha) + np.asarray(color) * alpha
         expected[selected & ~ndi.binary_erosion(selected)] = color
     np.testing.assert_array_equal(np.rint(expected).astype(np.uint8), np.asarray(Image.open(BytesIO(png["image"]))))
@@ -279,14 +283,12 @@ def test_revision_scoped_api_raw_bytes_parent_crop_and_case_isolation(source, tm
     service = app.state.service
     case = service.new_case("Volume transport fixture")
     parent_id, current_id = uuid.uuid4().hex, uuid.uuid4().hex
-    base = {"case_id": case["id"], "ct_file": str(ct), "geometry": imaging.geometry(ct), "structures": [
-        {"id": "total:liver", "mask_file": str(mask_path)}]}
+    base = {"case_id": case["id"], "ct_file": str(ct), "geometry": imaging.geometry(ct), "structures": [{"id": "total:liver", "mask_file": str(mask_path)}]}
     service.store.save("revisions", {**base, "id": parent_id, "parent_id": None})
     new_mask = mask.copy()
     new_mask[2] = 0
     new_path = save(tmp_path / "new.nii.gz", new_mask, nib.load(ct).affine)
-    service.store.save("revisions", {**base, "id": current_id, "parent_id": parent_id,
-                                    "structures": [{"id": "total:liver", "mask_file": str(new_path)}]})
+    service.store.save("revisions", {**base, "id": current_id, "parent_id": parent_id, "structures": [{"id": "total:liver", "mask_file": str(new_path)}]})
     prefix = f"/api/cases/{case['id']}/revisions/{current_id}"
     with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.get(prefix + "/ct-volume")
@@ -294,12 +296,15 @@ def test_revision_scoped_api_raw_bytes_parent_crop_and_case_isolation(source, tm
         descriptor = response.json()
         assert str(tmp_path) not in json.dumps(descriptor)
         chunks = [client.get(chunk["url"]) for chunk in descriptor["chunks"]]
-        assert all(chunk.status_code == 200 and chunk.headers["content-encoding"] == "gzip"
-                   and "private" in chunk.headers["cache-control"] and "immutable" in chunk.headers["cache-control"]
-                   for chunk in chunks)
+        assert all(
+            chunk.status_code == 200
+            and chunk.headers["content-encoding"] == "gzip"
+            and "private" in chunk.headers["cache-control"]
+            and "immutable" in chunk.headers["cache-control"]
+            for chunk in chunks
+        )
         # HTTP clients decompress Content-Encoding automatically, like fetch().
-        np.testing.assert_array_equal(np.frombuffer(b"".join(c.content for c in chunks), dtype="<i2").reshape(
-            values.shape, order="F"), values)
+        np.testing.assert_array_equal(np.frombuffer(b"".join(c.content for c in chunks), dtype="<i2").reshape(values.shape, order="F"), values)
         masks = client.get(prefix + "/mask-volume", params={"structure_id": "total:liver", "compare": True}).json()
         assert masks["current"]["origin_ijk"] == [3, 3, 5]
         assert masks["parent"]["origin_ijk"] == [2, 3, 5]
@@ -310,8 +315,7 @@ def test_revision_scoped_api_raw_bytes_parent_crop_and_case_isolation(source, tm
         assert client.get(prefix + "/mask-volume", params={"structure_id": "total:unknown"}).status_code == 400
         assert client.get(prefix + f"/ct-volume/{'0' * 64}/chunks/0").status_code == 404
         assert client.get(prefix + f"/ct-volume/{descriptor['key']}/chunks/999").status_code == 404
-        assert client.get(prefix + f"/mask-volume/{masks['parent']['key']}/chunks/0",
-                          params={"structure_id": "total:liver"}).status_code == 404
+        assert client.get(prefix + f"/mask-volume/{masks['parent']['key']}/chunks/0", params={"structure_id": "total:liver"}).status_code == 404
         other = service.new_case("Other case")
         wrong_prefix = f"/api/cases/{other['id']}/revisions/{current_id}"
         assert client.get(wrong_prefix + "/ct-volume").status_code == 404
@@ -323,12 +327,13 @@ def test_revision_scoped_api_raw_bytes_parent_crop_and_case_isolation(source, tm
         assert preview["quality"] == "preview" and preview["key"] != descriptor["key"]
         assert "quality=preview" in preview["chunks"][0]["url"]
         assert client.get(preview["chunks"][0]["url"]).status_code == 200
-        selected_preview = client.get(prefix + "/mask-volume", params={
-            "structure_id": "total:liver", "quality": "preview", "compare": True}).json()
+        selected_preview = client.get(prefix + "/mask-volume", params={"structure_id": "total:liver", "quality": "preview", "compare": True}).json()
         assert selected_preview["current"]["quality"] == "preview"
         assert client.get(selected_preview["current"]["chunks"][0]["url"]).status_code == 200
-        frame_response = client.get(prefix + "/review-frame", params={"plane": "axial",
-            "position_mm": imaging.geometry(ct)["center_ras"][2], "structure_id": "total:liver", "compare": True})
+        frame_response = client.get(
+            prefix + "/review-frame",
+            params={"plane": "axial", "position_mm": imaging.geometry(ct)["center_ras"][2], "structure_id": "total:liver", "compare": True},
+        )
         assert frame_response.status_code == 200 and frame_response.headers["content-encoding"] == "gzip"
         frame = json.loads(frame_response.headers["x-ct-frame"])
         assert len(frame_response.content) == frame["pixels"] * 6

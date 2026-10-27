@@ -42,9 +42,7 @@ def test_unbuffered_worker_prevents_manager_replaying_hidden_stdout():
     environment = {key: value for key, value in os.environ.items() if key != "PYTHONUNBUFFERED"}
 
     def lines(flags):
-        result = subprocess.run([sys.executable, *flags, "-c", program],
-                                env=environment, capture_output=True, text=True,
-                                timeout=30, check=True)
+        result = subprocess.run([sys.executable, *flags, "-c", program], env=environment, capture_output=True, text=True, timeout=30, check=True)
         return result.stdout.splitlines()
 
     expected = ["Predicting part 1", "Predicting part 2", "Predicting part 3"]

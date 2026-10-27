@@ -3,6 +3,7 @@
 These fixtures construct NIfTI values directly from DICOM functional groups;
 they do not use the application's enhanced-frame parser to define the oracle.
 """
+
 from pathlib import Path
 import subprocess
 
@@ -29,7 +30,7 @@ def native_volume(path):
     order = np.argsort(positions @ np.cross(orientation[:3], orientation[3:]))
     # DICOM [frame,row,column] becomes a common NIfTI [column,reversed-row,slice].
     values = source.pixel_array[order].transpose(2, 1, 0)[:, ::-1, :].copy()
-    lps_to_ras = np.diag([-1., -1., 1.])
+    lps_to_ras = np.diag([-1.0, -1.0, 1.0])
     affine = np.eye(4)
     affine[:3, 0] = lps_to_ras @ (orientation[:3] * spacing[1])
     affine[:3, 1] = -lps_to_ras @ (orientation[3:] * spacing[0])
@@ -78,7 +79,7 @@ def test_same_center_and_voxel_determinant_do_not_validate_a_sheared_grid(tmp_pa
     center_index = (np.asarray(values.shape) - 1) / 2
     center_ras = affine @ np.r_[center_index, 1]
     shear = np.eye(3)
-    shear[0, 1] = .25
+    shear[0, 1] = 0.25
     bad = affine.copy()
     bad[:3, :3] = affine[:3, :3] @ shear
     bad[:3, 3] = center_ras[:3] - bad[:3, :3] @ center_index

@@ -10,9 +10,15 @@ import pytest
 from scan3d import doctor
 
 
-VERSIONS = {"torch": "2.14.0+rocm10.1.0", "rocm": "10.1.0",
-            "rocm-sdk-core": "10.1.0", "rocm-sdk-libraries": "10.1.0",
-            "nnunetv2": "2.8.1", "TotalSegmentator": "2.18.0", "nnInteractive": "2.6.0"}
+VERSIONS = {
+    "torch": "2.14.0+rocm10.1.0",
+    "rocm": "10.1.0",
+    "rocm-sdk-core": "10.1.0",
+    "rocm-sdk-libraries": "10.1.0",
+    "nnunetv2": "2.8.1",
+    "TotalSegmentator": "2.18.0",
+    "nnInteractive": "2.6.0",
+}
 
 
 @pytest.fixture
@@ -28,13 +34,21 @@ def proof(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor.metadata, "version", version)
     target = tmp_path / "rocm10-proof.json"
     monkeypatch.setenv("SCAN3D_GPU_PROOF", str(target))
-    record = {"gpu_ready": True, "inference_verified": True,
-              "python_version": "3.14.8", "checked_at": "gpu-check", "validated_at": "model-check",
-              "completed_tasks": ["total", "lung_vessels"], "versions": dict(VERSIONS),
-              "checks": {"torch_distribution_version": VERSIONS["torch"], "hip_version": "7.16.26385",
-                         "runtime_versions": {key: VERSIONS[key] for key in
-                                              ("torch", "rocm", "rocm-sdk-core", "rocm-sdk-libraries")},
-                         "devices": [{"name": "AMD Radeon AI PRO R9700"}]}}
+    record = {
+        "gpu_ready": True,
+        "inference_verified": True,
+        "python_version": "3.14.8",
+        "checked_at": "gpu-check",
+        "validated_at": "model-check",
+        "completed_tasks": ["total", "lung_vessels"],
+        "versions": dict(VERSIONS),
+        "checks": {
+            "torch_distribution_version": VERSIONS["torch"],
+            "hip_version": "7.16.26385",
+            "runtime_versions": {key: VERSIONS[key] for key in ("torch", "rocm", "rocm-sdk-core", "rocm-sdk-libraries")},
+            "devices": [{"name": "AMD Radeon AI PRO R9700"}],
+        },
+    }
 
     def save(data=record, path=target):
         path.parent.mkdir(parents=True, exist_ok=True)

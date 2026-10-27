@@ -1,4 +1,5 @@
 """Closed domain values with stable strings at storage and API boundaries."""
+
 from enum import StrEnum, unique
 
 

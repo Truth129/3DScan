@@ -3,6 +3,7 @@
 Supporting an image representation does not imply that every acquisition can be
 imported or segmented. Adapters validate their supported acquisition subset.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -54,23 +55,29 @@ class ScalarPresentation:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> ScalarPresentation:
-        fields = {"units", "background_value", "default_window", "default_level",
-                  "photometric_interpretation", "preset_group", "preview_quantization_step"}
+        fields = {"units", "background_value", "default_window", "default_level", "photometric_interpretation", "preset_group", "preview_quantization_step"}
         if not isinstance(value, Mapping) or set(value) != fields:
             raise ValueError("Image presentation requires a complete scalar display policy")
         try:
             photometric = PhotometricInterpretation(value["photometric_interpretation"])
         except (TypeError, ValueError):
             raise ValueError("Scalar image presentation requires MONOCHROME1 or MONOCHROME2") from None
-        return cls(units=value["units"], background_value=value["background_value"],
-                   default_window=value["default_window"], default_level=value["default_level"],
-                   photometric_interpretation=photometric, preset_group=value["preset_group"],
-                   preview_quantization_step=value["preview_quantization_step"])
+        return cls(
+            units=value["units"],
+            background_value=value["background_value"],
+            default_window=value["default_window"],
+            default_level=value["default_level"],
+            photometric_interpretation=photometric,
+            preset_group=value["preset_group"],
+            preview_quantization_step=value["preview_quantization_step"],
+        )
 
     def to_dict(self) -> dict[str, str | float]:
         return {
-            "units": self.units, "background_value": self.background_value,
-            "default_window": self.default_window, "default_level": self.default_level,
+            "units": self.units,
+            "background_value": self.background_value,
+            "default_window": self.default_window,
+            "default_level": self.default_level,
             "photometric_interpretation": self.photometric_interpretation.value,
             "preset_group": self.preset_group,
             "preview_quantization_step": self.preview_quantization_step,
@@ -78,15 +85,23 @@ class ScalarPresentation:
 
 
 CT_PRESENTATION = ScalarPresentation(
-    units="HU", background_value=-1024.0, default_window=400.0, default_level=40.0,
+    units="HU",
+    background_value=-1024.0,
+    default_window=400.0,
+    default_level=40.0,
     photometric_interpretation=PhotometricInterpretation.MONOCHROME2,
-    preset_group="CT", preview_quantization_step=1.0,
+    preset_group="CT",
+    preview_quantization_step=1.0,
 )
 
 MR_PRESENTATION = ScalarPresentation(
-    units="signal", background_value=0.0, default_window=1.0, default_level=0.5,
+    units="signal",
+    background_value=0.0,
+    default_window=1.0,
+    default_level=0.5,
     photometric_interpretation=PhotometricInterpretation.MONOCHROME2,
-    preset_group="MR", preview_quantization_step=0.0,
+    preset_group="MR",
+    preview_quantization_step=0.0,
 )
 
 
@@ -145,9 +160,7 @@ class ModalityAdapter(Protocol):
     def capabilities(self) -> tuple[ImageCapability, ...]: ...
     def presentation(self) -> dict[str, str | float]: ...
     def presentation_for_image(self, file_path: Path, metadata: Mapping[str, Any] | None = None) -> dict[str, str | float]: ...
-    def validate_series(self, items: list[tuple[Path, Dataset]]) -> tuple[
-        list[tuple[Path, Dataset]], list[float] | None, list[str]
-    ]: ...
+    def validate_series(self, items: list[tuple[Path, Dataset]]) -> tuple[list[tuple[Path, Dataset]], list[float] | None, list[str]]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,8 +171,10 @@ class ConventionalCTAdapter:
     kind: ClassVar[ImageKind] = ImageKind.VOLUME3D
     units: ClassVar[str] = "HU"
     capabilities: ClassVar[tuple[ImageCapability, ...]] = (
-        ImageCapability.MPR, ImageCapability.VOLUME_RENDERING,
-        ImageCapability.SEGMENTATION, ImageCapability.VOXEL_MEASUREMENTS,
+        ImageCapability.MPR,
+        ImageCapability.VOLUME_RENDERING,
+        ImageCapability.SEGMENTATION,
+        ImageCapability.VOXEL_MEASUREMENTS,
     )
 
     def __post_init__(self) -> None:
@@ -172,10 +187,9 @@ class ConventionalCTAdapter:
     def presentation_for_image(self, file_path: Path, metadata: Mapping[str, Any] | None = None) -> dict[str, str | float]:
         return self.presentation()
 
-    def validate_series(self, items: list[tuple[Path, Dataset]]) -> tuple[
-        list[tuple[Path, Dataset]], list[float] | None, list[str]
-    ]:
+    def validate_series(self, items: list[tuple[Path, Dataset]]) -> tuple[list[tuple[Path, Dataset]], list[float] | None, list[str]]:
         from .dicom import _validate_conventional_ct
+
         return _validate_conventional_ct(items)
 
 
@@ -187,8 +201,10 @@ class ConventionalMRAdapter:
     kind: ClassVar[ImageKind] = ImageKind.VOLUME3D
     units: ClassVar[str] = "signal"
     capabilities: ClassVar[tuple[ImageCapability, ...]] = (
-        ImageCapability.MPR, ImageCapability.VOLUME_RENDERING,
-        ImageCapability.SEGMENTATION, ImageCapability.VOXEL_MEASUREMENTS,
+        ImageCapability.MPR,
+        ImageCapability.VOLUME_RENDERING,
+        ImageCapability.SEGMENTATION,
+        ImageCapability.VOXEL_MEASUREMENTS,
     )
 
     def __post_init__(self) -> None:
@@ -201,20 +217,23 @@ class ConventionalMRAdapter:
     def presentation_for_image(self, file_path: Path, metadata: Mapping[str, Any] | None = None) -> dict[str, str | float]:
         metadata = metadata or {}
         try:
-            photometric = PhotometricInterpretation(metadata.get(
-                "photometric_interpretation", self.display_policy.photometric_interpretation))
+            photometric = PhotometricInterpretation(metadata.get("photometric_interpretation", self.display_policy.photometric_interpretation))
         except (TypeError, ValueError):
             raise ValueError("MR presentation requires MONOCHROME1 or MONOCHROME2") from None
         window, level = _metadata_window(metadata) or _mr_signal_window(Path(file_path))
         return ScalarPresentation(
-            units=self.units, background_value=0.0, default_window=window, default_level=level,
-            photometric_interpretation=photometric, preset_group="MR", preview_quantization_step=0.0,
+            units=self.units,
+            background_value=0.0,
+            default_window=window,
+            default_level=level,
+            photometric_interpretation=photometric,
+            preset_group="MR",
+            preview_quantization_step=0.0,
         ).to_dict()
 
-    def validate_series(self, items: list[tuple[Path, Dataset]]) -> tuple[
-        list[tuple[Path, Dataset]], list[float] | None, list[str]
-    ]:
+    def validate_series(self, items: list[tuple[Path, Dataset]]) -> tuple[list[tuple[Path, Dataset]], list[float] | None, list[str]]:
         from .dicom import _validate_conventional_mr
+
         return _validate_conventional_mr(items)
 
 
@@ -231,11 +250,19 @@ def get_modality_adapter(modality: Modality | str = Modality.CT) -> ModalityAdap
 
 
 def modality_capabilities() -> dict:
-    return {"schema_version": 1, "modalities": [
-        {"adapter": adapter.id, "modality": adapter.modality.value, "kind": adapter.kind.value,
-         "capabilities": [value.value for value in adapter.capabilities], "presentation": adapter.presentation()}
-        for adapter in _ADAPTERS.values()
-    ]}
+    return {
+        "schema_version": 1,
+        "modalities": [
+            {
+                "adapter": adapter.id,
+                "modality": adapter.modality.value,
+                "kind": adapter.kind.value,
+                "capabilities": [value.value for value in adapter.capabilities],
+                "presentation": adapter.presentation(),
+            }
+            for adapter in _ADAPTERS.values()
+        ],
+    }
 
 
 def normalize_presentation(value: Mapping[str, Any] | ScalarPresentation | None = None) -> dict[str, str | float]:

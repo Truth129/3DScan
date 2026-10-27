@@ -1,4 +1,5 @@
 """Restoring previously filtered labels must preserve reviewed mask revisions."""
+
 import hashlib
 import json
 from pathlib import Path
@@ -20,7 +21,7 @@ def saved_run(tmp_path, monkeypatch):
     case_dir = service.store.case_dir(case["id"])
     source = case_dir / "converted"
     source.mkdir()
-    affine = np.array([[-2., 0, 0, 30], [0, 3., 0, -25], [0, 0, 4., -40], [0, 0, 0, 1]])
+    affine = np.array([[-2.0, 0, 0, 30], [0, 3.0, 0, -25], [0, 0, 4.0, -40], [0, 0, 0, 1]])
     shape = (18, 18, 18)
     ct = source / "reference.nii.gz"
     nib.save(nib.Nifti1Image(np.full(shape, 45, np.int16), affine), ct)
@@ -34,20 +35,22 @@ def saved_run(tmp_path, monkeypatch):
     for name, values in (("liver", native_liver), ("skull", skull), ("spleen", np.zeros(shape, np.uint8))):
         nib.save(nib.Nifti1Image(values, affine), masks / f"{name}.nii.gz")
     manifest = {
-        "schema_version": 1, "engine": "TotalSegmentator", "status": "completed",
-        "profile": "chest_abdomen", "run_id": run.name,
+        "schema_version": 1,
+        "engine": "TotalSegmentator",
+        "status": "completed",
+        "profile": "chest_abdomen",
+        "run_id": run.name,
         "input_sha256": hashlib.sha256(ct.read_bytes()).hexdigest(),
         "tasks": [{"task": "total", "status": "completed", "labels": ["liver", "skull", "spleen"]}],
-        "empty_labels": ["total:spleen"], "structure_count": 1,
+        "empty_labels": ["total:spleen"],
+        "structure_count": 1,
         "qc": ["Empty label omitted: total:spleen; inspect scan coverage"],
     }
     atomic_json(run / "inference.json", manifest)
     group, color = segmentation._appearance("liver")
-    liver = dict(id="total:liver", name="Liver", task="total", group=group, color=color,
-                 mask_file=str(masks / "liver.nii.gz"))
+    liver = dict(id="total:liver", name="Liver", task="total", group=group, color=color, mask_file=str(masks / "liver.nii.gz"))
     acquisition = dict(profile="chest_abdomen", series_uid="fixture-series", phase="venous")
-    original = service.build_revision(case["id"], ct, [liver], source="totalsegmentator",
-        acquisition=acquisition, inference_manifest=manifest)
+    original = service.build_revision(case["id"], ct, [liver], source="totalsegmentator", acquisition=acquisition, inference_manifest=manifest)
     service.store.commit_revision(original)
 
     # Simulate a saved Slicer correction that differs from the native model mask.
@@ -57,8 +60,9 @@ def saved_run(tmp_path, monkeypatch):
     corrected_liver[3:5] = 0
     nib.save(nib.Nifti1Image(corrected_liver, affine), correction)
     corrected = dict(liver, mask_file=str(correction))
-    parent = service.build_revision(case["id"], ct, [corrected], source="slicer_correction",
-        parent=original["id"], acquisition=acquisition, inference_manifest=manifest)
+    parent = service.build_revision(
+        case["id"], ct, [corrected], source="slicer_correction", parent=original["id"], acquisition=acquisition, inference_manifest=manifest
+    )
     parent["review_status"] = "corrected"
     atomic_json(Path(parent["directory"]) / "revision.json", parent)
     service.store.commit_revision(parent)

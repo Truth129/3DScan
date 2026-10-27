@@ -1,4 +1,5 @@
 """Mutable viewer entry points revalidate without changing clinical API policy."""
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -29,8 +30,7 @@ def test_viewer_entry_points_revalidate_including_conditional_responses(client, 
     response = client.get(path)
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-cache"
-    for headers in ({"If-None-Match": response.headers["etag"]},
-                    {"If-Modified-Since": response.headers["last-modified"]}):
+    for headers in ({"If-None-Match": response.headers["etag"]}, {"If-Modified-Since": response.headers["last-modified"]}):
         conditional = client.get(path, headers=headers)
         assert conditional.status_code == 304
         assert conditional.headers["cache-control"] == "no-cache"

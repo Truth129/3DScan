@@ -4,6 +4,7 @@ Only headers are inspected here. Source SOP/series identifiers and frame indices
 remain original; resolved frame headers are internal views, never new DICOMs.
 See DICOM PS3.3 C.7.6.16, C.7.6.17 and C.8.13.5 for functional groups/dimensions.
 """
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -22,13 +23,42 @@ from pydicom.tag import Tag
 ENHANCED_MR_STORAGE = "1.2.840.10008.5.1.4.1.1.4.1"
 _SPATIAL_DIMENSIONS = {Tag(0x0020, 0x9057), Tag(0x0020, 0x0032), Tag(0x0020, 0x9113)}
 _GLOBAL_FIELDS = (
-    "SeriesInstanceUID", "StudyInstanceUID", "SOPClassUID", "SOPInstanceUID", "FrameOfReferenceUID",
-    "Modality", "Rows", "Columns", "SamplesPerPixel", "PhotometricInterpretation", "BitsAllocated",
-    "BitsStored", "HighBit", "PixelRepresentation", "ImageType", "SequenceName", "ScanningSequence",
-    "SequenceVariant", "ScanOptions", "MRAcquisitionType", "AcquisitionNumber", "EchoNumbers",
-    "EchoTime", "RepetitionTime", "InversionTime", "WindowCenter", "WindowWidth", "VOILUTFunction",
-    "ComplexImageComponent", "AcquisitionContrast", "PixelPresentation", "VolumetricProperties",
-    "VolumeBasedCalculationTechnique", "RescaleSlope", "RescaleIntercept", "RescaleType",
+    "SeriesInstanceUID",
+    "StudyInstanceUID",
+    "SOPClassUID",
+    "SOPInstanceUID",
+    "FrameOfReferenceUID",
+    "Modality",
+    "Rows",
+    "Columns",
+    "SamplesPerPixel",
+    "PhotometricInterpretation",
+    "BitsAllocated",
+    "BitsStored",
+    "HighBit",
+    "PixelRepresentation",
+    "ImageType",
+    "SequenceName",
+    "ScanningSequence",
+    "SequenceVariant",
+    "ScanOptions",
+    "MRAcquisitionType",
+    "AcquisitionNumber",
+    "EchoNumbers",
+    "EchoTime",
+    "RepetitionTime",
+    "InversionTime",
+    "WindowCenter",
+    "WindowWidth",
+    "VOILUTFunction",
+    "ComplexImageComponent",
+    "AcquisitionContrast",
+    "PixelPresentation",
+    "VolumetricProperties",
+    "VolumeBasedCalculationTechnique",
+    "RescaleSlope",
+    "RescaleIntercept",
+    "RescaleType",
 )
 
 
@@ -129,14 +159,21 @@ def _validate_rwvm(mapping: Dataset | None, header: Dataset) -> None:
 
 
 def _frames(items: list[tuple[Path, Dataset]]) -> list[MRFrame]:
-    if not items or any(str(ds.get("Modality", "")) != "MR"
-                        or str(ds.get("SOPClassUID", "")) != ENHANCED_MR_STORAGE for _, ds in items):
+    if not items or any(str(ds.get("Modality", "")) != "MR" or str(ds.get("SOPClassUID", "")) != ENHANCED_MR_STORAGE for _, ds in items):
         raise ValueError("Do not combine classic, Enhanced MR or other image storage within one volume")
     if len(items) != 1:
         raise ValueError("Enhanced MR currently requires one complete instance per volume; multi-instance concatenations need a separate import adapter")
     path, source = items[0]
-    if any(name in source for name in ("ConcatenationUID", "ConcatenationFrameOffsetNumber", "InConcatenationNumber",
-                                      "InConcatenationTotalNumber", "SOPInstanceUIDOfConcatenationSource")):
+    if any(
+        name in source
+        for name in (
+            "ConcatenationUID",
+            "ConcatenationFrameOffsetNumber",
+            "InConcatenationNumber",
+            "InConcatenationTotalNumber",
+            "SOPInstanceUIDOfConcatenationSource",
+        )
+    ):
         raise ValueError("Enhanced MR concatenations are unsupported; export one complete instance")
     count = _positive_integer(source.get("NumberOfFrames"), "NumberOfFrames")
     if count < 2:
@@ -178,8 +215,9 @@ def _frames(items: list[tuple[Path, Dataset]]) -> list[MRFrame]:
             raise ValueError("Enhanced MR pixel-value transformation is incomplete")
         _copy_fields(header, transform, ("RescaleSlope", "RescaleIntercept", "RescaleType"))
         frame_type = _macro(shared, group, "MRImageFrameTypeSequence", required=True)
-        _copy_fields(header, frame_type, ("ComplexImageComponent", "AcquisitionContrast", "PixelPresentation",
-                                          "VolumetricProperties", "VolumeBasedCalculationTechnique"))
+        _copy_fields(
+            header, frame_type, ("ComplexImageComponent", "AcquisitionContrast", "PixelPresentation", "VolumetricProperties", "VolumeBasedCalculationTechnique")
+        )
         if "FrameType" not in frame_type:
             raise ValueError("Enhanced MR FrameType is required")
         header.ImageType = frame_type.FrameType
@@ -205,9 +243,18 @@ def _frames(items: list[tuple[Path, Dataset]]) -> list[MRFrame]:
                 header.InversionTime = times[0]
         _copy_fields(header, _macro(shared, group, "FrameVOILUTSequence"), ("WindowCenter", "WindowWidth", "VOILUTFunction"))
         _validate_rwvm(_macro(shared, group, "RealWorldValueMappingSequence"), header)
-        result.append(MRFrame(Path(path), str(source.get("SOPInstanceUID", "")), index, header,
-            str(content.StackID) if content.get("StackID") is not None else None,
-            _optional_index(content, "TemporalPositionIndex"), _optional_index(content, "InStackPositionNumber"), dimension_values))
+        result.append(
+            MRFrame(
+                Path(path),
+                str(source.get("SOPInstanceUID", "")),
+                index,
+                header,
+                str(content.StackID) if content.get("StackID") is not None else None,
+                _optional_index(content, "TemporalPositionIndex"),
+                _optional_index(content, "InStackPositionNumber"),
+                dimension_values,
+            )
+        )
     if len({frame.stack_id for frame in result}) != 1:
         raise ValueError("Mixed Enhanced MR stacks require separate volumes")
     if len({frame.temporal_position_index for frame in result}) != 1:
@@ -223,13 +270,12 @@ def _frames(items: list[tuple[Path, Dataset]]) -> list[MRFrame]:
 
 def resolve_stack(items: list[tuple[Path, Dataset]]) -> EnhancedMRStack:
     from .dicom import _validate_conventional_mr
+
     frames = _frames(items)
     frame_items = [(frame.source_path, frame.header) for frame in frames]
-    ordered, spacing, errors = _validate_conventional_mr(frame_items, enhanced_frames=True,
-        source_frame_keys=[frame.source_key for frame in frames])
+    ordered, spacing, errors = _validate_conventional_mr(frame_items, enhanced_frames=True, source_frame_keys=[frame.source_key for frame in frames])
     by_header = {id(frame.header): frame for frame in frames}
-    return EnhancedMRStack(tuple(items), tuple(by_header[id(header)] for _, header in ordered),
-                           tuple(spacing) if spacing is not None else None, tuple(errors))
+    return EnhancedMRStack(tuple(items), tuple(by_header[id(header)] for _, header in ordered), tuple(spacing) if spacing is not None else None, tuple(errors))
 
 
 def validate_series(items):
@@ -254,12 +300,11 @@ def verify_converted_grid(stack: EnhancedMRStack, image: nib.spatialimages.Spati
     source_shape = np.asarray([int(first.Columns), int(first.Rows), len(stack.frames)])
     orientation = np.asarray(first.ImageOrientationPatient, dtype=float)
     row, column = orientation[:3], orientation[3:]
-    flip = np.diag([-1., -1., 1.])
+    flip = np.diag([-1.0, -1.0, 1.0])
     expected = np.eye(4)
-    expected[:3, :3] = flip @ np.column_stack((row * stack.spacing[0], column * stack.spacing[1],
-                                               np.cross(row, column) * stack.spacing[2]))
+    expected[:3, :3] = flip @ np.column_stack((row * stack.spacing[0], column * stack.spacing[1], np.cross(row, column) * stack.spacing[2]))
     expected[:3, 3] = flip @ np.asarray(first.ImagePositionPatient, float)
-    factor = {"unknown": 1., "mm": 1., "meter": 1000., "micron": .001}.get(image.header.get_xyzt_units()[0])
+    factor = {"unknown": 1.0, "mm": 1.0, "meter": 1000.0, "micron": 0.001}.get(image.header.get_xyzt_units()[0])
     if factor is None:
         raise ValueError("Converted Enhanced MR has unsupported spatial units")
     converted_affine = np.asarray(image.affine, float).copy()
@@ -280,8 +325,7 @@ def verify_converted_grid(stack: EnhancedMRStack, image: nib.spatialimages.Spati
     converted_corners = set(product(*[(0, int(size) - 1) for size in image.shape]))
     reconstructed = nib.affines.apply_affine(converted_affine, rounded)
     source_world = nib.affines.apply_affine(expected, corners)
-    if (set(map(tuple, rounded)) != converted_corners
-            or not np.allclose(reconstructed, source_world, rtol=0, atol=.01)):
+    if set(map(tuple, rounded)) != converted_corners or not np.allclose(reconstructed, source_world, rtol=0, atol=0.01):
         raise ValueError("Converted Enhanced MR physical extent or voxel centres do not match the source")
     native_frame_axis = int(axes[2])
     other_axes = [axis for axis in range(3) if axis != native_frame_axis]
@@ -303,7 +347,6 @@ def verify_converted_grid(stack: EnhancedMRStack, image: nib.spatialimages.Spati
             raise ValueError("Could not verify Enhanced MR source frame pixels with the installed DICOM decoder") from exc
         if original.shape != (int(first.Rows), int(first.Columns)):
             raise ValueError("Enhanced MR source pixels do not match their frame geometry")
-        expected_values = (original[raster[:, 0], raster[:, 1]].astype(float) * float(frame.header.RescaleSlope)
-                           + float(frame.header.RescaleIntercept))
+        expected_values = original[raster[:, 0], raster[:, 1]].astype(float) * float(frame.header.RescaleSlope) + float(frame.header.RescaleIntercept)
         if not np.isfinite(actual).all() or not np.allclose(actual, expected_values, rtol=1e-6, atol=1e-4):
             raise ValueError("Converted Enhanced MR signal landmarks do not match their source patient coordinates")

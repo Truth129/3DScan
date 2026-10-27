@@ -57,18 +57,22 @@ _DESCRIPTIONS = {
 def default_task(modality: str = "CT") -> str:
     from .domain import Modality
     from .modalities import get_modality_adapter
+
     return "total_mr" if get_modality_adapter(modality).modality == Modality.MR else "total"
 
 
 def task_ids(modality: str = "CT") -> list[str]:
     from .modalities import get_modality_adapter
+
     adapter = get_modality_adapter(modality)
     from totalsegmentator.registry import TASKS, task_modality
     from totalsegmentator.map_tasks_config import TASK_CONFIGS
 
-    return [task for task in TASKS if task_modality(task) == adapter.modality
-            and task in TASK_CONFIGS and task not in _EXCLUDED_TASKS
-            and not task.endswith("_LEGACY")]
+    return [
+        task
+        for task in TASKS
+        if task_modality(task) == adapter.modality and task in TASK_CONFIGS and task not in _EXCLUDED_TASKS and not task.endswith("_LEGACY")
+    ]
 
 
 def resolved_task_config(task: str, robust_crop: bool = False, mode: str = "default") -> dict:
@@ -93,7 +97,9 @@ def task_capabilities(task: str) -> dict:
     return {
         "uses_organ_crop": cropped,
         "robust_crop_default": bool(config.get("robust_crop")) and not is_mr,
-        "robust_crop_supported": not is_mr and cropped and config.get("crop_model") is None
+        "robust_crop_supported": not is_mr
+        and cropped
+        and config.get("crop_model") is None
         and not any(label in {"body_trunc", "body_extremities"} for label in crop_labels),
         "body_seg_supported": not is_mr and not cropped,
     }
@@ -113,17 +119,28 @@ def segmentation_catalog(modality: str = "CT") -> dict:
         # They are imported by the pipeline and must be discoverable in the UI.
         if task == "body":
             classes += [name for name in ("body", "skin") if name not in classes]
-        tasks.append({"id": task, "label": _LABELS.get(task, task.replace("_", " ").capitalize()),
-                      "license_required": required, "license_available": available,
-                      "available": available, "modality": modality, "classes": classes,
-                      "class_count": len(classes), "model_class_count": model_class_count,
-                      "description": _DESCRIPTIONS.get(task, ""),
-                      **task_capabilities(task)})
-    return {"engine_version": metadata.version("TotalSegmentator"), "tasks": tasks,
-            "license_configured": configured,
-            "defaults": {"task": default_task(modality), "robust_crop": False, "body_seg": False,
-                         "remove_small_blobs": False},
-            "remove_small_blobs_mm3": REMOVE_SMALL_BLOBS_MM3}
+        tasks.append(
+            {
+                "id": task,
+                "label": _LABELS.get(task, task.replace("_", " ").capitalize()),
+                "license_required": required,
+                "license_available": available,
+                "available": available,
+                "modality": modality,
+                "classes": classes,
+                "class_count": len(classes),
+                "model_class_count": model_class_count,
+                "description": _DESCRIPTIONS.get(task, ""),
+                **task_capabilities(task),
+            }
+        )
+    return {
+        "engine_version": metadata.version("TotalSegmentator"),
+        "tasks": tasks,
+        "license_configured": configured,
+        "defaults": {"task": default_task(modality), "robust_crop": False, "body_seg": False, "remove_small_blobs": False},
+        "remove_small_blobs_mm3": REMOVE_SMALL_BLOBS_MM3,
+    }
 
 
 def normalize_options(profile: str, options: dict | None = None, *, modality: str = "CT") -> dict:
@@ -162,6 +179,5 @@ def normalize_options(profile: str, options: dict | None = None, *, modality: st
         raise ValueError("Body cropping cannot be combined with a task that already crops to an organ")
     # Some native task configurations mandate robust cropping even when the CLI
     # switch is absent. Canonicalize it so UI/cache/provenance do not imply off.
-    settings["robust_crop"] = settings["robust_crop"] or any(
-        item["robust_crop_default"] for item in capabilities)
+    settings["robust_crop"] = settings["robust_crop"] or any(item["robust_crop_default"] for item in capabilities)
     return {"tasks": list(tasks), **settings}

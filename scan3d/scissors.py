@@ -24,13 +24,18 @@ def normalize_scissors(prompt):
         matrix = np.asarray(prompt.get("ras_to_clip"), dtype=np.float64)
     except (ValueError, TypeError) as exc:
         raise ValueError("3D scissors require finite screen vertices and an orthographic projection") from exc
-    if (vertices.ndim != 2 or vertices.shape[1:] != (2,) or not 3 <= len(vertices) <= 2048
-            or not np.isfinite(vertices).all() or np.any(vertices < -1) or np.any(vertices > 1)):
+    if (
+        vertices.ndim != 2
+        or vertices.shape[1:] != (2,)
+        or not 3 <= len(vertices) <= 2048
+        or not np.isfinite(vertices).all()
+        or np.any(vertices < -1)
+        or np.any(vertices > 1)
+    ):
         raise ValueError("3D scissors require 3 to 2048 finite screen vertices between -1 and 1")
     if np.linalg.matrix_rank(vertices - vertices[0], tol=1e-10) < 2:
         raise ValueError("The scissors polygon must enclose a nonzero screen area")
-    if (matrix.shape != (4, 4) or not np.isfinite(matrix).all()
-            or not np.array_equal(matrix[3], [0, 0, 0, 1])):
+    if matrix.shape != (4, 4) or not np.isfinite(matrix).all() or not np.array_equal(matrix[3], [0, 0, 0, 1]):
         raise ValueError("3D scissors require an orthographic RAS-to-clip matrix; perspective cuts are unsupported")
     try:
         condition = np.linalg.cond(matrix[:3, :3])
@@ -40,8 +45,7 @@ def normalize_scissors(prompt):
         raise ValueError("The scissors projection must be invertible and numerically stable")
     if shape == "rectangle":
         edges = np.roll(vertices, -1, axis=0) - vertices
-        if (len(vertices) != 4 or len(np.unique(vertices, axis=0)) != 4
-                or not np.all(np.count_nonzero(np.abs(edges) > _BOUNDARY_EPSILON, axis=1) == 1)):
+        if len(vertices) != 4 or len(np.unique(vertices, axis=0)) != 4 or not np.all(np.count_nonzero(np.abs(edges) > _BOUNDARY_EPSILON, axis=1) == 1):
             raise ValueError("Rectangle scissors require four ordered, axis-aligned screen corners")
     return dict(operation=operation, shape=shape, vertices=vertices.tolist(), ras_to_clip=matrix.tolist())
 
@@ -65,14 +69,16 @@ def _polygon_contains(x, y, vertices, *, rectangle=False, cancelled=lambda: Fals
         if dy and crosses.any():
             crossing = first[0] + (py[crosses] - first[1]) * dx / dy
             inside[crosses] ^= px[crosses] < crossing
-        edge_box = ((px >= min(first[0], second[0]) - epsilon)
-                    & (px <= max(first[0], second[0]) + epsilon)
-                    & (py >= min(first[1], second[1]) - epsilon)
-                    & (py <= max(first[1], second[1]) + epsilon))
+        edge_box = (
+            (px >= min(first[0], second[0]) - epsilon)
+            & (px <= max(first[0], second[0]) + epsilon)
+            & (py >= min(first[1], second[1]) - epsilon)
+            & (py <= max(first[1], second[1]) + epsilon)
+        )
         if edge_box.any():
             edge_indices = np.flatnonzero(edge_box)
             cross = (px[edge_indices] - first[0]) * dy - (py[edge_indices] - first[1]) * dx
-            boundary[edge_indices] |= np.abs(cross) <= epsilon * max(1., float(np.hypot(dx, dy)))
+            boundary[edge_indices] |= np.abs(cross) <= epsilon * max(1.0, float(np.hypot(dx, dy)))
     within[selected] = inside | boundary
     return within
 

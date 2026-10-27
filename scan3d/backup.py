@@ -7,6 +7,7 @@ since the previous backup in the same destination are hard-linked to it, never
 to live data. Caches the service rebuilds on demand are skipped. Records store
 absolute paths, so restore into the same SCAN3D_DATA_DIR.
 """
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -25,8 +26,7 @@ _SNAPSHOT = re.compile(r"scan3d-\d{8}T\d{6}Z")
 
 
 def _latest(destination):
-    snapshots = [entry for entry in destination.iterdir()
-                 if _SNAPSHOT.fullmatch(entry.name) and (entry / "manifest.json").is_file()]
+    snapshots = [entry for entry in destination.iterdir() if _SNAPSHOT.fullmatch(entry.name) and (entry / "manifest.json").is_file()]
     return max(snapshots, key=lambda entry: entry.name, default=None)
 
 
@@ -97,8 +97,7 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
         for entry in sorted(data_dir.iterdir()):
             if entry.name.startswith(DATABASE):
                 continue  # Snapshotted above, including any write-ahead log.
-            if (entry.name in REBUILT_ON_DEMAND or entry.name.endswith(".lock") or entry.is_symlink()
-                    or not (entry.is_dir() or entry.is_file())):
+            if entry.name in REBUILT_ON_DEMAND or entry.name.endswith(".lock") or entry.is_symlink() or not (entry.is_dir() or entry.is_file()):
                 skipped.append(entry.name)
                 continue
             log(f"Copying {entry.name}")
@@ -109,13 +108,19 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
                 _copy(entry, partial / entry.name, prior, counts)
             included.append(entry.name)
         digest = hashlib.sha256((partial / DATABASE).read_bytes()).hexdigest()
-        manifest = {"schema_version": 1, "created_at": datetime.now(timezone.utc).isoformat(),
-                    "scan3d_version": __version__, "data_dir": str(data_dir), "snapshot": target.name,
-                    "previous": previous.name if previous else None,
-                    "database": {"sha256": digest, "integrity_check": integrity},
-                    "included": included, "skipped": skipped, "files": counts,
-                    "restore": "Stop the service, then copy this snapshot's contents into the same data_dir. "
-                               "Skipped caches rebuild on demand."}
+        manifest = {
+            "schema_version": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "scan3d_version": __version__,
+            "data_dir": str(data_dir),
+            "snapshot": target.name,
+            "previous": previous.name if previous else None,
+            "database": {"sha256": digest, "integrity_check": integrity},
+            "included": included,
+            "skipped": skipped,
+            "files": counts,
+            "restore": "Stop the service, then copy this snapshot's contents into the same data_dir. Skipped caches rebuild on demand.",
+        }
         (partial / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         partial.rename(target)
         return manifest

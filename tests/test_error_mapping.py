@@ -1,4 +1,5 @@
 """Only explicit missing records are 404s; other KeyErrors are server defects."""
+
 from fastapi.testclient import TestClient
 
 from scan3d.api import create_app

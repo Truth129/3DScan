@@ -20,8 +20,7 @@ class Settings:
 
     @classmethod
     def from_env(cls):
-        modalities = tuple(dict.fromkeys(part.strip().upper() for part in
-                                         os.environ.get("SCAN3D_MODALITIES", ",".join(MODALITIES)).split(",") if part.strip()))
+        modalities = tuple(dict.fromkeys(part.strip().upper() for part in os.environ.get("SCAN3D_MODALITIES", ",".join(MODALITIES)).split(",") if part.strip()))
         if not modalities or set(modalities) - set(MODALITIES):
             raise ValueError(f"SCAN3D_MODALITIES must list one or more of: {', '.join(MODALITIES)}")
         return cls(

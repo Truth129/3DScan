@@ -1,4 +1,5 @@
 """Record IDs with a stable wire format across supported Python runtimes."""
+
 import sys
 import uuid
 

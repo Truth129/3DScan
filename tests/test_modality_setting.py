@@ -1,4 +1,5 @@
 """A deployment can offer fewer modalities than the installed adapters support."""
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -27,15 +28,18 @@ def test_modality_setting_defaults_to_every_adapter_and_rejects_unknown_names(tm
 
 def test_ct_only_deployment_shows_mr_series_as_unavailable_without_changing_records(tmp_path):
     def client(**options):
-        return TestClient(create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", **options)),
-                          base_url="http://127.0.0.1")
+        return TestClient(create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", **options)), base_url="http://127.0.0.1")
 
     http = client(modalities=("CT",))
     service = http.app.state.service
     case = service.new_case("Mixed study")
-    case.update(status="imported", series=[
-        {"uid": "1.2.3", "modality": "CT", "supported": True, "unsupported_reason": None, "warnings": [], "files": ["/x/ct.dcm"]},
-        {"uid": "1.2.4", "modality": "MR", "supported": True, "unsupported_reason": None, "warnings": [], "files": ["/x/mr.dcm"]}])
+    case.update(
+        status="imported",
+        series=[
+            {"uid": "1.2.3", "modality": "CT", "supported": True, "unsupported_reason": None, "warnings": [], "files": ["/x/ct.dcm"]},
+            {"uid": "1.2.4", "modality": "MR", "supported": True, "unsupported_reason": None, "warnings": [], "files": ["/x/mr.dcm"]},
+        ],
+    )
     service.store.save("cases", case)
     shown = http.get(f"/api/cases/{case['id']}").json()["series"]
     assert [(series["supported"], series["unsupported_reason"]) for series in shown] == [(True, None), (False, REASON)]

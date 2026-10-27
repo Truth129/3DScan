@@ -25,16 +25,14 @@ SUPPORTED_ENGINE_VERSION = "2.6.0"
 
 def _integers(values, name, length=3):
     array = np.asarray(values)
-    if (array.shape != (length,) or array.dtype.kind not in "iuf"
-            or not np.isfinite(array).all() or not np.equal(array, np.floor(array)).all()):
+    if array.shape != (length,) or array.dtype.kind not in "iuf" or not np.isfinite(array).all() or not np.equal(array, np.floor(array)).all():
         raise ValueError(f"{name} must contain {length} finite integers")
     return array.astype(np.int64)
 
 
 def _bbox(value, shape, name="Prompt support"):
     array = np.asarray(value)
-    if (array.shape != (3, 2) or array.dtype.kind not in "iuf"
-            or not np.isfinite(array).all() or not np.equal(array, np.floor(array)).all()):
+    if array.shape != (3, 2) or array.dtype.kind not in "iuf" or not np.isfinite(array).all() or not np.equal(array, np.floor(array)).all():
         raise ValueError(f"{name} must contain three integer half-open intervals")
     array = array.astype(np.int64)
     if np.any(array[:, 0] < 0) or np.any(array[:, 1] > shape) or np.any(array[:, 1] <= array[:, 0]):
@@ -43,13 +41,11 @@ def _bbox(value, shape, name="Prompt support"):
 
 
 def _union(boxes):
-    return np.stack((np.min([b[:, 0] for b in boxes], axis=0),
-                     np.max([b[:, 1] for b in boxes], axis=0)), axis=1)
+    return np.stack((np.min([b[:, 0] for b in boxes], axis=0), np.max([b[:, 1] for b in boxes], axis=0)), axis=1)
 
 
 def _context(box, margin, shape):
-    return np.stack((np.maximum(0, box[:, 0] - margin),
-                     np.minimum(shape, box[:, 1] + margin)), axis=1)
+    return np.stack((np.maximum(0, box[:, 0] - margin), np.minimum(shape, box[:, 1] + margin)), axis=1)
 
 
 def _support(prompt, shape):
@@ -73,8 +69,7 @@ def _support(prompt, shape):
             raise ValueError("Drawing crops must contain binary values")
         if not np.any(crop_box[:, 1] - crop_box[:, 0] == 1):
             raise ValueError("Drawing prompts must lie on one native CT slice")
-        occupied = [np.flatnonzero(np.any(image, axis=tuple(j for j in range(3) if j != axis)))
-                    for axis in range(3)]
+        occupied = [np.flatnonzero(np.any(image, axis=tuple(j for j in range(3) if j != axis))) for axis in range(3)]
         if any(not len(indices) for indices in occupied):
             raise ValueError("Drawing prompt is empty")
         actual = np.array([[indices[0], indices[-1] + 1] for indices in occupied])
@@ -103,11 +98,16 @@ def _plan(box, prompt_ids, patch, max_zoom, shape, margin):
     center_high = box[:, 0] + scaled // 2
     center = np.minimum(np.maximum(center, center_low), center_high)
     input_box = np.stack((center - scaled // 2, center + scaled // 2 + scaled % 2), axis=1)
-    return {"prompt_ids": list(prompt_ids), "support_bbox_ijk": box.tolist(),
-            "context_bbox_ijk": context.tolist(), "input_bbox_ijk": input_box.tolist(),
-            "center_ijk": center.tolist(), "zoom": zoom, "scaled_patch_size": scaled.tolist(),
-            "context_limited_by_zoom_cap": bool(np.any(input_box[:, 0] > context[:, 0])
-                                                 or np.any(input_box[:, 1] < context[:, 1]))}
+    return {
+        "prompt_ids": list(prompt_ids),
+        "support_bbox_ijk": box.tolist(),
+        "context_bbox_ijk": context.tolist(),
+        "input_bbox_ijk": input_box.tolist(),
+        "center_ijk": center.tolist(),
+        "zoom": zoom,
+        "scaled_patch_size": scaled.tolist(),
+        "context_limited_by_zoom_cap": bool(np.any(input_box[:, 0] > context[:, 0]) or np.any(input_box[:, 1] < context[:, 1])),
+    }
 
 
 def plan_batches(normalized_prompts, patch_size, max_zoom, image_shape):
@@ -159,8 +159,9 @@ def plan_batches(normalized_prompts, patch_size, max_zoom, image_shape):
             continue
         intervals = []
         for axis in range(3):
-            intervals.append([(start, min(int(box[axis, 1]), start + int(capacity[axis])))
-                              for start in range(int(box[axis, 0]), int(box[axis, 1]), int(capacity[axis]))])
+            intervals.append(
+                [(start, min(int(box[axis, 1]), start + int(capacity[axis]))) for start in range(int(box[axis, 0]), int(box[axis, 1]), int(capacity[axis]))]
+            )
         for tile in product(*intervals):
             pieces.append({**cluster, "box": np.asarray(tile, dtype=np.int64)})
     if len(pieces) > 4096:
@@ -187,8 +188,7 @@ def _register(session, prompt):
         session.add_bbox_interaction(prompt["bbox_ijk"], include_interaction=include, run_prediction=False)
     else:
         method = session.add_scribble_interaction if kind == "scribble" else session.add_lasso_interaction
-        method(prompt["image"], include_interaction=include, run_prediction=False,
-               interaction_bbox=prompt["interaction_bbox"])
+        method(prompt["image"], include_interaction=include, run_prediction=False, interaction_bbox=prompt["interaction_bbox"])
 
 
 def register_and_predict(session, prompts, progress, cancelled, *, autozoom=True):
@@ -203,8 +203,7 @@ def register_and_predict(session, prompts, progress, cancelled, *, autozoom=True
         raise RuntimeError("Batched inference requires the pinned nnInteractive 2.6.0 adapter")
     if not isinstance(autozoom, bool):
         raise ValueError("AutoZoom must be an explicit boolean")
-    plans = plan_batches(prompts, session.configuration_manager.patch_size,
-                         session.MAX_AUTOZOOM_FACTOR, session.original_image_shape[1:])
+    plans = plan_batches(prompts, session.configuration_manager.patch_size, session.MAX_AUTOZOOM_FACTOR, session.original_image_shape[1:])
     _check_cancelled(cancelled)
     previous_autozoom = session.do_autozoom
     prediction_calls, changed = 0, []
@@ -228,9 +227,14 @@ def register_and_predict(session, prompts, progress, cancelled, *, autozoom=True
             _check_cancelled(cancelled)
             if box is not None:
                 changed.append(np.asarray(box, dtype=np.int64))
-        return {"adapter_version": ADAPTER_VERSION, "clusters": len(plans),
-                "prediction_calls": prediction_calls, "prediction_regions": prediction_calls, "plans": plans,
-                "changed_bbox_ijk": _union(changed).tolist() if changed else None}
+        return {
+            "adapter_version": ADAPTER_VERSION,
+            "clusters": len(plans),
+            "prediction_calls": prediction_calls,
+            "prediction_regions": prediction_calls,
+            "plans": plans,
+            "changed_bbox_ijk": _union(changed).tolist() if changed else None,
+        }
     finally:
         session.new_interaction_centers = []
         session.new_interaction_zoom_out_factors = []
@@ -251,13 +255,11 @@ def refine_whole_mask(session, progress, cancelled, *, autozoom=True):
         raise ValueError("AutoZoom must be an explicit boolean")
     # These are optional checkpoint capabilities in the vendor session API;
     # absence means unsupported, rather than a malformed application object.
-    if not (getattr(session, "supports_initial_label", False)
-            and getattr(session, "supports_zero_shot_label_refinement", False)):
+    if not (getattr(session, "supports_initial_label", False) and getattr(session, "supports_zero_shot_label_refinement", False)):
         raise ValueError("The loaded checkpoint does not support whole-mask refinement")
     _check_cancelled(cancelled)
     current = np.asarray(session.target_buffer)
-    if (current.shape != tuple(session.original_image_shape[1:]) or current.dtype.kind not in "bui"
-            or current.min() < 0 or current.max() > 1):
+    if current.shape != tuple(session.original_image_shape[1:]) or current.dtype.kind not in "bui" or current.min() < 0 or current.max() > 1:
         raise ValueError("Whole-mask refinement requires a binary mask on the reference CT grid")
     if not np.any(current):
         raise ValueError("Whole-mask refinement requires a nonempty candidate mask")
@@ -269,9 +271,14 @@ def refine_whole_mask(session, progress, cancelled, *, autozoom=True):
         _check_cancelled(cancelled)
         box = session.add_initial_seg_interaction(initial, run_prediction=True)
         _check_cancelled(cancelled)
-        return {"adapter_version": ADAPTER_VERSION, "prediction_regions": 1, "prediction_calls": 1,
-                "mode": "whole_mask", "resets_prompt_channels": True,
-                "changed_bbox_ijk": np.asarray(box, dtype=np.int64).tolist() if box is not None else None}
+        return {
+            "adapter_version": ADAPTER_VERSION,
+            "prediction_regions": 1,
+            "prediction_calls": 1,
+            "mode": "whole_mask",
+            "resets_prompt_channels": True,
+            "changed_bbox_ijk": np.asarray(box, dtype=np.int64).tolist() if box is not None else None,
+        }
     finally:
         session.new_interaction_centers = []
         session.new_interaction_zoom_out_factors = []

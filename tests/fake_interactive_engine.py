@@ -17,8 +17,7 @@ class Engine:
         self.loads = self.requests = 0
         self.warm = False
 
-    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key,
-                *, batches=None, options=None):
+    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None):
         self.requests += 1
         if not self.warm:
             progress("Loading the fake correction model")
@@ -29,7 +28,7 @@ class Engine:
             if behaviour == "cooperative":
                 progress("Running a cancellable step")
                 while not cancelled():
-                    time.sleep(.01)
+                    time.sleep(0.01)
                 raise InterruptedError("Fake correction cancelled")
             if behaviour == "uninterruptible":
                 progress("Running a kernel that ignores cancellation")
@@ -52,9 +51,18 @@ class Engine:
         mask, _, _ = imaging._binary(mask_path, image, affine)
         mask[1, 1, 1] = True
         imaging._save_mask(mask, image, output_path)
-        return {"engine": "fake-nninteractive", "pid": os.getpid(), "loads": self.loads,
-                "requests": self.requests, "prompts": prompts, "batches": batches, "options": options,
-                "session_key": session_key, "torch_imported": "torch" in sys.modules, **fields}
+        return {
+            "engine": "fake-nninteractive",
+            "pid": os.getpid(),
+            "loads": self.loads,
+            "requests": self.requests,
+            "prompts": prompts,
+            "batches": batches,
+            "options": options,
+            "session_key": session_key,
+            "torch_imported": "torch" in sys.modules,
+            **fields,
+        }
 
     def refine(self, prompts, progress, cancelled, session_key):
         return {}
@@ -75,19 +83,19 @@ class PointwiseEngine(Engine):
         self.session, self.applied = None, []
 
     def refine(self, prompts, progress, cancelled, session_key):
-        reused = self.session == session_key and prompts[:len(self.applied)] == self.applied
+        reused = self.session == session_key and prompts[: len(self.applied)] == self.applied
         if not reused:
             self.session, self.applied = session_key, []
         start = len(self.applied)
         try:
             for index in range(start, len(prompts)):
                 progress(f"Refining segmentation with point {index + 1} of {len(prompts)}")
-                deadline = time.monotonic() + .2
+                deadline = time.monotonic() + 0.2
                 while time.monotonic() < deadline:
                     if cancelled():
                         raise InterruptedError("Fake correction cancelled")
-                    time.sleep(.005)
-                self.applied = prompts[:index + 1]
+                    time.sleep(0.005)
+                self.applied = prompts[: index + 1]
         except BaseException:
             self.session, self.applied = None, []
             raise

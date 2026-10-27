@@ -1,4 +1,5 @@
 """SQLite records are committed only after their filesystem artifacts are complete."""
+
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
@@ -29,8 +30,7 @@ def job_lane(job):
     """
     # Claims classify every queued row; a malformed one fails in its job, not here.
     payload = job.get("payload") or {}
-    inference = job["kind"] == "review_predict" and not (
-        payload.get("relationship_only") or payload.get("method") == "direct")
+    inference = job["kind"] == "review_predict" and not (payload.get("relationship_only") or payload.get("method") == "direct")
     return "gpu" if job["kind"] == "segment" or inference else "cpu"
 
 
@@ -150,8 +150,7 @@ class Store:
             row = con.execute("SELECT data FROM image_assets WHERE id=?", (record["id"],)).fetchone()
             if row is not None:
                 existing = json.loads(row["data"])
-                if ({k: v for k, v in existing.items() if k != "file_path"}
-                        != {k: v for k, v in record.items() if k != "file_path"}):
+                if {k: v for k, v in existing.items() if k != "file_path"} != {k: v for k, v in record.items() if k != "file_path"}:
                     raise ValueError("Image assets are immutable")
                 # A copied source with identical bytes and provenance is the
                 # same asset; retain its original immutable storage location.
@@ -201,8 +200,7 @@ class Store:
         case["active_revision_id"] = revision_id
         case["status"] = "ready"
         acquisition = self.revision(case_id, revision_id).get("acquisition")
-        case.update(selected_series_uid=acquisition.get("series_uid") if acquisition else None,
-                    phase=acquisition.get("phase") if acquisition else None)
+        case.update(selected_series_uid=acquisition.get("series_uid") if acquisition else None, phase=acquisition.get("phase") if acquisition else None)
         return self.save("cases", case)
 
     def commit_revision(self, revision, job=None, expected_active_revision_id=None, review_guard=None):
@@ -218,16 +216,19 @@ class Store:
                 raise conflict("The active revision changed; start from the current revision")
             review = None
             if review_guard:
-                row = con.execute("SELECT data FROM review_sessions WHERE id=? AND case_id=?",
-                                  (review_guard["session_id"], revision["case_id"])).fetchone()
+                row = con.execute("SELECT data FROM review_sessions WHERE id=? AND case_id=?", (review_guard["session_id"], revision["case_id"])).fetchone()
                 if row is None:
                     raise NotFound("Review session not found")
                 review = json.loads(row["data"])
-                if (not job or review["generation"] != review_guard["generation"]
-                        or review["status"] != "accepting" or review.get("job_id") != job["id"]
-                        or review["revision_id"] != revision.get("parent_id")
-                        or not review.get("candidate")
-                        or review["candidate"]["generation"] != review["generation"]):
+                if (
+                    not job
+                    or review["generation"] != review_guard["generation"]
+                    or review["status"] != "accepting"
+                    or review.get("job_id") != job["id"]
+                    or review["revision_id"] != revision.get("parent_id")
+                    or not review.get("candidate")
+                    or review["candidate"]["generation"] != review["generation"]
+                ):
                     raise ReviewConflict("The correction draft changed; review the current candidate before accepting")
                 if case.get("active_revision_id") != review["revision_id"]:
                     raise ReviewConflict("The active revision changed; start a review from the current revision")
@@ -252,8 +253,9 @@ class Store:
         if review.get("schema_version", 1) < 2:
             review["prompts"] = [dict(prompt, kind=prompt.get("kind", "point")) for prompt in review["prompts"]]
             review["options"] = {"autozoom": True, "start_empty": False}
-            review["batches"] = ([dict(end=i + 1, autozoom=True, full_refine=False, legacy=True)
-                                  for i in range(len(review["prompts"]))] if review.get("candidate") else [])
+            review["batches"] = (
+                [dict(end=i + 1, autozoom=True, full_refine=False, legacy=True) for i in range(len(review["prompts"]))] if review.get("candidate") else []
+            )
             if review.get("candidate"):
                 review["candidate"].setdefault("prompts_snapshot", review["prompts"])
                 review["candidate"].setdefault("options", review["options"])
@@ -313,37 +315,46 @@ class Store:
             options_changed = next_options != review["options"]
             batches = [] if options_changed or discard else [batch for batch in review["batches"] if batch["end"] <= common]
             candidate = review.get("candidate")
-            if (discard or options_changed or not candidate
-                    or candidate.get("batches_snapshot") != batches
-                    or next_prompts[:len(candidate.get("prompts_snapshot", []))] != candidate.get("prompts_snapshot")):
+            if (
+                discard
+                or options_changed
+                or not candidate
+                or candidate.get("batches_snapshot") != batches
+                or next_prompts[: len(candidate.get("prompts_snapshot", []))] != candidate.get("prompts_snapshot")
+            ):
                 candidate = None
-            elif (next_prompts == candidate["prompts_snapshot"]
-                  and next_relationship == candidate.get("relationship", INDEPENDENT)):
+            elif next_prompts == candidate["prompts_snapshot"] and next_relationship == candidate.get("relationship", INDEPENDENT):
                 # Undoing only unapplied marks restores the exact saved result,
                 # with a fresh immutable alias and no inference work.
-                candidate = {**candidate, "generation": generation + 1,
-                             "revision_id": f"review-{session_id}-{generation + 1}"}
+                candidate = {**candidate, "generation": generation + 1, "revision_id": f"review-{session_id}-{generation + 1}"}
                 review.setdefault("candidates", {})[str(generation + 1)] = candidate
             if review["method"] == "direct" and candidate is None and not discard:
                 # Applied paint/erase undo can restore an exact immutable
                 # checkpoint immediately; no model or dense replay is needed.
                 for previous_candidate in reversed(list(review.get("candidates", {}).values())):
-                    if (previous_candidate.get("prompts_snapshot") == next_prompts
-                            and previous_candidate.get("options") == next_options
-                            and previous_candidate.get("batches_snapshot") == batches
-                            and previous_candidate.get("relationship", INDEPENDENT) == next_relationship):
-                        candidate = {**previous_candidate, "generation": generation + 1,
-                                     "revision_id": f"review-{session_id}-{generation + 1}"}
+                    if (
+                        previous_candidate.get("prompts_snapshot") == next_prompts
+                        and previous_candidate.get("options") == next_options
+                        and previous_candidate.get("batches_snapshot") == batches
+                        and previous_candidate.get("relationship", INDEPENDENT) == next_relationship
+                    ):
+                        candidate = {**previous_candidate, "generation": generation + 1, "revision_id": f"review-{session_id}-{generation + 1}"}
                         review.setdefault("candidates", {})[str(generation + 1)] = candidate
                         break
             if candidate and candidate["generation"] == generation + 1 and candidate.get("preview_3d_ready"):
-                candidate["model_manifest_url"] = (
-                    f"/api/cases/{case_id}/revisions/{candidate['revision_id']}/model-manifest")
-            review.update(generation=generation + 1, candidate=candidate, job_id=None, error=None,
-                          prompts=next_prompts, options=next_options, batches=batches,
-                          relationship=next_relationship,
-                          status="discarded" if discard else "ready" if candidate and candidate["generation"] == generation + 1 else "draft",
-                          updated_at=now())
+                candidate["model_manifest_url"] = f"/api/cases/{case_id}/revisions/{candidate['revision_id']}/model-manifest"
+            review.update(
+                generation=generation + 1,
+                candidate=candidate,
+                job_id=None,
+                error=None,
+                prompts=next_prompts,
+                options=next_options,
+                batches=batches,
+                relationship=next_relationship,
+                status="discarded" if discard else "ready" if candidate and candidate["generation"] == generation + 1 else "draft",
+                updated_at=now(),
+            )
             con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
         return review
 
@@ -367,12 +378,18 @@ class Store:
                     raise ReviewConflict("This correction session already has a queued or running job")
             if kind == "review_predict":
                 applied = review["batches"][-1]["end"] if review["batches"] else 0
-                direct_replay = (review["method"] == "direct" and bool(review["prompts"])
-                                 and not review.get("candidate"))
+                direct_replay = review["method"] == "direct" and bool(review["prompts"]) and not review.get("candidate")
                 policy_only = relationship_dirty(review) and len(review["prompts"]) <= applied and not full_refine
                 reusable = review.get("candidate")
-                if policy_only and reusable and (reusable.get("prompts_snapshot") != review["prompts"]
-                        or reusable.get("options") != review["options"] or reusable.get("batches_snapshot") != review["batches"]):
+                if (
+                    policy_only
+                    and reusable
+                    and (
+                        reusable.get("prompts_snapshot") != review["prompts"]
+                        or reusable.get("options") != review["options"]
+                        or reusable.get("batches_snapshot") != review["batches"]
+                    )
+                ):
                     reusable = None
                 if policy_only and not reusable and review["prompts"]:
                     policy_only = False
@@ -387,8 +404,7 @@ class Store:
                 candidate = review.get("candidate")
                 if not candidate or candidate["generation"] != generation:
                     raise ReviewConflict("Generate and inspect a candidate before accepting")
-                if (not candidate["summary"]["after_voxels"]
-                        and not (review["method"] == "direct" and not review.get("new_structure"))):
+                if not candidate["summary"]["after_voxels"] and not (review["method"] == "direct" and not review.get("new_structure")):
                     raise ValueError("An empty candidate cannot be accepted; revise the prompts")
                 if not candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]) and not candidate.get("relationship_changed"):
                     raise ValueError("The candidate is unchanged; no correction is needed")
@@ -401,18 +417,29 @@ class Store:
                     payload["relationship_only"] = True
                     payload["reuse_candidate_revision_id"] = reusable["revision_id"] if reusable else None
                 else:
-                    payload["batches"] = (review["batches"] if direct_replay and len(review["prompts"]) <= applied else
-                        [*review["batches"], dict(end=len(review["prompts"]),
-                            autozoom=review["options"]["autozoom"], full_refine=full_refine)])
+                    payload["batches"] = (
+                        review["batches"]
+                        if direct_replay and len(review["prompts"]) <= applied
+                        else [*review["batches"], dict(end=len(review["prompts"]), autozoom=review["options"]["autozoom"], full_refine=full_refine)]
+                    )
             payload["session_id"] = session_id
             if kind == "review_accept":
                 payload["candidate_revision_id"] = review["candidate"]["revision_id"]
-            job = dict(id=identifier(), case_id=case_id, kind=kind, status="queued", stage="Queued", error=None,
-                       revision_id=None, created_at=now(), payload=payload, cancel_requested=False,
-                       review_session_id=session_id)
+            job = dict(
+                id=identifier(),
+                case_id=case_id,
+                kind=kind,
+                status="queued",
+                stage="Queued",
+                error=None,
+                revision_id=None,
+                created_at=now(),
+                payload=payload,
+                cancel_requested=False,
+                review_session_id=session_id,
+            )
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
-            review.update(status="predicting" if kind == "review_predict" else "accepting", job_id=job["id"],
-                          error=None, updated_at=now())
+            review.update(status="predicting" if kind == "review_predict" else "accepting", job_id=job["id"], error=None, updated_at=now())
             con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
         return job
 
@@ -424,8 +451,7 @@ class Store:
             if current.get("cancel_requested") or current["status"] != "running":
                 raise InterruptedError("Interactive prediction cancelled before publication")
             review = self._review_row(con, job["payload"]["session_id"], job["case_id"])
-            if (review["generation"] != job["payload"]["generation"] or review["status"] != "predicting"
-                    or review.get("job_id") != job["id"]):
+            if review["generation"] != job["payload"]["generation"] or review["status"] != "predicting" or review.get("job_id") != job["id"]:
                 raise InterruptedError("Interactive prediction superseded by newer prompts")
             generation = str(review["generation"])
             if generation in review.get("candidates", {}):
@@ -446,10 +472,10 @@ class Store:
                 row = con.execute("SELECT data FROM jobs WHERE id=?", (review["job_id"],)).fetchone()
                 job = json.loads(row["data"]) if row else None
                 if job is None or job["status"] in ("failed", "cancelled"):
-                    error = (job.get("error") or "Correction job cancelled; your prompts are saved"
-                             if job else "Correction job unavailable; your prompts are saved")
-                    review.update(status="ready" if review.get("candidate") else "draft",
-                                  error=error, updated_at=now())
+                    error = (
+                        job.get("error") or "Correction job cancelled; your prompts are saved" if job else "Correction job unavailable; your prompts are saved"
+                    )
+                    review.update(status="ready" if review.get("candidate") else "draft", error=error, updated_at=now())
                     con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
         return review
 
@@ -464,6 +490,7 @@ class Store:
             revision.setdefault("processing_timings", {})["detailed_export_seconds"] = seconds
             con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
             from .service import atomic_json
+
             atomic_json(Path(revision["directory"]) / "revision.json", revision)
 
     def set_review_status(self, case_id, revision_id, status):
@@ -478,6 +505,7 @@ class Store:
             revision["review_status"] = status
             con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
             from .service import atomic_json
+
             atomic_json(Path(revision["directory"]) / "revision.json", revision)
         return revision
 
@@ -492,13 +520,24 @@ class Store:
             revision["model_manifest_url"] = f"/api/cases/{case_id}/revisions/{revision_id}/model-manifest"
             con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
             from .service import atomic_json
+
             atomic_json(Path(revision["directory"]) / "revision.json", revision)
         return revision
 
     def enqueue(self, case_id, kind, payload):
         self.get("cases", case_id)
-        job = dict(id=identifier(), case_id=case_id, kind=kind, status="queued", stage="Queued", error=None,
-                   revision_id=None, created_at=now(), payload=payload, cancel_requested=False)
+        job = dict(
+            id=identifier(),
+            case_id=case_id,
+            kind=kind,
+            status="queued",
+            stage="Queued",
+            error=None,
+            revision_id=None,
+            created_at=now(),
+            payload=payload,
+            cancel_requested=False,
+        )
         return self.save("jobs", job)
 
     def claim(self, lane=None):
@@ -511,10 +550,8 @@ class Store:
             raise ValueError("Unknown worker lane")
 
         def next_job(con):
-            queued = [json.loads(row["data"]) for row in
-                      con.execute("SELECT data FROM jobs WHERE status='queued' ORDER BY rowid")]
-            return min((job for job in queued if lane is None or job_lane(job) == lane),
-                       key=job_priority, default=None)
+            queued = [json.loads(row["data"]) for row in con.execute("SELECT data FROM jobs WHERE status='queued' ORDER BY rowid")]
+            return min((job for job in queued if lane is None or job_lane(job) == lane), key=job_priority, default=None)
 
         with self.connection() as con:
             if next_job(con) is None:
@@ -568,12 +605,15 @@ def public_revision(record):
         result["reference_image_id"] = asset["id"]
         result["image_asset"] = public_image_asset(asset)
     result.setdefault("kind", "segmentation" if record["structures"] else "ct")
-    result["structures"] = [{k: v for k, v in s.items() if k != "mask_file"}
-                            for s in (bind_structures(record["structures"], asset["id"])
-                                      if asset is not None else record["structures"])]
+    result["structures"] = [
+        {k: v for k, v in s.items() if k != "mask_file"}
+        for s in (bind_structures(record["structures"], asset["id"]) if asset is not None else record["structures"])
+    ]
     manifest = record.get("inference_manifest")
     if manifest:
-        result["model_provenance"] = {k: manifest[k] for k in ("engine", "engine_version", "nnunet_version", "resolution", "started_at", "finished_at") if k in manifest}
+        result["model_provenance"] = {
+            k: manifest[k] for k in ("engine", "engine_version", "nnunet_version", "resolution", "started_at", "finished_at") if k in manifest
+        }
         result["model_provenance"]["tasks"] = [t["task"] for t in manifest.get("tasks", [])]
         result["model_provenance"]["options"] = manifest.get("options")
         result["model_provenance"]["model_fingerprint_digest"] = manifest.get("model_fingerprint", {}).get("digest")

@@ -5,6 +5,7 @@ It follows slicer_cinematic_heart.py's segment median selection. Native NIfTI
 scaling and patient geometry remain authoritative. Computation uses bounded
 slabs and a size-limited disk-backed sample spool, rather than a full CT copy.
 """
+
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -20,7 +21,7 @@ from . import imaging
 
 _IMPLEMENTATION = "cinematic-reference-v1"
 _SLAB_VOXELS = 262_144
-_MAX_SAMPLES = 64 * 1024 ** 2  # At most 512 MiB of temporary float64 samples.
+_MAX_SAMPLES = 64 * 1024**2  # At most 512 MiB of temporary float64 samples.
 _MAX_SEGMENTS = 128
 _CACHE_ENTRIES = 64
 _CACHE = OrderedDict()
@@ -99,10 +100,8 @@ def _regions(shape):
         size = min(extent, remaining)
         block.append(size)
         remaining = max(1, remaining // size)
-    for start_k, start_j, start_i in product(range(0, shape[2], block[2]),
-                                           range(0, shape[1], block[1]), range(0, shape[0], block[0])):
-        yield tuple(slice(start, min(extent, start + size))
-                    for start, extent, size in zip((start_i, start_j, start_k), shape, block))
+    for start_k, start_j, start_i in product(range(0, shape[2], block[2]), range(0, shape[1], block[1]), range(0, shape[0], block[0])):
+        yield tuple(slice(start, min(extent, start + size)) for start, extent, size in zip((start_i, start_j, start_k), shape, block))
 
 
 def reference_values(revision, temporary_dir=None):
@@ -119,8 +118,12 @@ def reference_values(revision, temporary_dir=None):
     if not (aorta or left_heart):
         raise ValueError("No aorta or left-heart blood-pool segment was found; enter the cinematic HU values manually")
     with _LOCK:
-        identity = (_IMPLEMENTATION, revision["id"], _identity(revision["ct_file"]),
-                    tuple((item["id"], item["name"], _identity(item["mask_file"])) for item in selected))
+        identity = (
+            _IMPLEMENTATION,
+            revision["id"],
+            _identity(revision["ct_file"]),
+            tuple((item["id"], item["name"], _identity(item["mask_file"])) for item in selected),
+        )
         if identity in _CACHE:
             _CACHE.move_to_end(identity)
             return deepcopy(_CACHE[identity])
@@ -139,16 +142,29 @@ def reference_values(revision, temporary_dir=None):
         if blood_hu is None:
             raise ValueError("The blood-pool segments contain no finite tissue HU above -900; enter the cinematic HU values manually")
         if blood_hu - myocardial_hu < 100:
-            raise ValueError("Blood-pool HU must be at least 100 HU above myocardium; measured %.1f / %.1f HU. Enter the cinematic HU values manually" % (myocardial_hu, blood_hu))
-        after = (_IMPLEMENTATION, revision["id"], _identity(revision["ct_file"]),
-                 tuple((item["id"], item["name"], _identity(item["mask_file"])) for item in selected))
+            raise ValueError(
+                "Blood-pool HU must be at least 100 HU above myocardium; measured %.1f / %.1f HU. Enter the cinematic HU values manually"
+                % (myocardial_hu, blood_hu)
+            )
+        after = (
+            _IMPLEMENTATION,
+            revision["id"],
+            _identity(revision["ct_file"]),
+            tuple((item["id"], item["name"], _identity(item["mask_file"])) for item in selected),
+        )
         if after != identity:
             raise ValueError("Cardiac reference input changed while reading; retry the request")
-        result = {"schema_version": 1, "myocardium_hu": myocardial_hu, "blood_hu": blood_hu,
-                  "myocardium_structure_ids": [item["id"] for item in myocardium],
-                  "blood_structure_ids": [item["id"] for item in blood_structures],
-                  "myocardium_voxels": myocardial_count, "blood_voxels": blood_count,
-                  "blood_source": blood_source, "method": "median_hu_above_minus900"}
+        result = {
+            "schema_version": 1,
+            "myocardium_hu": myocardial_hu,
+            "blood_hu": blood_hu,
+            "myocardium_structure_ids": [item["id"] for item in myocardium],
+            "blood_structure_ids": [item["id"] for item in blood_structures],
+            "myocardium_voxels": myocardial_count,
+            "blood_voxels": blood_count,
+            "blood_source": blood_source,
+            "method": "median_hu_above_minus900",
+        }
         _CACHE[identity] = result
         while len(_CACHE) > _CACHE_ENTRIES:
             _CACHE.popitem(last=False)

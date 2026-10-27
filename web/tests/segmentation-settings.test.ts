@@ -3,14 +3,28 @@ import { restoreSegmentationSettings } from '../src/lib/segmentation-settings';
 import type { SegmentationCatalog, SegmentationTask } from '../src/types';
 
 const task = (id: string, extra: Partial<SegmentationTask> = {}): SegmentationTask => ({
-  id, label: id, modality: 'CT', classes: [id], class_count: 1, license_required: false, license_available: true,
-  robust_crop_default: false, robust_crop_supported: true, body_seg_supported: true, ...extra,
+  id,
+  label: id,
+  modality: 'CT',
+  classes: [id],
+  class_count: 1,
+  license_required: false,
+  license_available: true,
+  robust_crop_default: false,
+  robust_crop_supported: true,
+  body_seg_supported: true,
+  ...extra,
 });
 const catalog: SegmentationCatalog = {
-  engine_version: 'test', remove_small_blobs_mm3: 200,
+  engine_version: 'test',
+  remove_small_blobs_mm3: 200,
   defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
-  tasks: [task('total'), task('lung_vessels'), task('required', { robust_crop_default: true, body_seg_supported: false }),
-    task('licensed', { license_required: true, license_available: false })],
+  tasks: [
+    task('total'),
+    task('lung_vessels'),
+    task('required', { robust_crop_default: true, body_seg_supported: false }),
+    task('licensed', { license_required: true, license_available: false }),
+  ],
 };
 
 describe('restore segmentation settings', () => {
@@ -27,7 +41,10 @@ describe('restore segmentation settings', () => {
   });
   it('forces required crop and clears options unsupported by the selected task', () => {
     expect(restoreSegmentationSettings(catalog, { tasks: ['required'], robust_crop: false, body_seg: true })).toEqual({
-      task: 'required', robust_crop: true, body_seg: false, remove_small_blobs: false,
+      task: 'required',
+      robust_crop: true,
+      body_seg: false,
+      remove_small_blobs: false,
     });
   });
   it.each(['licensed', 'removed-task'])('falls back safely from unavailable task %s', id => {

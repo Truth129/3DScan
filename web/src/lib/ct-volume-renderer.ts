@@ -282,41 +282,53 @@ void main() {
 
 /** Native voxel centres -> the existing (-R,S,A) metre scene, including shear/reflection. */
 export function volumeIJKToWorld(descriptor: Pick<VolumeDescriptor, 'affine_ras'>): THREE.Matrix4 {
-  const ras = new THREE.Matrix4().set(...descriptor.affine_ras.flat() as Parameters<THREE.Matrix4['set']>);
-  return new THREE.Matrix4().set(-.001,0,0,0, 0,0,.001,0, 0,.001,0,0, 0,0,0,1).multiply(ras);
+  const ras = new THREE.Matrix4().set(...(descriptor.affine_ras.flat() as Parameters<THREE.Matrix4['set']>));
+  return new THREE.Matrix4().set(-0.001, 0, 0, 0, 0, 0, 0.001, 0, 0, 0.001, 0, 0, 0, 0, 0, 1).multiply(ras);
 }
 
 /** Physical opacity correction, also used by reference tests. */
 export function volumeStepOpacity(alpha: number, distanceMM: number, density = 1): number {
-  return 1-Math.pow(Math.max(1-Math.max(0,Math.min(1,alpha)),1e-7),Math.max(0,distanceMM)*Math.max(0,density));
+  return 1 - Math.pow(Math.max(1 - Math.max(0, Math.min(1, alpha)), 1e-7), Math.max(0, distanceMM) * Math.max(0, density));
 }
 
-export function volumeRenderSize(width: number, height: number, interacting: boolean, quality: CTVolumeSettings['quality'], cinematic = false): [number,number] {
+export function volumeRenderSize(
+  width: number,
+  height: number,
+  interacting: boolean,
+  quality: CTVolumeSettings['quality'],
+  cinematic = false,
+): [number, number] {
   const maximum = interacting ? 320 : cinematic ? (quality === 'detail' ? 1024 : 768) : quality === 'detail' ? 1536 : 1024;
-  const scale = Math.min(1,maximum/Math.max(width,height));
-  return [Math.max(1,Math.round(width*scale)),Math.max(1,Math.round(height*scale))];
+  const scale = Math.min(1, maximum / Math.max(width, height));
+  return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))];
 }
 
 /** Interactive previews trade samples for motion; settled frames resolve native CT detail. */
 export function volumeStepMM(minimumSpacingMM: number, interacting: boolean, quality: CTVolumeSettings['quality']): number {
-  return interacting ? Math.max(1.2,minimumSpacingMM*2)
-    : quality === 'detail' ? Math.max(.12,minimumSpacingMM*.5) : Math.max(.2,minimumSpacingMM*.75);
+  return interacting
+    ? Math.max(1.2, minimumSpacingMM * 2)
+    : quality === 'detail'
+      ? Math.max(0.12, minimumSpacingMM * 0.5)
+      : Math.max(0.2, minimumSpacingMM * 0.75);
 }
 
 /** Secondary rays are absent during navigation and for all ordinary presets. */
 export function volumeShadowSamples(settings: CTVolumeSettings, interacting: boolean): number {
-  return settings.preset !== 'CT-Cinematic-Heart' || interacting || settings.cinematic.shadows <= 0 ? 0
-    : settings.quality === 'detail' ? 12 : 8;
+  return settings.preset !== 'CT-Cinematic-Heart' || interacting || settings.cinematic.shadows <= 0 ? 0 : settings.quality === 'detail' ? 12 : 8;
 }
 
 /** Camera light elevation 25°, azimuth -20°, matching the supplied Slicer script. */
 export function cinematicKeyDirection(camera: THREE.Camera, output = new THREE.Vector3()): THREE.Vector3 {
-  const elevation=25*Math.PI/180,azimuth=-20*Math.PI/180;
-  return output.set(Math.sin(azimuth)*Math.cos(elevation),Math.sin(elevation),Math.cos(azimuth)*Math.cos(elevation))
+  const elevation = (25 * Math.PI) / 180,
+    azimuth = (-20 * Math.PI) / 180;
+  return output
+    .set(Math.sin(azimuth) * Math.cos(elevation), Math.sin(elevation), Math.cos(azimuth) * Math.cos(elevation))
     .transformDirection(camera.matrixWorld);
 }
 
-function linear(value: number) { return value <= .04045 ? value/12.92 : ((value+.055)/1.055)**2.4; }
+function linear(value: number) {
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
 
 /** Owns only a LUT and bounded render target; borrows the existing resident CT. */
 export class CTVolumeRenderer {
@@ -324,8 +336,8 @@ export class CTVolumeRenderer {
   private rayScene = new THREE.Scene();
   private displayScene = new THREE.Scene();
   private screenCamera = new THREE.Camera();
-  private quad: THREE.Mesh<THREE.PlaneGeometry,THREE.ShaderMaterial>;
-  private displayQuad: THREE.Mesh<THREE.PlaneGeometry,THREE.ShaderMaterial>;
+  private quad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  private displayQuad: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   private target?: THREE.WebGLRenderTarget;
   private planeTarget?: THREE.WebGLRenderTarget;
   private planeScene = new THREE.Scene();
@@ -346,285 +358,469 @@ export class CTVolumeRenderer {
   private diagonalMM = 1;
   private planeActive = false;
   private surfaceLayers?: VolumeSurfaceLayers;
-  private stackAccum: THREE.WebGLRenderTarget[]=[];
-  private stackActive=false;
-  private stackSurfaceCount=0;
-  private stackPeels=0;
-  private stackTail=false;
+  private stackAccum: THREE.WebGLRenderTarget[] = [];
+  private stackActive = false;
+  private stackSurfaceCount = 0;
+  private stackPeels = 0;
+  private stackTail = false;
   private maskBinding?: GPUCTMaskBinding;
   private maskIDs: readonly string[] = [];
   private maskMode: CTVolumeMaskMode = 'off';
 
   constructor(private renderer: THREE.WebGLRenderer) {
-    this.transfer = new THREE.DataTexture(new Float32Array(LUT_SIZE*4),LUT_SIZE,1,THREE.RGBAFormat,THREE.FloatType);
+    this.transfer = new THREE.DataTexture(new Float32Array(LUT_SIZE * 4), LUT_SIZE, 1, THREE.RGBAFormat, THREE.FloatType);
     this.transfer.minFilter = this.transfer.magFilter = THREE.NearestFilter;
-    this.transfer.generateMipmaps = false; this.transfer.flipY = false;
+    this.transfer.generateMipmaps = false;
+    this.transfer.flipY = false;
     // Integer samplers require a compatible texture even when a uniform branch
     // disables sampling. Three's normalized RGBA fallback is not a valid R8UI.
-    this.emptyMask=new THREE.DataTexture(new Uint8Array(1),1,1,THREE.RedIntegerFormat,THREE.UnsignedByteType);
-    this.emptyMask.internalFormat='R8UI';this.emptyMask.minFilter=this.emptyMask.magFilter=THREE.NearestFilter;
-    this.emptyMask.generateMipmaps=false;this.emptyMask.unpackAlignment=1;this.emptyMask.needsUpdate=true;
-    this.material = new THREE.ShaderMaterial({ name:'scan3d-ct-volume-raymarch',glslVersion:THREE.GLSL3,
-      uniforms:{uVolume:{value:null},uTransfer:{value:this.transfer},uCTSize:{value:new THREE.Vector3()},
-        uClipToWorld:{value:this.clipToWorld},uWorldToIJK:{value:new THREE.Matrix4()},uGradientToWorld:{value:new THREE.Matrix3()},
-        uCropLow:{value:new THREE.Vector3()},uCropHigh:{value:new THREE.Vector3()},uSlope:{value:1},uIntercept:{value:0},
-        uShift:{value:0},uDensity:{value:1},uStepMM:{value:1},uTransferRange:{value:new THREE.Vector2()},uLighting:{value:new THREE.Vector4(.25,.75,.1,32)},
-        uShade:{value:true},uCinematic:{value:false},uLightAmbientFactor:{value:0},uKeyDirection:{value:new THREE.Vector3()},
-        uShadowStrength:{value:0},uShadowReachMM:{value:0},uShadowSamples:{value:0},
-        uGradientOpacity:{value:false},uGradientMagnitudeScale:{value:1},
-        uOpacityPoints:{value:Array.from({length:16},()=>new THREE.Vector2())},uOpacityCount:{value:0},
-        uGradientPoints:{value:Array.from({length:8},()=>new THREE.Vector2())},uGradientCount:{value:0},
-        uHasPlane:{value:false},uPlaneColor:{value:null},uPlaneDepth:{value:null},
-        uStack:{value:false},uStackFirst:{value:true},uStackHasEnd:{value:false},uStackAccum:{value:null},
-        uStackStartDepth:{value:null},uStackEndColor:{value:null},uStackEndDepth:{value:null},
-        uVolumeMasks:{value:this.emptyMask},uVolumeMaskInfo:{value:null},uVolumeMaskWidth:{value:1},
-        uMaskIndices:{value:new Int32Array(128)},uMaskCount:{value:0},uMaskMode:{value:0},uMaskReady:{value:false}},
-      vertexShader,fragmentShader,depthTest:false,depthWrite:false,blending:THREE.NoBlending,toneMapped:false });
-    this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2),this.material); this.quad.frustumCulled = false; this.rayScene.add(this.quad);
-    const display = new THREE.ShaderMaterial({glslVersion:THREE.GLSL3,uniforms:{uImage:{value:null},uBlackBackground:{value:false}},vertexShader,
-      fragmentShader:`precision highp float; uniform sampler2D uImage; uniform bool uBlackBackground; in vec2 vUv; out vec4 outColor;
+    this.emptyMask = new THREE.DataTexture(new Uint8Array(1), 1, 1, THREE.RedIntegerFormat, THREE.UnsignedByteType);
+    this.emptyMask.internalFormat = 'R8UI';
+    this.emptyMask.minFilter = this.emptyMask.magFilter = THREE.NearestFilter;
+    this.emptyMask.generateMipmaps = false;
+    this.emptyMask.unpackAlignment = 1;
+    this.emptyMask.needsUpdate = true;
+    this.material = new THREE.ShaderMaterial({
+      name: 'scan3d-ct-volume-raymarch',
+      glslVersion: THREE.GLSL3,
+      uniforms: {
+        uVolume: { value: null },
+        uTransfer: { value: this.transfer },
+        uCTSize: { value: new THREE.Vector3() },
+        uClipToWorld: { value: this.clipToWorld },
+        uWorldToIJK: { value: new THREE.Matrix4() },
+        uGradientToWorld: { value: new THREE.Matrix3() },
+        uCropLow: { value: new THREE.Vector3() },
+        uCropHigh: { value: new THREE.Vector3() },
+        uSlope: { value: 1 },
+        uIntercept: { value: 0 },
+        uShift: { value: 0 },
+        uDensity: { value: 1 },
+        uStepMM: { value: 1 },
+        uTransferRange: { value: new THREE.Vector2() },
+        uLighting: { value: new THREE.Vector4(0.25, 0.75, 0.1, 32) },
+        uShade: { value: true },
+        uCinematic: { value: false },
+        uLightAmbientFactor: { value: 0 },
+        uKeyDirection: { value: new THREE.Vector3() },
+        uShadowStrength: { value: 0 },
+        uShadowReachMM: { value: 0 },
+        uShadowSamples: { value: 0 },
+        uGradientOpacity: { value: false },
+        uGradientMagnitudeScale: { value: 1 },
+        uOpacityPoints: { value: Array.from({ length: 16 }, () => new THREE.Vector2()) },
+        uOpacityCount: { value: 0 },
+        uGradientPoints: { value: Array.from({ length: 8 }, () => new THREE.Vector2()) },
+        uGradientCount: { value: 0 },
+        uHasPlane: { value: false },
+        uPlaneColor: { value: null },
+        uPlaneDepth: { value: null },
+        uStack: { value: false },
+        uStackFirst: { value: true },
+        uStackHasEnd: { value: false },
+        uStackAccum: { value: null },
+        uStackStartDepth: { value: null },
+        uStackEndColor: { value: null },
+        uStackEndDepth: { value: null },
+        uVolumeMasks: { value: this.emptyMask },
+        uVolumeMaskInfo: { value: null },
+        uVolumeMaskWidth: { value: 1 },
+        uMaskIndices: { value: new Int32Array(128) },
+        uMaskCount: { value: 0 },
+        uMaskMode: { value: 0 },
+        uMaskReady: { value: false },
+      },
+      vertexShader,
+      fragmentShader,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NoBlending,
+      toneMapped: false,
+    });
+    this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material);
+    this.quad.frustumCulled = false;
+    this.rayScene.add(this.quad);
+    const display = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: { uImage: { value: null }, uBlackBackground: { value: false } },
+      vertexShader,
+      fragmentShader: `precision highp float; uniform sampler2D uImage; uniform bool uBlackBackground; in vec2 vUv; out vec4 outColor;
       void main() { vec4 pixel=texture(uImage,vUv); vec3 rgb=pixel.a>1e-6?pixel.rgb/pixel.a:vec3(0.);
         if (uBlackBackground) { outColor=vec4(pixel.rgb,1.); return; }
         outColor=linearToOutputTexel(vec4(rgb,pixel.a)); outColor.rgb*=outColor.a; }`,
-      depthTest:false,depthWrite:false,blending:THREE.NoBlending,toneMapped:false});
-    this.displayQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2),display); this.displayQuad.frustumCulled=false; this.displayScene.add(this.displayQuad);
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NoBlending,
+      toneMapped: false,
+    });
+    this.displayQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), display);
+    this.displayQuad.frustumCulled = false;
+    this.displayScene.add(this.displayQuad);
     this.updateTransfer();
   }
-  get ready() { return !!this.binding && !this.disposed; }
-  private get maskReady() {
-    const mask=this.maskBinding,binding=this.binding;
-    return this.maskMode==='off' || !!(binding && mask && mask.isCurrent()
-      && mask.ctKey===binding.descriptor.key && mask.ctTexture===binding.texture
-      && this.maskIDs.length>0 && this.maskIDs.length<=128
-      && this.maskIDs.every(id=>{
-        const index=mask.currentIndices.get(id);
-        return typeof id==='string' && id.length>0 && typeof index==='number' && Number.isInteger(index)
-          && index>=0 && index<mask.info.image.height;
-      }));
+  get ready() {
+    return !!this.binding && !this.disposed;
   }
-  get diagnostics() { return {ready:this.ready,frames:this.frameCount,width:this.lastWidth,height:this.lastHeight,
-    interacting:this.interacting,key:this.binding?.descriptor.key,texture:this.binding?.texture.uuid,
-    targetBytes:this.lastWidth*this.lastHeight*4,planeTargetBytes:this.planeTarget?this.planeTarget.width*this.planeTarget.height*8:0,planeActive:this.planeActive,
-    stackActive:this.stackActive,surfaceCount:this.stackSurfaceCount,peelCount:this.stackPeels,tailActive:this.stackTail,
-    stackTargetBytes:(this.surfaceLayers?.bytes??0)+this.stackAccum.reduce((sum,target)=>sum+target.width*target.height*8,0),
-    transferBytes:LUT_SIZE*16,cinematic:this.settings.preset==='CT-Cinematic-Heart',
-    shadowSamples:volumeShadowSamples(this.settings,this.interacting),maskReady:this.maskReady,maskMode:this.maskMode,
-    maskSelectedCount:this.maskIDs.length,maskKey:this.maskBinding?.key??''}; }
+  private get maskReady() {
+    const mask = this.maskBinding,
+      binding = this.binding;
+    return (
+      this.maskMode === 'off' ||
+      !!(
+        binding &&
+        mask &&
+        mask.isCurrent() &&
+        mask.ctKey === binding.descriptor.key &&
+        mask.ctTexture === binding.texture &&
+        this.maskIDs.length > 0 &&
+        this.maskIDs.length <= 128 &&
+        this.maskIDs.every(id => {
+          const index = mask.currentIndices.get(id);
+          return (
+            typeof id === 'string' && id.length > 0 && typeof index === 'number' && Number.isInteger(index) && index >= 0 && index < mask.info.image.height
+          );
+        })
+      )
+    );
+  }
+  get diagnostics() {
+    return {
+      ready: this.ready,
+      frames: this.frameCount,
+      width: this.lastWidth,
+      height: this.lastHeight,
+      interacting: this.interacting,
+      key: this.binding?.descriptor.key,
+      texture: this.binding?.texture.uuid,
+      targetBytes: this.lastWidth * this.lastHeight * 4,
+      planeTargetBytes: this.planeTarget ? this.planeTarget.width * this.planeTarget.height * 8 : 0,
+      planeActive: this.planeActive,
+      stackActive: this.stackActive,
+      surfaceCount: this.stackSurfaceCount,
+      peelCount: this.stackPeels,
+      tailActive: this.stackTail,
+      stackTargetBytes: (this.surfaceLayers?.bytes ?? 0) + this.stackAccum.reduce((sum, target) => sum + target.width * target.height * 8, 0),
+      transferBytes: LUT_SIZE * 16,
+      cinematic: this.settings.preset === 'CT-Cinematic-Heart',
+      shadowSamples: volumeShadowSamples(this.settings, this.interacting),
+      maskReady: this.maskReady,
+      maskMode: this.maskMode,
+      maskSelectedCount: this.maskIDs.length,
+      maskKey: this.maskBinding?.key ?? '',
+    };
+  }
   /** Borrow the current atlas; missing/stale selections always hide masked volume. */
   setMask(binding: GPUCTMaskBinding | undefined, ids: readonly string[], mode: CTVolumeMaskMode) {
     if (this.disposed) return;
-    if (!['off','inside','outside'].includes(mode)) throw new Error('Unsupported CT volume mask mode');
-    this.maskBinding=binding;this.maskIDs=[...new Set(ids)];this.maskMode=mode;
+    if (!['off', 'inside', 'outside'].includes(mode)) throw new Error('Unsupported CT volume mask mode');
+    this.maskBinding = binding;
+    this.maskIDs = [...new Set(ids)];
+    this.maskMode = mode;
     this.updateMask();
   }
   private updateMask() {
-    const ready=this.maskReady,mask=this.maskBinding,uniforms=this.material.uniforms;
-    const bound=ready&&this.maskMode!=='off'&&mask;
-    uniforms.uMaskMode.value=this.maskMode==='off'?0:this.maskMode==='inside'?1:2;
-    uniforms.uMaskReady.value=ready;
-    uniforms.uMaskCount.value=ready&&this.maskMode!=='off'?this.maskIDs.length:0;
-    uniforms.uVolumeMasks.value=bound?bound.texture:this.emptyMask;
-    uniforms.uVolumeMaskInfo.value=bound?bound.info:null;
-    uniforms.uVolumeMaskWidth.value=bound?bound.width:1;
+    const ready = this.maskReady,
+      mask = this.maskBinding,
+      uniforms = this.material.uniforms;
+    const bound = ready && this.maskMode !== 'off' && mask;
+    uniforms.uMaskMode.value = this.maskMode === 'off' ? 0 : this.maskMode === 'inside' ? 1 : 2;
+    uniforms.uMaskReady.value = ready;
+    uniforms.uMaskCount.value = ready && this.maskMode !== 'off' ? this.maskIDs.length : 0;
+    uniforms.uVolumeMasks.value = bound ? bound.texture : this.emptyMask;
+    uniforms.uVolumeMaskInfo.value = bound ? bound.info : null;
+    uniforms.uVolumeMaskWidth.value = bound ? bound.width : 1;
     if (bound) {
-      const indices=uniforms.uMaskIndices.value as Int32Array;
-      this.maskIDs.forEach((id,index)=>{indices[index]=bound.currentIndices.get(id)!;});
+      const indices = uniforms.uMaskIndices.value as Int32Array;
+      this.maskIDs.forEach((id, index) => {
+        indices[index] = bound.currentIndices.get(id)!;
+      });
     }
   }
   setVolume(binding?: GPUCTBinding) {
     if (this.disposed) return;
     if (binding?.texture === this.binding?.texture && binding?.descriptor.key === this.binding?.descriptor.key) return;
     this.binding = binding;
-    if (!binding) this.planeActive=false;
+    if (!binding) this.planeActive = false;
     this.material.uniforms.uVolume.value = binding?.texture ?? null;
-    if (!binding) { this.updateMask(); return; }
-    const {descriptor} = binding;
-    this.material.defines = descriptor.dtype === 'int16' ? {CT_SIGNED:1} : descriptor.dtype === 'uint16' ? {CT_UNSIGNED:1} : {};
+    if (!binding) {
+      this.updateMask();
+      return;
+    }
+    const { descriptor } = binding;
+    this.material.defines = descriptor.dtype === 'int16' ? { CT_SIGNED: 1 } : descriptor.dtype === 'uint16' ? { CT_UNSIGNED: 1 } : {};
     this.material.needsUpdate = true;
     this.material.uniforms.uCTSize.value.set(...descriptor.shape);
     const toWorld = volumeIJKToWorld(descriptor);
-    const spacing = [0,1,2].map(axis => new THREE.Vector3().setFromMatrixColumn(toWorld,axis).length()*1000);
+    const spacing = [0, 1, 2].map(axis => new THREE.Vector3().setFromMatrixColumn(toWorld, axis).length() * 1000);
     this.minimumSpacingMM = Math.min(...spacing);
     // A conservative physical extent also covers reflected and sheared grids.
-    this.diagonalMM=spacing.reduce((sum,value,axis)=>sum+value*descriptor.shape[axis],0);
+    this.diagonalMM = spacing.reduce((sum, value, axis) => sum + value * descriptor.shape[axis], 0);
     // VTK's gradient-opacity magnitude uses the mean-spacing-scaled central
     // derivative. The inverse transpose extends this to reflected/sheared grids.
-    this.material.uniforms.uGradientMagnitudeScale.value = spacing.reduce((a,b)=>a+b,0)/3*.001;
+    this.material.uniforms.uGradientMagnitudeScale.value = (spacing.reduce((a, b) => a + b, 0) / 3) * 0.001;
     this.material.uniforms.uWorldToIJK.value.copy(toWorld).invert();
     this.material.uniforms.uGradientToWorld.value.getNormalMatrix(toWorld);
-    this.material.uniforms.uSlope.value = descriptor.slope; this.material.uniforms.uIntercept.value = descriptor.intercept;
+    this.material.uniforms.uSlope.value = descriptor.slope;
+    this.material.uniforms.uIntercept.value = descriptor.intercept;
     this.updateCrop();
     this.updateMask();
   }
   setSettings(settings: CTVolumeSettings) {
-    const next=freshVolumeSettings(settings);
-    const presetChanged = next.preset !== this.settings.preset || (next.preset === 'MR-SignalWindow' && (next.signal_window.window !== this.settings.signal_window.window || next.signal_window.level !== this.settings.signal_window.level || next.signal_window.invert !== this.settings.signal_window.invert)) || (next.preset==='CT-Cinematic-Heart'
-      && (next.cinematic.myocardiumHU!==this.settings.cinematic.myocardiumHU || next.cinematic.bloodHU!==this.settings.cinematic.bloodHU));
+    const next = freshVolumeSettings(settings);
+    const presetChanged =
+      next.preset !== this.settings.preset ||
+      (next.preset === 'MR-SignalWindow' &&
+        (next.signal_window.window !== this.settings.signal_window.window ||
+          next.signal_window.level !== this.settings.signal_window.level ||
+          next.signal_window.invert !== this.settings.signal_window.invert)) ||
+      (next.preset === 'CT-Cinematic-Heart' &&
+        (next.cinematic.myocardiumHU !== this.settings.cinematic.myocardiumHU || next.cinematic.bloodHU !== this.settings.cinematic.bloodHU));
     this.settings = next;
-    this.material.uniforms.uShift.value = this.settings.shift; this.material.uniforms.uDensity.value = this.settings.density;
+    this.material.uniforms.uShift.value = this.settings.shift;
+    this.material.uniforms.uDensity.value = this.settings.density;
     if (presetChanged) this.updateTransfer();
     this.updateCrop();
   }
-  setInteracting(value: boolean) { this.interacting = value; }
+  setInteracting(value: boolean) {
+    this.interacting = value;
+  }
   private updateTransfer() {
-    const preset=getVolumePreset(this.settings.preset,this.settings.cinematic,this.settings.signal_window), range=preset.transferRange;
+    const preset = getVolumePreset(this.settings.preset, this.settings.cinematic, this.settings.signal_window),
+      range = preset.transferRange;
     this.material.uniforms.uTransferRange.value.set(...range);
     const pixels = this.transfer.image.data as Float32Array;
-    const cinematic=this.settings.preset==='CT-Cinematic-Heart';
-    for (let i=0;i<LUT_SIZE;i++) {
-      const hu=range[0]+i*(range[1]-range[0])/(LUT_SIZE-1), rgba=samplePresetTransfer(preset,hu);
-      pixels.set(cinematic ? rgba : [linear(rgba[0]),linear(rgba[1]),linear(rgba[2]),rgba[3]],i*4);
+    const cinematic = this.settings.preset === 'CT-Cinematic-Heart';
+    for (let i = 0; i < LUT_SIZE; i++) {
+      const hu = range[0] + (i * (range[1] - range[0])) / (LUT_SIZE - 1),
+        rgba = samplePresetTransfer(preset, hu);
+      pixels.set(cinematic ? rgba : [linear(rgba[0]), linear(rgba[1]), linear(rgba[2]), rgba[3]], i * 4);
     }
-    this.transfer.needsUpdate=true;
-    this.material.uniforms.uLighting.value.set(preset.ambient,preset.diffuse,preset.specular,preset.specularPower);
-    this.material.uniforms.uShade.value=preset.shade;
-    if (preset.opacity.length>16) throw new Error('This CT display preset exceeds the opacity control-point limit.');
-    const points=this.material.uniforms.uOpacityPoints.value as THREE.Vector2[];
-    preset.opacity.forEach(([hu,alpha],index)=>points[index].set(hu,alpha));
-    this.material.uniforms.uOpacityCount.value=preset.opacity.length;
-    if (preset.gradientOpacity.length>8) throw new Error('This display preset exceeds the gradient control-point limit.');
-    const gradientPoints=this.material.uniforms.uGradientPoints.value as THREE.Vector2[];
-    preset.gradientOpacity.forEach(([magnitude,alpha],index)=>gradientPoints[index].set(magnitude,alpha));
-    this.material.uniforms.uGradientCount.value=preset.gradientOpacity.length;
-    this.material.uniforms.uGradientOpacity.value=preset.gradientOpacity.some(([,alpha])=>alpha!==1);
+    this.transfer.needsUpdate = true;
+    this.material.uniforms.uLighting.value.set(preset.ambient, preset.diffuse, preset.specular, preset.specularPower);
+    this.material.uniforms.uShade.value = preset.shade;
+    if (preset.opacity.length > 16) throw new Error('This CT display preset exceeds the opacity control-point limit.');
+    const points = this.material.uniforms.uOpacityPoints.value as THREE.Vector2[];
+    preset.opacity.forEach(([hu, alpha], index) => points[index].set(hu, alpha));
+    this.material.uniforms.uOpacityCount.value = preset.opacity.length;
+    if (preset.gradientOpacity.length > 8) throw new Error('This display preset exceeds the gradient control-point limit.');
+    const gradientPoints = this.material.uniforms.uGradientPoints.value as THREE.Vector2[];
+    preset.gradientOpacity.forEach(([magnitude, alpha], index) => gradientPoints[index].set(magnitude, alpha));
+    this.material.uniforms.uGradientCount.value = preset.gradientOpacity.length;
+    this.material.uniforms.uGradientOpacity.value = preset.gradientOpacity.some(([, alpha]) => alpha !== 1);
   }
   private updateCrop() {
     if (!this.binding) return;
-    const shape=this.binding.descriptor.shape;
-    this.material.uniforms.uCropLow.value.set(...this.settings.crop[0].map((n,i)=>-.5+Math.max(0,Math.min(1,n))*shape[i]) as [number,number,number]);
-    this.material.uniforms.uCropHigh.value.set(...this.settings.crop[1].map((n,i)=>-.5+Math.max(0,Math.min(1,n))*shape[i]) as [number,number,number]);
+    const shape = this.binding.descriptor.shape;
+    this.material.uniforms.uCropLow.value.set(
+      ...(this.settings.crop[0].map((n, i) => -0.5 + Math.max(0, Math.min(1, n)) * shape[i]) as [number, number, number]),
+    );
+    this.material.uniforms.uCropHigh.value.set(
+      ...(this.settings.crop[1].map((n, i) => -0.5 + Math.max(0, Math.min(1, n)) * shape[i]) as [number, number, number]),
+    );
   }
   /** Present through the existing context, retaining all owning-renderer state. */
   render(camera: THREE.Camera, plane?: THREE.Mesh, surfaces?: THREE.Scene): boolean {
     if (!this.ready || !this.binding) return false;
-    const gl=this.renderer.getContext();
+    const gl = this.renderer.getContext();
     if (gl.isContextLost()) throw new Error('CT volume display is waiting for the GPU context to recover.');
     this.updateMask();
     camera.updateMatrixWorld();
     this.clipToWorld.copy(camera.matrixWorld).multiply(camera.projectionMatrixInverse);
     this.renderer.getDrawingBufferSize(this.size);
-    const cinematic=this.settings.preset==='CT-Cinematic-Heart';
-    const [width,height]=volumeRenderSize(this.size.x,this.size.y,this.interacting,this.settings.quality,cinematic);
+    const cinematic = this.settings.preset === 'CT-Cinematic-Heart';
+    const [width, height] = volumeRenderSize(this.size.x, this.size.y, this.interacting, this.settings.quality, cinematic);
     if (!this.target) {
-      this.target=new THREE.WebGLRenderTarget(width,height,{format:THREE.RGBAFormat,type:THREE.UnsignedByteType,
-        minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,depthBuffer:false,stencilBuffer:false,generateMipmaps:false});
-      this.target.texture.colorSpace=THREE.SRGBColorSpace;
-      this.displayQuad.material.uniforms.uImage.value=this.target.texture;
-    } else if (this.target.width!==width || this.target.height!==height) this.target.setSize(width,height);
-    this.lastWidth=width;this.lastHeight=height;
-    this.material.uniforms.uStepMM.value=volumeStepMM(this.minimumSpacingMM,this.interacting,this.settings.quality);
-    this.material.uniforms.uCinematic.value=cinematic;
-    this.material.uniforms.uShadowSamples.value=volumeShadowSamples(this.settings,this.interacting);
-    this.material.uniforms.uShadowStrength.value=this.settings.cinematic.shadows;
-    this.material.uniforms.uShadowReachMM.value=Math.max(2,Math.min(100,this.diagonalMM*this.settings.cinematic.shadowReach*.3));
-    cinematicKeyDirection(camera,this.material.uniforms.uKeyDirection.value);
-    this.displayQuad.material.uniforms.uBlackBackground.value=cinematic;
-    const previousTarget=this.renderer.getRenderTarget(),previousAutoClear=this.renderer.autoClear;
-    const previousClearAlpha=this.renderer.getClearAlpha();this.renderer.getClearColor(this.savedClearColor);
+      this.target = new THREE.WebGLRenderTarget(width, height, {
+        format: THREE.RGBAFormat,
+        type: THREE.UnsignedByteType,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        depthBuffer: false,
+        stencilBuffer: false,
+        generateMipmaps: false,
+      });
+      this.target.texture.colorSpace = THREE.SRGBColorSpace;
+      this.displayQuad.material.uniforms.uImage.value = this.target.texture;
+    } else if (this.target.width !== width || this.target.height !== height) this.target.setSize(width, height);
+    this.lastWidth = width;
+    this.lastHeight = height;
+    this.material.uniforms.uStepMM.value = volumeStepMM(this.minimumSpacingMM, this.interacting, this.settings.quality);
+    this.material.uniforms.uCinematic.value = cinematic;
+    this.material.uniforms.uShadowSamples.value = volumeShadowSamples(this.settings, this.interacting);
+    this.material.uniforms.uShadowStrength.value = this.settings.cinematic.shadows;
+    this.material.uniforms.uShadowReachMM.value = Math.max(2, Math.min(100, this.diagonalMM * this.settings.cinematic.shadowReach * 0.3));
+    cinematicKeyDirection(camera, this.material.uniforms.uKeyDirection.value);
+    this.displayQuad.material.uniforms.uBlackBackground.value = cinematic;
+    const previousTarget = this.renderer.getRenderTarget(),
+      previousAutoClear = this.renderer.autoClear;
+    const previousClearAlpha = this.renderer.getClearAlpha();
+    this.renderer.getClearColor(this.savedClearColor);
     try {
-      this.renderer.autoClear=false;
-      this.stackActive=false;this.stackSurfaceCount=0;this.stackPeels=0;this.stackTail=false;
-      if(surfaces){
-        this.surfaceLayers??=new VolumeSurfaceLayers(this.renderer);
-        this.surfaceLayers.begin(surfaces,camera,plane,width,height);
-        this.stackSurfaceCount=this.surfaceLayers.count;
+      this.renderer.autoClear = false;
+      this.stackActive = false;
+      this.stackSurfaceCount = 0;
+      this.stackPeels = 0;
+      this.stackTail = false;
+      if (surfaces) {
+        this.surfaceLayers ??= new VolumeSurfaceLayers(this.renderer);
+        this.surfaceLayers.begin(surfaces, camera, plane, width, height);
+        this.stackSurfaceCount = this.surfaceLayers.count;
       }
-      const stack=!!surfaces && this.stackSurfaceCount>0;
-      const planeVisible=!!plane?.visible;
-      if(stack){
-        this.renderStack(camera,width,height);
+      const stack = !!surfaces && this.stackSurfaceCount > 0;
+      const planeVisible = !!plane?.visible;
+      if (stack) {
+        this.renderStack(camera, width, height);
       } else {
-      this.material.uniforms.uStack.value=false;
-      this.material.uniforms.uHasPlane.value=planeVisible;
-      if (planeVisible) {
-        if (!this.planeTarget) {
-          this.planeTarget=new THREE.WebGLRenderTarget(width,height,{format:THREE.RGBAFormat,type:THREE.UnsignedByteType,
-            minFilter:THREE.NearestFilter,magFilter:THREE.NearestFilter,depthBuffer:true,stencilBuffer:false,generateMipmaps:false});
-          // Three's offscreen material output is linear; the native sRGB
-          // attachment encodes storage and texture sampling decodes it once.
-          this.planeTarget.texture.colorSpace=THREE.SRGBColorSpace;
-          this.planeTarget.depthTexture=new THREE.DepthTexture(width,height,THREE.UnsignedIntType);
-          this.material.uniforms.uPlaneColor.value=this.planeTarget.texture;
-          this.material.uniforms.uPlaneDepth.value=this.planeTarget.depthTexture;
-        } else if (this.planeTarget.width!==width || this.planeTarget.height!==height) this.planeTarget.setSize(width,height);
-        this.material.uniforms.uPlaneColor.value=this.planeTarget.texture;
-        this.material.uniforms.uPlaneDepth.value=this.planeTarget.depthTexture;
-        // Mirror object placement only. Geometry, material, CT and mask textures
-        // remain owned by the source plane; never move or dispose that object.
-        this.planeMirror??=new THREE.Mesh(plane!.geometry,plane!.material);
-        this.planeMirror.geometry=plane!.geometry;this.planeMirror.material=plane!.material;
-        this.planeMirror.matrixAutoUpdate=false;this.planeMirror.matrixWorldAutoUpdate=false;
-        plane!.updateWorldMatrix(true,false);this.planeMirror.matrixWorld.copy(plane!.matrixWorld);
-        this.planeMirror.layers.mask=plane!.layers.mask;
-        this.planeMirror.frustumCulled=false;
-        if (!this.planeMirror.parent) this.planeScene.add(this.planeMirror);
-        this.renderer.setClearColor(0,0);
-        this.renderer.setRenderTarget(this.planeTarget);this.renderer.clear(true,true,false);this.renderer.render(this.planeScene,camera);
-      }
-      this.renderer.setClearColor(this.savedClearColor,previousClearAlpha);
-      // setRenderTarget uses physical target pixels. setViewport would multiply
-      // by canvas DPR again and clip the offscreen image on high-DPI clients.
-      this.renderer.setRenderTarget(this.target);
-      this.renderer.render(this.rayScene,this.screenCamera);
-      this.displayQuad.material.uniforms.uImage.value=this.target.texture;
+        this.material.uniforms.uStack.value = false;
+        this.material.uniforms.uHasPlane.value = planeVisible;
+        if (planeVisible) {
+          if (!this.planeTarget) {
+            this.planeTarget = new THREE.WebGLRenderTarget(width, height, {
+              format: THREE.RGBAFormat,
+              type: THREE.UnsignedByteType,
+              minFilter: THREE.NearestFilter,
+              magFilter: THREE.NearestFilter,
+              depthBuffer: true,
+              stencilBuffer: false,
+              generateMipmaps: false,
+            });
+            // Three's offscreen material output is linear; the native sRGB
+            // attachment encodes storage and texture sampling decodes it once.
+            this.planeTarget.texture.colorSpace = THREE.SRGBColorSpace;
+            this.planeTarget.depthTexture = new THREE.DepthTexture(width, height, THREE.UnsignedIntType);
+            this.material.uniforms.uPlaneColor.value = this.planeTarget.texture;
+            this.material.uniforms.uPlaneDepth.value = this.planeTarget.depthTexture;
+          } else if (this.planeTarget.width !== width || this.planeTarget.height !== height) this.planeTarget.setSize(width, height);
+          this.material.uniforms.uPlaneColor.value = this.planeTarget.texture;
+          this.material.uniforms.uPlaneDepth.value = this.planeTarget.depthTexture;
+          // Mirror object placement only. Geometry, material, CT and mask textures
+          // remain owned by the source plane; never move or dispose that object.
+          this.planeMirror ??= new THREE.Mesh(plane!.geometry, plane!.material);
+          this.planeMirror.geometry = plane!.geometry;
+          this.planeMirror.material = plane!.material;
+          this.planeMirror.matrixAutoUpdate = false;
+          this.planeMirror.matrixWorldAutoUpdate = false;
+          plane!.updateWorldMatrix(true, false);
+          this.planeMirror.matrixWorld.copy(plane!.matrixWorld);
+          this.planeMirror.layers.mask = plane!.layers.mask;
+          this.planeMirror.frustumCulled = false;
+          if (!this.planeMirror.parent) this.planeScene.add(this.planeMirror);
+          this.renderer.setClearColor(0, 0);
+          this.renderer.setRenderTarget(this.planeTarget);
+          this.renderer.clear(true, true, false);
+          this.renderer.render(this.planeScene, camera);
+        }
+        this.renderer.setClearColor(this.savedClearColor, previousClearAlpha);
+        // setRenderTarget uses physical target pixels. setViewport would multiply
+        // by canvas DPR again and clip the offscreen image on high-DPI clients.
+        this.renderer.setRenderTarget(this.target);
+        this.renderer.render(this.rayScene, this.screenCamera);
+        this.displayQuad.material.uniforms.uImage.value = this.target.texture;
       }
       this.renderer.setRenderTarget(previousTarget);
-      this.renderer.clear(true,true,false);
-      this.renderer.render(this.displayScene,this.screenCamera);
-      const code=gl.getError();
-      if (code!==gl.NO_ERROR || gl.isContextLost()) throw new Error('This GPU could not render the CT volume. CT slice review remains available.');
-      this.planeActive=planeVisible;this.frameCount++;return true;
+      this.renderer.clear(true, true, false);
+      this.renderer.render(this.displayScene, this.screenCamera);
+      const code = gl.getError();
+      if (code !== gl.NO_ERROR || gl.isContextLost()) throw new Error('This GPU could not render the CT volume. CT slice review remains available.');
+      this.planeActive = planeVisible;
+      this.frameCount++;
+      return true;
     } finally {
-      this.renderer.setRenderTarget(previousTarget);this.renderer.autoClear=previousAutoClear;
-      this.renderer.setClearColor(this.savedClearColor,previousClearAlpha);
+      this.renderer.setRenderTarget(previousTarget);
+      this.renderer.autoClear = previousAutoClear;
+      this.renderer.setClearColor(this.savedClearColor, previousClearAlpha);
     }
   }
-  private renderStack(camera:THREE.Camera,width:number,height:number){
-    const layers=this.surfaceLayers!,u=this.material.uniforms,opaque=layers.renderOpaque(camera);
-    this.stackActive=true;u.uHasPlane.value=true;u.uPlaneColor.value=opaque.color;u.uPlaneDepth.value=opaque.depth;
-    const transparent=layers.transparentCount>0;
-    if(!transparent){
-      u.uStack.value=false;this.renderer.setRenderTarget(this.target!);this.renderer.render(this.rayScene,this.screenCamera);
-      this.displayQuad.material.uniforms.uImage.value=this.target!.texture;return;
+  private renderStack(camera: THREE.Camera, width: number, height: number) {
+    const layers = this.surfaceLayers!,
+      u = this.material.uniforms,
+      opaque = layers.renderOpaque(camera);
+    this.stackActive = true;
+    u.uHasPlane.value = true;
+    u.uPlaneColor.value = opaque.color;
+    u.uPlaneDepth.value = opaque.depth;
+    const transparent = layers.transparentCount > 0;
+    if (!transparent) {
+      u.uStack.value = false;
+      this.renderer.setRenderTarget(this.target!);
+      this.renderer.render(this.rayScene, this.screenCamera);
+      this.displayQuad.material.uniforms.uImage.value = this.target!.texture;
+      return;
     }
-    for(let slot=0;slot<2;slot++){
-      this.stackAccum[slot]??=new THREE.WebGLRenderTarget(width,height,{type:THREE.HalfFloatType,
-        minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,depthBuffer:false,stencilBuffer:false,generateMipmaps:false});
-      if(this.stackAccum[slot].width!==width||this.stackAccum[slot].height!==height)this.stackAccum[slot].setSize(width,height);
+    for (let slot = 0; slot < 2; slot++) {
+      this.stackAccum[slot] ??= new THREE.WebGLRenderTarget(width, height, {
+        type: THREE.HalfFloatType,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+        depthBuffer: false,
+        stencilBuffer: false,
+        generateMipmaps: false,
+      });
+      if (this.stackAccum[slot].width !== width || this.stackAccum[slot].height !== height) this.stackAccum[slot].setSize(width, height);
     }
-    u.uStack.value=true;
-    let previous:VolumeDepthLayer|undefined,iteration=0;
-    const integrate=(end?:VolumeDepthLayer)=>{
-      u.uStackFirst.value=iteration===0;u.uStackHasEnd.value=!!end;
-      u.uStackAccum.value=iteration?this.stackAccum[(iteration-1)%2].texture:null;
-      u.uStackStartDepth.value=previous?.depth??null;u.uStackEndColor.value=end?.color??null;u.uStackEndDepth.value=end?.depth??null;
-      this.renderer.setRenderTarget(this.stackAccum[iteration%2]);this.renderer.render(this.rayScene,this.screenCamera);
-      previous=end;iteration++;
+    u.uStack.value = true;
+    let previous: VolumeDepthLayer | undefined,
+      iteration = 0;
+    const integrate = (end?: VolumeDepthLayer) => {
+      u.uStackFirst.value = iteration === 0;
+      u.uStackHasEnd.value = !!end;
+      u.uStackAccum.value = iteration ? this.stackAccum[(iteration - 1) % 2].texture : null;
+      u.uStackStartDepth.value = previous?.depth ?? null;
+      u.uStackEndColor.value = end?.color ?? null;
+      u.uStackEndDepth.value = end?.depth ?? null;
+      this.renderer.setRenderTarget(this.stackAccum[iteration % 2]);
+      this.renderer.render(this.rayScene, this.screenCamera);
+      previous = end;
+      iteration++;
     };
-    const peels=this.interacting?4:8;this.stackPeels=peels;this.stackTail=true;
-    for(let index=0;index<peels;index++)integrate(layers.peel(camera,index,previous?.depth));
-    integrate(layers.renderTail(camera,peels,previous!.depth));integrate();
-    this.displayQuad.material.uniforms.uImage.value=this.stackAccum[(iteration-1)%2].texture;
+    const peels = this.interacting ? 4 : 8;
+    this.stackPeels = peels;
+    this.stackTail = true;
+    for (let index = 0; index < peels; index++) integrate(layers.peel(camera, index, previous?.depth));
+    integrate(layers.renderTail(camera, peels, previous!.depth));
+    integrate();
+    this.displayQuad.material.uniforms.uImage.value = this.stackAccum[(iteration - 1) % 2].texture;
   }
   /** Release framebuffer storage while the layer is hidden; borrowed CT stays owned by the scene. */
   releaseTargets() {
-    this.target?.dispose(); this.target=undefined;
-    this.planeTarget?.dispose(); this.planeTarget=undefined;
-    this.surfaceLayers?.dispose(); this.surfaceLayers=undefined;
-    this.stackAccum.forEach(target=>target.dispose()); this.stackAccum=[];
-    this.lastWidth=0;this.lastHeight=0;this.planeActive=false;
-    this.stackActive=false;this.stackSurfaceCount=0;this.stackPeels=0;this.stackTail=false;
-    for (const name of ['uPlaneColor','uPlaneDepth','uStackAccum','uStackStartDepth','uStackEndColor','uStackEndDepth'])
-      this.material.uniforms[name].value=null;
-    this.displayQuad.material.uniforms.uImage.value=null;
-    this.planeScene.clear();this.planeMirror=undefined;
+    this.target?.dispose();
+    this.target = undefined;
+    this.planeTarget?.dispose();
+    this.planeTarget = undefined;
+    this.surfaceLayers?.dispose();
+    this.surfaceLayers = undefined;
+    this.stackAccum.forEach(target => target.dispose());
+    this.stackAccum = [];
+    this.lastWidth = 0;
+    this.lastHeight = 0;
+    this.planeActive = false;
+    this.stackActive = false;
+    this.stackSurfaceCount = 0;
+    this.stackPeels = 0;
+    this.stackTail = false;
+    for (const name of ['uPlaneColor', 'uPlaneDepth', 'uStackAccum', 'uStackStartDepth', 'uStackEndColor', 'uStackEndDepth'])
+      this.material.uniforms[name].value = null;
+    this.displayQuad.material.uniforms.uImage.value = null;
+    this.planeScene.clear();
+    this.planeMirror = undefined;
   }
   dispose() {
     if (this.disposed) return;
-    this.disposed=true;this.binding=undefined;this.maskBinding=undefined;this.maskIDs=[];this.planeActive=false;this.material.uniforms.uVolume.value=null;
+    this.disposed = true;
+    this.binding = undefined;
+    this.maskBinding = undefined;
+    this.maskIDs = [];
+    this.planeActive = false;
+    this.material.uniforms.uVolume.value = null;
     this.updateMask();
-    this.transfer.dispose();this.emptyMask.dispose();this.releaseTargets();
-    this.quad.geometry.dispose();this.displayQuad.geometry.dispose();this.material.dispose();this.displayQuad.material.dispose();
-    this.rayScene.clear();this.displayScene.clear();
+    this.transfer.dispose();
+    this.emptyMask.dispose();
+    this.releaseTargets();
+    this.quad.geometry.dispose();
+    this.displayQuad.geometry.dispose();
+    this.material.dispose();
+    this.displayQuad.material.dispose();
+    this.rayScene.clear();
+    this.displayScene.clear();
   }
 }

@@ -4,7 +4,8 @@ import { freshVolumeSettings } from '../src/lib/volume-presets';
 
 describe('explicit CT volume mask selection', () => {
   it('starts disabled and empty, with independent owned selection arrays', () => {
-    const first = freshVolumeMaskSettings(), next = freshVolumeMaskSettings();
+    const first = freshVolumeMaskSettings(),
+      next = freshVolumeMaskSettings();
     expect(first).toEqual({ enabled: false, mode: 'inside', ids: [], margin_mm: 0 });
     first.ids.push('liver');
     expect(next.ids).toEqual([]);
@@ -29,10 +30,11 @@ describe('explicit CT volume mask selection', () => {
 
   it('takes visibility only as an explicit snapshot, independent of subsequent surface changes', () => {
     const structures = [{ id: 'liver' }, { id: 'lung' }, { id: 'missing-display' }];
-    const display = { liver: { visible: true, opacity: .5 }, lung: { visible: false, opacity: 1 } };
+    const display = { liver: { visible: true, opacity: 0.5 }, lung: { visible: false, opacity: 1 } };
     const mask = freshVolumeMaskSettings({ enabled: true, ids: visibleVolumeMaskIds(structures, display) });
     expect(mask.ids).toEqual(['liver']);
-    display.liver.visible = false; display.lung.visible = true;
+    display.liver.visible = false;
+    display.lung.visible = true;
     expect(mask.ids).toEqual(['liver']);
     expect(visibleVolumeMaskIds(structures, display)).toEqual(['lung']);
   });
@@ -50,8 +52,8 @@ describe('explicit CT volume mask selection', () => {
     expect(volumeMaskSourceId('heart', 0)).toBe('heart');
     expect(volumeMaskSourceId('heart', 2.5)).toBe('volume-margin:2.5:heart');
     expect(volumeMaskSourceId('heart', 2.5001)).toBe('volume-margin:2.5:heart');
-    expect(volumeMaskSourceId('heart', .0625)).toBe('volume-margin:0.063:heart');
-    expect(normalizeVolumeMaskMargin(.0001)).toBe(0);
+    expect(volumeMaskSourceId('heart', 0.0625)).toBe('volume-margin:0.063:heart');
+    expect(normalizeVolumeMaskMargin(0.0001)).toBe(0);
     for (const value of [-1, 6, NaN, Infinity]) expect(() => volumeMaskSourceId('heart', value)).toThrow('between 0 and 5');
   });
 });

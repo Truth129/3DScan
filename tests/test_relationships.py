@@ -1,4 +1,5 @@
 """Explicit multi-mask overlap previews, reciprocal metadata and atomic acceptance."""
+
 import copy
 import hashlib
 from pathlib import Path
@@ -53,8 +54,10 @@ def apply_relationship(service, case, draft, relationship):
 def add_peer(example, relationship=None):
     service, case, base, _ = example
     image, _ = imaging._image(Path(base["ct_file"]))
-    values = np.zeros(image.shape, dtype=np.uint8); values[4, 4, 4] = 1
-    path = Path(base["directory"]) / "overlapping-peer.nii.gz"; imaging._save_mask(values, image, path)
+    values = np.zeros(image.shape, dtype=np.uint8)
+    values[4, 4, 4] = 1
+    path = Path(base["directory"]) / "overlapping-peer.nii.gz"
+    imaging._save_mask(values, image, path)
     entry = dict(id="custom:peer", name="Sibling region", task="custom", group="Same display group", color="#ab12ef", mask_file=str(path))
     if relationship:
         entry["relationship"] = relationship
@@ -68,12 +71,15 @@ def test_independent_parent_and_subdivision_use_one_prediction_and_preview_every
     original = copy.deepcopy(base)
     draft = new_candidate(example)
     first = draft["candidate"]
-    assert first["overlaps"] == [dict(id="total:liver", name="liver", voxel_count=1, volume_ml=pytest.approx(.009), policy="preserved", reason="independent")]
+    assert first["overlaps"] == [dict(id="total:liver", name="liver", voxel_count=1, volume_ml=pytest.approx(0.009), policy="preserved", reason="independent")]
     assert len(first["warnings"]) == 1
     kidney = Path(base["structures"][1]["mask_file"])
     binary, decoded = imaging._binary, []
+
     def watched(path, *args, **kwargs):
-        decoded.append(Path(path)); return binary(path, *args, **kwargs)
+        decoded.append(Path(path))
+        return binary(path, *args, **kwargs)
+
     monkeypatch.setattr(imaging, "_binary", watched)
     draft = apply_relationship(service, case, draft, {"kind": "subregion", "parent_id": "total:liver", "exclusive_with": []})
     assert not draft["candidate"]["warnings"]
@@ -117,8 +123,10 @@ def test_independent_parent_and_subdivision_use_one_prediction_and_preview_every
 def test_sibling_only_change_can_empty_peer_and_metadata_only_choice_removes_reverse_link(example, monkeypatch):
     service, case, base, _ = add_peer(example)
     original = copy.deepcopy(base)
+
     def no_gpu():
         raise AssertionError("Relationship-only processing must not initialize the neural runtime")
+
     monkeypatch.setattr(service, "_interactive", no_gpu)
     draft = service.reviews.create(case["id"], base["id"], "total:liver")
     draft = apply_relationship(service, case, draft, {"kind": "subdivision", "exclusive_with": ["custom:peer"]})
@@ -153,8 +161,9 @@ def test_undoing_unapplied_relationship_restores_exact_immutable_candidate_witho
     service, case, _, _ = example
     draft = new_candidate(example)
     original = draft["candidate"]
-    changed = service.reviews.update(case["id"], draft["id"], draft["generation"], draft["prompts"],
-                                    relationship={"kind": "subdivision", "exclusive_with": ["total:liver"]})
+    changed = service.reviews.update(
+        case["id"], draft["id"], draft["generation"], draft["prompts"], relationship={"kind": "subdivision", "exclusive_with": ["total:liver"]}
+    )
     assert changed["candidate"]["generation"] < changed["generation"] and public_review(changed)["relationship_dirty"]
     restored = service.reviews.update(case["id"], draft["id"], changed["generation"], draft["prompts"], relationship=INDEPENDENT)
     assert restored["status"] == "ready" and restored["candidate"]["generation"] == restored["generation"]
@@ -162,20 +171,26 @@ def test_undoing_unapplied_relationship_restores_exact_immutable_candidate_witho
     assert restored["candidate"]["mask_file"] == original["mask_file"]
     assert restored["candidate"]["affected_structures"] == original["affected_structures"]
     assert not public_review(restored)["relationship_dirty"] and service.interactive_runtime.calls == 1
-    assert service.reviews.candidate_revision(case["id"], original["revision_id"])["structures"] == service.reviews.candidate_revision(case["id"], restored["candidate"]["revision_id"])["structures"]
+    assert (
+        service.reviews.candidate_revision(case["id"], original["revision_id"])["structures"]
+        == service.reviews.candidate_revision(case["id"], restored["candidate"]["revision_id"])["structures"]
+    )
 
 
-@pytest.mark.parametrize("relationship,reason", [
-    ({"kind": "independent", "exclusive_with": ["b"]}, "Independent"),
-    ({"kind": "subregion", "exclusive_with": []}, "parent"),
-    ({"kind": "subdivision", "exclusive_with": []}, "at least one"),
-    ({"kind": "subdivision", "exclusive_with": ["a"]}, "excluding"),
-    ({"kind": "subdivision", "exclusive_with": ["foreign"]}, "existing"),
-    ({"kind": "subdivision", "exclusive_with": ["b", "b"]}, "unique"),
-    ({"kind": "subregion", "parent_id": "child"}, "cycle"),
-    ({"kind": "subdivision", "exclusive_with": ["child"]}, "Parent and child"),
-    ({"kind": "subdivision", "parent_id": "b", "exclusive_with": ["b"]}, "Parent and child"),
-])
+@pytest.mark.parametrize(
+    "relationship,reason",
+    [
+        ({"kind": "independent", "exclusive_with": ["b"]}, "Independent"),
+        ({"kind": "subregion", "exclusive_with": []}, "parent"),
+        ({"kind": "subdivision", "exclusive_with": []}, "at least one"),
+        ({"kind": "subdivision", "exclusive_with": ["a"]}, "excluding"),
+        ({"kind": "subdivision", "exclusive_with": ["foreign"]}, "existing"),
+        ({"kind": "subdivision", "exclusive_with": ["b", "b"]}, "unique"),
+        ({"kind": "subregion", "parent_id": "child"}, "cycle"),
+        ({"kind": "subdivision", "exclusive_with": ["child"]}, "Parent and child"),
+        ({"kind": "subdivision", "parent_id": "b", "exclusive_with": ["b"]}, "Parent and child"),
+    ],
+)
 def test_relationship_validation_protects_identity_and_parent_graph(relationship, reason):
     structures = [{"id": "a"}, {"id": "b"}, {"id": "child", "relationship": {"kind": "subregion", "parent_id": "a", "exclusive_with": []}}]
     with pytest.raises(ValueError, match=reason):
@@ -187,9 +202,12 @@ def test_curated_exact_lobe_suggestions_are_opt_in_and_direct_links_never_expand
     assert relationship_suggestions(lobes, lobes[0]["id"])[0]["exclusive_with"] == [lobes[1]["id"]]
     assert effective_relationship(lobes, lobes[0]["id"]) == INDEPENDENT
     assert relationship_suggestions(lobes, "total:liver") == []
-    assert relationship_suggestions([{ "id": "custom:lung_upper_lobe_left", "group": "Lung lobes"}], "custom:lung_upper_lobe_left") == []
-    structures = [{"id": "a", "relationship": {"kind": "subdivision", "exclusive_with": ["b"]}},
-                  {"id": "b", "relationship": {"kind": "subdivision", "exclusive_with": ["c"]}}, {"id": "c"}]
+    assert relationship_suggestions([{"id": "custom:lung_upper_lobe_left", "group": "Lung lobes"}], "custom:lung_upper_lobe_left") == []
+    structures = [
+        {"id": "a", "relationship": {"kind": "subdivision", "exclusive_with": ["b"]}},
+        {"id": "b", "relationship": {"kind": "subdivision", "exclusive_with": ["c"]}},
+        {"id": "c"},
+    ]
     assert effective_relationship(structures, "c")["exclusive_with"] == ["b"]
     updates = reciprocal_updates(structures, structures[0], INDEPENDENT)
     assert updates == {"a": INDEPENDENT}
@@ -219,8 +237,14 @@ def test_http_relationship_preview_recovery_stale_save_and_affected_mask_transpo
     app.state.service.stop = lambda: None
     with TestClient(app, base_url="http://127.0.0.1") as http:
         prefix = f"/api/cases/{case['id']}/reviews/{draft['id']}"
-        updated = http.patch(prefix, json={"expected_generation": draft["generation"], "prompts": draft["prompts"],
-            "relationship": {"kind": "subdivision", "exclusive_with": ["total:liver"]}})
+        updated = http.patch(
+            prefix,
+            json={
+                "expected_generation": draft["generation"],
+                "prompts": draft["prompts"],
+                "relationship": {"kind": "subdivision", "exclusive_with": ["total:liver"]},
+            },
+        )
         assert updated.status_code == 200, updated.text
         assert updated.json()["relationship_dirty"] and updated.json()["dirty"]
         assert http.get(prefix).json()["relationship"] == updated.json()["relationship"]

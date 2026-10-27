@@ -1,4 +1,5 @@
 """Prove native nnInteractive correction without changing a case or revision."""
+
 import argparse
 import json
 from pathlib import Path
@@ -29,13 +30,28 @@ def main():
                 if any(v < 0 or v >= s for v, s in zip(voxel, ct.shape)):
                     raise ValueError("Proof point lies outside the reference CT")
                 ras = (affine @ np.r_[voxel, 1])[:3].tolist()
-                prompts.append({"id": f"proof-{index}", "ras": ras,
-                                "include": not (args.exclude_last and index == len(args.point_ijk))})
-            record = runtime.predict(args.ct, args.mask, prompts, args.output / f"candidate-{index}.nii.gz",
-                                     lambda message: print(message, flush=True), lambda: False, "native-proof")
+                prompts.append({"id": f"proof-{index}", "ras": ras, "include": not (args.exclude_last and index == len(args.point_ijk))})
+            record = runtime.predict(
+                args.ct,
+                args.mask,
+                prompts,
+                args.output / f"candidate-{index}.nii.gz",
+                lambda message: print(message, flush=True),
+                lambda: False,
+                "native-proof",
+            )
             records.append(record)
-            print(json.dumps({"prompt_count": record["prompt_count"], "timings": record["timings"],
-                              "changed_voxels": record["changed_voxels"], "device": record["device"]}), flush=True)
+            print(
+                json.dumps(
+                    {
+                        "prompt_count": record["prompt_count"],
+                        "timings": record["timings"],
+                        "changed_voxels": record["changed_voxels"],
+                        "device": record["device"],
+                    }
+                ),
+                flush=True,
+            )
         if original != interactive._sha256(interactive._identity(args.mask)):
             raise RuntimeError("Native proof modified the source segmentation")
         if records[0]["changed_voxels"] != 0:

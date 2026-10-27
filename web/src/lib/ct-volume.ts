@@ -28,13 +28,22 @@ export interface LocalCTOptions {
   quality?: 'preview' | 'full';
 }
 export class LocalCTUnsupportedError extends Error {
-  constructor(message: string) { super(message); this.name = 'LocalCTUnsupportedError'; }
+  constructor(message: string) {
+    super(message);
+    this.name = 'LocalCTUnsupportedError';
+  }
 }
 export class LocalCTSupersededError extends Error {
-  constructor() { super('Superseded local CT request'); this.name = 'LocalCTSupersededError'; }
+  constructor() {
+    super('Superseded local CT request');
+    this.name = 'LocalCTSupersededError';
+  }
 }
 export class LocalCTOverlayError extends Error {
-  constructor(message: string, options?: ErrorOptions) { super(message, options); this.name = 'LocalCTOverlayError'; }
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'LocalCTOverlayError';
+  }
 }
 export function isLocalCTUnsupported(error: unknown): error is LocalCTUnsupportedError {
   return error instanceof LocalCTUnsupportedError;
@@ -43,7 +52,10 @@ export function localCTBudget(deviceMemory?: number): number {
   return (deviceMemory !== undefined && deviceMemory <= 2 ? 128 : 512) * 1024 ** 2;
 }
 
-interface PendingRPC { resolve: (result: unknown) => void; reject: (error: Error) => void }
+interface PendingRPC {
+  resolve: (result: unknown) => void;
+  reject: (error: Error) => void;
+}
 interface SliceRequest {
   plane: Plane;
   position: number;
@@ -55,8 +67,15 @@ interface SliceRequest {
   resolve: (slice: LocalSlice) => void;
   reject: (error: Error) => void;
 }
-interface MaskResponse { schema_version: 1; current: VolumeDescriptor; parent: VolumeDescriptor | null }
-interface OverlayResponse { allocatedBytes: number; missing: { key: string; indices: number[] }[] }
+interface MaskResponse {
+  schema_version: 1;
+  current: VolumeDescriptor;
+  parent: VolumeDescriptor | null;
+}
+interface OverlayResponse {
+  allocatedBytes: number;
+  missing: { key: string; indices: number[] }[];
+}
 
 function selectedIds(selection: CTSelection): string[] {
   const ids = selection === null ? [] : typeof selection === 'string' ? [selection] : [...selection];
@@ -72,9 +91,21 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(new LocalCTSupersededError());
   return new Promise((resolve, reject) => {
     const cleanup = () => signal.removeEventListener('abort', abort);
-    const abort = () => { cleanup(); reject(new LocalCTSupersededError()); };
+    const abort = () => {
+      cleanup();
+      reject(new LocalCTSupersededError());
+    };
     signal.addEventListener('abort', abort, { once: true });
-    promise.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    promise.then(
+      value => {
+        cleanup();
+        resolve(value);
+      },
+      error => {
+        cleanup();
+        reject(error);
+      },
+    );
   });
 }
 
@@ -88,7 +119,9 @@ export class LocalCTSession {
   descriptor: VolumeDescriptor | null = null;
   overlayError: LocalCTOverlayError | null = null;
   /** Bind consumers to the requested immutable mask revision before using a frame. */
-  get revisionBase(): string { return this.base; }
+  get revisionBase(): string {
+    return this.base;
+  }
   private readonly worker: Worker;
   private readonly options: LocalCTOptions;
   private readonly quality: 'preview' | 'full';
@@ -116,7 +149,12 @@ export class LocalCTSession {
   private slicing = false;
   private sliceGeneration = 0;
   private latestProbe = 0;
-  private probeQueued: { ras: Point; generation: number; resolve: (value: { hu: number | null; voxel?: Point }) => void; reject: (error: Error) => void } | null = null;
+  private probeQueued: {
+    ras: Point;
+    generation: number;
+    resolve: (value: { hu: number | null; voxel?: Point }) => void;
+    reject: (error: Error) => void;
+  } | null = null;
   private probing = false;
 
   constructor(base: string, options: LocalCTOptions = {}) {
@@ -125,15 +163,24 @@ export class LocalCTSession {
     this.quality = options.quality ?? 'preview';
     if (typeof Worker === 'undefined') throw new LocalCTUnsupportedError('This browser cannot run local CT slicing; server previews remain available.');
     if (new Uint8Array(new Uint16Array([1]).buffer)[0] !== 1) throw new LocalCTUnsupportedError('This browser uses an unsupported CT byte order.');
-    try { this.worker = new Worker(new URL('./ct-worker.ts', import.meta.url), { type: 'module' }); }
-    catch { throw new LocalCTUnsupportedError('This browser cannot start the local CT worker; server previews remain available.'); }
+    try {
+      this.worker = new Worker(new URL('./ct-worker.ts', import.meta.url), { type: 'module' });
+    } catch {
+      throw new LocalCTUnsupportedError('This browser cannot start the local CT worker; server previews remain available.');
+    }
     this.worker.onmessage = event => {
       const { id, result, error, allocation } = event.data;
       const pending = this.pending.get(id);
       if (!pending) return;
       this.pending.delete(id);
-      if (error) pending.reject(allocation ? new LocalCTUnsupportedError('The browser could not allocate this CT volume; server previews remain available.')
-        : error.startsWith('Superseded') ? new LocalCTSupersededError() : new Error(error));
+      if (error)
+        pending.reject(
+          allocation
+            ? new LocalCTUnsupportedError('The browser could not allocate this CT volume; server previews remain available.')
+            : error.startsWith('Superseded')
+              ? new LocalCTSupersededError()
+              : new Error(error),
+        );
       else pending.resolve(result);
     };
     this.worker.onerror = event => {
@@ -142,7 +189,9 @@ export class LocalCTSession {
     };
     this.descriptorPromise = this.initialize(this.base, ++this.baseVersion);
     this.ready = this.descriptorPromise.then(() => this.ctPromise!);
-    this.ready.catch(error => { if (!(error instanceof LocalCTSupersededError) && !this.disposed) this.options.onError?.(error); });
+    this.ready.catch(error => {
+      if (!(error instanceof LocalCTSupersededError) && !this.disposed) this.options.onError?.(error);
+    });
   }
 
   /** A revision changes overlays, while an unchanged CT key retains its volume. */
@@ -155,7 +204,8 @@ export class LocalCTSession {
     this.descriptorController = new AbortController();
     this.invalidateSlices();
     this.latestProbe++;
-    this.probeQueued?.reject(new LocalCTSupersededError()); this.probeQueued = null;
+    this.probeQueued?.reject(new LocalCTSupersededError());
+    this.probeQueued = null;
     this.cancelOverlay();
     this.descriptorPromise = this.initialize(base, ++this.baseVersion);
     this.ready = this.descriptorPromise.then(() => this.ctPromise!);
@@ -185,15 +235,19 @@ export class LocalCTSession {
       let next = 0;
       const load = async () => {
         while (next < ids.length) {
-          const index = next++, id = ids[index];
+          const index = next++,
+            id = ids[index];
           let cached = this.maskDescriptors.get(id);
           if (!cached || (compare && !cached.compared)) {
             const query = new URLSearchParams({ structure_id: id, compare: String(compare), quality: this.quality });
             const response = await this.json<MaskResponse>(`${this.base}/mask-volume?${query}`, controller.signal);
             this.assertOverlay(version, controller);
             if (response.schema_version !== 1) throw new Error('Unsupported local CT overlay format');
-            cached = { current: validateDescriptor(response.current, 'mask'),
-              parent: compare && response.parent ? validateDescriptor(response.parent, 'mask') : null, compared: compare };
+            cached = {
+              current: validateDescriptor(response.current, 'mask'),
+              parent: compare && response.parent ? validateDescriptor(response.parent, 'mask') : null,
+              compared: compare,
+            };
             this.maskDescriptors.set(id, cached);
           }
           entries[index] = { id, current: cached.current, parent: compare ? cached.parent : null };
@@ -208,25 +262,30 @@ export class LocalCTSession {
       const descriptors = [...unique.values()];
       const budget = this.options.maxOverlayBytes ?? (this.quality === 'full' ? 192 : 64) * 1024 ** 2;
       const totalBytes = descriptors.reduce((sum, entry) => sum + entry.byte_length, 0);
-      if (totalBytes > budget) throw new Error(`The selected overlays need ${Math.ceil(totalBytes / 1024 ** 2)} MiB, above the ${Math.floor(budget / 1024 ** 2)} MiB local mask budget.`);
+      if (totalBytes > budget)
+        throw new Error(
+          `The selected overlays need ${Math.ceil(totalBytes / 1024 ** 2)} MiB, above the ${Math.floor(budget / 1024 ** 2)} MiB local mask budget.`,
+        );
       this.assertOverlay(version, controller);
-      const resident = await this.rpc({ type: 'overlay', ctVersion, overlayVersion: version, overlays: entries,
-        maxOverlayBytes: budget }) as OverlayResponse;
+      const resident = (await this.rpc({ type: 'overlay', ctVersion, overlayVersion: version, overlays: entries, maxOverlayBytes: budget })) as OverlayResponse;
       this.assertOverlay(version, controller);
       const totalChunks = descriptors.reduce((sum, entry) => sum + entry.chunks.length, 0);
       const missing = new Map(resident.missing.map(entry => [entry.key, new Set(entry.indices)]));
-      const queue = descriptors.flatMap(descriptor => descriptor.chunks
-        .filter(chunk => missing.get(descriptor.key)?.has(chunk.index))
-        .map(chunk => ({ descriptor, chunk, slot: descriptor.key })));
+      const queue = descriptors.flatMap(descriptor =>
+        descriptor.chunks.filter(chunk => missing.get(descriptor.key)?.has(chunk.index)).map(chunk => ({ descriptor, chunk, slot: descriptor.key })),
+      );
       let loadedBytes = totalBytes - queue.reduce((sum, entry) => sum + entry.chunk.byte_length, 0);
       let loadedChunks = totalChunks - queue.length;
-      const report = () => this.options.onProgress?.({ stage: 'overlay', loadedBytes, totalBytes, loadedChunks, totalChunks, ready: loadedChunks === totalChunks });
+      const report = () =>
+        this.options.onProgress?.({ stage: 'overlay', loadedBytes, totalBytes, loadedChunks, totalChunks, ready: loadedChunks === totalChunks });
       report();
       // One shared queue bounds all current/parent downloads to two transfers.
       await this.download(queue, controller.signal, async ({ chunk, slot }, bytes) => {
         this.assertOverlay(version, controller);
         await this.rpc({ type: 'chunk', ctVersion, overlayVersion: version, slot: 'mask', maskKey: slot, index: chunk.index, bytes }, [bytes]);
-        loadedBytes += chunk.byte_length; loadedChunks++; report();
+        loadedBytes += chunk.byte_length;
+        loadedChunks++;
+        report();
       });
       this.assertOverlay(version, controller);
       this.overlayError = null;
@@ -243,7 +302,10 @@ export class LocalCTSession {
       await this.rpc({ type: 'overlay', ctVersion: this.ctVersion, overlayVersion: version, current: null, parent: null });
       if (this.disposed || version !== this.overlayVersion) throw new LocalCTSupersededError();
       const navigation = this.quality === 'full' ? 'Full-resolution source' : 'Source image';
-      const reason = new LocalCTOverlayError(`Segmentation overlays are hidden. ${navigation} navigation remains available. ${error instanceof Error ? error.message : String(error)} Select fewer overlays or retry.`, { cause: error });
+      const reason = new LocalCTOverlayError(
+        `Segmentation overlays are hidden. ${navigation} navigation remains available. ${error instanceof Error ? error.message : String(error)} Select fewer overlays or retry.`,
+        { cause: error },
+      );
       this.overlayError = reason;
       this.options.onOverlayError?.(reason);
       this.notifyOverlayChange();
@@ -266,16 +328,30 @@ export class LocalCTSession {
     return () => this.overlayListeners.delete(listener);
   }
 
-  async requestSlice(plane: Plane, position: number, structure?: CTSelection, compare = false, native?: { axis: 0 | 1 | 2; index: number }, consumer: 'ct' | 'model-review' = 'ct'): Promise<LocalSlice> {
+  async requestSlice(
+    plane: Plane,
+    position: number,
+    structure?: CTSelection,
+    compare = false,
+    native?: { axis: 0 | 1 | 2; index: number },
+    consumer: 'ct' | 'model-review' = 'ct',
+  ): Promise<LocalSlice> {
     this.ensureActive();
     if (consumer !== 'ct' && consumer !== 'model-review') throw new Error('Unsupported local CT slice consumer');
     const baseVersion = this.baseVersion;
     const requestedOverlay = structure === undefined ? null : JSON.stringify([this.base, selectedIds(structure), compare]);
     if (structure !== undefined) void this.setOverlay(structure, compare).catch(() => {});
-    const generation = this.sliceGeneration, overlay = this.overlayVersion;
+    const generation = this.sliceGeneration,
+      overlay = this.overlayVersion;
     await this.ready;
-    if (this.disposed || baseVersion !== this.baseVersion || generation !== this.sliceGeneration || overlay !== this.overlayVersion
-        || (requestedOverlay !== null && requestedOverlay !== this.requestedOverlay)) throw new LocalCTSupersededError();
+    if (
+      this.disposed ||
+      baseVersion !== this.baseVersion ||
+      generation !== this.sliceGeneration ||
+      overlay !== this.overlayVersion ||
+      (requestedOverlay !== null && requestedOverlay !== this.requestedOverlay)
+    )
+      throw new LocalCTSupersededError();
     const includeOverlays = this.overlayReady;
     return new Promise((resolve, reject) => {
       // A model-plane view can request the same anatomical plane as the CT
@@ -304,7 +380,8 @@ export class LocalCTSession {
     this.ensureActive();
     if (signal?.aborted) throw new LocalCTSupersededError();
     if (this.quality !== 'full') throw new LocalCTUnsupportedError('GPU volume rendering requires full-resolution masks.');
-    const ids = selectedIds(selection), baseVersion = this.baseVersion;
+    const ids = selectedIds(selection),
+      baseVersion = this.baseVersion;
     await abortable(this.setOverlay(ids, compare), signal);
     const version = this.overlayVersion;
     await abortable(this.ready, signal);
@@ -313,7 +390,10 @@ export class LocalCTSession {
     const sources = new Map<string, GPUVolumeSource>();
     const source = (descriptor: VolumeDescriptor) => {
       let result = sources.get(descriptor.key);
-      if (!result) { result = this.gpuSource(descriptor, version, signal); sources.set(descriptor.key, result); }
+      if (!result) {
+        result = this.gpuSource(descriptor, version, signal);
+        sources.set(descriptor.key, result);
+      }
       return result;
     };
     const overlays = ids.map(id => {
@@ -327,29 +407,39 @@ export class LocalCTSession {
 
   private gpuSource(descriptor: VolumeDescriptor, overlayVersion?: number, lifetimeSignal?: AbortSignal): GPUVolumeSource {
     if (descriptor.quality === 'preview') throw new LocalCTUnsupportedError('GPU volume rendering requires full-resolution data.');
-    const version = this.ctVersion, key = descriptor.key;
+    const version = this.ctVersion,
+      key = descriptor.key;
     const assertCurrent = () => {
       this.ensureActive();
-      if (lifetimeSignal?.aborted || version !== this.ctVersion || !this.descriptor
-          || (overlayVersion === undefined ? this.descriptor.key !== key : overlayVersion !== this.overlayVersion)) {
+      if (
+        lifetimeSignal?.aborted ||
+        version !== this.ctVersion ||
+        !this.descriptor ||
+        (overlayVersion === undefined ? this.descriptor.key !== key : overlayVersion !== this.overlayVersion)
+      ) {
         throw new LocalCTSupersededError();
       }
     };
     // Metadata is small. Isolate it from caller mutation while keeping native
     // voxels and the authoritative descriptor under worker/session ownership.
     const snapshot = structuredClone(descriptor);
-    return { descriptor: snapshot, readSlab: async (zStart, depth, signal) => {
-      assertCurrent();
-      if (signal?.aborted) throw new LocalCTSupersededError();
-      const range = gpuVolumeSlabRange(descriptor, zStart, depth);
-      const bytes = await this.rpc({ type: 'gpu-slab', ctVersion: version, overlayVersion,
-        slot: overlayVersion === undefined ? 'ct' : 'mask', volumeKey: key, zStart, depth }, [],
-      [lifetimeSignal, signal].filter((value): value is AbortSignal => !!value)) as ArrayBuffer;
-      assertCurrent();
-      if (signal?.aborted) throw new LocalCTSupersededError();
-      if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== range.byteLength) throw new Error('GPU volume slab has an unexpected byte count');
-      return bytes;
-    } };
+    return {
+      descriptor: snapshot,
+      readSlab: async (zStart, depth, signal) => {
+        assertCurrent();
+        if (signal?.aborted) throw new LocalCTSupersededError();
+        const range = gpuVolumeSlabRange(descriptor, zStart, depth);
+        const bytes = (await this.rpc(
+          { type: 'gpu-slab', ctVersion: version, overlayVersion, slot: overlayVersion === undefined ? 'ct' : 'mask', volumeKey: key, zStart, depth },
+          [],
+          [lifetimeSignal, signal].filter((value): value is AbortSignal => !!value),
+        )) as ArrayBuffer;
+        assertCurrent();
+        if (signal?.aborted) throw new LocalCTSupersededError();
+        if (!(bytes instanceof ArrayBuffer) || bytes.byteLength !== range.byteLength) throw new Error('GPU volume slab has an unexpected byte count');
+        return bytes;
+      },
+    };
   }
 
   async probe(ras: Point): Promise<{ hu: number | null; voxel?: Point }> {
@@ -368,9 +458,12 @@ export class LocalCTSession {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.descriptorController.abort(); this.ctController.abort(); this.overlayController.abort();
+    this.descriptorController.abort();
+    this.ctController.abort();
+    this.overlayController.abort();
     this.invalidateSlices();
-    this.probeQueued?.reject(new LocalCTSupersededError()); this.probeQueued = null;
+    this.probeQueued?.reject(new LocalCTSupersededError());
+    this.probeQueued = null;
     for (const pending of this.pending.values()) pending.reject(new LocalCTSupersededError());
     this.pending.clear();
     this.worker.terminate();
@@ -382,8 +475,9 @@ export class LocalCTSession {
   private async initialize(base: string, baseVersion: number): Promise<void> {
     const signal = this.descriptorController.signal;
     let descriptor: VolumeDescriptor;
-    try { descriptor = validateDescriptor(await this.json<VolumeDescriptor>(`${base}/image-volume?quality=${this.quality}`, signal), 'ct'); }
-    catch (error) {
+    try {
+      descriptor = validateDescriptor(await this.json<VolumeDescriptor>(`${base}/image-volume?quality=${this.quality}`, signal), 'ct');
+    } catch (error) {
       if (signal.aborted || this.disposed || baseVersion !== this.baseVersion) throw new LocalCTSupersededError();
       throw error;
     }
@@ -394,7 +488,10 @@ export class LocalCTSession {
     }
     const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
     const budget = this.options.maxCTBytes ?? localCTBudget(memory);
-    if (descriptor.byte_length > budget) throw new LocalCTUnsupportedError(`This CT needs ${Math.ceil(descriptor.byte_length / 1024 ** 2)} MiB, above this device’s ${Math.floor(budget / 1024 ** 2)} MiB local CT budget; server previews remain available.`);
+    if (descriptor.byte_length > budget)
+      throw new LocalCTUnsupportedError(
+        `This CT needs ${Math.ceil(descriptor.byte_length / 1024 ** 2)} MiB, above this device’s ${Math.floor(budget / 1024 ** 2)} MiB local CT budget; server previews remain available.`,
+      );
     this.ctController.abort();
     this.ctController = new AbortController();
     const controller = this.ctController;
@@ -406,20 +503,33 @@ export class LocalCTSession {
     await this.rpc({ type: 'overlay', ctVersion: version, overlayVersion: this.overlayVersion, current: null, parent: null });
     if (this.disposed || controller.signal.aborted || version !== this.ctVersion || baseVersion !== this.baseVersion) throw new LocalCTSupersededError();
     this.descriptor = descriptor;
-    let loadedBytes = 0, loadedChunks = 0;
-    const report = () => this.options.onProgress?.({ stage: 'ct', loadedBytes, totalBytes: descriptor.byte_length,
-      loadedChunks, totalChunks: descriptor.chunks.length, ready: loadedChunks === descriptor.chunks.length });
+    let loadedBytes = 0,
+      loadedChunks = 0;
+    const report = () =>
+      this.options.onProgress?.({
+        stage: 'ct',
+        loadedBytes,
+        totalBytes: descriptor.byte_length,
+        loadedChunks,
+        totalChunks: descriptor.chunks.length,
+        ready: loadedChunks === descriptor.chunks.length,
+      });
     report();
-    this.ctPromise = this.download(descriptor.chunks.map(chunk => ({ descriptor, chunk, slot: 'ct' })), controller.signal,
+    this.ctPromise = this.download(
+      descriptor.chunks.map(chunk => ({ descriptor, chunk, slot: 'ct' })),
+      controller.signal,
       async ({ chunk }, bytes) => {
         if (this.disposed || controller.signal.aborted || version !== this.ctVersion) throw new LocalCTSupersededError();
         await this.rpc({ type: 'chunk', ctVersion: version, slot: 'ct', index: chunk.index, bytes }, [bytes]);
-        loadedBytes += chunk.byte_length; loadedChunks++; report();
-      }).catch(error => {
-        if (controller.signal.aborted || this.disposed || version !== this.ctVersion) throw new LocalCTSupersededError();
-        controller.abort();
-        throw error;
-      });
+        loadedBytes += chunk.byte_length;
+        loadedChunks++;
+        report();
+      },
+    ).catch(error => {
+      if (controller.signal.aborted || this.disposed || version !== this.ctVersion) throw new LocalCTSupersededError();
+      controller.abort();
+      throw error;
+    });
     this.ctPromise.catch(() => {});
   }
 
@@ -429,8 +539,11 @@ export class LocalCTSession {
     return response.json() as Promise<T>;
   }
 
-  private async download(queue: { descriptor: VolumeDescriptor; chunk: VolumeChunk; slot: string }[], signal: AbortSignal,
-      receive: (entry: { descriptor: VolumeDescriptor; chunk: VolumeChunk; slot: string }, bytes: ArrayBuffer) => Promise<void>): Promise<void> {
+  private async download(
+    queue: { descriptor: VolumeDescriptor; chunk: VolumeChunk; slot: string }[],
+    signal: AbortSignal,
+    receive: (entry: { descriptor: VolumeDescriptor; chunk: VolumeChunk; slot: string }, bytes: ArrayBuffer) => Promise<void>,
+  ): Promise<void> {
     let next = 0;
     const run = async () => {
       while (!signal.aborted) {
@@ -446,7 +559,10 @@ export class LocalCTSession {
           if (signal.aborted) throw new LocalCTSupersededError();
           if (bytes.byteLength !== entry.chunk.byte_length) throw new Error('Local CT chunk has an unexpected byte count');
           await receive(entry, bytes);
-        } finally { this.activeDownloads--; this.downloadWaiters.shift()?.(); }
+        } finally {
+          this.activeDownloads--;
+          this.downloadWaiters.shift()?.();
+        }
       }
       throw new LocalCTSupersededError();
     };
@@ -455,12 +571,20 @@ export class LocalCTSession {
 
   private acquireDownload(signal: AbortSignal): Promise<void> {
     if (signal.aborted) return Promise.reject(new LocalCTSupersededError());
-    if (this.activeDownloads < 2) { this.activeDownloads++; return Promise.resolve(); }
+    if (this.activeDownloads < 2) {
+      this.activeDownloads++;
+      return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       const start = () => {
         signal.removeEventListener('abort', abort);
-        if (signal.aborted) { this.downloadWaiters.shift()?.(); reject(new LocalCTSupersededError()); }
-        else { this.activeDownloads++; resolve(); }
+        if (signal.aborted) {
+          this.downloadWaiters.shift()?.();
+          reject(new LocalCTSupersededError());
+        } else {
+          this.activeDownloads++;
+          resolve();
+        }
       };
       const abort = () => {
         const index = this.downloadWaiters.indexOf(start);
@@ -478,12 +602,32 @@ export class LocalCTSession {
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
       const uniqueSignals = [...new Set(signals)];
-      const cleanup = () => { for (const signal of uniqueSignals) signal.removeEventListener('abort', abort); };
-      const abort = () => { this.pending.delete(id); cleanup(); reject(new LocalCTSupersededError()); };
+      const cleanup = () => {
+        for (const signal of uniqueSignals) signal.removeEventListener('abort', abort);
+      };
+      const abort = () => {
+        this.pending.delete(id);
+        cleanup();
+        reject(new LocalCTSupersededError());
+      };
       for (const signal of uniqueSignals) signal.addEventListener('abort', abort, { once: true });
-      this.pending.set(id, { resolve: result => { cleanup(); resolve(result); }, reject: error => { cleanup(); reject(error); } });
-      try { this.worker.postMessage({ ...command, id }, transfer); }
-      catch (error) { this.pending.delete(id); cleanup(); reject(error); }
+      this.pending.set(id, {
+        resolve: result => {
+          cleanup();
+          resolve(result);
+        },
+        reject: error => {
+          cleanup();
+          reject(error);
+        },
+      });
+      try {
+        this.worker.postMessage({ ...command, id }, transfer);
+      } catch (error) {
+        this.pending.delete(id);
+        cleanup();
+        reject(error);
+      }
     });
   }
 
@@ -495,17 +639,28 @@ export class LocalCTSession {
         const [plane, request] = this.slices.entries().next().value!;
         this.slices.delete(plane);
         try {
-          const result = await this.rpc({ type: 'slice', ctVersion: this.ctVersion, overlayVersion: request.overlay,
-            plane: request.plane, position: request.position, native: request.native, consumer: request.consumer,
-            includeOverlays: request.includeOverlays }) as LocalSlice;
+          const result = (await this.rpc({
+            type: 'slice',
+            ctVersion: this.ctVersion,
+            overlayVersion: request.overlay,
+            plane: request.plane,
+            position: request.position,
+            native: request.native,
+            consumer: request.consumer,
+            includeOverlays: request.includeOverlays,
+          })) as LocalSlice;
           // A completed frame is useful during continuous dragging. Only
           // unstarted requests are coalesced; dropping every in-flight result
           // whenever another position is queued would starve the display.
           if (request.generation !== this.sliceGeneration || request.overlay !== this.overlayVersion) request.reject(new LocalCTSupersededError());
           else request.resolve(result);
-        } catch (error) { request.reject(error instanceof Error ? error : new Error(String(error))); }
+        } catch (error) {
+          request.reject(error instanceof Error ? error : new Error(String(error)));
+        }
       }
-    } finally { this.slicing = false; }
+    } finally {
+      this.slicing = false;
+    }
   }
 
   private async drainProbes(): Promise<void> {
@@ -513,14 +668,19 @@ export class LocalCTSession {
     this.probing = true;
     try {
       while (this.probeQueued && !this.disposed) {
-        const request = this.probeQueued; this.probeQueued = null;
+        const request = this.probeQueued;
+        this.probeQueued = null;
         try {
-          const result = await this.rpc({ type: 'probe', ctVersion: this.ctVersion, ras: request.ras }) as { hu: number | null; voxel?: Point };
+          const result = (await this.rpc({ type: 'probe', ctVersion: this.ctVersion, ras: request.ras })) as { hu: number | null; voxel?: Point };
           if (request.generation !== this.latestProbe) request.reject(new LocalCTSupersededError());
           else request.resolve(result);
-        } catch (error) { request.reject(error instanceof Error ? error : new Error(String(error))); }
+        } catch (error) {
+          request.reject(error instanceof Error ? error : new Error(String(error)));
+        }
       }
-    } finally { this.probing = false; }
+    } finally {
+      this.probing = false;
+    }
   }
 
   private invalidateSlices(): void {
@@ -529,8 +689,10 @@ export class LocalCTSession {
     this.slices.clear();
   }
   private cancelOverlay(): void {
-    this.overlayController.abort(); this.overlayController = new AbortController();
-    this.overlayVersion++; this.requestedOverlay = '';
+    this.overlayController.abort();
+    this.overlayController = new AbortController();
+    this.overlayVersion++;
+    this.requestedOverlay = '';
     this.overlayPromise = Promise.resolve();
     this.overlayError = null;
     this.overlayReady = false;
@@ -548,7 +710,9 @@ export class LocalCTSession {
   }
   private fail(error: Error): void {
     this.fatal = error;
-    this.descriptorController.abort(); this.ctController.abort(); this.overlayController.abort();
+    this.descriptorController.abort();
+    this.ctController.abort();
+    this.overlayController.abort();
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
     this.options.onError?.(error);
@@ -558,10 +722,20 @@ export class LocalCTSession {
 /** Full-resolution HU and label pixels for the stationary view; no window settings
  * are sent because window/level remains a GPU-only operation on this frame.
  */
-export async function fetchCTDetail(base: string, plane: Plane, position: number,
-    structure?: CTSelection, compare = false, signal?: AbortSignal, native?: { axis: 0 | 1 | 2; index: number }): Promise<LocalSlice> {
+export async function fetchCTDetail(
+  base: string,
+  plane: Plane,
+  position: number,
+  structure?: CTSelection,
+  compare = false,
+  signal?: AbortSignal,
+  native?: { axis: 0 | 1 | 2; index: number },
+): Promise<LocalSlice> {
   const query = new URLSearchParams({ plane, position_mm: String(position), compare: String(compare) });
-  if (native) { query.set('native_axis', String(native.axis)); query.set('native_index', String(native.index)); }
+  if (native) {
+    query.set('native_axis', String(native.axis));
+    query.set('native_index', String(native.index));
+  }
   const ids = selectedIds(structure ?? null);
   if (typeof structure === 'string') query.set('structure_id', structure);
   else for (const id of ids) query.append('structure_ids', id);
@@ -569,23 +743,44 @@ export async function fetchCTDetail(base: string, plane: Plane, position: number
   if (!response.ok) throw new Error(`CT detail request failed (${response.status})`);
   const header = response.headers.get('X-CT-Frame');
   if (!header) throw new Error('CT detail metadata is missing');
-  const frame = JSON.parse(header) as ImageContext & { meta: LocalSlice['meta']; dtype: string; pixels: number; current_offset: number | null;
-    parent_offset: number | null; hu_encoding?: 'byte-shuffle';
-    overlays?: { id: string; current_offset: number; parent_offset: number | null }[] };
+  const frame = JSON.parse(header) as ImageContext & {
+    meta: LocalSlice['meta'];
+    dtype: string;
+    pixels: number;
+    current_offset: number | null;
+    parent_offset: number | null;
+    hu_encoding?: 'byte-shuffle';
+    overlays?: { id: string; current_offset: number; parent_offset: number | null }[];
+  };
   const pixels = frame.meta?.width * frame.meta?.height;
-  if (frame.dtype !== 'float32' || !Number.isSafeInteger(frame.meta?.width) || !Number.isSafeInteger(frame.meta?.height)
-      || frame.meta.width < 1 || frame.meta.height < 1 || !Number.isSafeInteger(pixels) || pixels < 1 || pixels > MAX_FULL_FRAME_PIXELS
-      || (frame.hu_encoding !== undefined && frame.hu_encoding !== 'byte-shuffle')
-      || frame.pixels !== pixels) throw new Error('Invalid CT detail layout');
-  const invalid = () => { throw new Error('Invalid CT detail layout'); };
+  if (
+    frame.dtype !== 'float32' ||
+    !Number.isSafeInteger(frame.meta?.width) ||
+    !Number.isSafeInteger(frame.meta?.height) ||
+    frame.meta.width < 1 ||
+    frame.meta.height < 1 ||
+    !Number.isSafeInteger(pixels) ||
+    pixels < 1 ||
+    pixels > MAX_FULL_FRAME_PIXELS ||
+    (frame.hu_encoding !== undefined && frame.hu_encoding !== 'byte-shuffle') ||
+    frame.pixels !== pixels
+  )
+    throw new Error('Invalid CT detail layout');
+  const invalid = () => {
+    throw new Error('Invalid CT detail layout');
+  };
   let expectedBytes = pixels * 4;
   if (frame.overlays !== undefined) {
-    if (!Array.isArray(frame.overlays) || frame.overlays.length !== ids.length
-        || frame.overlays.length > 128 || new Set(frame.overlays.map(layer => layer?.id)).size !== frame.overlays.length) invalid();
+    if (
+      !Array.isArray(frame.overlays) ||
+      frame.overlays.length !== ids.length ||
+      frame.overlays.length > 128 ||
+      new Set(frame.overlays.map(layer => layer?.id)).size !== frame.overlays.length
+    )
+      invalid();
     for (let index = 0; index < frame.overlays.length; index++) {
       const layer = frame.overlays[index];
-      if (!layer || typeof layer.id !== 'string' || !layer.id || layer.id !== ids[index]
-          || layer.current_offset !== expectedBytes) invalid();
+      if (!layer || typeof layer.id !== 'string' || !layer.id || layer.id !== ids[index] || layer.current_offset !== expectedBytes) invalid();
       expectedBytes += pixels;
       if (layer.parent_offset !== null) {
         if (!compare || layer.parent_offset !== expectedBytes) invalid();
@@ -593,11 +788,18 @@ export async function fetchCTDetail(base: string, plane: Plane, position: number
       }
     }
     const first = frame.overlays[0];
-    if ((frame.current_offset !== null && frame.current_offset !== first?.current_offset)
-        || (frame.parent_offset !== null && frame.parent_offset !== first?.parent_offset)) invalid();
+    if (
+      (frame.current_offset !== null && frame.current_offset !== first?.current_offset) ||
+      (frame.parent_offset !== null && frame.parent_offset !== first?.parent_offset)
+    )
+      invalid();
   } else {
-    if (ids.length > 1 || (frame.current_offset !== null && frame.current_offset !== pixels * 4)
-        || (frame.parent_offset !== null && (frame.current_offset === null || frame.parent_offset !== pixels * 5))) invalid();
+    if (
+      ids.length > 1 ||
+      (frame.current_offset !== null && frame.current_offset !== pixels * 4) ||
+      (frame.parent_offset !== null && (frame.current_offset === null || frame.parent_offset !== pixels * 5))
+    )
+      invalid();
     expectedBytes = frame.parent_offset !== null ? pixels * 6 : frame.current_offset !== null ? pixels * 5 : pixels * 4;
   }
   if (expectedBytes > MAX_CT_FRAME_BYTES) throw new Error('These CT overlays exceed the 256 MiB frame limit. Select fewer structures.');
@@ -607,10 +809,13 @@ export async function fetchCTDetail(base: string, plane: Plane, position: number
   let hu: Float32Array;
   if (shuffled) {
     hu = new Float32Array(pixels);
-    const destination = new Uint8Array(hu.buffer), source = new Uint8Array(bytes, 0, pixels * 4);
+    const destination = new Uint8Array(hu.buffer),
+      source = new Uint8Array(bytes, 0, pixels * 4);
     for (let index = 0; index < pixels; index++) {
-      destination[index * 4] = source[index]; destination[index * 4 + 1] = source[pixels + index];
-      destination[index * 4 + 2] = source[pixels * 2 + index]; destination[index * 4 + 3] = source[pixels * 3 + index];
+      destination[index * 4] = source[index];
+      destination[index * 4 + 1] = source[pixels + index];
+      destination[index * 4 + 2] = source[pixels * 2 + index];
+      destination[index * 4 + 3] = source[pixels * 3 + index];
     }
   } else hu = new Float32Array(bytes, 0, pixels);
   const label = (offset: number) => {
@@ -618,10 +823,16 @@ export async function fetchCTDetail(base: string, plane: Plane, position: number
     if (view.some(value => value !== 0 && value !== 1)) throw new Error('Invalid CT detail binary overlay');
     return shuffled ? view.slice() : view;
   };
-  const overlays = frame.overlays?.map(layer => ({ id: layer.id, current: label(layer.current_offset),
-    ...(layer.parent_offset !== null ? { parent: label(layer.parent_offset) } : {}) }));
-  const result: LocalSlice = { meta: frame.meta, hu,
-    current: overlays?.[0]?.current ?? (frame.current_offset === null ? new Uint8Array(pixels) : label(frame.current_offset)) };
+  const overlays = frame.overlays?.map(layer => ({
+    id: layer.id,
+    current: label(layer.current_offset),
+    ...(layer.parent_offset !== null ? { parent: label(layer.parent_offset) } : {}),
+  }));
+  const result: LocalSlice = {
+    meta: frame.meta,
+    hu,
+    current: overlays?.[0]?.current ?? (frame.current_offset === null ? new Uint8Array(pixels) : label(frame.current_offset)),
+  };
   for (const key of ['reference_image_id', 'modality', 'scalar', 'presentation', 'source'] as const) {
     if (frame[key] !== undefined) Object.assign(result, { [key]: frame[key] });
   }

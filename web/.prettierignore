@@ -9,3 +9,6 @@ src/lib/slicer-volume-presets.generated.ts
 
 # Test inputs compared as data
 tests/fixtures/
+
+# HTML pages loaded by the browser smoke scripts; keep them byte-stable
+tests/*.html

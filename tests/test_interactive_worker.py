@@ -25,7 +25,7 @@ from test_interactive_review import example, execute_next  # noqa: F401 (fixture
 
 TESTS = Path(__file__).resolve().parent
 ENGINE = "fake_interactive_engine:Engine"
-PROMPTS = [{"id": "point-1", "kind": "point", "ras": [0., 0., 0.], "include": True}]
+PROMPTS = [{"id": "point-1", "kind": "point", "ras": [0.0, 0.0, 0.0], "include": True}]
 BATCHES = [{"end": 1, "autozoom": True, "full_refine": False}]
 
 
@@ -39,22 +39,29 @@ def child_environment(tmp_path, monkeypatch):
 
 @pytest.fixture
 def worker(child_environment, tmp_path):
-    image = nib.Nifti1Image(np.arange(6 * 7 * 8, dtype=np.int16).reshape((6, 7, 8)), np.diag([.8, .9, 2., 1.]))
+    image = nib.Nifti1Image(np.arange(6 * 7 * 8, dtype=np.int16).reshape((6, 7, 8)), np.diag([0.8, 0.9, 2.0, 1.0]))
     image.header.set_xyzt_units("mm")
     nib.save(image, tmp_path / "ct.nii.gz")
     mask = np.zeros(image.shape, np.uint8)
     mask[2:4, 2:5, 3:6] = 1
     imaging._save_mask(mask, image, tmp_path / "mask.nii.gz")
-    worker = InteractiveWorker(ENGINE, cancel_grace=1., stall_seconds=30.)
+    worker = InteractiveWorker(ENGINE, cancel_grace=1.0, stall_seconds=30.0)
     yield worker
     worker.release()
 
 
-def predict(worker, directory, session_key="warm", name="candidate.nii.gz", *,
-            progress=lambda message: None, cancelled=lambda: False):
-    return worker.predict(directory / "ct.nii.gz", directory / "mask.nii.gz", PROMPTS, directory / name,
-                          progress, cancelled, session_key, batches=BATCHES,
-                          options={"autozoom": True, "start_empty": False})
+def predict(worker, directory, session_key="warm", name="candidate.nii.gz", *, progress=lambda message: None, cancelled=lambda: False):
+    return worker.predict(
+        directory / "ct.nii.gz",
+        directory / "mask.nii.gz",
+        PROMPTS,
+        directory / name,
+        progress,
+        cancelled,
+        session_key,
+        batches=BATCHES,
+        options={"autozoom": True, "start_empty": False},
+    )
 
 
 def alive(pid):
@@ -83,8 +90,7 @@ def test_cooperative_cancellation_stops_the_request_and_keeps_the_child(worker, 
     messages = []
     started = time.monotonic()
     with pytest.raises(SegmentationCancelled, match="was cancelled"):
-        predict(worker, tmp_path, "cooperative", "cancelled.nii.gz",
-                progress=messages.append, cancelled=lambda: bool(messages))
+        predict(worker, tmp_path, "cooperative", "cancelled.nii.gz", progress=messages.append, cancelled=lambda: bool(messages))
     assert time.monotonic() - started < worker.cancel_grace
     assert worker.pid == pid and not (tmp_path / "cancelled.nii.gz").exists()
     retry = predict(worker, tmp_path, name="retry.nii.gz")
@@ -103,11 +109,10 @@ def test_progress_callback_errors_cancel_the_request_in_the_child(worker, tmp_pa
 
 
 def test_ignored_cancellation_is_forced_after_the_grace_period(worker, tmp_path):
-    pids, worker.cancel_grace = [], .5
+    pids, worker.cancel_grace = [], 0.5
     started = time.monotonic()
     with pytest.raises(SegmentationCancelled, match="did not stop within 0.5 s"):
-        predict(worker, tmp_path, "uninterruptible", progress=lambda message: pids.append(worker.pid),
-                cancelled=lambda: bool(pids))
+        predict(worker, tmp_path, "uninterruptible", progress=lambda message: pids.append(worker.pid), cancelled=lambda: bool(pids))
     assert worker.cancel_grace <= time.monotonic() - started < 15
     assert worker.pid is None and not alive(pids[0])
     retry = predict(worker, tmp_path, name="retry.nii.gz")
@@ -137,7 +142,7 @@ def test_engine_failure_replaces_the_child_but_invalid_input_keeps_it(worker, tm
 
 def test_silent_child_is_stopped_as_hung(worker, tmp_path):
     pid = predict(worker, tmp_path)["pid"]
-    worker.stall_seconds = .5
+    worker.stall_seconds = 0.5
     with pytest.raises(RuntimeError, match="no progress for 0.5 s"):
         predict(worker, tmp_path, "silent")
     assert worker.pid is None and not alive(pid)
@@ -163,15 +168,15 @@ def test_release_stops_the_child_after_the_engine_releases(worker, tmp_path, chi
 
 
 def test_child_that_cannot_start_fails_clearly(child_environment, tmp_path):
-    worker = InteractiveWorker("fake_interactive_engine:Missing", stall_seconds=30.)
+    worker = InteractiveWorker("fake_interactive_engine:Missing", stall_seconds=30.0)
     with pytest.raises(RuntimeError, match="could not start; it exited with status 1"):
-        worker.predict(tmp_path / "ct.nii.gz", tmp_path / "mask.nii.gz", [], tmp_path / "out.nii.gz",
-                       lambda message: None, lambda: False, "warm")
+        worker.predict(tmp_path / "ct.nii.gz", tmp_path / "mask.nii.gz", [], tmp_path / "out.nii.gz", lambda message: None, lambda: False, "warm")
     assert worker.pid is None
 
 
 def test_child_running_other_code_is_refused(worker, tmp_path, monkeypatch):
     from scan3d import interactive_worker
+
     monkeypatch.setattr(interactive_worker, "PROTOCOL", interactive_worker.PROTOCOL + 1)
     with pytest.raises(RuntimeError, match="different scan3d code"):
         predict(worker, tmp_path)
@@ -211,8 +216,7 @@ assert result["pid"] != os.getpid() and service.interactive_runtime is None
 assert not {"torch", "nnInteractive"} & set(sys.modules)
 print("parent stayed torch-free")
 """
-    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path)],
-                               capture_output=True, text=True, timeout=60)
+    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True, timeout=60)
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "parent stayed torch-free"
 

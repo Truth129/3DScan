@@ -21,7 +21,7 @@ from . import imaging, review_volume
 
 
 _IMPLEMENTATION = "physical-cropped-mask-union-occupancy-v1"
-_MAX_BYTES = 8 * 1024 ** 2
+_MAX_BYTES = 8 * 1024**2
 _STREAM_BYTES = 256 * 1024
 
 
@@ -42,7 +42,7 @@ def _generation_lock(cache_dir, cancelled):
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                threading.Event().wait(.05)
+                threading.Event().wait(0.05)
         try:
             _cancelled(cancelled)
             yield
@@ -105,8 +105,7 @@ def _pool_cached_mask(cache_dir, descriptor, output, crop_origin, native_shape, 
                 raise ValueError("Cached native mask has an incorrect chunk length")
 
 
-def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, reference_image_id=None,
-                      cancelled=None):
+def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, reference_image_id=None, cancelled=None):
     """Return a source-bound, content-addressed union presentation descriptor.
 
     ``masks`` is an iterable of (public structure ID, native binary mask path).
@@ -134,17 +133,23 @@ def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, referenc
     for structure_id, path in sorted(selected.items()):
         _cancelled(cancelled)
         inputs.append((structure_id, path, review_volume._file_digest(path)))
-    key = review_volume._identity({"implementation": _IMPLEMENTATION,
-        "native_implementation": review_volume._IMPLEMENTATION,
-        "margin_implementation": "physical-mask-margin-v1", "max_bytes": _MAX_BYTES,
-        "reference_image_id": reference_image_id, "reference_sha256": reference_digest,
-        "reference_geometry": reference, "display_margin_mm": margin_mm,
-        "inputs": [{"id": structure_id, "sha256": digest} for structure_id, _, digest in inputs]})
+    key = review_volume._identity(
+        {
+            "implementation": _IMPLEMENTATION,
+            "native_implementation": review_volume._IMPLEMENTATION,
+            "margin_implementation": "physical-mask-margin-v1",
+            "max_bytes": _MAX_BYTES,
+            "reference_image_id": reference_image_id,
+            "reference_sha256": reference_digest,
+            "reference_geometry": reference,
+            "display_margin_mm": margin_mm,
+            "inputs": [{"id": structure_id, "sha256": digest} for structure_id, _, digest in inputs],
+        }
+    )
 
     def validate():
         _cancelled(cancelled)
-        if review_volume._file_digest(reference_path) != reference_digest or any(
-                review_volume._file_digest(path) != digest for _, path, digest in inputs):
+        if review_volume._file_digest(reference_path) != reference_digest or any(review_volume._file_digest(path) != digest for _, path, digest in inputs):
             raise ValueError("Volume mask input changed while reading; retry the request")
 
     cached = review_volume._read_cached(cache_dir, key)
@@ -162,8 +167,9 @@ def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, referenc
             # Native validation and exact physical dilation happen before
             # pooling. Only one original mask is decoded at a time; its crop is
             # an immutable reusable cache, never an edited measurement mask.
-            descriptors.append(review_volume.mask_volume(reference_path, path, cache_dir,
-                "full", margin_mm, reference_image_id=reference_image_id, validate=validate))
+            descriptors.append(
+                review_volume.mask_volume(reference_path, path, cache_dir, "full", margin_mm, reference_image_id=reference_image_id, validate=validate)
+            )
         validate()
         nonempty = [entry for entry in descriptors if not entry["empty"]]
         if nonempty:
@@ -182,17 +188,35 @@ def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, referenc
         affine = reference_affine.copy()
         affine[:3, :3] = reference_affine[:3, :3] @ np.diag(step)
         affine[:3, 3] = imaging._world(reference_affine, origin)
-        geometry = {"shape": target_shape.tolist(), "affine_ras": affine.tolist(),
+        geometry = {
+            "shape": target_shape.tolist(),
+            "affine_ras": affine.tolist(),
             "spacing": np.linalg.norm(affine[:3, :3], axis=0).tolist(),
             "bounds_ras": imaging._bounds(target_shape, affine).tolist(),
-            "center_ras": imaging._world(affine, (target_shape - 1) / 2).tolist()}
-        descriptor = {"schema_version": 1, "key": key, "kind": "mask", "dtype": "uint8",
-            "quality": "preview", "presentation_only": True, "volume_mask_union": True,
+            "center_ras": imaging._world(affine, (target_shape - 1) / 2).tolist(),
+        }
+        descriptor = {
+            "schema_version": 1,
+            "key": key,
+            "kind": "mask",
+            "dtype": "uint8",
+            "quality": "preview",
+            "presentation_only": True,
+            "volume_mask_union": True,
             "approximate": bool(np.any(target_shape != native_shape)),
-            "pooling": "foreground-centre-occupancy", "shape": target_shape.tolist(),
-            "affine_ras": affine.tolist(), "geometry": geometry, "reference_geometry": reference,
-            "reference_image_id": reference_image_id, "origin_ijk": origin.tolist(),
-            "native_crop_origin_ijk": crop_origin.tolist(), "native_crop_shape": native_shape.tolist(),
-            "selected_structure_ids": sorted(selected), "display_margin_mm": margin_mm,
-            "slope": 1.0, "intercept": 0.0, "empty": not nonempty}
+            "pooling": "foreground-centre-occupancy",
+            "shape": target_shape.tolist(),
+            "affine_ras": affine.tolist(),
+            "geometry": geometry,
+            "reference_geometry": reference,
+            "reference_image_id": reference_image_id,
+            "origin_ijk": origin.tolist(),
+            "native_crop_origin_ijk": crop_origin.tolist(),
+            "native_crop_shape": native_shape.tolist(),
+            "selected_structure_ids": sorted(selected),
+            "display_margin_mm": margin_mm,
+            "slope": 1.0,
+            "intercept": 0.0,
+            "empty": not nonempty,
+        }
         return review_volume._write(cache_dir, descriptor, output, validate=validate)

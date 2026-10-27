@@ -51,12 +51,11 @@ def structure(identity, mask="unused.nii.gz", color="#b25566"):
 
 def mask_file(path, offset=0):
     values = np.zeros((26, 28, 24), np.uint8)
-    values[4 + offset:19, 5:22, 3:19] = 1
+    values[4 + offset : 19, 5:22, 3:19] = 1
     values[11:16, 12:16, 8:12] = 0
     angle = np.deg2rad(27)
     affine = np.eye(4)
-    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0],
-                              [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.8, 1.3, 2.1])
+    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.8, 1.3, 2.1])
     affine[:3, 3] = [27, -54, 882]
     image = nib.Nifti1Image(values, affine)
     image.header.set_xyzt_units("mm")
@@ -67,9 +66,13 @@ def mask_file(path, offset=0):
 def write_glb(path, document, binary):
     encoded = json.dumps(document, separators=(",", ":"), ensure_ascii=True).encode()
     encoded += b" " * (-len(encoded) % 4)
-    Path(path).write_bytes(struct.pack("<III", 0x46546C67, 2, 28 + len(encoded) + len(binary))
-                           + struct.pack("<II", len(encoded), 0x4E4F534A) + encoded
-                           + struct.pack("<II", len(binary), 0x004E4942) + bytes(binary))
+    Path(path).write_bytes(
+        struct.pack("<III", 0x46546C67, 2, 28 + len(encoded) + len(binary))
+        + struct.pack("<II", len(encoded), 0x4E4F534A)
+        + encoded
+        + struct.pack("<II", len(binary), 0x004E4942)
+        + bytes(binary)
+    )
     return path
 
 
@@ -96,15 +99,17 @@ def decode(document, binary, node, part=0):
     """World positions per glTF/KHR_mesh_quantization: translation + scale * POSITION."""
     primitive = document["meshes"][node["mesh"]]["primitives"][part]
     positions = values(document, binary, primitive["attributes"]["POSITION"])
-    return (positions * node.get("scale", [1, 1, 1]) + node.get("translation", [0, 0, 0]),
-            values(document, binary, primitive["attributes"]["NORMAL"]),
-            values(document, binary, primitive["indices"]).reshape(-1, 3))
+    return (
+        positions * node.get("scale", [1, 1, 1]) + node.get("translation", [0, 0, 0]),
+        values(document, binary, primitive["attributes"]["NORMAL"]),
+        values(document, binary, primitive["indices"]).reshape(-1, 3),
+    )
 
 
-def sheet(rows, columns, spacing=.0007):
+def sheet(rows, columns, spacing=0.0007):
     """A rippled open surface in scene metres, triangulated row by row like a contour."""
     y, x = np.mgrid[0:rows, 0:columns].astype(float) * spacing
-    positions = np.stack([x.ravel() - .1, .002 * np.sin(40 * x.ravel()) + 1.1, y.ravel() + .05], axis=1)
+    positions = np.stack([x.ravel() - 0.1, 0.002 * np.sin(40 * x.ravel()) + 1.1, y.ravel() + 0.05], axis=1)
     index = np.arange(rows * columns).reshape(rows, columns)
     a, b, c, d = (corner.ravel() for corner in (index[:-1, :-1], index[:-1, 1:], index[1:, :-1], index[1:, 1:]))
     faces = np.stack([np.stack([a, c, b], 1), np.stack([b, c, d], 1)], 1).reshape(-1, 3)
@@ -127,20 +132,24 @@ def test_display_glb_is_quantized_aligned_and_decodes_within_the_grid_bound(tmp_
     liver, aorta = box(*LIVER), box(*AORTA)
     path = tmp_path / "model.glb"
     report = surfaces._write_model([(structure("total:liver"), liver), (structure("total:aorta"), aorta)], path)
-    assert report["display_quantization"] == {"encoding": "KHR_mesh_quantization", "position_step_mm": STEP * 1000,
-                                              "position_error_bound_mm": pytest.approx(STEP * 1000 * 3 ** .5 / 2),
-                                              "normals": "int8"}
+    assert report["display_quantization"] == {
+        "encoding": "KHR_mesh_quantization",
+        "position_step_mm": STEP * 1000,
+        "position_error_bound_mm": pytest.approx(STEP * 1000 * 3**0.5 / 2),
+        "normals": "int8",
+    }
     document, binary = surfaces._read_glb(path)
     assert document["extensionsUsed"] == document["extensionsRequired"] == ["KHR_mesh_quantization"]
-    assert document["extras"] == {"units": "metres", "coordinates": "scene=(-R,S,A)/1000",
-                                  "detailed": False, "source": "segmentation masks"}
+    assert document["extras"] == {"units": "metres", "coordinates": "scene=(-R,S,A)/1000", "detailed": False, "source": "segmentation masks"}
     assert all(view["byteOffset"] % 4 == 0 for view in document["bufferViews"])
     errors = []
     for node, expected in zip(document["nodes"], (liver, aorta), strict=True):
         primitive = document["meshes"][node["mesh"]]["primitives"][0]
-        position, normal, index = (document["accessors"][primitive["attributes"]["POSITION"]],
-                                   document["accessors"][primitive["attributes"]["NORMAL"]],
-                                   document["accessors"][primitive["indices"]])
+        position, normal, index = (
+            document["accessors"][primitive["attributes"]["POSITION"]],
+            document["accessors"][primitive["attributes"]["NORMAL"]],
+            document["accessors"][primitive["indices"]],
+        )
         assert (position["componentType"], position.get("normalized", False)) == (5123, False)
         assert (normal["componentType"], normal["normalized"]) == (5120, True)
         assert index["componentType"] == 5123
@@ -152,7 +161,7 @@ def test_display_glb_is_quantized_aligned_and_decodes_within_the_grid_bound(tmp_
         assert position["min"] == grid.min(axis=0).tolist() and position["max"] == grid.max(axis=0).tolist()
         positions, normals, faces = decode(document, binary, node)
         np.testing.assert_array_equal(faces, expected[2])
-        assert np.abs(normals - expected[1]).max() <= .5 / 127 + 1e-7
+        assert np.abs(normals - expected[1]).max() <= 0.5 / 127 + 1e-7
         errors.append(np.abs(positions - expected[0]).max() * 1000)
         # A positive uniform scale keeps outward winding and normal directions.
         a, b, c = (positions[faces[:, i]] - positions.mean(axis=0) for i in range(3))
@@ -165,14 +174,14 @@ def test_display_glb_is_quantized_aligned_and_decodes_within_the_grid_bound(tmp_
 
 def test_quantization_is_idempotent_on_one_absolute_grid():
     rng = np.random.default_rng(7)
-    points = rng.uniform([-.35, -.2, .9], [.25, .3, 1.4], (600, 3)).astype("<f4")
+    points = rng.uniform([-0.35, -0.2, 0.9], [0.25, 0.3, 1.4], (600, 3)).astype("<f4")
     normals = rng.normal(size=(600, 3))
     normals = (normals / np.linalg.norm(normals, axis=1, keepdims=True)).astype("<f4")
     faces = np.arange(600, dtype="<u4").reshape(-1, 3)
     quantized = surfaces._quantize((points, normals, faces))
     positions, decoded_normals, decoded_faces = surfaces._float_arrays(quantized)
     assert quantized.scale == STEP and np.abs(positions - points).max() <= STEP / 2
-    assert np.abs(decoded_normals - normals).max() <= .5 / 127 + 1e-7
+    assert np.abs(decoded_normals - normals).max() <= 0.5 / 127 + 1e-7
     np.testing.assert_array_equal(decoded_faces, faces)
     # Encoding decoded data again reproduces the exact integers and transform.
     again = surfaces._quantize(surfaces._float_arrays(quantized))
@@ -180,14 +189,14 @@ def test_quantization_is_idempotent_on_one_absolute_grid():
     np.testing.assert_array_equal(again.normals, quantized.normals)
     assert (again.translation, again.scale, again.parts) == (quantized.translation, quantized.scale, ((600, 200),))
     # A structure with another extent snaps shared boundary vertices identically.
-    other = np.concatenate([points[:40], rng.uniform([.3, -.6, .5], [.5, -.4, .7], (20, 3)).astype("<f4")])
+    other = np.concatenate([points[:40], rng.uniform([0.3, -0.6, 0.5], [0.5, -0.4, 0.7], (20, 3)).astype("<f4")])
     neighbour = surfaces._quantize((other, normals[:60], faces[:20]))
     assert neighbour.translation != quantized.translation
     np.testing.assert_array_equal(surfaces._float_arrays(neighbour)[0][:40], positions[:40])
 
 
 def test_structures_longer_than_the_uint16_range_use_a_coarser_power_of_two_step():
-    points = np.array([[0, 0, 0], [0, 2.5, 0], [.3, 1, .2]], "<f4") + np.array([.1, -1.2, .4], "<f4")
+    points = np.array([[0, 0, 0], [0, 2.5, 0], [0.3, 1, 0.2]], "<f4") + np.array([0.1, -1.2, 0.4], "<f4")
     quantized = surfaces._quantize((points, np.zeros((3, 3), "<f4"), np.array([[0, 1, 2]], "<u4")))
     assert quantized.scale == 2 * STEP and quantized.positions.max() <= 65535
     assert np.abs(surfaces._float_arrays(quantized)[0] - points).max() <= STEP
@@ -216,8 +225,9 @@ def test_meshes_beyond_uint16_indices_split_into_seamless_primitives(tmp_path):
     assert np.abs(np.concatenate(corners) - arrays[0][arrays[2]]).max() <= STEP / 2
     assert 0 < vertices - len(arrays[0]) <= 2 * 300  # only seam rows repeat
     merged = surfaces._asset_arrays(model)
-    assert merged.parts == tuple((document["accessors"][p["attributes"]["POSITION"]]["count"],
-                                  document["accessors"][p["indices"]]["count"] // 3) for p in primitives)
+    assert merged.parts == tuple(
+        (document["accessors"][p["attributes"]["POSITION"]]["count"], document["accessors"][p["indices"]]["count"] // 3) for p in primitives
+    )
     again = surfaces._quantize(surfaces._float_arrays(merged))
     assert again.parts == merged.parts and again.translation == merged.translation
     np.testing.assert_array_equal(again.positions, merged.positions)
@@ -245,8 +255,7 @@ def test_legacy_float_models_read_and_repackage_exactly_like_fresh_arrays(tmp_pa
     legacy = legacy_display_model(list(zip(entries, (liver, aorta))), tmp_path / "legacy.glb")
     document, binary = surfaces._read_glb(legacy)
     assert "extensionsUsed" not in document and all("scale" not in node for node in document["nodes"])
-    legacy_arrays = [surfaces._primitive_arrays(document, binary, document["meshes"][node["mesh"]]["primitives"][0], node)
-                     for node in document["nodes"]]
+    legacy_arrays = [surfaces._primitive_arrays(document, binary, document["meshes"][node["mesh"]]["primitives"][0], node) for node in document["nodes"]]
     for arrays, expected in zip(legacy_arrays, (liver, aorta), strict=True):
         assert not isinstance(arrays, surfaces._Quantized)
         for actual, original in zip(arrays, expected, strict=True):
@@ -262,8 +271,7 @@ def test_legacy_float_models_read_and_repackage_exactly_like_fresh_arrays(tmp_pa
 
 
 def test_import_quantizes_legacy_display_models_without_mask_decode(tmp_path, monkeypatch):
-    entries = [structure("total:liver", mask_file(tmp_path / "first.nii.gz")),
-               structure("total:kidney_left", mask_file(tmp_path / "second.nii.gz", offset=1))]
+    entries = [structure("total:liver", mask_file(tmp_path / "first.nii.gz")), structure("total:kidney_left", mask_file(tmp_path / "second.nii.gz", offset=1))]
     arrays = [surfaces._mesh(item["mask_file"], detailed=False) for item in entries]
     legacy = legacy_display_model(list(zip(entries, arrays)), tmp_path / "legacy.glb")
     before = legacy.read_bytes()
@@ -294,11 +302,11 @@ def test_optimize_migrates_a_legacy_revision_to_the_assets_a_fresh_build_writes(
     service = Service(Settings(tmp_path / "data", (tmp_path,)))
     case = create_demo(service)
     revision = service.store.revision(case["id"], case["active_revision_id"])
-    fresh = {asset["id"]: surfaces.surface_asset_path(service.surface_cache, asset["key"]).read_bytes()
-             for asset in revision["surface_assets"]}
+    fresh = {asset["id"]: surfaces.surface_asset_path(service.surface_cache, asset["key"]).read_bytes() for asset in revision["surface_assets"]}
     # A revision from the previous release: float32 model.glb, no current-key assets.
-    legacy_display_model([(item, surfaces._mesh(item["mask_file"], detailed=False)) for item in revision["structures"]],
-                         Path(revision["directory"]) / "model.glb")
+    legacy_display_model(
+        [(item, surfaces._mesh(item["mask_file"], detailed=False)) for item in revision["structures"]], Path(revision["directory"]) / "model.glb"
+    )
     for asset in revision["surface_assets"]:
         path = surfaces.surface_asset_path(service.surface_cache, asset["key"])
         path.unlink()
@@ -334,8 +342,17 @@ def test_display_keys_are_versioned_and_legacy_assets_never_collide(tmp_path, mo
     detailed = surfaces._surface_identity(entry, detailed=True)[1]
 
     def legacy(flag, parameters):
-        return surfaces._key({"base": base, "implementation": "physical-glb-v2", "detailed": flag, "parameters": parameters,
-                              "id": entry["id"], "name": entry["name"], "color": entry["color"]})
+        return surfaces._key(
+            {
+                "base": base,
+                "implementation": "physical-glb-v2",
+                "detailed": flag,
+                "parameters": parameters,
+                "id": entry["id"],
+                "name": entry["name"],
+                "color": entry["color"],
+            }
+        )
 
     legacy_display = legacy(False, {"target": 12000, "local_error_mm": 0.25, "preserve_topology": True})
     assert detailed == legacy(True, None)  # float32 detailed exports keep their cache entries
@@ -372,13 +389,12 @@ def test_display_meshes_of_oblique_reflected_masks_stay_within_the_grid_bound(tm
     assert report["triangles"] == len(faces) == len(expected[2])
     np.testing.assert_array_equal(faces, expected[2])
     assert np.abs(positions - expected[0]).max() * 1000 <= STEP * 1000 / 2
-    assert np.abs(normals - expected[1]).max() <= .5 / 127 + 1e-6
+    assert np.abs(normals - expected[1]).max() <= 0.5 / 127 + 1e-6
     # Only display GLBs change: detailed exports remain exact float32.
     surfaces.build_model([structure("total:liver", path)], tmp_path / "detailed.glb", detailed=True)
     detailed, detailed_binary = surfaces._read_glb(tmp_path / "detailed.glb")
     assert "extensionsUsed" not in detailed
-    np.testing.assert_array_equal(decode(detailed, detailed_binary, detailed["nodes"][0])[0],
-                                  surfaces._mesh(path, detailed=True)[0])
+    np.testing.assert_array_equal(decode(detailed, detailed_binary, detailed["nodes"][0])[0], surfaces._mesh(path, detailed=True)[0])
 
 
 def test_import_rejects_inconsistent_quantized_models(tmp_path):
@@ -387,17 +403,18 @@ def test_import_rejects_inconsistent_quantized_models(tmp_path):
     parameters = surfaces.build_model([entry], model)["display_simplification"]
     document, binary = surfaces._read_glb(model)
     normal = document["meshes"][0]["primitives"][0]["attributes"]["NORMAL"]
-    for change in (lambda value: value["nodes"][0].update(scale=[STEP, STEP, 2 * STEP]),
-                   lambda value: value["nodes"][0].pop("translation"),
-                   lambda value: value["nodes"][0].update(rotation=[0, 0, 0, 1]),
-                   lambda value: value.pop("extensionsRequired"),
-                   lambda value: value.update(extensionsUsed=["KHR_mesh_quantization", "EXT_meshopt_compression"]),
-                   lambda value: value["accessors"][normal].pop("normalized")):
+    for change in (
+        lambda value: value["nodes"][0].update(scale=[STEP, STEP, 2 * STEP]),
+        lambda value: value["nodes"][0].pop("translation"),
+        lambda value: value["nodes"][0].update(rotation=[0, 0, 0, 1]),
+        lambda value: value.pop("extensionsRequired"),
+        lambda value: value.update(extensionsUsed=["KHR_mesh_quantization", "EXT_meshopt_compression"]),
+        lambda value: value["accessors"][normal].pop("normalized"),
+    ):
         broken = json.loads(json.dumps(document))
         change(broken)
         with pytest.raises(ValueError):
-            surfaces.import_display_assets([entry], write_glb(tmp_path / "broken.glb", broken, binary),
-                                           tmp_path / "cache", parameters)
+            surfaces.import_display_assets([entry], write_glb(tmp_path / "broken.glb", broken, binary), tmp_path / "cache", parameters)
     assert not list((tmp_path / "cache").rglob("*.glb"))
     assert surfaces.import_display_assets([entry], model, tmp_path / "cache", parameters)["cache"]["surface_misses"] == 1
 

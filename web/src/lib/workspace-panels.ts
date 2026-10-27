@@ -46,11 +46,17 @@ export function setWorkspacePanel(state: WorkspacePanelsState, id: WorkspacePane
 }
 
 export function readWorkspacePanels(): WorkspacePanelsState {
-  try { return restoreWorkspacePanels(globalThis.localStorage.getItem(WORKSPACE_PANELS_STORAGE_KEY)); }
-  catch { return defaultWorkspacePanels(); }
+  try {
+    return restoreWorkspacePanels(globalThis.localStorage.getItem(WORKSPACE_PANELS_STORAGE_KEY));
+  } catch {
+    return defaultWorkspacePanels();
+  }
 }
 
 export function saveWorkspacePanels(state: WorkspacePanelsState): void {
-  try { globalThis.localStorage.setItem(WORKSPACE_PANELS_STORAGE_KEY, JSON.stringify(restoreWorkspacePanels(state))); }
-  catch { /* Layout controls still work when browser storage is unavailable. */ }
+  try {
+    globalThis.localStorage.setItem(WORKSPACE_PANELS_STORAGE_KEY, JSON.stringify(restoreWorkspacePanels(state)));
+  } catch {
+    /* Layout controls still work when browser storage is unavailable. */
+  }
 }

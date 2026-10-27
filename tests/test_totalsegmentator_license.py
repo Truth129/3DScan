@@ -75,17 +75,22 @@ def assert_private(response, *keys):
 
 def test_status_is_local_and_does_not_import_torch(license_home):
     result = subprocess.run(
-        [sys.executable, "-c", "import sys; from scan3d.totalsegmentator_license import license_status; "
-         "s=license_status(); assert not s['configured']; assert 'torch' not in sys.modules"],
-        check=True, capture_output=True, text=True,
+        [
+            sys.executable,
+            "-c",
+            "import sys; from scan3d.totalsegmentator_license import license_status; "
+            "s=license_status(); assert not s['configured']; assert 'torch' not in sys.modules",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     assert not result.stdout and not result.stderr
     assert licenses.license_status() == {"configured": False, "validated": None, "validated_at": None}
 
 
 def test_save_update_remove_preserve_upstream_config_and_use_private_permissions(license_home, monkeypatch):
-    unrelated = {"totalseg_id": "fixture", "send_usage_stats": False,
-                 "prediction_counter": 17, "unknown_upstream_field": {"preserve": [1, 2, 3]}}
+    unrelated = {"totalseg_id": "fixture", "send_usage_stats": False, "prediction_counter": 17, "unknown_upstream_field": {"preserve": [1, 2, 3]}}
     path = write_config(license_home, unrelated)
     calls = accepted(monkeypatch)
     for key in [KEY_A, KEY_B]:
@@ -119,8 +124,7 @@ def test_first_save_creates_a_usable_upstream_config_without_changing_usage_pref
     assert stat.S_IMODE((license_home / "config.json").stat().st_mode) == 0o600
 
 
-@pytest.mark.parametrize("key", ["", "short", "x" * 18, "aca_" + "a" * 13, "aca_" + "a" * 15,
-                                 "aca_" + "a" * 13 + "!", "aca_" + "a" * 13 + "é"])
+@pytest.mark.parametrize("key", ["", "short", "x" * 18, "aca_" + "a" * 13, "aca_" + "a" * 15, "aca_" + "a" * 13 + "!", "aca_" + "a" * 13 + "é"])
 def test_invalid_shape_never_calls_vendor_or_replaces_existing_key(license_home, monkeypatch, key):
     path = write_config(license_home, {"license_number": KEY_A, "prediction_counter": 4})
     before = path.read_bytes()
@@ -132,15 +136,17 @@ def test_invalid_shape_never_calls_vendor_or_replaces_existing_key(license_home,
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("reply", [
-    {"status": "invalid_license", "message": KEY_B},
-    {"status": "expired_license", "message": KEY_B},
-])
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"status": "invalid_license", "message": KEY_B},
+        {"status": "expired_license", "message": KEY_B},
+    ],
+)
 def test_rejected_license_keeps_previous_key_and_redacts_vendor_response(license_home, monkeypatch, reply, capsys, caplog):
     path = write_config(license_home, {"license_number": KEY_A, "prediction_counter": 4})
     before = path.read_bytes()
-    monkeypatch.setattr(licenses.requests, "post", lambda *args, **kwargs: SimpleNamespace(
-        ok=True, status_code=200, json=lambda: reply, close=lambda: None))
+    monkeypatch.setattr(licenses.requests, "post", lambda *args, **kwargs: SimpleNamespace(ok=True, status_code=200, json=lambda: reply, close=lambda: None))
     with pytest.raises(licenses.LicenseError) as caught:
         licenses.save_license(KEY_B)
     assert caught.value.status_code == 400
@@ -150,8 +156,7 @@ def test_rejected_license_keeps_previous_key_and_redacts_vendor_response(license
     assert KEY_B not in output.out + output.err + caplog.text
 
 
-@pytest.mark.parametrize("mode,code", [("timeout", 503), ("connection", 503), ("server", 502),
-                                       ("redirect", 502), ("malformed", 502), ("unexpected", 502)])
+@pytest.mark.parametrize("mode,code", [("timeout", 503), ("connection", 503), ("server", 502), ("redirect", 502), ("malformed", 502), ("unexpected", 502)])
 def test_validation_failure_does_not_replace_existing_key(license_home, monkeypatch, mode, code, capsys, caplog):
     path = write_config(license_home, {"license_number": KEY_A, "prediction_counter": 4})
     before = path.read_bytes()
@@ -254,10 +259,18 @@ def test_api_add_update_remove_unlocks_catalog_without_returning_key(http, monke
     assert all(not item["license_available"] for item in segmentation_catalog()["tasks"] if item["license_required"])
 
 
-@pytest.mark.parametrize("body", [
-    {}, {"license_key": None}, {"license_key": 42}, {"license_key": KEY_A, "extra": KEY_B},
-    {"wrong_field": KEY_A}, [KEY_A], KEY_A,
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"license_key": None},
+        {"license_key": 42},
+        {"license_key": KEY_A, "extra": KEY_B},
+        {"wrong_field": KEY_A},
+        [KEY_A],
+        KEY_A,
+    ],
+)
 def test_api_validation_errors_never_echo_key_or_extra_fields(http, body):
     response = http.client.put(ENDPOINT, json=body)
     assert response.status_code == 422
@@ -266,8 +279,7 @@ def test_api_validation_errors_never_echo_key_or_extra_fields(http, body):
 
 
 def test_invalid_json_license_request_is_redacted(http):
-    response = http.client.put(ENDPOINT, content='{"license_key":"' + KEY_A + '"',
-                               headers={"Content-Type": "application/json"})
+    response = http.client.put(ENDPOINT, content='{"license_key":"' + KEY_A + '"', headers={"Content-Type": "application/json"})
     assert response.status_code == 422
     assert_private(response, KEY_A)
 
@@ -330,7 +342,7 @@ def test_license_update_serializes_with_new_job_enqueue(http, monkeypatch):
         assert validating.wait(3)
         saving = pool.submit(enqueue)
         try:
-            assert not enqueued.wait(.15), "A job was enqueued while license configuration was being validated"
+            assert not enqueued.wait(0.15), "A job was enqueued while license configuration was being validated"
         finally:
             release.set()
         response = updating.result(timeout=5)

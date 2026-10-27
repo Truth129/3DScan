@@ -68,7 +68,7 @@ def _hd95(original, current, matrix):
         pending = np.argwhere(source & ~shared)
         distances = np.zeros(int(np.count_nonzero(source)), dtype=np.float64)
         if len(pending):
-            distances[:len(pending)] = cKDTree(np.argwhere(target) @ matrix.T).query(pending @ matrix.T)[0]
+            distances[: len(pending)] = cKDTree(np.argwhere(target) @ matrix.T).query(pending @ matrix.T)[0]
         percentiles.append(float(np.percentile(distances, 95)))
     return max(percentiles)
 
@@ -79,16 +79,26 @@ def _compare(original, current, matrix):
     added, removed = after - overlap, before - overlap
     # Equal nonempty masks have coincident surfaces; empty ones have none.
     hd95 = None if not before or not after else 0.0 if not added and not removed else _hd95(original, current, matrix)
-    return {"dice": 2 * overlap / (before + after) if before + after else 1.0, "hd95_mm": hd95,
-            "original_voxels": before, "current_voxels": after, "added_voxels": added, "removed_voxels": removed}
+    return {
+        "dice": 2 * overlap / (before + after) if before + after else 1.0,
+        "hd95_mm": hd95,
+        "original_voxels": before,
+        "current_voxels": after,
+        "added_voxels": added,
+        "removed_voxels": removed,
+    }
 
 
 def _with_volumes(metrics, voxel_ml):
     """Volumes follow imaging.analyze_mask: voxels x |det(affine)| / 1000 mL."""
     before, after = metrics["original_voxels"], metrics["current_voxels"]
-    return {**metrics, "unchanged": not metrics["added_voxels"] and not metrics["removed_voxels"],
-            "original_volume_ml": before * voxel_ml, "current_volume_ml": after * voxel_ml,
-            "volume_change_ml": (after - before) * voxel_ml}
+    return {
+        **metrics,
+        "unchanged": not metrics["added_voxels"] and not metrics["removed_voxels"],
+        "original_volume_ml": before * voxel_ml,
+        "current_volume_ml": after * voxel_ml,
+        "volume_change_ml": (after - before) * voxel_ml,
+    }
 
 
 def _voxel_ml(affine):
@@ -122,8 +132,7 @@ def _dense(original_path, current_path, image, affine):
     crops = [_crop(original_path, image, affine), _crop(current_path, image, affine)]
     present = [crop for crop in crops if crop is not None]
     low = np.min([origin for origin, _ in present], axis=0) if present else np.zeros(3, dtype=int)
-    high = (np.max([origin + values.shape for origin, values in present], axis=0) if present
-            else np.ones(3, dtype=int))
+    high = np.max([origin + values.shape for origin, values in present], axis=0) if present else np.ones(3, dtype=int)
 
     def placed(crop):
         # Outside the union box both masks are empty, so its surfaces match the full grid's.
@@ -149,8 +158,7 @@ def _cached(path, key):
     try:
         record = json.loads(path.read_text())
         metrics = record["agreement"]
-        if (isinstance(metrics, dict) and record["key"] == key and set(_METRICS) <= metrics.keys()
-                and record["sha256"] == _payload_digest(metrics)):
+        if isinstance(metrics, dict) and record["key"] == key and set(_METRICS) <= metrics.keys() and record["sha256"] == _payload_digest(metrics):
             return metrics
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -170,8 +178,7 @@ def _saved_output(entry, root):
     if not parts or len(parts) != 4 or not _RUN.fullmatch(parts[1]) or not parts[3].endswith(".nii.gz"):
         return None
     task, label = parts[2], parts[3][:-7]
-    if (not _NAME.fullmatch(task) or not _NAME.fullmatch(label) or entry["id"] != f"{task}:{label}"
-            or entry.get("task", task) != task):
+    if not _NAME.fullmatch(task) or not _NAME.fullmatch(label) or entry["id"] != f"{task}:{label}" or entry.get("task", task) != task:
         return None
     return {"run_id": parts[1], "task": task}
 
@@ -179,9 +186,15 @@ def _saved_output(entry, root):
 def _phantom(revision, entry, root):
     """A demo phantom label plays the model's role, only in its synthetic case."""
     parts = _inside(entry.get("mask_file"), root)
-    return (revision.get("source") == "synthetic_demo" and bool(revision.get("synthetic"))
-            and not revision.get("parent_id") and bool(parts) and len(parts) == 1
-            and parts[0].endswith(".nii.gz") and entry["id"] == f"synthetic:{parts[0][:-7]}")
+    return (
+        revision.get("source") == "synthetic_demo"
+        and bool(revision.get("synthetic"))
+        and not revision.get("parent_id")
+        and bool(parts)
+        and len(parts) == 1
+        and parts[0].endswith(".nii.gz")
+        and entry["id"] == f"synthetic:{parts[0][:-7]}"
+    )
 
 
 def _run_details(revision, run_id):
@@ -221,14 +234,12 @@ class _Lineage:
             revision, entry = item[0], item[1][structure_id]
             saved = _saved_output(entry, roots[0])
             if saved or (synthetic and _phantom(revision, entry, roots[1])):
-                while (previous := self[index + 1]) is not None and (
-                        previous[1].get(structure_id, {}).get("mask_file") == entry["mask_file"]):
+                while (previous := self[index + 1]) is not None and (previous[1].get(structure_id, {}).get("mask_file") == entry["mask_file"]):
                     index += 1
                 introduced = self[index][0]
                 if not saved:
                     return introduced, entry, {"kind": "synthetic_phantom", "revision_id": introduced["id"]}
-                return introduced, entry, {"kind": "model_output", "revision_id": introduced["id"], **saved,
-                                           **_run_details(introduced, saved["run_id"])}
+                return introduced, entry, {"kind": "model_output", "revision_id": introduced["id"], **saved, **_run_details(introduced, saved["run_id"])}
             index += 1
         return None
 
@@ -247,8 +258,7 @@ def _count(entry):
 
 def _unchanged(count):
     """An identical mask needs no decode; its saved measurement supplies the volume."""
-    return {"dice": 1.0, "hd95_mm": 0.0 if count else None, "original_voxels": count, "current_voxels": count,
-            "added_voxels": 0, "removed_voxels": 0}
+    return {"dice": 1.0, "hd95_mm": 0.0 if count else None, "original_voxels": count, "current_voxels": count, "added_voxels": 0, "removed_voxels": 0}
 
 
 def _agreement(service, case, revision):
@@ -274,8 +284,11 @@ def _agreement(service, case, revision):
                 images[record["id"]] = None
         return images[record["id"]]
 
-    implementation = {"implementation": _IMPLEMENTATION, "code_sha256": _CODE_SHA256,
-                      "geometry": {"shape": geometry["shape"], "affine_ras": geometry["affine_ras"]}}
+    implementation = {
+        "implementation": _IMPLEMENTATION,
+        "code_sha256": _CODE_SHA256,
+        "geometry": {"shape": geometry["shape"], "affine_ras": geometry["affine_ras"]},
+    }
     compared, excluded, pending = {}, {}, {}
     hits = 0
     for structure in revision["structures"]:
@@ -314,28 +327,41 @@ def _agreement(service, case, revision):
     structures, exclusions = [], []
     for structure in revision["structures"]:
         sid = structure["id"]
-        identity = {"id": sid, "name": structure.get("name", sid), "task": structure.get("task"),
-                    "group": structure.get("group")}
+        identity = {"id": sid, "name": structure.get("name", sid), "task": structure.get("task"), "group": structure.get("group")}
         if sid in compared:
             origin, basis, metrics = compared[sid]
-            structures.append({**identity, "origin": origin, "basis": basis,
-                               **_with_volumes({key: metrics[key] for key in _METRICS}, voxel_ml)})
+            structures.append({**identity, "origin": origin, "basis": basis, **_with_volumes({key: metrics[key] for key in _METRICS}, voxel_ml)})
         else:
             exclusions.append({**identity, "code": excluded[sid], "reason": _REASONS[excluded[sid]]})
     active = case.get("active_revision_id") == revision["id"]
     counted = active and revision.get("review_status") in COUNTED_STATUSES and bool(structures)
-    return {"schema_version": 1, "case_id": case["id"], "revision_id": revision["id"],
-            "review_status": revision.get("review_status"), "synthetic": synthetic, "active": active,
-            "aggregate_pool": ("synthetic" if synthetic else "real") if counted else None,
-            "implementation": _IMPLEMENTATION, "hd95_exact": True,
-            "grid": {"voxel_volume_ml": voxel_ml, "spacing_mm": spacing.tolist(),
-                     "sheared": not np.allclose(matrix.T @ matrix, np.diag(spacing ** 2), rtol=1e-6, atol=1e-8)},
-            "summary": {"structures": len(revision["structures"]), "compared": len(structures),
-                        "unchanged": sum(entry["unchanged"] for entry in structures),
-                        "changed": sum(not entry["unchanged"] for entry in structures),
-                        "excluded": len(exclusions), **_statistics(structures, counts=False)},
-            "structures": structures, "excluded": exclusions,
-            "cache": {"hits": hits, "computed": len(pending)}}
+    return {
+        "schema_version": 1,
+        "case_id": case["id"],
+        "revision_id": revision["id"],
+        "review_status": revision.get("review_status"),
+        "synthetic": synthetic,
+        "active": active,
+        "aggregate_pool": ("synthetic" if synthetic else "real") if counted else None,
+        "implementation": _IMPLEMENTATION,
+        "hd95_exact": True,
+        "grid": {
+            "voxel_volume_ml": voxel_ml,
+            "spacing_mm": spacing.tolist(),
+            "sheared": not np.allclose(matrix.T @ matrix, np.diag(spacing**2), rtol=1e-6, atol=1e-8),
+        },
+        "summary": {
+            "structures": len(revision["structures"]),
+            "compared": len(structures),
+            "unchanged": sum(entry["unchanged"] for entry in structures),
+            "changed": sum(not entry["unchanged"] for entry in structures),
+            "excluded": len(exclusions),
+            **_statistics(structures, counts=False),
+        },
+        "structures": structures,
+        "excluded": exclusions,
+        "cache": {"hits": hits, "computed": len(pending)},
+    }
 
 
 def _compute(service, revision, pending, excluded):
@@ -377,13 +403,14 @@ def _compute(service, revision, pending, excluded):
 
 def _statistics(rows, counts=True):
     dice = [row["dice"] for row in rows]
-    summary = {"dice_mean": statistics.fmean(dice) if dice else None,
-               "dice_median": statistics.median(dice) if dice else None,
-               "abs_volume_change_ml_mean": statistics.fmean(abs(row["volume_change_ml"]) for row in rows) if rows else None}
+    summary = {
+        "dice_mean": statistics.fmean(dice) if dice else None,
+        "dice_median": statistics.median(dice) if dice else None,
+        "abs_volume_change_ml_mean": statistics.fmean(abs(row["volume_change_ml"]) for row in rows) if rows else None,
+    }
     if counts:
         unchanged = sum(row["unchanged"] for row in rows)
-        summary = {"reviewed": len(rows), "unchanged": unchanged,
-                   "unchanged_percent": 100 * unchanged / len(rows) if rows else None, **summary}
+        summary = {"reviewed": len(rows), "unchanged": unchanged, "unchanged_percent": 100 * unchanged / len(rows) if rows else None, **summary}
     return summary
 
 
@@ -427,22 +454,35 @@ def aggregate_agreement(service):
         pool["excluded"] += len(result["excluded"])
         for row in result["structures"]:
             pool["rows"][(row["task"], row["id"])].append(row)
-        revisions.append({"case_id": case["id"], "revision_id": revision["id"],
-                          "review_status": revision["review_status"],
-                          "pool": "synthetic" if result["synthetic"] else "real"})
+        revisions.append(
+            {
+                "case_id": case["id"],
+                "revision_id": revision["id"],
+                "review_status": revision["review_status"],
+                "pool": "synthetic" if result["synthetic"] else "real",
+            }
+        )
 
     def summarize(pool):
         tasks = defaultdict(list)
         for (task, sid), rows in sorted(pool["rows"].items(), key=lambda item: (str(item[0][0]), item[0][1])):
             tasks[task].append({"id": sid, "name": rows[-1]["name"], "task": task, **_statistics(rows)})
         everything = [row for rows in pool["rows"].values() for row in rows]
-        return {"cases": pool["cases"], "excluded": pool["excluded"],
-                "summary": _statistics(everything) if everything else None,
-                "tasks": [{"task": task, **_statistics([row for rows in pool["rows"].values()
-                                                        for row in rows if row["task"] == task]),
-                           "structures": entries} for task, entries in tasks.items()]}
+        return {
+            "cases": pool["cases"],
+            "excluded": pool["excluded"],
+            "summary": _statistics(everything) if everything else None,
+            "tasks": [
+                {"task": task, **_statistics([row for rows in pool["rows"].values() for row in rows if row["task"] == task]), "structures": entries}
+                for task, entries in tasks.items()
+            ],
+        }
 
-    return {"schema_version": 1, "implementation": _IMPLEMENTATION,
-            "selection": {"revision": "active", "review_statuses": list(COUNTED_STATUSES)},
-            "cases": {"total": len(cases), "included": len(revisions), "skipped": dict(skipped)},
-            "pools": {name: summarize(pool) for name, pool in pools.items()}, "revisions": revisions}
+    return {
+        "schema_version": 1,
+        "implementation": _IMPLEMENTATION,
+        "selection": {"revision": "active", "review_statuses": list(COUNTED_STATUSES)},
+        "cases": {"total": len(cases), "included": len(revisions), "skipped": dict(skipped)},
+        "pools": {name: summarize(pool) for name, pool in pools.items()},
+        "revisions": revisions,
+    }

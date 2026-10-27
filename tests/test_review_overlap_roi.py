@@ -13,10 +13,9 @@ from scan3d.relationships import INDEPENDENT
 
 @pytest.fixture
 def fixture(tmp_path):
-    angle = .37
+    angle = 0.37
     affine = np.eye(4)
-    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0],
-                              [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-1.3, 2.1, 3.7])
+    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-1.3, 2.1, 3.7])
     affine[:3, 3] = [45, -60, 120]
     shape = (11, 13, 17)
     image = nib.Nifti1Image(np.zeros(shape, np.int16), affine)
@@ -44,12 +43,10 @@ def fixture(tmp_path):
         relationship = {"kind": "subdivision", "exclusive_with": ["peer"]} if exclusive else INDEPENDENT
         summary = review._summary(int(after.sum()), int(after.sum()), 0, 0, abs(np.linalg.det(affine[:3, :3])) / 1000)
         job = {"payload": {"relationship": relationship}}
-        result = manager._overlaps(job, {"structures": [selected, entry]}, selected, after, image, affine,
-                                   folder, target, summary)
+        result = manager._overlaps(job, {"structures": [selected, entry]}, selected, after, image, affine, folder, target, summary)
         return result, peer, target
 
-    return SimpleNamespace(shape=shape, image=image, affine=affine, manager=manager, service=service,
-                           folder=folder, save=save, run=run, checks=checks)
+    return SimpleNamespace(shape=shape, image=image, affine=affine, manager=manager, service=service, folder=folder, save=save, run=run, checks=checks)
 
 
 @pytest.mark.parametrize("storage", ["C", "F", "strided"])
@@ -58,9 +55,9 @@ def fixture(tmp_path):
 def test_complete_volume_oracle_and_readonly_native_layouts(fixture, monkeypatch, storage, dtype, exclusive):
     rng = np.random.default_rng(53)
     target = np.zeros(fixture.shape, bool)
-    target[3:8, 2:7, 4:10] = rng.random((5, 5, 6)) > .5
+    target[3:8, 2:7, 4:10] = rng.random((5, 5, 6)) > 0.5
     target[3, 2, 4] = target[7, 6, 9] = True
-    expected_peer = (rng.random(fixture.shape) > .75).astype(dtype)
+    expected_peer = (rng.random(fixture.shape) > 0.75).astype(dtype)
     expected_peer[3, 2, 4] = 1
     if storage == "strided":
         array = np.zeros((fixture.shape[0] * 2, *fixture.shape[1:]), dtype=dtype)
@@ -152,7 +149,7 @@ def test_exclusive_peer_empty_warning_uses_complete_count(fixture):
     assert result["warnings"] == ["Replacing overlap leaves Peer empty; inspect this subdivision"]
 
 
-@pytest.mark.parametrize("invalid", [2., .5, np.nan])
+@pytest.mark.parametrize("invalid", [2.0, 0.5, np.nan])
 def test_binary_validation_checks_values_outside_target_roi(fixture, invalid):
     target = np.zeros(fixture.shape, bool)
     target[3, 4, 5] = True

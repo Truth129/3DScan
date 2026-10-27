@@ -1,44 +1,99 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, onMounted, onBeforeUnmount, useId, watch } from 'vue';
-import type { CameraView, Geometry, InteractivePrompt, InteractiveTool, Plane, Point, ScissorsOperation, ScissorsShape, Structure, StructureDisplay, SurfaceManifest } from '../types';
+import type {
+  CameraView,
+  Geometry,
+  InteractivePrompt,
+  InteractiveTool,
+  Plane,
+  Point,
+  ScissorsOperation,
+  ScissorsShape,
+  Structure,
+  StructureDisplay,
+  SurfaceManifest,
+} from '../types';
 import { AnatomyScene, type OrientationAxis, type SurfaceProgress } from '../lib/scene';
 import { colorCTOverlays, ctOverlayColor, type CTOverlaySelection } from '../lib/ct-overlays';
 import type { GPUOverlaySourceProvider, RenderCTSession } from '../lib/gpu-volume-data';
 import { nativeSliceMetadata } from '../lib/ct-reslice';
 import { api, revisionUrl } from '../lib/api';
 import { moveNativeSlice, nativeSliceFor } from '../lib/interactive-review';
-import { ModelReviewFrames, modelReviewFrameKey, modelReviewFrameFamilyKey, modelReviewTargetAvailable, type ModelReviewFrame, type ModelReviewFrameRequest } from '../lib/model-review-frame';
+import {
+  ModelReviewFrames,
+  modelReviewFrameKey,
+  modelReviewFrameFamilyKey,
+  modelReviewTargetAvailable,
+  type ModelReviewFrame,
+  type ModelReviewFrameRequest,
+} from '../lib/model-review-frame';
 import { imagePresentation, type ImageContext, type ImageCapability } from '../lib/image-domain';
 import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
-import { cinematicReferenceError, CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings, type CTVolumeSettings } from '../lib/volume-presets';
+import {
+  cinematicReferenceError,
+  CINEMATIC_HEART_PRESET,
+  MR_SIGNAL_PRESET,
+  DEFAULT_CINEMATIC_SETTINGS,
+  freshVolumeSettings,
+  type CTVolumeSettings,
+} from '../lib/volume-presets';
 import { CinematicReferenceGate, hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { cardiacCamera } from '../lib/cardiac-camera';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
 import { normalizePortableState, type PortableLayers, type PortableRenderSnapshot } from '../lib/portable-viewer';
 const props = defineProps<{
-  modelUrl?: string; manifestUrl?: string; modelData?: ArrayBuffer; structures: Structure[];
-  display: StructureDisplay; selected: string; point?: Point; label?: string;
-  reviewActive?: boolean; reviewTarget?: Structure; reviewTool?: InteractiveTool;
-  reviewPrompts?: InteractivePrompt[]; reviewDisabled?: boolean; reviewInclude?: boolean; reviewRadius?: number;
-  reviewScissorsShape?: ScissorsShape; reviewScissorsOperation?: ScissorsOperation; modelRevisionId?: string;
-  imageContext?: ImageContext; capabilities?: readonly ImageCapability[];
-  caseId?: string; revisionId?: string; geometry?: Geometry; localSession?: RenderCTSession;
-  localReady?: boolean; fullResolution?: boolean; overlays?: CTOverlaySelection[];
-  compare?: boolean; window?: number; level?: number;
-  viewportActive?: boolean; maskStructures?: Structure[];
-  maskSourceProvider?: GPUOverlaySourceProvider; availableLayers?: PortableLayers; initialSnapshot?: PortableRenderSnapshot;
+  modelUrl?: string;
+  manifestUrl?: string;
+  modelData?: ArrayBuffer;
+  structures: Structure[];
+  display: StructureDisplay;
+  selected: string;
+  point?: Point;
+  label?: string;
+  reviewActive?: boolean;
+  reviewTarget?: Structure;
+  reviewTool?: InteractiveTool;
+  reviewPrompts?: InteractivePrompt[];
+  reviewDisabled?: boolean;
+  reviewInclude?: boolean;
+  reviewRadius?: number;
+  reviewScissorsShape?: ScissorsShape;
+  reviewScissorsOperation?: ScissorsOperation;
+  modelRevisionId?: string;
+  imageContext?: ImageContext;
+  capabilities?: readonly ImageCapability[];
+  caseId?: string;
+  revisionId?: string;
+  geometry?: Geometry;
+  localSession?: RenderCTSession;
+  localReady?: boolean;
+  fullResolution?: boolean;
+  overlays?: CTOverlaySelection[];
+  compare?: boolean;
+  window?: number;
+  level?: number;
+  viewportActive?: boolean;
+  maskStructures?: Structure[];
+  maskSourceProvider?: GPUOverlaySourceProvider;
+  availableLayers?: PortableLayers;
+  initialSnapshot?: PortableRenderSnapshot;
 }>();
 const emit = defineEmits<{ pick: [id: string, point: Point]; point: [point: Point]; gesture: [prompt: InteractivePrompt]; opacity: [value: number] }>();
-const viewport = ref<HTMLElement>(), expandButton = ref<HTMLButtonElement>();
-const viewportId = useId(), expanded = ref(false);
-let expansionVersion = 0, previousFocus: HTMLElement | undefined;
+const viewport = ref<HTMLElement>(),
+  expandButton = ref<HTMLButtonElement>();
+const viewportId = useId(),
+  expanded = ref(false);
+let expansionVersion = 0,
+  previousFocus: HTMLElement | undefined;
 let inertSiblings: { element: HTMLElement; inert: boolean }[] = [];
 const surface = ref<HTMLElement>();
 const reviewControls = ref<HTMLElement>();
 const reviewSceneTop = ref(140);
-const loading = ref(true), error = ref(''), view = ref('oblique');
+const loading = ref(true),
+  error = ref(''),
+  view = ref('oblique');
 const transparencyWarning = ref('');
 const orientation = ref<OrientationAxis[]>([]);
 const progress = ref<SurfaceProgress>();
@@ -82,44 +137,75 @@ async function setExpanded(value: boolean, restoreFocus = true) {
 function expandedKeyboard(event: KeyboardEvent) {
   if (event.isComposing) return;
   if (event.key === 'Escape') {
-    event.preventDefault(); event.stopPropagation(); void setExpanded(false); return;
+    event.preventDefault();
+    event.stopPropagation();
+    void setExpanded(false);
+    return;
   }
   if (event.key !== 'Tab' || !viewport.value) return;
-  const items = Array.from(viewport.value.querySelectorAll<HTMLElement>(
-    'button,input,select,textarea,a[href],summary,[tabindex]:not([tabindex="-1"])',
-  )).filter(item => !item.matches(':disabled') && item.tabIndex >= 0 && !item.closest('[inert]') && item.getClientRects().length);
-  const first = items[0], last = items.at(-1), outside = !viewport.value.contains(document.activeElement);
-  if (event.shiftKey && (document.activeElement === first || outside)) { event.preventDefault(); last?.focus(); }
-  else if (!event.shiftKey && (document.activeElement === last || outside)) { event.preventDefault(); first?.focus(); }
+  const items = Array.from(viewport.value.querySelectorAll<HTMLElement>('button,input,select,textarea,a[href],summary,[tabindex]:not([tabindex="-1"])')).filter(
+    item => !item.matches(':disabled') && item.tabIndex >= 0 && !item.closest('[inert]') && item.getClientRects().length,
+  );
+  const first = items[0],
+    last = items.at(-1),
+    outside = !viewport.value.contains(document.activeElement);
+  if (event.shiftKey && (document.activeElement === first || outside)) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || outside)) {
+    event.preventDefault();
+    first?.focus();
+  }
 }
-const reviewMode = ref<'surface' | 'plane'>('surface'), reviewPlane = ref<Plane>(props.initialSnapshot?.state.plane.plane ?? 'axial'), showPlane = ref(props.initialSnapshot?.layers.ct_plane ?? false);
+const reviewMode = ref<'surface' | 'plane'>('surface'),
+  reviewPlane = ref<Plane>(props.initialSnapshot?.state.plane.plane ?? 'axial'),
+  showPlane = ref(props.initialSnapshot?.layers.ct_plane ?? false);
 const planeFrame = shallowRef<ModelReviewFrame>();
 const planeFrameFamily = ref('');
-const planeLoading = ref(false), planeError = ref('');
-const gpuFamilyReady = ref(''), gpuPreparing = ref(false), gpuFallback = ref('');
-const showSegmentation = ref(props.initialSnapshot?.layers.segmentation ?? true), volumeOptionsOpen = ref(false);
-const segmentOpacities = computed(() => props.structures.map(item => props.display[item.id]?.opacity ?? .5));
-const segmentationOpacityMixed = computed(() => segmentOpacities.value.some(value => Math.abs(value - (segmentOpacities.value[0] ?? .5)) > .0001));
+const planeLoading = ref(false),
+  planeError = ref('');
+const gpuFamilyReady = ref(''),
+  gpuPreparing = ref(false),
+  gpuFallback = ref('');
+const showSegmentation = ref(props.initialSnapshot?.layers.segmentation ?? true),
+  volumeOptionsOpen = ref(false);
+const segmentOpacities = computed(() => props.structures.map(item => props.display[item.id]?.opacity ?? 0.5));
+const segmentationOpacityMixed = computed(() => segmentOpacities.value.some(value => Math.abs(value - (segmentOpacities.value[0] ?? 0.5)) > 0.0001));
 const segmentationOpacity = computed({
-  get: () => segmentOpacities.value.length ? segmentOpacities.value.reduce((total, value) => total + value, 0) / segmentOpacities.value.length : .5,
-  set: (value: number) => { if (Number.isFinite(value)) emit('opacity', Math.max(0, Math.min(1, value))); },
+  get: () => (segmentOpacities.value.length ? segmentOpacities.value.reduce((total, value) => total + value, 0) / segmentOpacities.value.length : 0.5),
+  set: (value: number) => {
+    if (Number.isFinite(value)) emit('opacity', Math.max(0, Math.min(1, value)));
+  },
 });
-const selectedSegmentationOpacity = computed(() => props.display[target.value?.id ?? props.selected]?.opacity ?? .5);
+const selectedSegmentationOpacity = computed(() => props.display[target.value?.id ?? props.selected]?.opacity ?? 0.5);
 const modality = computed(() => props.imageContext?.modality ?? props.localSession?.descriptor?.modality ?? 'CT');
 const sourcePresentation = computed(() => imagePresentation(props.imageContext ?? props.localSession?.descriptor ?? undefined));
 const signalVolume = computed(() => modality.value !== 'CT');
 const allows = (capability: ImageCapability) => !props.capabilities || props.capabilities.includes(capability);
-const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? false), volumeSettings = shallowRef(freshVolumeSettings(props.initialSnapshot?.state.volume)), volumeError = ref(''), volumeFamilyReady = ref('');
-const referenceLoading = ref(false), referenceMessage = ref(''), referenceError = ref(false);
+const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? false),
+  volumeSettings = shallowRef(freshVolumeSettings(props.initialSnapshot?.state.volume)),
+  volumeError = ref(''),
+  volumeFamilyReady = ref('');
+const referenceLoading = ref(false),
+  referenceMessage = ref(''),
+  referenceError = ref(false);
 let referenceController: AbortController | undefined;
 const automaticReference = new CinematicReferenceGate();
-const referenceKey = computed(() => props.caseId && props.revisionId ? JSON.stringify([props.caseId, props.revisionId]) : '');
-const referenceAvailable = computed(() => !signalVolume.value && !!props.caseId && !!props.revisionId && !props.initialSnapshot && !props.reviewActive && props.structures.length > 0);
-const automaticReferenceAvailable = computed(() => referenceAvailable.value && !props.revisionId!.startsWith('review-')
-  && hasCinematicReferenceMasks(props.maskStructures ?? props.structures));
-const volumeMask = shallowRef(freshVolumeMaskSettings(props.initialSnapshot?.state.volume_mask)), maskFamilyReady = ref(''), maskError = ref(''), atlasFamilyReady = ref('');
+const referenceKey = computed(() => (props.caseId && props.revisionId ? JSON.stringify([props.caseId, props.revisionId]) : ''));
+const referenceAvailable = computed(
+  () => !signalVolume.value && !!props.caseId && !!props.revisionId && !props.initialSnapshot && !props.reviewActive && props.structures.length > 0,
+);
+const automaticReferenceAvailable = computed(
+  () => referenceAvailable.value && !props.revisionId!.startsWith('review-') && hasCinematicReferenceMasks(props.maskStructures ?? props.structures),
+);
+const volumeMask = shallowRef(freshVolumeMaskSettings(props.initialSnapshot?.state.volume_mask)),
+  maskFamilyReady = ref(''),
+  maskError = ref(''),
+  atlasFamilyReady = ref('');
 const availableMaskStructures = computed(() => props.maskStructures ?? props.structures);
-const heartCamera = computed(() => signalVolume.value ? undefined : cardiacCamera(availableMaskStructures.value, volumeMask.value.enabled ? volumeMask.value.margin_mm : 0));
+const heartCamera = computed(() =>
+  signalVolume.value ? undefined : cardiacCamera(availableMaskStructures.value, volumeMask.value.enabled ? volumeMask.value.margin_mm : 0),
+);
 let automaticHeartCase = '';
 function showHeartView() {
   if (scene && heartCamera.value && !props.reviewActive) scene.restoreCamera(heartCamera.value);
@@ -129,9 +215,20 @@ const volumeMaskIds = computed(() => [...volumeMask.value.ids].sort());
 // The user's selected IDs remain separate from the atlas aliases.
 const volumeMaskSourceIds = shallowRef<string[]>([]);
 const ctOnly = computed(() => !!props.caseId && !!props.geometry && !props.structures.length);
-const renderVolumeSettings = computed(() => signalVolume.value ? freshVolumeSettings({ ...volumeSettings.value,
-  preset: MR_SIGNAL_PRESET, shift: 0, signal_window: { window: validWindow(props.window, sourcePresentation.value),
-    level: validLevel(props.level, sourcePresentation.value), invert: sourcePresentation.value.photometric_interpretation === 'MONOCHROME1' } }) : volumeSettings.value);
+const renderVolumeSettings = computed(() =>
+  signalVolume.value
+    ? freshVolumeSettings({
+        ...volumeSettings.value,
+        preset: MR_SIGNAL_PRESET,
+        shift: 0,
+        signal_window: {
+          window: validWindow(props.window, sourcePresentation.value),
+          level: validLevel(props.level, sourcePresentation.value),
+          invert: sourcePresentation.value.photometric_interpretation === 'MONOCHROME1',
+        },
+      })
+    : volumeSettings.value,
+);
 const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!props.revisionId && !!props.point);
 const segmentationAvailable = computed(() => props.structures.length > 0 && props.availableLayers?.segmentation !== false);
 const ctVolumeAvailable = computed(() => planeAvailable.value && allows('volume_rendering') && props.availableLayers?.ct_volume !== false);
@@ -142,36 +239,63 @@ const target = computed(() => props.reviewTarget ?? props.structures.find(item =
 const hasTargetSurface = computed(() => !!target.value && props.structures.some(item => item.id === target.value!.id));
 const planeRequest = computed<ModelReviewFrameRequest | undefined>(() => {
   if (!planeAvailable.value) return;
-  return { base: revisionUrl(props.caseId!, props.revisionId!), geometry: props.geometry!,
-    plane: reviewPlane.value, native: nativeSliceFor(props.geometry!, reviewPlane.value, props.point!),
+  return {
+    base: revisionUrl(props.caseId!, props.revisionId!),
+    geometry: props.geometry!,
+    plane: reviewPlane.value,
+    native: nativeSliceFor(props.geometry!, reviewPlane.value, props.point!),
     overlays: props.overlays?.map(item => item.id) ?? (target.value ? [target.value.id] : []),
-    compare: !!props.compare, session: props.localSession, localReady: props.localReady,
-    fullResolution: props.fullResolution };
+    compare: !!props.compare,
+    session: props.localSession,
+    localReady: props.localReady,
+    fullResolution: props.fullResolution,
+  };
 });
-const desiredPlaneContext = computed(() => planeRequest.value ? modelReviewFrameKey(planeRequest.value) : '');
-const desiredPlaneFamily = computed(() => planeRequest.value ? modelReviewFrameFamilyKey(planeRequest.value) : '');
+const desiredPlaneContext = computed(() => (planeRequest.value ? modelReviewFrameKey(planeRequest.value) : ''));
+const desiredPlaneFamily = computed(() => (planeRequest.value ? modelReviewFrameFamilyKey(planeRequest.value) : ''));
 // Axis/index do not affect resident data. Revisions and overlay selections do.
-const gpuFamily = computed(() => planeRequest.value ? JSON.stringify([
-  planeRequest.value.base, planeRequest.value.overlays, planeRequest.value.compare,
-  planeRequest.value.geometry.shape, planeRequest.value.geometry.affine_ras,
-]) : '');
+const gpuFamily = computed(() =>
+  planeRequest.value
+    ? JSON.stringify([
+        planeRequest.value.base,
+        planeRequest.value.overlays,
+        planeRequest.value.compare,
+        planeRequest.value.geometry.shape,
+        planeRequest.value.geometry.affine_ras,
+      ])
+    : '',
+);
 const overlayPalette = computed(() => (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })));
 const needsPlane = computed(() => ctPlaneAvailable.value && props.viewportActive !== false && showPlane.value);
 const needsVolume = computed(() => ctVolumeAvailable.value && props.viewportActive !== false && showVolume.value && !props.reviewActive);
-const volumeFamily = computed(() => planeRequest.value ? JSON.stringify([
-  planeRequest.value.base, planeRequest.value.geometry.shape, planeRequest.value.geometry.affine_ras, 'volume',
-]) : '');
+const volumeFamily = computed(() =>
+  planeRequest.value ? JSON.stringify([planeRequest.value.base, planeRequest.value.geometry.shape, planeRequest.value.geometry.affine_ras, 'volume']) : '',
+);
 const volumeReady = computed(() => needsVolume.value && !!volumeFamilyReady.value && volumeFamilyReady.value === volumeFamily.value);
-const needsVolumeMask = computed(() => needsVolume.value && volumeMask.value.enabled &&
-  volumeMaskIds.value.length > 0 && volumeMaskIds.value.length <= MAX_VOLUME_MASK_SEGMENTS);
-const volumeMaskFamily = computed(() => needsVolumeMask.value ? JSON.stringify([volumeFamily.value, volumeMaskIds.value, volumeMask.value.margin_mm]) : '');
+const needsVolumeMask = computed(
+  () => needsVolume.value && volumeMask.value.enabled && volumeMaskIds.value.length > 0 && volumeMaskIds.value.length <= MAX_VOLUME_MASK_SEGMENTS,
+);
+const volumeMaskFamily = computed(() => (needsVolumeMask.value ? JSON.stringify([volumeFamily.value, volumeMaskIds.value, volumeMask.value.margin_mm]) : ''));
 const volumeMaskReady = computed(() => needsVolumeMask.value && maskFamilyReady.value === volumeMaskFamily.value);
 const volumeMaskLoading = computed(() => needsVolumeMask.value && !volumeMaskReady.value && !maskError.value);
-const volumeMaskMessage = computed(() => maskError.value || (volumeMaskReady.value
-  ? `Showing ${volumeMask.value.mode} ${volumeMaskIds.value.length} selected ${volumeMaskIds.value.length === 1 ? 'segment' : 'segments'}.` : ''));
-const volumeMessage = computed(() => volumeError.value || (!props.fullResolution
-  ? `Preloading full ${modality.value}. Progress and cache errors appear in source review.`
-  : volumeReady.value ? ctOnly.value ? `${modality.value} ${sourcePresentation.value.units} · drag to rotate; scroll to zoom.` : 'Rotate to compare the volume and visible segments.' : `Preparing ${modality.value} volume…`));
+const volumeMaskMessage = computed(
+  () =>
+    maskError.value ||
+    (volumeMaskReady.value
+      ? `Showing ${volumeMask.value.mode} ${volumeMaskIds.value.length} selected ${volumeMaskIds.value.length === 1 ? 'segment' : 'segments'}.`
+      : ''),
+);
+const volumeMessage = computed(
+  () =>
+    volumeError.value ||
+    (!props.fullResolution
+      ? `Preloading full ${modality.value}. Progress and cache errors appear in source review.`
+      : volumeReady.value
+        ? ctOnly.value
+          ? `${modality.value} ${sourcePresentation.value.units} · drag to rotate; scroll to zoom.`
+          : 'Rotate to compare the volume and visible segments.'
+        : `Preparing ${modality.value} volume…`),
+);
 const volumeStackStatus = computed(() => {
   if (volumeError.value) return 'Unavailable';
   if (volumeMask.value.enabled) {
@@ -185,23 +309,48 @@ const volumeStackStatus = computed(() => {
 });
 const gpuActive = computed(() => needsPlane.value && !!gpuFamilyReady.value && gpuFamilyReady.value === gpuFamily.value);
 const gpuMeta = computed(() => {
-  const descriptor = props.localSession?.descriptor, request = planeRequest.value;
+  const descriptor = props.localSession?.descriptor,
+    request = planeRequest.value;
   if (gpuActive.value && descriptor && request) return nativeSliceMetadata(descriptor, request.plane, request.native);
 });
-const currentPlane = computed(() => planeFrameFamily.value === desiredPlaneFamily.value ? planeFrame.value : undefined);
-const exactPlaneReady = computed(() => !!gpuMeta.value || (!!currentPlane.value && currentPlane.value.quality === 'full' && currentPlane.value.context === desiredPlaneContext.value && !planeError.value));
-const targetOverlayAvailable = computed(() => modelReviewTargetAvailable(target.value?.id,
-  planeRequest.value?.overlays ?? [], currentPlane.value?.frame, !!gpuMeta.value));
+const currentPlane = computed(() => (planeFrameFamily.value === desiredPlaneFamily.value ? planeFrame.value : undefined));
+const exactPlaneReady = computed(
+  () =>
+    !!gpuMeta.value ||
+    (!!currentPlane.value && currentPlane.value.quality === 'full' && currentPlane.value.context === desiredPlaneContext.value && !planeError.value),
+);
+const targetOverlayAvailable = computed(() =>
+  modelReviewTargetAvailable(target.value?.id, planeRequest.value?.overlays ?? [], currentPlane.value?.frame, !!gpuMeta.value),
+);
 const planeReady = computed(() => !!gpuMeta.value || !!currentPlane.value);
 const displayedMeta = computed(() => gpuMeta.value ?? currentPlane.value?.frame.meta);
-const displayedContext = computed(() => gpuMeta.value ? desiredPlaneContext.value : currentPlane.value?.context ?? '');
-const coloredPlaneFrame = computed(() => currentPlane.value ? colorCTOverlays(currentPlane.value.frame, props.overlays) : undefined);
-const reviewReady = computed(() => !!props.reviewActive && !!target.value && !props.reviewDisabled &&
-  (props.reviewTool === 'scissors' ? !loading.value && !error.value : reviewMode.value === 'plane' ? showPlane.value && exactPlaneReady.value && targetOverlayAvailable.value : showSegmentation.value && selectedSegmentationOpacity.value > .02 && hasTargetSurface.value && hasModel.value && !loading.value && props.reviewTool === 'point'));
+const displayedContext = computed(() => (gpuMeta.value ? desiredPlaneContext.value : (currentPlane.value?.context ?? '')));
+const coloredPlaneFrame = computed(() => (currentPlane.value ? colorCTOverlays(currentPlane.value.frame, props.overlays) : undefined));
+const reviewReady = computed(
+  () =>
+    !!props.reviewActive &&
+    !!target.value &&
+    !props.reviewDisabled &&
+    (props.reviewTool === 'scissors'
+      ? !loading.value && !error.value
+      : reviewMode.value === 'plane'
+        ? showPlane.value && exactPlaneReady.value && targetOverlayAvailable.value
+        : showSegmentation.value &&
+          selectedSegmentationOpacity.value > 0.02 &&
+          hasTargetSurface.value &&
+          hasModel.value &&
+          !loading.value &&
+          props.reviewTool === 'point'),
+);
 const reviewHint = computed(() => {
-  if (props.reviewActive && props.reviewTool === 'scissors') return error.value ? 'The 3D surface preview is unavailable. Reload the model to continue cutting.' : loading.value ? 'Preparing the 3D surface preview…' : props.reviewDisabled
-    ? 'Editing paused while the current operation finishes.'
-    : `3D scissors · ${props.reviewScissorsOperation === 'erase_outside' ? 'erase outside' : 'erase inside'} through the full depth of ${target.value?.name || 'the selected segment'}. Draw on the 3D view; right drag rotates. Esc cancels a cut.`;
+  if (props.reviewActive && props.reviewTool === 'scissors')
+    return error.value
+      ? 'The 3D surface preview is unavailable. Reload the model to continue cutting.'
+      : loading.value
+        ? 'Preparing the 3D surface preview…'
+        : props.reviewDisabled
+          ? 'Editing paused while the current operation finishes.'
+          : `3D scissors · ${props.reviewScissorsOperation === 'erase_outside' ? 'erase outside' : 'erase inside'} through the full depth of ${target.value?.name || 'the selected segment'}. Draw on the 3D view; right drag rotates. Esc cancels a cut.`;
   if (planeError.value && needsPlane.value) return planeError.value;
   if (!props.reviewActive) {
     if (!showPlane.value) return '';
@@ -213,117 +362,238 @@ const reviewHint = computed(() => {
     return `${currentPlane.value.quality === 'preview' ? `Local preview · full ${modality.value} preloading.` : `Full ${modality.value} · local navigation.`} Drag to rotate; scroll to zoom.`;
   }
   if (!hasTargetSurface.value && reviewMode.value === 'surface') return `This segment has no saved surface. Mark its ${modality.value} plane to create it.`;
-  if (reviewMode.value === 'surface' && (!showSegmentation.value || selectedSegmentationOpacity.value <= .02)) return 'Show the segmentation and increase its opacity to mark a surface.';
-  if (reviewMode.value === 'surface') return props.reviewTool === 'point'
-    ? `Click the ${target.value?.name || 'selected'} surface to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point. Right drag rotates.`
-    : `Choose Point for surface marks, or use a ${modality.value} plane for drawn regions.`;
+  if (reviewMode.value === 'surface' && (!showSegmentation.value || selectedSegmentationOpacity.value <= 0.02))
+    return 'Show the segmentation and increase its opacity to mark a surface.';
+  if (reviewMode.value === 'surface')
+    return props.reviewTool === 'point'
+      ? `Click the ${target.value?.name || 'selected'} surface to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point. Right drag rotates.`
+      : `Choose Point for surface marks, or use a ${modality.value} plane for drawn regions.`;
   if (!showPlane.value) return `Show the ${modality.value} plane to mark it.`;
-  if (!gpuActive.value && planeLoading.value) return currentPlane.value ? `Updating ${modality.value} plane… Previous slice remains visible.` : `Preparing ${modality.value} plane…`;
-  if (!gpuActive.value && reviewMode.value === 'plane' && currentPlane.value?.quality === 'preview') return `Local preview · marking waits for full-resolution ${modality.value}.`;
+  if (!gpuActive.value && planeLoading.value)
+    return currentPlane.value ? `Updating ${modality.value} plane… Previous slice remains visible.` : `Preparing ${modality.value} plane…`;
+  if (!gpuActive.value && reviewMode.value === 'plane' && currentPlane.value?.quality === 'preview')
+    return `Local preview · marking waits for full-resolution ${modality.value}.`;
   if (reviewMode.value === 'plane' && !targetOverlayAvailable.value) return 'Editing paused: the selected segment overlay is unavailable.';
   if (props.reviewDisabled) return 'Editing paused while the current operation finishes.';
-  return props.reviewTool === 'navigate' ? 'Choose a marking tool above. Drag to rotate; right drag to pan.' : `Draw directly on the ${modality.value} plane. Right drag rotates; scroll zooms.`;
+  return props.reviewTool === 'navigate'
+    ? 'Choose a marking tool above. Drag to rotate; right drag to pan.'
+    : `Draw directly on the ${modality.value} plane. Right drag rotates; scroll zooms.`;
 });
 let scene: AnatomyScene | undefined;
 let controller: AbortController | undefined;
-let loadId = 0, planeLoadId = 0, disposed = false, requestFrame = 0, faceWhenReady = false, requestedFamily = '';
+let loadId = 0,
+  planeLoadId = 0,
+  disposed = false,
+  requestFrame = 0,
+  faceWhenReady = false,
+  requestedFamily = '';
 let exactPlaneTimer = 0;
-let gpuController: AbortController | undefined, gpuSession: RenderCTSession | undefined, gpuPendingFamily = '';
+let gpuController: AbortController | undefined,
+  gpuSession: RenderCTSession | undefined,
+  gpuPendingFamily = '';
 let gpuBaseTimer = 0;
-let gpuBaseRetryFamily = '', gpuBaseRetries = 0;
+let gpuBaseRetryFamily = '',
+  gpuBaseRetries = 0;
 let reviewControlsObserver: ResizeObserver | undefined;
 const reviewFrames = new ModelReviewFrames();
 const maskSources = new VolumeMaskSources();
 let initialCameraApplied = false;
 function restoreInitialCamera() {
   const camera = props.initialSnapshot?.state.camera;
-  if (initialCameraApplied || !camera || !scene || loading.value
-      || (needsVolume.value && !volumeReady.value && !volumeError.value)
-      || (needsPlane.value && !gpuActive.value && !gpuFallback.value)) return;
-  initialCameraApplied = true; scene.restoreCamera(camera);
+  if (
+    initialCameraApplied ||
+    !camera ||
+    !scene ||
+    loading.value ||
+    (needsVolume.value && !volumeReady.value && !volumeError.value) ||
+    (needsPlane.value && !gpuActive.value && !gpuFallback.value)
+  )
+    return;
+  initialCameraApplied = true;
+  scene.restoreCamera(camera);
 }
 async function observeReviewControls() {
-  await nextTick(); if (disposed) return;
+  await nextTick();
+  if (disposed) return;
   reviewControlsObserver?.disconnect();
   if (!reviewControls.value) return;
-  const measure = () => { if (reviewControls.value) reviewSceneTop.value = reviewControls.value.offsetTop + reviewControls.value.offsetHeight + 8; };
-  measure(); reviewControlsObserver ??= new ResizeObserver(measure); reviewControlsObserver.observe(reviewControls.value);
+  const measure = () => {
+    if (reviewControls.value) reviewSceneTop.value = reviewControls.value.offsetTop + reviewControls.value.offsetHeight + 8;
+  };
+  measure();
+  reviewControlsObserver ??= new ResizeObserver(measure);
+  reviewControlsObserver.observe(reviewControls.value);
 }
 function syncReview() {
   if (!scene || disposed) return;
   scene.setViewportControlsReserved(controlsVisible.value);
   scene.setSegmentationLayer({ visible: showSegmentation.value, opacity: 1 });
-  scene.setCTVolume(props.geometry ? { visible: volumeReady.value && !volumeError.value,
-    geometry: props.geometry, settings: renderVolumeSettings.value,
-    mask: { mode: volumeMask.value.enabled ? volumeMask.value.mode : 'off', ids: volumeMaskSourceIds.value,
-      ready: volumeMaskReady.value } } : undefined);
-  scene.setCTPlane(!props.reviewActive && planeAvailable.value ? {
-    visible: needsPlane.value, geometry: props.geometry!, frame: gpuMeta.value ? undefined : coloredPlaneFrame.value,
-    gpuMeta: gpuMeta.value,
-    window: props.window || 400, level: props.level ?? 40, contextKey: displayedContext.value,
-  } : undefined);
+  scene.setCTVolume(
+    props.geometry
+      ? {
+          visible: volumeReady.value && !volumeError.value,
+          geometry: props.geometry,
+          settings: renderVolumeSettings.value,
+          mask: { mode: volumeMask.value.enabled ? volumeMask.value.mode : 'off', ids: volumeMaskSourceIds.value, ready: volumeMaskReady.value },
+        }
+      : undefined,
+  );
+  scene.setCTPlane(
+    !props.reviewActive && planeAvailable.value
+      ? {
+          visible: needsPlane.value,
+          geometry: props.geometry!,
+          frame: gpuMeta.value ? undefined : coloredPlaneFrame.value,
+          gpuMeta: gpuMeta.value,
+          window: props.window || 400,
+          level: props.level ?? 40,
+          contextKey: displayedContext.value,
+        }
+      : undefined,
+  );
   restoreInitialCamera();
-  if (!props.reviewActive || !props.geometry || !target.value) { scene.setReview(undefined); return; }
-  const contextKey = props.reviewTool === 'scissors'
-    ? JSON.stringify([props.caseId, props.revisionId, target.value.id, props.geometry.shape, props.geometry.affine_ras,
-      props.point, 'scissors', props.reviewScissorsShape, props.reviewScissorsOperation])
-    : JSON.stringify([props.caseId, props.revisionId, target.value.id,
-      desiredPlaneContext.value, reviewMode.value, props.reviewTool, props.reviewInclude !== false, props.reviewRadius || 3]);
-  scene.setReview({ enabled: true, mode: reviewMode.value, showPlane: showPlane.value,
-    targetId: target.value.id, geometry: props.geometry, tool: props.reviewTool || 'navigate',
-    include: props.reviewInclude !== false, radiusMm: props.reviewRadius || 3,
-    scissorsShape: props.reviewScissorsShape ?? 'freehand', scissorsOperation: props.reviewScissorsOperation ?? 'erase_inside',
-    disabled: !reviewReady.value, prompts: props.reviewPrompts || [], contextKey,
-    frame: gpuMeta.value ? undefined : coloredPlaneFrame.value, gpuMeta: gpuMeta.value,
-    window: props.window || 400, level: props.level ?? 40 });
+  if (!props.reviewActive || !props.geometry || !target.value) {
+    scene.setReview(undefined);
+    return;
+  }
+  const contextKey =
+    props.reviewTool === 'scissors'
+      ? JSON.stringify([
+          props.caseId,
+          props.revisionId,
+          target.value.id,
+          props.geometry.shape,
+          props.geometry.affine_ras,
+          props.point,
+          'scissors',
+          props.reviewScissorsShape,
+          props.reviewScissorsOperation,
+        ])
+      : JSON.stringify([
+          props.caseId,
+          props.revisionId,
+          target.value.id,
+          desiredPlaneContext.value,
+          reviewMode.value,
+          props.reviewTool,
+          props.reviewInclude !== false,
+          props.reviewRadius || 3,
+        ]);
+  scene.setReview({
+    enabled: true,
+    mode: reviewMode.value,
+    showPlane: showPlane.value,
+    targetId: target.value.id,
+    geometry: props.geometry,
+    tool: props.reviewTool || 'navigate',
+    include: props.reviewInclude !== false,
+    radiusMm: props.reviewRadius || 3,
+    scissorsShape: props.reviewScissorsShape ?? 'freehand',
+    scissorsOperation: props.reviewScissorsOperation ?? 'erase_inside',
+    disabled: !reviewReady.value,
+    prompts: props.reviewPrompts || [],
+    contextKey,
+    frame: gpuMeta.value ? undefined : coloredPlaneFrame.value,
+    gpuMeta: gpuMeta.value,
+    window: props.window || 400,
+    level: props.level ?? 40,
+  });
 }
 /** Upload immutable data once; native navigation below changes metadata only. */
 async function prepareGPUPlane() {
   clearTimeout(gpuBaseTimer);
-  const session = props.localSession, rawFamily = volumeFamily.value, overlayFamily = gpuFamily.value;
-  const wantPlane = needsPlane.value, wantMask = needsVolumeMask.value, maskFamily = volumeMaskFamily.value;
+  const session = props.localSession,
+    rawFamily = volumeFamily.value,
+    overlayFamily = gpuFamily.value;
+  const wantPlane = needsPlane.value,
+    wantMask = needsVolumeMask.value,
+    maskFamily = volumeMaskFamily.value;
   const atlasFamily = JSON.stringify([wantPlane ? overlayFamily : null, wantMask ? maskFamily : null]);
   const family = JSON.stringify([rawFamily, atlasFamily]);
   if (gpuSession !== session) {
-    gpuController?.abort(); gpuPendingFamily = ''; gpuFamilyReady.value = ''; gpuFallback.value = ''; volumeFamilyReady.value = ''; volumeError.value = '';
-    maskFamilyReady.value = ''; maskError.value = ''; atlasFamilyReady.value = '';
-    volumeMaskSourceIds.value = []; scene?.clearGPUCT();
+    gpuController?.abort();
+    gpuPendingFamily = '';
+    gpuFamilyReady.value = '';
+    gpuFallback.value = '';
+    volumeFamilyReady.value = '';
+    volumeError.value = '';
+    maskFamilyReady.value = '';
+    maskError.value = '';
+    atlasFamilyReady.value = '';
+    volumeMaskSourceIds.value = [];
+    scene?.clearGPUCT();
     gpuSession = session;
-    gpuBaseRetryFamily = ''; gpuBaseRetries = 0;
+    gpuBaseRetryFamily = '';
+    gpuBaseRetries = 0;
   }
-  if (gpuBaseRetryFamily !== family) { gpuBaseRetryFamily = family; gpuBaseRetries = 0; }
+  if (gpuBaseRetryFamily !== family) {
+    gpuBaseRetryFamily = family;
+    gpuBaseRetries = 0;
+  }
   if (gpuFamilyReady.value && gpuFamilyReady.value !== overlayFamily) gpuFamilyReady.value = '';
   if (!scene || disposed || (!wantPlane && !needsVolume.value) || !session || !props.localReady || !props.fullResolution || !rawFamily) {
     if ((!wantPlane && !needsVolume.value) || !session || !props.localReady || !props.fullResolution || !rawFamily) {
-      gpuController?.abort(); gpuPendingFamily = ''; gpuPreparing.value = false;
-      scene?.clearGPUCT(); gpuFamilyReady.value = ''; volumeFamilyReady.value = '';
-      maskFamilyReady.value = ''; atlasFamilyReady.value = ''; volumeMaskSourceIds.value = [];
+      gpuController?.abort();
+      gpuPendingFamily = '';
+      gpuPreparing.value = false;
+      scene?.clearGPUCT();
+      gpuFamilyReady.value = '';
+      volumeFamilyReady.value = '';
+      maskFamilyReady.value = '';
+      atlasFamilyReady.value = '';
+      volumeMaskSourceIds.value = [];
       syncReview();
     }
     return;
   }
   if (gpuPendingFamily && gpuPendingFamily !== family) {
-    gpuController?.abort(); gpuPendingFamily = ''; gpuPreparing.value = false;
+    gpuController?.abort();
+    gpuPendingFamily = '';
+    gpuPreparing.value = false;
   }
   if (volumeMaskSourceIds.value.length && maskFamilyReady.value !== maskFamily) {
     // Drop a disabled/stale union immediately, before any replacement fetch.
-    scene.clearGPUOverlays(); volumeMaskSourceIds.value = [];
-    gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = '';
+    scene.clearGPUOverlays();
+    volumeMaskSourceIds.value = [];
+    gpuFamilyReady.value = '';
+    maskFamilyReady.value = '';
+    atlasFamilyReady.value = '';
   }
   if (!wantPlane && !wantMask && atlasFamilyReady.value) {
-    scene.clearGPUOverlays(); gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = '';
+    scene.clearGPUOverlays();
+    gpuFamilyReady.value = '';
+    maskFamilyReady.value = '';
+    atlasFamilyReady.value = '';
   }
-  if (volumeFamilyReady.value === rawFamily && scene.gpuCTReady && (!(wantPlane || wantMask) ||
-      (atlasFamilyReady.value === atlasFamily && (!wantPlane || gpuFamilyReady.value === overlayFamily || !!gpuFallback.value)
-        && (!wantMask || maskFamilyReady.value === maskFamily)))) { syncReview(); return; }
+  if (
+    volumeFamilyReady.value === rawFamily &&
+    scene.gpuCTReady &&
+    (!(wantPlane || wantMask) ||
+      (atlasFamilyReady.value === atlasFamily &&
+        (!wantPlane || gpuFamilyReady.value === overlayFamily || !!gpuFallback.value) &&
+        (!wantMask || maskFamilyReady.value === maskFamily)))
+  ) {
+    syncReview();
+    return;
+  }
   if (gpuPendingFamily === family && gpuController && !gpuController.signal.aborted) return;
-  gpuController?.abort(); const controller = new AbortController(); gpuController = controller;
-  gpuPendingFamily = family; gpuPreparing.value = true; gpuFallback.value = ''; if (needsVolume.value) volumeError.value = '';
+  gpuController?.abort();
+  const controller = new AbortController();
+  gpuController = controller;
+  gpuPendingFamily = family;
+  gpuPreparing.value = true;
+  gpuFallback.value = '';
+  if (needsVolume.value) volumeError.value = '';
   const request = planeRequest.value!;
-  const identityCurrent = () => !disposed && !controller.signal.aborted && props.localSession === session
-    && volumeFamily.value === rawFamily && (needsPlane.value || needsVolume.value)
-    && (!wantPlane || (needsPlane.value && gpuFamily.value === overlayFamily))
-    && wantMask === needsVolumeMask.value && (!wantMask || volumeMaskFamily.value === maskFamily);
+  const identityCurrent = () =>
+    !disposed &&
+    !controller.signal.aborted &&
+    props.localSession === session &&
+    volumeFamily.value === rawFamily &&
+    (needsPlane.value || needsVolume.value) &&
+    (!wantPlane || (needsPlane.value && gpuFamily.value === overlayFamily)) &&
+    wantMask === needsVolumeMask.value &&
+    (!wantMask || volumeMaskFamily.value === maskFamily);
   const current = () => identityCurrent() && session.revisionBase === request.base;
   try {
     // The parent rebinds this shared worker on immutable-alias changes. Never
@@ -331,7 +601,10 @@ async function prepareGPUPlane() {
     await nextTick();
     if (!identityCurrent()) return;
     if (session.revisionBase !== request.base) {
-      if (gpuBaseRetries++ < 3) gpuBaseTimer = window.setTimeout(() => { if (identityCurrent()) void prepareGPUPlane(); }, 50);
+      if (gpuBaseRetries++ < 3)
+        gpuBaseTimer = window.setTimeout(() => {
+          if (identityCurrent()) void prepareGPUPlane();
+        }, 50);
       return;
     }
     gpuBaseRetries = 0;
@@ -344,78 +617,114 @@ async function prepareGPUPlane() {
       syncReview();
     }
     if (!wantPlane && !wantMask) {
-      scene.clearGPUOverlays(); gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = '';
-      volumeMaskSourceIds.value = []; syncReview(); return;
+      scene.clearGPUOverlays();
+      gpuFamilyReady.value = '';
+      maskFamilyReady.value = '';
+      atlasFamilyReady.value = '';
+      volumeMaskSourceIds.value = [];
+      syncReview();
+      return;
     }
     // GPU masks have an independent, bounded transport. Changing volume masking
     // must never change the CT worker's slice-overlay selection/version.
-    gpuFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = ''; maskError.value = '';
+    gpuFamilyReady.value = '';
+    maskFamilyReady.value = '';
+    atlasFamilyReady.value = '';
+    maskError.value = '';
     syncReview();
     if (wantPlane) queueReviewPlane();
-    const planePromise = wantPlane ? session.getGPUOverlays(request.overlays, request.compare, controller.signal)
-        .then(masks => ({ masks, error: '' })).catch(reason => ({ masks: { overlays: [] },
-          error: reason instanceof Error ? reason.message : 'GPU overlays unavailable; using local slices.' }))
-        : Promise.resolve({ masks: { overlays: [] }, error: '' });
-    const extraMasks = wantMask ? await (props.maskSourceProvider ?? maskSources).get(request.base,
-      volumeMaskIds.value, controller.signal, volumeMask.value.margin_mm) : undefined;
+    const planePromise = wantPlane
+      ? session
+          .getGPUOverlays(request.overlays, request.compare, controller.signal)
+          .then(masks => ({ masks, error: '' }))
+          .catch(reason => ({ masks: { overlays: [] }, error: reason instanceof Error ? reason.message : 'GPU overlays unavailable; using local slices.' }))
+      : Promise.resolve({ masks: { overlays: [] }, error: '' });
+    const extraMasks = wantMask
+      ? await (props.maskSourceProvider ?? maskSources).get(request.base, volumeMaskIds.value, controller.signal, volumeMask.value.margin_mm)
+      : undefined;
     if (!current()) return;
     if (wantMask) {
       // The small display union can be shown before optional native colored
       // plane labels finish their independent WAN download.
       await scene.prepareGPUOverlays({ overlays: [] }, [], controller.signal, extraMasks);
       if (!current()) return;
-      volumeMaskSourceIds.value = extraMasks!.overlays.map(layer => layer.id); maskFamilyReady.value = maskFamily;
+      volumeMaskSourceIds.value = extraMasks!.overlays.map(layer => layer.id);
+      maskFamilyReady.value = maskFamily;
       syncReview();
     }
     const planeResult = await planePromise;
     if (!current()) return;
-    const planeFits = await scene.prepareGPUOverlays(planeResult.masks,
-      (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })), controller.signal, extraMasks);
+    const planeFits = await scene.prepareGPUOverlays(
+      planeResult.masks,
+      (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })),
+      controller.signal,
+      extraMasks,
+    );
     if (!current()) return;
     atlasFamilyReady.value = atlasFamily;
     if (wantMask) {
-      volumeMaskSourceIds.value = extraMasks!.overlays.map(layer => layer.id); maskFamilyReady.value = maskFamily;
+      volumeMaskSourceIds.value = extraMasks!.overlays.map(layer => layer.id);
+      maskFamilyReady.value = maskFamily;
     }
     if (wantPlane && planeFits && !planeResult.error) {
-      gpuFamilyReady.value = overlayFamily; planeError.value = ''; planeLoading.value = false;
-      reviewFrames.cancel(); clearTimeout(exactPlaneTimer); planeLoadId++;
+      gpuFamilyReady.value = overlayFamily;
+      planeError.value = '';
+      planeLoading.value = false;
+      reviewFrames.cancel();
+      clearTimeout(exactPlaneTimer);
+      planeLoadId++;
     } else if (wantPlane) {
       gpuFallback.value = planeResult.error || 'Colored plane overlays use local full-resolution slices; the masked 3D volume remains on the GPU.';
       queueReviewPlane();
     }
     syncReview();
-    if (faceWhenReady) { faceWhenReady = false; scene.focusReviewPlane(); }
+    if (faceWhenReady) {
+      faceWhenReady = false;
+      scene.focusReviewPlane();
+    }
   } catch (reason) {
     if (!current()) return;
     controller.abort();
     gpuFamilyReady.value = '';
-    maskFamilyReady.value = ''; atlasFamilyReady.value = ''; volumeMaskSourceIds.value = [];
+    maskFamilyReady.value = '';
+    atlasFamilyReady.value = '';
+    volumeMaskSourceIds.value = [];
     scene.clearGPUOverlays();
     gpuFallback.value = reason instanceof Error ? reason.message : 'GPU volume unavailable; using local slices.';
     if (wantMask) maskError.value = `Volume mask unavailable: ${gpuFallback.value} The masked volume stays hidden. Choose fewer segments or retry.`;
     if (needsVolume.value && (volumeFamilyReady.value !== rawFamily || !scene.gpuCTReady)) {
-      volumeError.value = gpuFallback.value; fallbackToCTPlane();
+      volumeError.value = gpuFallback.value;
+      fallbackToCTPlane();
     }
     if (needsPlane.value) queueReviewPlane();
     syncReview();
   } finally {
-    if (gpuController === controller) { gpuPreparing.value = false; gpuPendingFamily = ''; }
+    if (gpuController === controller) {
+      gpuPreparing.value = false;
+      gpuPendingFamily = '';
+    }
   }
 }
 function setVolumeEnabled(enabled: boolean) {
-  showVolume.value = enabled; volumeError.value = ''; syncReview();
+  showVolume.value = enabled;
+  volumeError.value = '';
+  syncReview();
 }
 function fallbackToCTPlane() {
   if (!ctOnly.value) return;
-  showVolume.value = false; showPlane.value = true; faceWhenReady = true;
+  showVolume.value = false;
+  showPlane.value = true;
+  faceWhenReady = true;
   queueReviewPlane();
 }
 function cancelReference() {
-  referenceController?.abort(); referenceController = undefined; referenceLoading.value = false;
+  referenceController?.abort();
+  referenceController = undefined;
+  referenceLoading.value = false;
 }
 function setVolumeSettings(settings: CTVolumeSettings) {
-  const manual = settings.cinematic.myocardiumHU !== volumeSettings.value.cinematic.myocardiumHU
-    || settings.cinematic.bloodHU !== volumeSettings.value.cinematic.bloodHU;
+  const manual =
+    settings.cinematic.myocardiumHU !== volumeSettings.value.cinematic.myocardiumHU || settings.cinematic.bloodHU !== volumeSettings.value.cinematic.bloodHU;
   if (manual) automaticReference.edited(referenceKey.value);
   const cancelled = referenceLoading.value;
   cancelReference();
@@ -423,16 +732,21 @@ function setVolumeSettings(settings: CTVolumeSettings) {
     referenceMessage.value = 'Using manually selected reference HU. Automatic measurement will not replace this pair.';
     referenceError.value = false;
   } else if (cancelled) {
-    referenceMessage.value = 'Reference measurement cancelled. The current HU pair is unchanged; use Measure from segments to retry, or enter both values manually.';
+    referenceMessage.value =
+      'Reference measurement cancelled. The current HU pair is unchanged; use Measure from segments to retry, or enter both values manually.';
     referenceError.value = false;
   }
-  volumeSettings.value = freshVolumeSettings(settings); syncReview();
+  volumeSettings.value = freshVolumeSettings(settings);
+  syncReview();
 }
 async function measureCinematicReference(automatic = false) {
   if (!referenceAvailable.value || volumeSettings.value.preset !== CINEMATIC_HEART_PRESET) return;
   cancelReference();
-  const controller = new AbortController(), caseId = props.caseId!, revisionId = props.revisionId!;
-  referenceController = controller; referenceLoading.value = true;
+  const controller = new AbortController(),
+    caseId = props.caseId!,
+    revisionId = props.revisionId!;
+  referenceController = controller;
+  referenceLoading.value = true;
   referenceMessage.value = automatic ? 'Measuring myocardium and blood-pool HU from this segmentation…' : '';
   referenceError.value = false;
   try {
@@ -440,8 +754,10 @@ async function measureCinematicReference(automatic = false) {
     if (controller.signal.aborted || disposed || caseId !== props.caseId || revisionId !== props.revisionId) return;
     const invalid = cinematicReferenceError(measured.myocardium_hu, measured.blood_hu);
     if (invalid) throw new Error(`${invalid} Set both reference values manually.`);
-    volumeSettings.value = freshVolumeSettings({ ...volumeSettings.value,
-      cinematic: { ...volumeSettings.value.cinematic, myocardiumHU: measured.myocardium_hu, bloodHU: measured.blood_hu } });
+    volumeSettings.value = freshVolumeSettings({
+      ...volumeSettings.value,
+      cinematic: { ...volumeSettings.value.cinematic, myocardiumHU: measured.myocardium_hu, bloodHU: measured.blood_hu },
+    });
     referenceMessage.value = `Measured medians: myocardium ${measured.myocardium_hu.toFixed(1)} HU; ${measured.blood_source === 'aorta' ? 'aorta' : 'left heart'} ${measured.blood_hu.toFixed(1)} HU.`;
     syncReview();
   } catch (reason) {
@@ -449,27 +765,57 @@ async function measureCinematicReference(automatic = false) {
     referenceError.value = true;
     referenceMessage.value = `${reason instanceof Error ? reason.message : 'Reference measurement failed.'} The current reference HU pair is unchanged; enter both values manually or retry measurement.`;
   } finally {
-    if (referenceController === controller) { referenceController = undefined; referenceLoading.value = false; }
+    if (referenceController === controller) {
+      referenceController = undefined;
+      referenceLoading.value = false;
+    }
   }
 }
 function setVolumeMask(settings: VolumeMaskSettings) {
   volumeMask.value = freshVolumeMaskSettings(settings, availableMaskStructures.value);
-  maskError.value = ''; syncReview();
+  maskError.value = '';
+  syncReview();
 }
-function retryVolumeMask() { maskError.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = ''; syncReview(); void prepareGPUPlane(); }
-function retryVolume() { volumeError.value = ''; void prepareGPUPlane(); syncReview(); }
+function retryVolumeMask() {
+  maskError.value = '';
+  maskFamilyReady.value = '';
+  atlasFamilyReady.value = '';
+  syncReview();
+  void prepareGPUPlane();
+}
+function retryVolume() {
+  volumeError.value = '';
+  void prepareGPUPlane();
+  syncReview();
+}
 async function loadReviewPlane(exact = false) {
-  const request = planeRequest.value, id = ++planeLoadId;
-  if (!needsPlane.value || !request || disposed) { reviewFrames.cancel(); planeLoading.value = false; syncReview(); return; }
-  if (gpuActive.value) { planeLoading.value = false; syncReview(); return; }
-  planeLoading.value = true; planeError.value = ''; syncReview();
+  const request = planeRequest.value,
+    id = ++planeLoadId;
+  if (!needsPlane.value || !request || disposed) {
+    reviewFrames.cancel();
+    planeLoading.value = false;
+    syncReview();
+    return;
+  }
+  if (gpuActive.value) {
+    planeLoading.value = false;
+    syncReview();
+    return;
+  }
+  planeLoading.value = true;
+  planeError.value = '';
+  syncReview();
   const family = modelReviewFrameFamilyKey(request);
   const present = (value: ModelReviewFrame) => {
     if (disposed || !needsPlane.value || family !== desiredPlaneFamily.value) return;
-    planeFrame.value = value; planeFrameFamily.value = family;
+    planeFrame.value = value;
+    planeFrameFamily.value = family;
     planeLoading.value = value.context !== desiredPlaneContext.value;
     syncReview();
-    if (faceWhenReady) { faceWhenReady = false; scene?.focusReviewPlane(); }
+    if (faceWhenReady) {
+      faceWhenReady = false;
+      scene?.focusReviewPlane();
+    }
   };
   try {
     const value = await reviewFrames.request(exact ? { ...request, exact: true } : request, present);
@@ -499,32 +845,51 @@ function queueReviewPlane() {
   const family = needsPlane.value ? desiredPlaneFamily.value : '';
   const previousFamily = requestedFamily;
   if (family !== requestedFamily) {
-    reviewFrames.cancel(); planeFrame.value = undefined; planeFrameFamily.value = ''; requestedFamily = family;
+    reviewFrames.cancel();
+    planeFrame.value = undefined;
+    planeFrameFamily.value = '';
+    requestedFamily = family;
   }
   planeLoading.value = needsPlane.value && currentPlane.value?.context !== desiredPlaneContext.value;
   planeError.value = '';
   if (!needsPlane.value && !previousFamily) return;
   if (gpuActive.value) {
-    reviewFrames.cancel(); planeLoading.value = false; syncReview();
-    if (faceWhenReady) { faceWhenReady = false; scene?.focusReviewPlane(); }
+    reviewFrames.cancel();
+    planeLoading.value = false;
+    syncReview();
+    if (faceWhenReady) {
+      faceWhenReady = false;
+      scene?.focusReviewPlane();
+    }
     return;
   }
   // Embedded exports have no remote detail endpoint or external worker. Their
   // shared 3D texture supplies the plane as soon as its bounded upload finishes.
   if (props.localSession?.networkFree) {
     planeError.value = gpuFallback.value ? `Embedded ${modality.value} plane unavailable: ${gpuFallback.value}` : '';
-    planeLoading.value = needsPlane.value && !planeError.value; syncReview(); return;
+    planeLoading.value = needsPlane.value && !planeError.value;
+    syncReview();
+    return;
   }
   syncReview();
   if (!needsPlane.value) return;
   if (requestFrame) return;
-  requestFrame = requestAnimationFrame(() => { requestFrame = 0; void loadReviewPlane(); });
+  requestFrame = requestAnimationFrame(() => {
+    requestFrame = 0;
+    void loadReviewPlane();
+  });
 }
 function changeMode(event: Event) {
   reviewMode.value = (event.target as HTMLSelectElement).value as 'surface' | 'plane';
-  if (reviewMode.value === 'plane') { showPlane.value = true; faceWhenReady = true; }
+  if (reviewMode.value === 'plane') {
+    showPlane.value = true;
+    faceWhenReady = true;
+  }
 }
-function changePlane(event: Event) { reviewPlane.value = (event.target as HTMLSelectElement).value as Plane; faceWhenReady = true; }
+function changePlane(event: Event) {
+  reviewPlane.value = (event.target as HTMLSelectElement).value as Plane;
+  faceWhenReady = true;
+}
 function slidePlane(event: Event) {
   if (!props.geometry || !props.point || !planeRequest.value) return;
   emit('point', moveNativeSlice(props.geometry, props.point, planeRequest.value.native.axis, Number((event.target as HTMLInputElement).value)));
@@ -542,22 +907,33 @@ function reviewGesture(prompt: InteractivePrompt) {
 async function load() {
   if (!scene) return;
   scene.restoreContext();
-  const id = ++loadId; controller?.abort(); controller = new AbortController();
-  loading.value = true; error.value = ''; progress.value = undefined;
+  const id = ++loadId;
+  controller?.abort();
+  controller = new AbortController();
+  loading.value = true;
+  error.value = '';
+  progress.value = undefined;
   try {
     if (ctOnly.value) {
-      scene.clearSurfaces(); hasModel.value = false;
+      scene.clearSurfaces();
+      hasModel.value = false;
       surfaceRevisionLoaded.value = props.modelRevisionId ?? '';
-      scene.display(props.display, props.selected); scene.setPoint(props.point);
+      scene.display(props.display, props.selected);
+      scene.setPoint(props.point);
       return;
     }
     if (props.manifestUrl && !props.modelData) {
       const response = await fetch(props.manifestUrl, { signal: controller.signal });
       if (!response.ok) throw new Error(`Could not load surface information (${response.status}).`);
-      const manifest = await response.json() as SurfaceManifest;
+      const manifest = (await response.json()) as SurfaceManifest;
       if (id !== loadId) return;
-      await scene.loadSurfaces(manifest, props.structures, { signal: controller.signal, preserveView: hasModel.value || !!props.reviewActive,
-        onProgress: value => { if (id === loadId) progress.value = value; } });
+      await scene.loadSurfaces(manifest, props.structures, {
+        signal: controller.signal,
+        preserveView: hasModel.value || !!props.reviewActive,
+        onProgress: value => {
+          if (id === loadId) progress.value = value;
+        },
+      });
     } else {
       let data = props.modelData;
       if (!data && props.modelUrl) {
@@ -570,169 +946,558 @@ async function load() {
       await scene.load(data, props.structures, hasModel.value);
     }
     if (id !== loadId) return;
-    scene.setStructureColors(props.structures); scene.display(props.display, props.selected); scene.setPoint(props.point);
-    hasModel.value = true; surfaceRevisionLoaded.value = props.modelRevisionId ?? ''; syncReview();
-  } catch (reason) { if (id === loadId && !(reason instanceof DOMException && reason.name === 'AbortError')) error.value = reason instanceof Error ? reason.message : '3D rendering failed.'; }
-  finally { if (id === loadId) { loading.value = false; transparencyWarning.value = scene.transparencyWarning; syncReview(); } }
+    scene.setStructureColors(props.structures);
+    scene.display(props.display, props.selected);
+    scene.setPoint(props.point);
+    hasModel.value = true;
+    surfaceRevisionLoaded.value = props.modelRevisionId ?? '';
+    syncReview();
+  } catch (reason) {
+    if (id === loadId && !(reason instanceof DOMException && reason.name === 'AbortError'))
+      error.value = reason instanceof Error ? reason.message : '3D rendering failed.';
+  } finally {
+    if (id === loadId) {
+      loading.value = false;
+      transparencyWarning.value = scene.transparencyWarning;
+      syncReview();
+    }
+  }
 }
 onMounted(() => {
-  try { scene = new AnatomyScene(surface.value!, (id, point) => { if (!props.reviewActive || props.reviewTool === 'navigate') emit('pick', id, point); }, message => { error.value = message; }, name => { view.value = name; }, axes => { orientation.value = axes; }, reviewGesture);
-    scene.onGPUCTInvalidated = reason => { gpuController?.abort(); gpuFamilyReady.value = ''; volumeFamilyReady.value = ''; maskFamilyReady.value = ''; atlasFamilyReady.value = ''; maskError.value = ''; gpuPendingFamily = ''; gpuPreparing.value = false; gpuFallback.value = reason || 'GPU volume was released; using local slices.'; queueReviewPlane(); syncReview(); };
-    scene.onGPUCTRestored = () => { if (!disposed) void prepareGPUPlane(); };
-    scene.onCTVolumeError = reason => { volumeError.value = reason; gpuFallback.value = reason; fallbackToCTPlane(); syncReview(); };
+  try {
+    scene = new AnatomyScene(
+      surface.value!,
+      (id, point) => {
+        if (!props.reviewActive || props.reviewTool === 'navigate') emit('pick', id, point);
+      },
+      message => {
+        error.value = message;
+      },
+      name => {
+        view.value = name;
+      },
+      axes => {
+        orientation.value = axes;
+      },
+      reviewGesture,
+    );
+    scene.onGPUCTInvalidated = reason => {
+      gpuController?.abort();
+      gpuFamilyReady.value = '';
+      volumeFamilyReady.value = '';
+      maskFamilyReady.value = '';
+      atlasFamilyReady.value = '';
+      maskError.value = '';
+      gpuPendingFamily = '';
+      gpuPreparing.value = false;
+      gpuFallback.value = reason || 'GPU volume was released; using local slices.';
+      queueReviewPlane();
+      syncReview();
+    };
+    scene.onGPUCTRestored = () => {
+      if (!disposed) void prepareGPUPlane();
+    };
+    scene.onCTVolumeError = reason => {
+      volumeError.value = reason;
+      gpuFallback.value = reason;
+      fallbackToCTPlane();
+      syncReview();
+    };
     if (ctOnly.value && !props.initialSnapshot && ctVolumeAvailable.value) setVolumeEnabled(true);
-    load(); syncReview(); queueReviewPlane(); void prepareGPUPlane(); void observeReviewControls(); }
-  catch { error.value = `WebGL is unavailable. You can still review ${modality.value} slices and export the segmentation.`; loading.value = false; }
-});
-onBeforeUnmount(() => { void setExpanded(false, false); disposed = true; cancelReference(); loadId++; planeLoadId++; gpuController?.abort(); maskSources.dispose(); clearTimeout(gpuBaseTimer); cancelAnimationFrame(requestFrame); clearTimeout(exactPlaneTimer); reviewControlsObserver?.disconnect(); reviewFrames.dispose(); controller?.abort(); scene?.dispose(); });
-watch(() => [props.manifestUrl, props.modelUrl, props.modelData], load);
-watch(() => [props.caseId, props.revisionId, ctOnly.value] as const, (current, previous) => {
-  automaticReference.select(referenceKey.value);
-  cancelReference(); referenceMessage.value = ''; referenceError.value = false;
-  if (!props.initialSnapshot && previous && current[0] !== previous[0]) {
-    volumeMask.value = freshVolumeMaskSettings({ ...volumeMask.value, margin_mm: 0 }, availableMaskStructures.value);
-  }
-  if (!props.initialSnapshot && previous && (current[0] !== previous[0] || current[1] !== previous[1])) {
-    volumeSettings.value = freshVolumeSettings({ ...volumeSettings.value, cinematic: { ...volumeSettings.value.cinematic,
-      myocardiumHU: DEFAULT_CINEMATIC_SETTINGS.myocardiumHU, bloodHU: DEFAULT_CINEMATIC_SETTINGS.bloodHU } });
-    if (volumeSettings.value.preset === CINEMATIC_HEART_PRESET) referenceMessage.value = 'Case or revision changed. Reference HU reset to 80 / 400; measure again or set both values manually.';
+    load();
     syncReview();
+    queueReviewPlane();
+    void prepareGPUPlane();
+    void observeReviewControls();
+  } catch {
+    error.value = `WebGL is unavailable. You can still review ${modality.value} slices and export the segmentation.`;
+    loading.value = false;
   }
-  if (current[2] && !props.reviewActive && !props.initialSnapshot && ctVolumeAvailable.value) setVolumeEnabled(true);
-  else if (previous?.[2]) { setVolumeEnabled(false); showPlane.value = false; }
 });
-watch(() => [referenceKey.value, volumeSettings.value.preset, showVolume.value, automaticReferenceAvailable.value] as const,
+onBeforeUnmount(() => {
+  void setExpanded(false, false);
+  disposed = true;
+  cancelReference();
+  loadId++;
+  planeLoadId++;
+  gpuController?.abort();
+  maskSources.dispose();
+  clearTimeout(gpuBaseTimer);
+  cancelAnimationFrame(requestFrame);
+  clearTimeout(exactPlaneTimer);
+  reviewControlsObserver?.disconnect();
+  reviewFrames.dispose();
+  controller?.abort();
+  scene?.dispose();
+});
+watch(() => [props.manifestUrl, props.modelUrl, props.modelData], load);
+watch(
+  () => [props.caseId, props.revisionId, ctOnly.value] as const,
+  (current, previous) => {
+    automaticReference.select(referenceKey.value);
+    cancelReference();
+    referenceMessage.value = '';
+    referenceError.value = false;
+    if (!props.initialSnapshot && previous && current[0] !== previous[0]) {
+      volumeMask.value = freshVolumeMaskSettings({ ...volumeMask.value, margin_mm: 0 }, availableMaskStructures.value);
+    }
+    if (!props.initialSnapshot && previous && (current[0] !== previous[0] || current[1] !== previous[1])) {
+      volumeSettings.value = freshVolumeSettings({
+        ...volumeSettings.value,
+        cinematic: { ...volumeSettings.value.cinematic, myocardiumHU: DEFAULT_CINEMATIC_SETTINGS.myocardiumHU, bloodHU: DEFAULT_CINEMATIC_SETTINGS.bloodHU },
+      });
+      if (volumeSettings.value.preset === CINEMATIC_HEART_PRESET)
+        referenceMessage.value = 'Case or revision changed. Reference HU reset to 80 / 400; measure again or set both values manually.';
+      syncReview();
+    }
+    if (current[2] && !props.reviewActive && !props.initialSnapshot && ctVolumeAvailable.value) setVolumeEnabled(true);
+    else if (previous?.[2]) {
+      setVolumeEnabled(false);
+      showPlane.value = false;
+    }
+  },
+);
+watch(
+  () => [referenceKey.value, volumeSettings.value.preset, showVolume.value, automaticReferenceAvailable.value] as const,
   ([key, preset, visible, available]) => {
     if (preset !== CINEMATIC_HEART_PRESET || !visible || props.initialSnapshot || props.reviewActive) return;
-    if (available && automaticReference.claim(key)) { void measureCinematicReference(true); return; }
-    if (!available && !referenceMessage.value) referenceMessage.value = 'Automatic HU calibration needs myocardium and aorta or left-heart segments. Using 80 / 400 HU display defaults; enter both values manually or use Measure from segments.';
-  }, { immediate: true });
-watch(() => [props.caseId, volumeSettings.value.preset, showVolume.value, heartCamera.value, props.reviewActive,
-  props.localReady, props.localSession?.revisionBase, loading.value] as const,
+    if (available && automaticReference.claim(key)) {
+      void measureCinematicReference(true);
+      return;
+    }
+    if (!available && !referenceMessage.value)
+      referenceMessage.value =
+        'Automatic HU calibration needs myocardium and aorta or left-heart segments. Using 80 / 400 HU display defaults; enter both values manually or use Measure from segments.';
+  },
+  { immediate: true },
+);
+watch(
+  () =>
+    [
+      props.caseId,
+      volumeSettings.value.preset,
+      showVolume.value,
+      heartCamera.value,
+      props.reviewActive,
+      props.localReady,
+      props.localSession?.revisionBase,
+      loading.value,
+    ] as const,
   ([caseId, preset, visible, camera, reviewing]) => {
-    if (!scene || !caseId || caseId === automaticHeartCase || preset !== CINEMATIC_HEART_PRESET || !visible
-        || !camera || reviewing || props.initialSnapshot || !props.localReady || loading.value
-        || props.localSession?.revisionBase !== revisionUrl(caseId, props.revisionId!)) return;
-    automaticHeartCase = caseId; showHeartView();
-  });
-watch(() => [props.display, props.selected], () => scene?.display(props.display, props.selected), { deep: true });
-watch(() => JSON.stringify(props.structures.map(item => [item.id, item.color])), () => scene?.setStructureColors(props.structures));
-watch(() => JSON.stringify(overlayPalette.value), () => scene?.setGPUOverlayColors(overlayPalette.value));
+    if (
+      !scene ||
+      !caseId ||
+      caseId === automaticHeartCase ||
+      preset !== CINEMATIC_HEART_PRESET ||
+      !visible ||
+      !camera ||
+      reviewing ||
+      props.initialSnapshot ||
+      !props.localReady ||
+      loading.value ||
+      props.localSession?.revisionBase !== revisionUrl(caseId, props.revisionId!)
+    )
+      return;
+    automaticHeartCase = caseId;
+    showHeartView();
+  },
+);
+watch(
+  () => [props.display, props.selected],
+  () => scene?.display(props.display, props.selected),
+  { deep: true },
+);
+watch(
+  () => JSON.stringify(props.structures.map(item => [item.id, item.color])),
+  () => scene?.setStructureColors(props.structures),
+);
+watch(
+  () => JSON.stringify(overlayPalette.value),
+  () => scene?.setGPUOverlayColors(overlayPalette.value),
+);
 watch(() => [showSegmentation.value, segmentationOpacity.value, controlsVisible.value], syncReview);
-watch(() => props.point, point => { if (props.viewportActive !== false) scene?.setPoint(point); }, { deep: true });
-watch(() => props.viewportActive, active => { if (active !== false) scene?.setPoint(props.point); else void setExpanded(false, false); syncReview(); });
-watch(() => props.caseId, () => { void setExpanded(false, false); });
-watch(() => [desiredPlaneContext.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution, props.reviewActive, reviewMode.value], queueReviewPlane);
-watch(() => props.localSession, (session, _previous, cleanup) => {
-  const unsubscribe = session?.onOverlayChange?.(() => {
-    reviewFrames.clear(); planeFrame.value = undefined; planeFrameFamily.value = ''; queueReviewPlane();
-  });
-  if (unsubscribe) cleanup(unsubscribe);
-}, { immediate: true });
-watch(() => [gpuFamily.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution], () => { void prepareGPUPlane(); });
-watch(() => [volumeFamily.value, needsVolume.value], () => { syncReview(); void prepareGPUPlane(); });
-watch(volumeMaskFamily, () => { maskError.value = ''; syncReview(); void prepareGPUPlane(); });
+watch(
+  () => props.point,
+  point => {
+    if (props.viewportActive !== false) scene?.setPoint(point);
+  },
+  { deep: true },
+);
+watch(
+  () => props.viewportActive,
+  active => {
+    if (active !== false) scene?.setPoint(props.point);
+    else void setExpanded(false, false);
+    syncReview();
+  },
+);
+watch(
+  () => props.caseId,
+  () => {
+    void setExpanded(false, false);
+  },
+);
+watch(
+  () => [desiredPlaneContext.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution, props.reviewActive, reviewMode.value],
+  queueReviewPlane,
+);
+watch(
+  () => props.localSession,
+  (session, _previous, cleanup) => {
+    const unsubscribe = session?.onOverlayChange?.(() => {
+      reviewFrames.clear();
+      planeFrame.value = undefined;
+      planeFrameFamily.value = '';
+      queueReviewPlane();
+    });
+    if (unsubscribe) cleanup(unsubscribe);
+  },
+  { immediate: true },
+);
+watch(
+  () => [gpuFamily.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution],
+  () => {
+    void prepareGPUPlane();
+  },
+);
+watch(
+  () => [volumeFamily.value, needsVolume.value],
+  () => {
+    syncReview();
+    void prepareGPUPlane();
+  },
+);
+watch(volumeMaskFamily, () => {
+  maskError.value = '';
+  syncReview();
+  void prepareGPUPlane();
+});
 watch(volumeMask, syncReview);
-watch(() => [availableMaskStructures.value, props.revisionId] as const, () => {
-  const next = freshVolumeMaskSettings(volumeMask.value, availableMaskStructures.value);
-  if (!availableMaskStructures.value.length) next.enabled = false;
-  volumeMask.value = next; maskError.value = ''; syncReview();
-});
-watch(() => props.reviewActive, active => { if (active) setVolumeEnabled(false); });
-watch(() => [props.reviewActive, props.reviewTarget, props.reviewTool, props.reviewPrompts, props.reviewDisabled,
-  props.reviewInclude, props.reviewRadius, props.reviewScissorsShape, props.reviewScissorsOperation,
-  props.window, props.level, props.overlays, reviewMode.value, showPlane.value], syncReview, { deep: true });
-watch(() => [props.caseId, props.geometry], () => { planeFrame.value = undefined; planeFrameFamily.value = ''; reviewFrames.clear(); planeError.value = ''; queueReviewPlane(); });
+watch(
+  () => [availableMaskStructures.value, props.revisionId] as const,
+  () => {
+    const next = freshVolumeMaskSettings(volumeMask.value, availableMaskStructures.value);
+    if (!availableMaskStructures.value.length) next.enabled = false;
+    volumeMask.value = next;
+    maskError.value = '';
+    syncReview();
+  },
+);
+watch(
+  () => props.reviewActive,
+  active => {
+    if (active) setVolumeEnabled(false);
+  },
+);
+watch(
+  () => [
+    props.reviewActive,
+    props.reviewTarget,
+    props.reviewTool,
+    props.reviewPrompts,
+    props.reviewDisabled,
+    props.reviewInclude,
+    props.reviewRadius,
+    props.reviewScissorsShape,
+    props.reviewScissorsOperation,
+    props.window,
+    props.level,
+    props.overlays,
+    reviewMode.value,
+    showPlane.value,
+  ],
+  syncReview,
+  { deep: true },
+);
+watch(
+  () => [props.caseId, props.geometry],
+  () => {
+    planeFrame.value = undefined;
+    planeFrameFamily.value = '';
+    reviewFrames.clear();
+    planeError.value = '';
+    queueReviewPlane();
+  },
+);
 watch(() => [props.reviewActive, controlsVisible.value, showPlane.value, showVolume.value], observeReviewControls);
-watch(() => [volumeError.value, maskError.value], ([volumeFailure, maskFailure]) => {
-  if (volumeFailure || maskFailure) volumeOptionsOpen.value = true;
-});
-watch(() => [props.reviewActive, props.reviewTool, target.value?.id], () => {
-  if (!props.reviewActive) return;
-  if (props.reviewTool === 'scissors') { faceWhenReady = false; reviewMode.value = 'surface'; return; }
-  if (!hasTargetSurface.value || (props.reviewTool && !['navigate', 'point'].includes(props.reviewTool))) {
-    if (reviewMode.value !== 'plane') faceWhenReady = true;
-    reviewMode.value = 'plane'; showPlane.value = true;
-  }
-}, { immediate: true });
+watch(
+  () => [volumeError.value, maskError.value],
+  ([volumeFailure, maskFailure]) => {
+    if (volumeFailure || maskFailure) volumeOptionsOpen.value = true;
+  },
+);
+watch(
+  () => [props.reviewActive, props.reviewTool, target.value?.id],
+  () => {
+    if (!props.reviewActive) return;
+    if (props.reviewTool === 'scissors') {
+      faceWhenReady = false;
+      reviewMode.value = 'surface';
+      return;
+    }
+    if (!hasTargetSurface.value || (props.reviewTool && !['navigate', 'point'].includes(props.reviewTool))) {
+      if (reviewMode.value !== 'plane') faceWhenReady = true;
+      reviewMode.value = 'plane';
+      showPlane.value = true;
+    }
+  },
+  { immediate: true },
+);
 const cameras: CameraView[] = ['anterior', 'posterior', 'right', 'left', 'superior', 'oblique'];
 function exportSnapshot(): PortableRenderSnapshot {
-  const plane = planeRequest.value, structures = availableMaskStructures.value;
-  return { layers: { segmentation: showSegmentation.value && segmentationAvailable.value,
-    ct_volume: showVolume.value && ctVolumeAvailable.value, ct_plane: showPlane.value && ctPlaneAvailable.value },
-    state: normalizePortableState({ display: Object.fromEntries(structures.map(structure => [structure.id, {
-      visible: props.display[structure.id]?.visible !== false, opacity: props.display[structure.id]?.opacity ?? .8,
-      ...(typeof structure.color === 'string' ? { color: structure.color } : {}),
-    }])), selected: props.selected, segmentation_opacity: 1,
-    volume: renderVolumeSettings.value, volume_mask: volumeMask.value,
-    plane: { plane: reviewPlane.value, axis: plane?.native.axis ?? 2, index: plane?.native.index ?? 0,
-      window: props.window ?? 400, level: props.level ?? 40, overlays: [...(plane?.overlays ?? [])] },
-    camera: hasModel.value || volumeReady.value || gpuActive.value ? scene?.captureCamera() : undefined }, structures, props.geometry) };
+  const plane = planeRequest.value,
+    structures = availableMaskStructures.value;
+  return {
+    layers: {
+      segmentation: showSegmentation.value && segmentationAvailable.value,
+      ct_volume: showVolume.value && ctVolumeAvailable.value,
+      ct_plane: showPlane.value && ctPlaneAvailable.value,
+    },
+    state: normalizePortableState(
+      {
+        display: Object.fromEntries(
+          structures.map(structure => [
+            structure.id,
+            {
+              visible: props.display[structure.id]?.visible !== false,
+              opacity: props.display[structure.id]?.opacity ?? 0.8,
+              ...(typeof structure.color === 'string' ? { color: structure.color } : {}),
+            },
+          ]),
+        ),
+        selected: props.selected,
+        segmentation_opacity: 1,
+        volume: renderVolumeSettings.value,
+        volume_mask: volumeMask.value,
+        plane: {
+          plane: reviewPlane.value,
+          axis: plane?.native.axis ?? 2,
+          index: plane?.native.index ?? 0,
+          window: props.window ?? 400,
+          level: props.level ?? 40,
+          overlays: [...(plane?.overlays ?? [])],
+        },
+        camera: hasModel.value || volumeReady.value || gpuActive.value ? scene?.captureCamera() : undefined,
+      },
+      structures,
+      props.geometry,
+    ),
+  };
 }
-defineExpose({ focus: () => scene?.focus(), screenshot: () => scene?.screenshot(props.label),
+defineExpose({
+  focus: () => scene?.focus(),
+  screenshot: () => scene?.screenshot(props.label),
   exportSnapshot,
-  reviewPatientToCanvas: (ras: Point) => scene?.reviewPatientToCanvas(ras) });
+  reviewPatientToCanvas: (ras: Point) => scene?.reviewPatientToCanvas(ras),
+});
 </script>
 
 <template>
-  <div ref="viewport" :id="viewportId" class="model-viewport" :class="{ 'model-review': reviewActive, 'model-plane': !reviewActive && planeLayout, 'viewport-expanded': expanded }" :data-expanded="expanded"
-    :role="expanded ? 'dialog' : undefined" :aria-modal="expanded ? true : undefined" :aria-label="expanded ? 'Expanded 3D view' : undefined" :data-review-mode="reviewMode" :data-image-modality="modality" :data-reference-image-id="imageContext?.reference_image_id" :data-volume-window="renderVolumeSettings.signal_window.window" :data-volume-level="renderVolumeSettings.signal_window.level" :data-volume-invert="renderVolumeSettings.signal_window.invert"
+  <div
+    ref="viewport"
+    :id="viewportId"
+    class="model-viewport"
+    :class="{ 'model-review': reviewActive, 'model-plane': !reviewActive && planeLayout, 'viewport-expanded': expanded }"
+    :data-expanded="expanded"
+    :role="expanded ? 'dialog' : undefined"
+    :aria-modal="expanded ? true : undefined"
+    :aria-label="expanded ? 'Expanded 3D view' : undefined"
+    :data-review-mode="reviewMode"
+    :data-image-modality="modality"
+    :data-reference-image-id="imageContext?.reference_image_id"
+    :data-volume-window="renderVolumeSettings.signal_window.window"
+    :data-volume-level="renderVolumeSettings.signal_window.level"
+    :data-volume-invert="renderVolumeSettings.signal_window.invert"
     :style="planeLayout ? { '--review-scene-top': `${reviewSceneTop}px` } : undefined"
-    :data-ct-plane-visible="needsPlane" :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"
-    :data-review-ready="reviewReady" :data-review-context="displayedContext" :data-model-revision="modelRevisionId" :data-surface-revision="surfaceRevisionLoaded" :data-surface-loading="loading"
-    :data-review-pending-context="desiredPlaneContext" :data-review-native-axis="displayedMeta?.native?.axis"
+    :data-ct-plane-visible="needsPlane"
+    :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"
+    :data-review-ready="reviewReady"
+    :data-review-context="displayedContext"
+    :data-model-revision="modelRevisionId"
+    :data-surface-revision="surfaceRevisionLoaded"
+    :data-surface-loading="loading"
+    :data-review-pending-context="desiredPlaneContext"
+    :data-review-native-axis="displayedMeta?.native?.axis"
     :data-review-native-index="displayedMeta?.native?.index"
-    :data-layer-segmentation-visible="showSegmentation" :data-layer-segmentation-opacity="segmentationOpacity"
-    :data-volume-mask-enabled="volumeMask.enabled" :data-volume-mask-selection="JSON.stringify(volumeMaskIds)"
-    :data-volume-mask-margin="volumeMask.margin_mm" :data-volume-mask-sources="JSON.stringify(volumeMaskSourceIds)"
-    :data-volume-mask-ready="volumeMaskReady" :data-volume-mask-pending="volumeMaskLoading" :data-volume-mask-error="maskError">
+    :data-layer-segmentation-visible="showSegmentation"
+    :data-layer-segmentation-opacity="segmentationOpacity"
+    :data-volume-mask-enabled="volumeMask.enabled"
+    :data-volume-mask-selection="JSON.stringify(volumeMaskIds)"
+    :data-volume-mask-margin="volumeMask.margin_mm"
+    :data-volume-mask-sources="JSON.stringify(volumeMaskSourceIds)"
+    :data-volume-mask-ready="volumeMaskReady"
+    :data-volume-mask-pending="volumeMaskLoading"
+    :data-volume-mask-error="maskError"
+  >
     <div ref="surface" class="model-canvas"></div>
-    <div class="viewport-caption">{{ ctOnly ? `${modality} view` : '3D anatomy' }} <span class="divider">·</span> <span>{{ sourceViewLabel(view, modality) }}</span></div>
-    <button ref="expandButton" class="text-button viewport-expand-button" :aria-label="expanded ? 'Restore 3D view' : 'Expand 3D view'" :title="expanded ? 'Restore 3D view (Esc)' : 'Expand 3D view'" :aria-expanded="expanded" :aria-controls="viewportId" @click="setExpanded(!expanded)">{{ expanded ? 'Restore ↙' : 'Expand ↗' }}</button>
+    <div class="viewport-caption">
+      {{ ctOnly ? `${modality} view` : '3D anatomy' }} <span class="divider">·</span> <span>{{ sourceViewLabel(view, modality) }}</span>
+    </div>
+    <button
+      ref="expandButton"
+      class="text-button viewport-expand-button"
+      :aria-label="expanded ? 'Restore 3D view' : 'Expand 3D view'"
+      :title="expanded ? 'Restore 3D view (Esc)' : 'Expand 3D view'"
+      :aria-expanded="expanded"
+      :aria-controls="viewportId"
+      @click="setExpanded(!expanded)"
+    >
+      {{ expanded ? 'Restore ↙' : 'Expand ↗' }}
+    </button>
     <div v-if="controlsVisible" ref="reviewControls" class="model-review-controls" :class="{ 'main-plane-controls': !reviewActive }">
       <section class="rendering-stack" aria-label="Rendering stack">
         <div class="rendering-stack-heading">Rendering stack <span>One aligned 3D view</span></div>
         <div class="rendering-stack-layer">
-          <label class="rendering-stack-toggle" :title="segmentationAvailable ? 'Show the segments enabled in the anatomy list.' : 'Segmentation surfaces are not included in this view.'"><input type="checkbox" aria-label="Show segmentation" :checked="showSegmentation && segmentationAvailable" :disabled="!segmentationAvailable" @change="showSegmentation = ($event.target as HTMLInputElement).checked" /> Segmentation</label>
-          <label class="rendering-stack-opacity" title="Set every segment’s opacity together. Visibility stays unchanged; 100% makes every visible segment opaque.">All segment opacity <input type="range" aria-label="All segment opacity" :aria-valuetext="segmentationOpacityMixed ? 'Mixed segment values' : `${Math.round(segmentationOpacity * 100)}%`" min="0" max="1" step="0.01" v-model.number="segmentationOpacity" :disabled="!segmentationAvailable || !showSegmentation" /><output>{{ segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%` }}</output></label>
+          <label
+            class="rendering-stack-toggle"
+            :title="segmentationAvailable ? 'Show the segments enabled in the anatomy list.' : 'Segmentation surfaces are not included in this view.'"
+            ><input
+              type="checkbox"
+              aria-label="Show segmentation"
+              :checked="showSegmentation && segmentationAvailable"
+              :disabled="!segmentationAvailable"
+              @change="showSegmentation = ($event.target as HTMLInputElement).checked"
+            />
+            Segmentation</label
+          >
+          <label
+            class="rendering-stack-opacity"
+            title="Set every segment’s opacity together. Visibility stays unchanged; 100% makes every visible segment opaque."
+            >All segment opacity
+            <input
+              type="range"
+              aria-label="All segment opacity"
+              :aria-valuetext="segmentationOpacityMixed ? 'Mixed segment values' : `${Math.round(segmentationOpacity * 100)}%`"
+              min="0"
+              max="1"
+              step="0.01"
+              v-model.number="segmentationOpacity"
+              :disabled="!segmentationAvailable || !showSegmentation"
+            /><output>{{ segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%` }}</output></label
+          >
         </div>
         <div v-if="ctVolumeAvailable && !reviewActive" class="rendering-stack-layer">
-          <label class="rendering-stack-toggle"><input type="checkbox" :aria-label="`Show ${modality} volume`" :checked="showVolume" @change="setVolumeEnabled(($event.target as HTMLInputElement).checked)" /> {{ modality }} volume</label>
+          <label class="rendering-stack-toggle"
+            ><input
+              type="checkbox"
+              :aria-label="`Show ${modality} volume`"
+              :checked="showVolume"
+              @change="setVolumeEnabled(($event.target as HTMLInputElement).checked)"
+            />
+            {{ modality }} volume</label
+          >
           <span v-if="showVolume" class="rendering-stack-status" role="status">{{ volumeStackStatus }}</span>
         </div>
         <div v-if="ctPlaneAvailable" class="rendering-stack-layer">
-          <label class="rendering-stack-toggle"><input type="checkbox" :aria-label="`Show ${modality} plane`" v-model="showPlane" /> {{ modality }} plane</label>
+          <label class="rendering-stack-toggle"
+            ><input type="checkbox" :aria-label="`Show ${modality} plane`" v-model="showPlane" /> {{ modality }} plane</label
+          >
           <button v-if="showPlane" class="text-button" :disabled="!planeReady" @click="scene?.focusReviewPlane()">Face plane</button>
         </div>
       </section>
-      <details v-if="!reviewActive && ctVolumeAvailable" v-show="showVolume" class="stack-volume-options" :open="volumeOptionsOpen" @toggle="volumeOptionsOpen = ($event.target as HTMLDetailsElement).open; observeReviewControls()">
+      <details
+        v-if="!reviewActive && ctVolumeAvailable"
+        v-show="showVolume"
+        class="stack-volume-options"
+        :open="volumeOptionsOpen"
+        @toggle="
+          volumeOptionsOpen = ($event.target as HTMLDetailsElement).open;
+          observeReviewControls();
+        "
+      >
         <summary>{{ modality }} volume settings <span>Appearance · opacity · mask · crop</span></summary>
-        <VolumeControls headerless :enabled="showVolume" :settings="renderVolumeSettings" :modality="modality"
-          :heart-view-available="!!heartCamera && !reviewActive" @heart-view="showHeartView"
-          :reference-available="referenceAvailable" :reference-loading="referenceLoading" :reference-message="referenceMessage" :reference-error="referenceError" @measure-reference="measureCinematicReference()"
-          :ready="volumeReady && !volumeError" :loading="needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
-          :mask="volumeMask" :structures="availableMaskStructures" :selected="selected" :display="display"
+        <VolumeControls
+          headerless
+          :enabled="showVolume"
+          :settings="renderVolumeSettings"
+          :modality="modality"
+          :heart-view-available="!!heartCamera && !reviewActive"
+          @heart-view="showHeartView"
+          :reference-available="referenceAvailable"
+          :reference-loading="referenceLoading"
+          :reference-message="referenceMessage"
+          :reference-error="referenceError"
+          @measure-reference="measureCinematicReference()"
+          :ready="volumeReady && !volumeError"
+          :loading="needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
+          :mask="volumeMask"
+          :structures="availableMaskStructures"
+          :selected="selected"
+          :display="display"
           :mask-margin-fixed="!!props.localSession?.networkFree"
-          :mask-loading="volumeMaskLoading" :mask-message="volumeMaskMessage" :mask-error="!!maskError"
-          :message="showVolume ? volumeMessage : ''" @update:enabled="setVolumeEnabled" @update:settings="setVolumeSettings"
-          @update:mask="setVolumeMask" @retry-mask="retryVolumeMask" @retry="retryVolume" @layout="observeReviewControls" />
+          :mask-loading="volumeMaskLoading"
+          :mask-message="volumeMaskMessage"
+          :mask-error="!!maskError"
+          :message="showVolume ? volumeMessage : ''"
+          @update:enabled="setVolumeEnabled"
+          @update:settings="setVolumeSettings"
+          @update:mask="setVolumeMask"
+          @retry-mask="retryVolumeMask"
+          @retry="retryVolume"
+          @layout="observeReviewControls"
+        />
       </details>
       <div v-if="reviewActive && reviewTool !== 'scissors'" class="model-review-row review-marking-row">
-        <label v-if="reviewActive">Mark on <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode"><option value="surface">Surface point</option><option value="plane">{{ modality }} plane</option></select></label>
+        <label v-if="reviewActive"
+          >Mark on
+          <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode">
+            <option value="surface">Surface point</option>
+            <option value="plane">{{ modality }} plane</option>
+          </select></label
+        >
       </div>
       <div v-if="showPlane || (reviewActive && reviewMode === 'plane')" class="model-review-row model-plane-navigation">
-        <select :aria-label="`3D ${modality} plane`" :value="reviewPlane" @change="changePlane"><option value="axial">Native k</option><option value="coronal">Native j</option><option value="sagittal">Native i</option></select>
-        <input v-if="planeRequest" :aria-label="`3D ${modality} slice`" type="range" min="0" :max="geometry!.shape[planeRequest.native.axis] - 1" step="1" :value="planeRequest.native.index" @input="slidePlane" />
+        <select :aria-label="`3D ${modality} plane`" :value="reviewPlane" @change="changePlane">
+          <option value="axial">Native k</option>
+          <option value="coronal">Native j</option>
+          <option value="sagittal">Native i</option>
+        </select>
+        <input
+          v-if="planeRequest"
+          :aria-label="`3D ${modality} slice`"
+          type="range"
+          min="0"
+          :max="geometry!.shape[planeRequest.native.axis] - 1"
+          step="1"
+          :value="planeRequest.native.index"
+          @input="slidePlane"
+        />
         <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
       </div>
-      <p v-if="reviewHint" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">{{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button></p>
+      <p v-if="reviewHint" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
+        {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
+      </p>
     </div>
     <p v-if="transparencyWarning && !error" class="render-notice" role="status">{{ transparencyWarning }}</p>
-    <svg class="orientation-gizmo" viewBox="0 0 78 78" role="img" aria-label="Patient RAS orientation axes"><circle cx="39" cy="39" r="30"/><g v-for="axis in orientation" :key="axis.label" :class="{ behind: !axis.front }"><line x1="39" y1="39" :x2="39 + axis.x" :y2="39 + axis.y"/><text :x="39 + axis.x * 1.24" :y="39 + axis.y * 1.24 + 3">{{ axis.label }}</text></g><circle class="axis-origin" cx="39" cy="39" r="2"/></svg>
-    <div v-if="loading && !(volumeReady && !volumeError)" class="viewport-state" :class="{ 'surface-update': hasModel }" role="status"><span class="spinner"></span><strong>{{ hasModel ? 'Updating anatomical surfaces' : 'Preparing anatomical surfaces' }}</strong><span v-if="progress">{{ progress.completed }} / {{ progress.total }} surfaces ready<span v-if="progress.reused"> · {{ progress.reused }} reused</span></span><span v-else>Loading the cached model…</span></div>
-    <div v-if="error && !(volumeReady && !volumeError)" class="viewport-state error-state" :class="{ 'surface-update': hasModel }" role="alert"><strong>{{ hasModel ? 'Surface update unavailable' : '3D view unavailable' }}</strong><p>{{ error }}<template v-if="hasModel"> Previous surfaces remain shown.</template></p><button class="button" @click="load">Reload model</button></div>
+    <svg class="orientation-gizmo" viewBox="0 0 78 78" role="img" aria-label="Patient RAS orientation axes">
+      <circle cx="39" cy="39" r="30" />
+      <g v-for="axis in orientation" :key="axis.label" :class="{ behind: !axis.front }">
+        <line x1="39" y1="39" :x2="39 + axis.x" :y2="39 + axis.y" />
+        <text :x="39 + axis.x * 1.24" :y="39 + axis.y * 1.24 + 3">{{ axis.label }}</text>
+      </g>
+      <circle class="axis-origin" cx="39" cy="39" r="2" />
+    </svg>
+    <div v-if="loading && !(volumeReady && !volumeError)" class="viewport-state" :class="{ 'surface-update': hasModel }" role="status">
+      <span class="spinner"></span><strong>{{ hasModel ? 'Updating anatomical surfaces' : 'Preparing anatomical surfaces' }}</strong
+      ><span v-if="progress"
+        >{{ progress.completed }} / {{ progress.total }} surfaces ready<span v-if="progress.reused"> · {{ progress.reused }} reused</span></span
+      ><span v-else>Loading the cached model…</span>
+    </div>
+    <div v-if="error && !(volumeReady && !volumeError)" class="viewport-state error-state" :class="{ 'surface-update': hasModel }" role="alert">
+      <strong>{{ hasModel ? 'Surface update unavailable' : '3D view unavailable' }}</strong>
+      <p>{{ error }}<template v-if="hasModel"> Previous surfaces remain shown.</template></p>
+      <button class="button" @click="load">Reload model</button>
+    </div>
     <div class="camera-strip" aria-label="Anatomical camera views">
-      <button v-if="volumeSettings.preset === CINEMATIC_HEART_PRESET && heartCamera && !reviewActive" :class="{ active: view === 'Heart' }" aria-label="Heart view" title="Face the red outer wall using the supplied Slicer heart orientation" @click="showHeartView">Heart view</button>
+      <button
+        v-if="volumeSettings.preset === CINEMATIC_HEART_PRESET && heartCamera && !reviewActive"
+        :class="{ active: view === 'Heart' }"
+        aria-label="Heart view"
+        title="Face the red outer wall using the supplied Slicer heart orientation"
+        @click="showHeartView"
+      >
+        Heart view
+      </button>
       <button v-for="camera in cameras" :key="camera" :class="{ active: view === camera }" @click="scene?.view(camera)">{{ camera }}</button>
     </div>
     <div class="viewport-tools">
@@ -742,30 +1507,219 @@ defineExpose({ focus: () => scene?.focus(), screenshot: () => scene?.screenshot(
       <button title="Reset view" @click="scene?.view('oblique')">Reset</button>
       <button title="Save image" @click="scene?.screenshot(label)">PNG ↗</button>
     </div>
-    <div class="viewport-hint">{{ reviewActive && reviewTool !== 'navigate' ? 'Right drag to rotate · Scroll to zoom' : 'Drag to rotate · Right drag to pan · Scroll to zoom' }}</div>
+    <div class="viewport-hint">
+      {{ reviewActive && reviewTool !== 'navigate' ? 'Right drag to rotate · Scroll to zoom' : 'Drag to rotate · Right drag to pan · Scroll to zoom' }}
+    </div>
   </div>
 </template>
 
 <style scoped>
-.model-viewport.viewport-expanded{position:fixed;inset:12px;z-index:100;min-height:0;border:1px solid var(--line-strong);border-radius:8px;box-shadow:0 0 0 100vmax #07090de6,0 15px 80px #0009}
-.viewport-expand-button{position:absolute;top:8px;right:10px;z-index:5;min-height:28px;padding:5px 9px;border:1px solid var(--line-strong);border-radius:4px;background:var(--panel);color:var(--white);font-size:10px;white-space:nowrap}
-.viewport-expand-button:hover{background:var(--surface-hover)}
-.model-review-controls{position:absolute;top:42px;left:10px;right:10px;z-index:3;padding:8px 10px;border:1px solid #414b5d;border-radius:6px;background:#171d27ed;box-shadow:0 3px 12px #0003;color:#bac7d9;font-size:10px;max-height:clamp(72px,calc(100% - 230px),390px);overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
-.rendering-stack-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:5px;color:#d8e2ef;font-size:10px;font-weight:600}
-.rendering-stack-heading>span{font-weight:400;font-size:9px;color:#8596ae}
-.rendering-stack-layer{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:29px}
-.rendering-stack-toggle{display:flex;align-items:center;gap:6px;font-size:10px;white-space:nowrap}
-.rendering-stack-toggle input{accent-color:#8aabff;margin:0;width:13px;height:13px}
-.rendering-stack-opacity{display:flex;align-items:center;gap:7px;font-size:9px;color:#a2b2c8;min-width:0}
-.rendering-stack-opacity input{width:clamp(52px,10vw,140px);min-width:40px;height:18px;accent-color:#8aabff;margin:0}
-.rendering-stack-opacity output{min-width:31px;text-align:right;font:9px var(--mono);color:#c3d0e4}
-.rendering-stack-layer>.text-button{font-size:10px;padding:4px 7px}
-.rendering-stack-status{font-size:9px;color:#a2b2c8;text-align:right}
-.stack-volume-options{margin-top:6px;border-top:1px solid #343e50;padding-top:7px}
-.stack-volume-options>summary{cursor:pointer;user-select:none;color:#c3d0e4;font-size:10px;line-height:1.6}
-.stack-volume-options>summary>span{margin-left:8px;color:#8596ae;font-size:9px}
-.stack-volume-options>.volume-controls{margin-top:7px}
-.review-marking-row{margin-top:7px;padding-top:7px;border-top:1px solid #343e50}
-.model-review .model-canvas,.model-plane .model-canvas{top:var(--review-scene-top);bottom:100px}.model-review .orientation-gizmo,.model-plane .orientation-gizmo{top:auto;bottom:106px;right:12px;width:64px;height:64px}
-.model-review-row{display:flex;align-items:center;gap:9px;min-width:0}.model-review-row>label{display:flex;align-items:center;gap:5px;white-space:nowrap}.model-review-row select{font-size:10px;padding:4px 5px;max-width:132px;min-width:0;background:#252e3d;border:1px solid #414b5d;border-radius:4px;color:#e2eaf6}.model-review-row .text-button{font-size:10px;margin-left:auto;white-space:nowrap}.model-plane-toggle input{accent-color:#8aabff}.model-plane-navigation{margin-top:7px}.model-plane-navigation>input{flex:1;min-width:30px;accent-color:#8aabff}.model-plane-navigation>span{font:9px var(--mono);white-space:nowrap;color:#9aaac0}.model-review-hint{font-size:10px;line-height:1.4;color:#a2b2c8;margin:7px 0 0}.model-review-error{color:#f2ba9c}.model-review-hint .text-button{font-size:10px}.model-review .viewport-caption{top:14px;left:12px}
+.model-viewport.viewport-expanded {
+  position: fixed;
+  inset: 12px;
+  z-index: 100;
+  min-height: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow:
+    0 0 0 100vmax #07090de6,
+    0 15px 80px #0009;
+}
+.viewport-expand-button {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 5;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--white);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.viewport-expand-button:hover {
+  background: var(--surface-hover);
+}
+.model-review-controls {
+  position: absolute;
+  top: 42px;
+  left: 10px;
+  right: 10px;
+  z-index: 3;
+  padding: 8px 10px;
+  border: 1px solid #414b5d;
+  border-radius: 6px;
+  background: #171d27ed;
+  box-shadow: 0 3px 12px #0003;
+  color: #bac7d9;
+  font-size: 10px;
+  max-height: clamp(72px, calc(100% - 230px), 390px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.rendering-stack-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+  color: #d8e2ef;
+  font-size: 10px;
+  font-weight: 600;
+}
+.rendering-stack-heading > span {
+  font-weight: 400;
+  font-size: 9px;
+  color: #8596ae;
+}
+.rendering-stack-layer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 29px;
+}
+.rendering-stack-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.rendering-stack-toggle input {
+  accent-color: #8aabff;
+  margin: 0;
+  width: 13px;
+  height: 13px;
+}
+.rendering-stack-opacity {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 9px;
+  color: #a2b2c8;
+  min-width: 0;
+}
+.rendering-stack-opacity input {
+  width: clamp(52px, 10vw, 140px);
+  min-width: 40px;
+  height: 18px;
+  accent-color: #8aabff;
+  margin: 0;
+}
+.rendering-stack-opacity output {
+  min-width: 31px;
+  text-align: right;
+  font: 9px var(--mono);
+  color: #c3d0e4;
+}
+.rendering-stack-layer > .text-button {
+  font-size: 10px;
+  padding: 4px 7px;
+}
+.rendering-stack-status {
+  font-size: 9px;
+  color: #a2b2c8;
+  text-align: right;
+}
+.stack-volume-options {
+  margin-top: 6px;
+  border-top: 1px solid #343e50;
+  padding-top: 7px;
+}
+.stack-volume-options > summary {
+  cursor: pointer;
+  user-select: none;
+  color: #c3d0e4;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.stack-volume-options > summary > span {
+  margin-left: 8px;
+  color: #8596ae;
+  font-size: 9px;
+}
+.stack-volume-options > .volume-controls {
+  margin-top: 7px;
+}
+.review-marking-row {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid #343e50;
+}
+.model-review .model-canvas,
+.model-plane .model-canvas {
+  top: var(--review-scene-top);
+  bottom: 100px;
+}
+.model-review .orientation-gizmo,
+.model-plane .orientation-gizmo {
+  top: auto;
+  bottom: 106px;
+  right: 12px;
+  width: 64px;
+  height: 64px;
+}
+.model-review-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.model-review-row > label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.model-review-row select {
+  font-size: 10px;
+  padding: 4px 5px;
+  max-width: 132px;
+  min-width: 0;
+  background: #252e3d;
+  border: 1px solid #414b5d;
+  border-radius: 4px;
+  color: #e2eaf6;
+}
+.model-review-row .text-button {
+  font-size: 10px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.model-plane-toggle input {
+  accent-color: #8aabff;
+}
+.model-plane-navigation {
+  margin-top: 7px;
+}
+.model-plane-navigation > input {
+  flex: 1;
+  min-width: 30px;
+  accent-color: #8aabff;
+}
+.model-plane-navigation > span {
+  font: 9px var(--mono);
+  white-space: nowrap;
+  color: #9aaac0;
+}
+.model-review-hint {
+  font-size: 10px;
+  line-height: 1.4;
+  color: #a2b2c8;
+  margin: 7px 0 0;
+}
+.model-review-error {
+  color: #f2ba9c;
+}
+.model-review-hint .text-button {
+  font-size: 10px;
+}
+.model-review .viewport-caption {
+  top: 14px;
+  left: 12px;
+}
 </style>

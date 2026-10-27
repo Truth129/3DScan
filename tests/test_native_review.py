@@ -1,4 +1,5 @@
 """Native drawing planes retain exact voxel identity on oblique/reflected CT."""
+
 import gzip
 import json
 from io import BytesIO
@@ -16,10 +17,9 @@ from scan3d.config import Settings
 
 @pytest.fixture
 def source(tmp_path):
-    angle = .37
+    angle = 0.37
     affine = np.eye(4)
-    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0],
-                              [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-1., 2., 3.])
+    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-1.0, 2.0, 3.0])
     affine[:3, 3] = [40, -50, 60]
     values = np.arange(11 * 13 * 17, dtype=np.int16).reshape((11, 13, 17)) - 1000
     image = nib.Nifti1Image(values, affine)
@@ -94,13 +94,13 @@ def test_native_frame_matches_original_voxels_without_interpolation(source, axis
 
 
 def test_native_and_anatomical_long_scans_have_no_768_pixel_cap():
-    affine = np.diag([1.26953125, -1.26953125, 1., 1.])
+    affine = np.diag([1.26953125, -1.26953125, 1.0, 1.0])
     shape = (512, 512, 967)
     native, _ = imaging.slice_geometry(shape, affine, "coronal", 0, native_axis=1, native_index=200)
     assert (native["width"], native["height"]) == (512, 967)
     anatomical, _ = imaging.slice_geometry(shape, affine, "coronal", -200)
     assert (anatomical["width"], anatomical["height"]) == (650, 967)
-    assert anatomical["extent_mm"] == [650., 967.]
+    assert anatomical["extent_mm"] == [650.0, 967.0]
 
 
 @pytest.mark.parametrize("native", [False, True])

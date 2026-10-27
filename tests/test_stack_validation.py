@@ -21,8 +21,7 @@ spec.loader.exec_module(validation)
 def masks(tmp_path):
     theta = np.deg2rad(23)
     affine = np.eye(4)
-    affine[:3, :3] = np.array([[np.cos(theta), -np.sin(theta), 0],
-                               [np.sin(theta), np.cos(theta), 0], [0, 0, 1]]) @ np.diag([-2., 3., 4.])
+    affine[:3, :3] = np.array([[np.cos(theta), -np.sin(theta), 0], [np.sin(theta), np.cos(theta), 0], [0, 0, 1]]) @ np.diag([-2.0, 3.0, 4.0])
     affine[:3, 3] = [12, -24, 36]
     values = np.zeros((7, 8, 9), np.uint8)
     values[2:5, 2:6, 3:7] = 1
@@ -33,6 +32,7 @@ def masks(tmp_path):
         path = tmp_path / (name + ".nii.gz")
         nib.save(image, path)
         return path
+
     return values, affine, save
 
 
@@ -45,7 +45,7 @@ def test_mask_comparison_uses_physical_volume_and_exact_voxels(masks):
     assert result["left_voxels"] == 48
     assert result["right_voxels"] == 49
     assert result["dice"] == pytest.approx(96 / 97)
-    assert result["volume_difference_ml"] == pytest.approx(.024)
+    assert result["volume_difference_ml"] == pytest.approx(0.024)
 
 
 def test_reflected_or_translated_grid_cannot_pass_comparison(masks):
@@ -94,10 +94,16 @@ def test_output_directory_cannot_reuse_existing_artifacts(tmp_path):
 def test_compare_checks_same_ct_options_and_weights(tmp_path, masks):
     _, _, save = masks
     mask = save("mask")
-    common = {"status": "passed", "source_ct_sha256": "same-input", "options": {"tasks": ["total"]},
-              "profile": "chest_abdomen", "model_fingerprint": {"models": [{"sha256": "same-checkpoint"}]},
-              "provenance": {"python": "different-is-allowed"}, "end_to_end_seconds": 4,
-              "masks": {"total:liver": str(mask)}}
+    common = {
+        "status": "passed",
+        "source_ct_sha256": "same-input",
+        "options": {"tasks": ["total"]},
+        "profile": "chest_abdomen",
+        "model_fingerprint": {"models": [{"sha256": "same-checkpoint"}]},
+        "provenance": {"python": "different-is-allowed"},
+        "end_to_end_seconds": 4,
+        "masks": {"total:liver": str(mask)},
+    }
     left, right = tmp_path / "left", tmp_path / "right"
     left.mkdir()
     right.mkdir()
@@ -108,10 +114,12 @@ def test_compare_checks_same_ct_options_and_weights(tmp_path, masks):
     result = json.loads(args.output.read_text())
     assert result["all_voxels_identical"] is True
     assert result["status"] == "completed"
-    for key, replacement in (("source_ct_sha256", "different-input"),
-                             ("modality", "MR"),
-                             ("options", {"tasks": ["total"], "fast": True}),
-                             ("model_fingerprint", {"models": [{"sha256": "different-weights"}]})):
+    for key, replacement in (
+        ("source_ct_sha256", "different-input"),
+        ("modality", "MR"),
+        ("options", {"tasks": ["total"], "fast": True}),
+        ("model_fingerprint", {"models": [{"sha256": "different-weights"}]}),
+    ):
         validation.write_json(right / "report.json", {**common, key: replacement})
         with pytest.raises(ValueError):
             validation.compare(args)
@@ -123,11 +131,11 @@ def test_supervised_worker_harness_runs_every_step_without_a_gpu(tmp_path, masks
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, (tests, os.environ.get("PYTHONPATH")))))
     # A dry run must never contend with a real GPU validation for its lock.
     monkeypatch.setattr(validation, "gpu_lock", nullcontext)
-    args = argparse.Namespace(ct=save("ct", (values * 40).astype(np.int16)), mask=save("mask"),
-                              output=tmp_path / "worker-proof", engine="fake_interactive_engine:PointwiseEngine")
+    args = argparse.Namespace(
+        ct=save("ct", (values * 40).astype(np.int16)), mask=save("mask"), output=tmp_path / "worker-proof", engine="fake_interactive_engine:PointwiseEngine"
+    )
     validation.interactive_worker(args)
     report = json.loads((args.output / "report.json").read_text())
     assert report["status"] == "passed" and all(report["checks"].values()), report["checks"]
-    assert [step["outcome"] for step in report["steps"]] == [
-        "completed", "completed", "SegmentationCancelled", "RuntimeError", "completed"]
+    assert [step["outcome"] for step in report["steps"]] == ["completed", "completed", "SegmentationCancelled", "RuntimeError", "completed"]
     assert report["steps"][1]["provenance"]["pid"] == report["steps"][0]["pid_after"]

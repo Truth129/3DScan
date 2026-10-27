@@ -34,11 +34,12 @@ def source_environment(project, extra=None):
     env.pop("SCAN3D_CODE_DIR", None)
     env.pop("SCAN3D_IMPORT_ROOTS", None)
     env.update(extra or {})
-    script = '''source "$1"
+    script = """source "$1"
 printf '%s\\n' "$SCAN3D_CODE_DIR" "$PYTHONPATH" "$PYTHONSAFEPATH" "$SCAN3D_IMPORT_ROOTS" "$SCAN3D_DATA_DIR"
-'''
-    return subprocess.run(["bash", "-c", script, "production-env", str(project / "scripts/production-env.sh")],
-                          env=env, cwd=project, check=True, capture_output=True, text=True).stdout.splitlines()
+"""
+    return subprocess.run(
+        ["bash", "-c", script, "production-env", str(project / "scripts/production-env.sh")], env=env, cwd=project, check=True, capture_output=True, text=True
+    ).stdout.splitlines()
 
 
 def frozen_release(tmp_path, name="frozen release"):
@@ -57,20 +58,38 @@ def select_release(project, release):
 
 
 def test_production_paths_override_inherited_experimental_paths():
-    env = dict(os.environ, SCAN3D_DATA_DIR="/experiment/data", TOTALSEG_HOME_DIR="/experiment/config",
-               TOTALSEG_WEIGHTS_PATH="/experiment/weights", SCAN3D_NNINTERACTIVE_MODEL="/experiment/model",
-               SCAN3D_GPU_PROOF="/experiment/proof.json", ROCM_PATH="/opt/old-rocm", HIP_PATH="/opt/old-hip",
-               LD_LIBRARY_PATH="/opt/old-libraries", HSA_OVERRIDE_GFX_VERSION="fake")
-    script = '''source "$1"
+    env = dict(
+        os.environ,
+        SCAN3D_DATA_DIR="/experiment/data",
+        TOTALSEG_HOME_DIR="/experiment/config",
+        TOTALSEG_WEIGHTS_PATH="/experiment/weights",
+        SCAN3D_NNINTERACTIVE_MODEL="/experiment/model",
+        SCAN3D_GPU_PROOF="/experiment/proof.json",
+        ROCM_PATH="/opt/old-rocm",
+        HIP_PATH="/opt/old-hip",
+        LD_LIBRARY_PATH="/opt/old-libraries",
+        HSA_OVERRIDE_GFX_VERSION="fake",
+    )
+    script = """source "$1"
 printf '%s\n' "$SCAN3D_DATA_DIR" "$TOTALSEG_HOME_DIR" "$TOTALSEG_WEIGHTS_PATH" "$SCAN3D_NNINTERACTIVE_MODEL" "$SCAN3D_GPU_PROOF" "$XDG_CACHE_HOME" "$MIOPEN_USER_DB_PATH" "$MIOPEN_CUSTOM_CACHE_DIR" "${ROCM_PATH-unset}" "${HIP_PATH-unset}" "${LD_LIBRARY_PATH-unset}" "${HSA_OVERRIDE_GFX_VERSION-unset}"
-'''
-    result = subprocess.run(["bash", "-c", script, "production-env", str(ROOT / "scripts/production-env.sh")],
-                            env=env, check=True, capture_output=True, text=True)
-    assert result.stdout.splitlines() == [str(ROOT / "data"), str(ROOT / ".runtime/totalsegmentator"),
-        str(ROOT / ".runtime/totalsegmentator/nnunet/results"), str(ROOT / ".runtime/nninteractive/nnInteractive_v1.0"),
-        str(ROOT / ".runtime/rocm10/gpu-proof.json"), str(ROOT / ".cache/rocm10"),
-        str(ROOT / ".cache/rocm10/miopen-db"), str(ROOT / ".cache/rocm10/miopen-kernels"),
-        "unset", "unset", "unset", "unset"]
+"""
+    result = subprocess.run(
+        ["bash", "-c", script, "production-env", str(ROOT / "scripts/production-env.sh")], env=env, check=True, capture_output=True, text=True
+    )
+    assert result.stdout.splitlines() == [
+        str(ROOT / "data"),
+        str(ROOT / ".runtime/totalsegmentator"),
+        str(ROOT / ".runtime/totalsegmentator/nnunet/results"),
+        str(ROOT / ".runtime/nninteractive/nnInteractive_v1.0"),
+        str(ROOT / ".runtime/rocm10/gpu-proof.json"),
+        str(ROOT / ".cache/rocm10"),
+        str(ROOT / ".cache/rocm10/miopen-db"),
+        str(ROOT / ".cache/rocm10/miopen-kernels"),
+        "unset",
+        "unset",
+        "unset",
+        "unset",
+    ]
 
 
 def test_absent_release_pointer_keeps_the_checkout_default(production_checkout):
@@ -98,11 +117,17 @@ def test_python_from_editable_checkout_imports_only_selected_release(production_
     select_release(project, release)
     env = dict(os.environ, PYTHONPATH=str(project), PYTHONSAFEPATH="0")
     env.pop("SCAN3D_CODE_DIR", None)
-    script = '''source "$1"
+    script = """source "$1"
 exec "$2" -c 'import scan3d; print(scan3d.RELEASE_TAG); print(scan3d.__file__)'
-'''
-    result = subprocess.run(["bash", "-c", script, "production-env", str(project / "scripts/production-env.sh"),
-                             sys.executable], env=env, cwd=project, check=True, capture_output=True, text=True)
+"""
+    result = subprocess.run(
+        ["bash", "-c", script, "production-env", str(project / "scripts/production-env.sh"), sys.executable],
+        env=env,
+        cwd=project,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     assert result.stdout.splitlines() == ["frozen", str(release / "scan3d/__init__.py")]
 
 
@@ -127,18 +152,22 @@ def test_launcher_uses_absolute_runtime_and_selected_release(production_checkout
         "from pathlib import Path\n"
         "print(json.dumps({'source': str(Path(__file__).resolve()), 'cwd': os.getcwd(), "
         "'executable': sys.executable, 'args': sys.argv[1:], "
-        "'data': os.environ['SCAN3D_DATA_DIR'], 'imports': os.environ['SCAN3D_IMPORT_ROOTS']}))\n")
+        "'data': os.environ['SCAN3D_DATA_DIR'], 'imports': os.environ['SCAN3D_IMPORT_ROOTS']}))\n"
+    )
     select_release(project, release)
     env = dict(os.environ, SCAN3D_PORT="9013", SCAN3D_HOST="127.0.0.1")
     env.pop("SCAN3D_CODE_DIR", None)
     env.pop("SCAN3D_IMPORT_ROOTS", None)
-    result = subprocess.run(["bash", str(project / "scripts/run-production.sh")], env=env, cwd=project,
-                            capture_output=True, text=True, check=True)
+    result = subprocess.run(["bash", str(project / "scripts/run-production.sh")], env=env, cwd=project, capture_output=True, text=True, check=True)
     launched = json.loads(result.stdout)
-    assert launched == {"source": str(release / "scan3d/__main__.py"), "cwd": str(release),
-                        "executable": str(project / ".venv-rocm10-py314/bin/python"),
-                        "args": ["serve", "--host", "127.0.0.1", "--port", "9013"],
-                        "data": str(project / "data"), "imports": str(project)}
+    assert launched == {
+        "source": str(release / "scan3d/__main__.py"),
+        "cwd": str(release),
+        "executable": str(project / ".venv-rocm10-py314/bin/python"),
+        "args": ["serve", "--host", "127.0.0.1", "--port", "9013"],
+        "data": str(project / "data"),
+        "imports": str(project),
+    }
 
 
 @pytest.mark.parametrize("invalid", ["relative-release", "missing-package", "missing-viewer", "multiline"])
@@ -161,8 +190,7 @@ def test_invalid_release_fails_before_interpreter_or_data_access(production_chec
     else:
         chosen = str(release) + "\nextra-line"
     env = dict(os.environ, SCAN3D_CODE_DIR=chosen, INTERPRETER_TEST_MARKER=str(marker))
-    result = subprocess.run(["bash", str(project / "scripts/run-production.sh")], env=env, cwd=project,
-                            capture_output=True, text=True)
+    result = subprocess.run(["bash", str(project / "scripts/run-production.sh")], env=env, cwd=project, capture_output=True, text=True)
     assert result.returncode == 1
     assert "absolute release directory" in result.stderr
     assert not marker.exists()

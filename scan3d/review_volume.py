@@ -32,7 +32,7 @@ from .errors import NotFound
 _IMPLEMENTATION = "native-review-slabs-v2"
 _CHUNK_DEPTH = 16
 _PREVIEW_MAX_DIMENSION = 192
-_FRAME_MAX_BYTES = 256 * 1024 ** 2
+_FRAME_MAX_BYTES = 256 * 1024**2
 _KEY = re.compile(r"[0-9a-f]{64}")
 _DIGESTS = OrderedDict()
 _DIGEST_LOCK = threading.RLock()
@@ -69,8 +69,7 @@ def _file_digest(path):
 
 
 def _identity(value):
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
-                                     allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
 def _entry(cache_dir, key):
@@ -99,10 +98,13 @@ def _generation_lock(cache_dir, quality):
 
 
 def _geometry(image, affine):
-    return {"shape": list(image.shape), "affine_ras": affine.tolist(),
-            "spacing": np.linalg.norm(affine[:3, :3], axis=0).tolist(),
-            "bounds_ras": imaging._bounds(image.shape, affine).tolist(),
-            "center_ras": imaging._world(affine, (np.asarray(image.shape) - 1) / 2).tolist()}
+    return {
+        "shape": list(image.shape),
+        "affine_ras": affine.tolist(),
+        "spacing": np.linalg.norm(affine[:3, :3], axis=0).tolist(),
+        "bounds_ras": imaging._bounds(image.shape, affine).tolist(),
+        "center_ras": imaging._world(affine, (np.asarray(image.shape) - 1) / 2).tolist(),
+    }
 
 
 def _review_grid(image, affine, quality):
@@ -116,9 +118,13 @@ def _review_grid(image, affine, quality):
     target = affine.copy()
     target[:3, :3] = affine[:3, :3] @ np.diag(step)
     target[:3, 3] = imaging._world(affine, origin)
-    grid = {"shape": shape.tolist(), "affine_ras": target.tolist(),
-            "spacing": np.linalg.norm(target[:3, :3], axis=0).tolist(),
-            "bounds_ras": reference["bounds_ras"], "center_ras": reference["center_ras"]}
+    grid = {
+        "shape": shape.tolist(),
+        "affine_ras": target.tolist(),
+        "spacing": np.linalg.norm(target[:3, :3], axis=0).tolist(),
+        "bounds_ras": reference["bounds_ras"],
+        "center_ras": reference["center_ras"],
+    }
     return grid, reference, step, origin
 
 
@@ -127,11 +133,9 @@ def _read_cached(cache_dir, key):
     try:
         record = json.loads((directory / "manifest.json").read_text())
         descriptor = record["descriptor"]
-        if (record["implementation"] != _IMPLEMENTATION or descriptor["key"] != key
-                or descriptor["schema_version"] != 1):
+        if record["implementation"] != _IMPLEMENTATION or descriptor["key"] != key or descriptor["schema_version"] != 1:
             return None
-        if ("descriptor_sha256" in record or descriptor.get("volume_mask_union")) and (
-                record.get("descriptor_sha256") != _identity(descriptor)):
+        if ("descriptor_sha256" in record or descriptor.get("volume_mask_union")) and (record.get("descriptor_sha256") != _identity(descriptor)):
             return None
         # Digests are memoized by inode, length, mtime AND ctime. A corrupted or
         # replaced compressed artifact is checked again before it can be served.
@@ -144,8 +148,7 @@ def _read_cached(cache_dir, key):
         return None
 
 
-def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=0.0,
-           source=None, validate=None):
+def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=0.0, source=None, validate=None):
     """Publish only a complete, verified generation; interrupted writes are inert."""
     destination = _entry(cache_dir, descriptor["key"])
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -159,13 +162,12 @@ def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=
             if validate is not None:
                 validate()
             depth = min(_CHUNK_DEPTH, values.shape[2] - start)
-            slab = values[:, :, start:start + depth]
+            slab = values[:, :, start : start + depth]
             if descriptor["kind"] == "ct":
                 # This mirrors Nibabel's ArrayProxy float32 conversion, which
                 # performs scaling with its float64 proxy slope/intercept and
                 # rounds once to float32. It also validates raw integer streams.
-                scaled = np.asarray(apply_read_scaling(slab, source_slope, source_intercept),
-                                    dtype=np.float32)
+                scaled = np.asarray(apply_read_scaling(slab, source_slope, source_intercept), dtype=np.float32)
                 if not np.isfinite(scaled).all():
                     raise ValueError("Reference CT contains nonfinite intensities")
                 if descriptor["dtype"] == "float32":
@@ -174,8 +176,7 @@ def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=
             compressed = gzip.compress(raw, compresslevel=1, mtime=0)
             path = temporary / f"{index}.bin.gz"
             path.write_bytes(compressed)
-            chunks.append({"index": index, "start_k": start, "depth": depth,
-                           "byte_offset": byte_offset, "byte_length": len(raw)})
+            chunks.append({"index": index, "start_k": start, "depth": depth, "byte_offset": byte_offset, "byte_length": len(raw)})
             files.append({"byte_length": len(compressed), "sha256": hashlib.sha256(compressed).hexdigest()})
             byte_offset += len(raw)
         descriptor = {**descriptor, "byte_length": byte_offset, "chunk_depth": _CHUNK_DEPTH, "chunks": chunks}
@@ -183,10 +184,8 @@ def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=
             raise ValueError("Review volume input changed while reading; retry the request")
         if validate is not None:
             validate()
-        record = {"implementation": _IMPLEMENTATION, "descriptor": descriptor,
-                  "descriptor_sha256": _identity(descriptor), "files": files}
-        (temporary / "manifest.json").write_text(json.dumps(record, sort_keys=True, separators=(",", ":"),
-                                                           allow_nan=False))
+        record = {"implementation": _IMPLEMENTATION, "descriptor": descriptor, "descriptor_sha256": _identity(descriptor), "files": files}
+        (temporary / "manifest.json").write_text(json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False))
         # A previously corrupted generation is disposable; original case files
         # are outside this content-addressed cache and are never touched.
         if destination.exists():
@@ -210,17 +209,25 @@ def scalar_volume(ct_path, cache_dir, quality="full", *, presentation=None, refe
     modality and source identity are supplied separately by the owning image.
     """
     from .modalities import get_modality_adapter, normalize_presentation
+
     policy = normalize_presentation(presentation)
     legacy_ct = policy == get_modality_adapter("CT").presentation()
     ct_path = Path(ct_path)
     source_digest = _file_digest(ct_path)
     image, affine = imaging._image(ct_path)
     geometry, reference, step, origin = _review_grid(image, affine, quality)
-    key = _identity({"implementation": _IMPLEMENTATION, "kind": "ct",
-                     "source": source_digest, "geometry": geometry, "quality": quality,
-                     **({"preview_quantization": "nearest-int16-hu-v1"} if quality == "preview" else {}),
-                     **({"presentation": policy} if not legacy_ct else {}),
-                     **({"reference_image_id": reference_image_id} if reference_image_id else {})})
+    key = _identity(
+        {
+            "implementation": _IMPLEMENTATION,
+            "kind": "ct",
+            "source": source_digest,
+            "geometry": geometry,
+            "quality": quality,
+            **({"preview_quantization": "nearest-int16-hu-v1"} if quality == "preview" else {}),
+            **({"presentation": policy} if not legacy_ct else {}),
+            **({"reference_image_id": reference_image_id} if reference_image_id else {}),
+        }
+    )
     cached = _read_cached(cache_dir, key)
     if cached is not None:
         return cached
@@ -243,9 +250,9 @@ def scalar_volume(ct_path, cache_dir, quality="full", *, presentation=None, refe
             # A bounded image of the entire scan makes every patient plane
             # available after a small initial transfer. Its voxel faces exactly
             # match the reference FOV, including oblique/reflected directions.
-            values = ndi.affine_transform(values, np.diag(step), origin,
-                                          output_shape=tuple(geometry["shape"]), output=np.float64,
-                                          order=1, mode="nearest", prefilter=False)
+            values = ndi.affine_transform(
+                values, np.diag(step), origin, output_shape=tuple(geometry["shape"]), output=np.float64, order=1, mode="nearest", prefilter=False
+            )
             preview_hu = np.asarray(apply_read_scaling(values, slope, intercept), dtype=np.float32)
             if not np.isfinite(preview_hu).all():
                 raise ValueError("Reference CT contains nonfinite intensities")
@@ -260,19 +267,29 @@ def scalar_volume(ct_path, cache_dir, quality="full", *, presentation=None, refe
                 slope = 1.0
             intercept = 0.0
         dtype = values.dtype.newbyteorder("=").name if preserve_raw else "float32"
-        descriptor = {"schema_version": 1, "key": key, "kind": "ct", "dtype": dtype,
-                      "quality": quality, "approximate": quality == "preview",
-                      "preview_quantization_hu": (.5 * policy["preview_quantization_step"]
-                                                  if policy["units"] == "HU" and quality == "preview" and dtype == "int16" else 0),
-                      **({"preview_quantization_error": (.5 * policy["preview_quantization_step"]
-                                                         if quality == "preview" and dtype == "int16" else 0)}
-                         if not legacy_ct else {}),
-                      "reference_geometry": reference,
-                      "shape": geometry["shape"], "affine_ras": geometry["affine_ras"], "geometry": geometry,
-                      "slope": slope if preserve_raw else 1.0,
-                      "intercept": intercept if preserve_raw else 0.0}
-        return _write(cache_dir, descriptor, values, source_slope=slope, source_intercept=intercept,
-                      source=(ct_path, source_digest))
+        descriptor = {
+            "schema_version": 1,
+            "key": key,
+            "kind": "ct",
+            "dtype": dtype,
+            "quality": quality,
+            "approximate": quality == "preview",
+            "preview_quantization_hu": (
+                0.5 * policy["preview_quantization_step"] if policy["units"] == "HU" and quality == "preview" and dtype == "int16" else 0
+            ),
+            **(
+                {"preview_quantization_error": (0.5 * policy["preview_quantization_step"] if quality == "preview" and dtype == "int16" else 0)}
+                if not legacy_ct
+                else {}
+            ),
+            "reference_geometry": reference,
+            "shape": geometry["shape"],
+            "affine_ras": geometry["affine_ras"],
+            "geometry": geometry,
+            "slope": slope if preserve_raw else 1.0,
+            "intercept": intercept if preserve_raw else 0.0,
+        }
+        return _write(cache_dir, descriptor, values, source_slope=slope, source_intercept=intercept, source=(ct_path, source_digest))
 
 
 def display_margin(value):
@@ -280,7 +297,7 @@ def display_margin(value):
     value = float(value)
     if not math.isfinite(value) or not 0 <= value <= 5:
         raise ValueError("Display mask margin must be between 0 and 5 mm")
-    return math.floor(value * 1000 + .5) / 1000
+    return math.floor(value * 1000 + 0.5) / 1000
 
 
 def volume_mask_alias(structure_id, margin_mm):
@@ -306,7 +323,7 @@ def _margin_crop(values, affine, margin_mm):
     source = values[region]
     output = np.zeros(source.shape, dtype=bool)
     spacing = np.linalg.norm(matrix, axis=0)
-    orthogonal = np.allclose(matrix.T @ matrix, np.diag(spacing ** 2), rtol=1e-6, atol=1e-8)
+    orthogonal = np.allclose(matrix.T @ matrix, np.diag(spacing**2), rtol=1e-6, atol=1e-8)
     kernel = None
     if not orthogonal:
         kernel_shape = padding * 2 + 1
@@ -318,13 +335,15 @@ def _margin_crop(values, affine, margin_mm):
             raise ValueError("This sheared grid needs too much display-margin work; reduce the margin")
     # Keep distance-transform temporaries near 16 MiB plus a small physical halo.
     block = np.minimum(np.asarray(source.shape), [128, 128, 128])
-    if int(np.prod(np.minimum(source.shape, block + 2 * padding))) > 8 * 1024 ** 2:
+    if int(np.prod(np.minimum(source.shape, block + 2 * padding))) > 8 * 1024**2:
         raise ValueError("This voxel spacing needs too much display-margin working memory; reduce the margin")
     for i in range(0, source.shape[0], block[0]):
         for j in range(0, source.shape[1], block[1]):
             for k in range(0, source.shape[2], block[2]):
-                low = np.asarray([i, j, k]); end = np.minimum(low + block, source.shape)
-                halo_low = np.maximum(0, low - padding); halo_high = np.minimum(source.shape, end + padding)
+                low = np.asarray([i, j, k])
+                end = np.minimum(low + block, source.shape)
+                halo_low = np.maximum(0, low - padding)
+                halo_high = np.minimum(source.shape, end + padding)
                 tile = source[tuple(slice(int(a), int(b)) for a, b in zip(halo_low, halo_high))]
                 if not tile.any():
                     continue
@@ -337,8 +356,7 @@ def _margin_crop(values, affine, margin_mm):
     return origin, output
 
 
-def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, reference_image_id=None,
-                validate=None):
+def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, reference_image_id=None, validate=None):
     """Return a binary crop in the chosen native or matched preview grid."""
     margin_mm = display_margin(margin_mm)
     if validate is not None:
@@ -348,11 +366,18 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, r
     target_affine = np.asarray(geometry["affine_ras"])
     mask_path = Path(mask_path)
     source_digest = _file_digest(mask_path)
-    key = _identity({"implementation": _IMPLEMENTATION, "kind": "mask",
-                     "source": source_digest, "reference_geometry": reference,
-                     "quality": quality, "geometry": geometry,
-                     **({"display_margin_mm": margin_mm, "margin_implementation": "physical-mask-margin-v1"} if margin_mm else {}),
-                     **({"reference_image_id": reference_image_id} if reference_image_id else {})})
+    key = _identity(
+        {
+            "implementation": _IMPLEMENTATION,
+            "kind": "mask",
+            "source": source_digest,
+            "reference_geometry": reference,
+            "quality": quality,
+            "geometry": geometry,
+            **({"display_margin_mm": margin_mm, "margin_implementation": "physical-mask-margin-v1"} if margin_mm else {}),
+            **({"reference_image_id": reference_image_id} if reference_image_id else {}),
+        }
+    )
     cached = _read_cached(cache_dir, key)
     if cached is not None:
         return cached
@@ -369,9 +394,17 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, r
         if margin_mm:
             native_origin, values = _margin_crop(values, affine, margin_mm)
         if quality == "preview":
-            values = ndi.affine_transform(values, np.diag(step), grid_origin - native_origin,
-                                          output_shape=tuple(geometry["shape"]), output=bool,
-                                          order=0, mode="constant", cval=0, prefilter=False)
+            values = ndi.affine_transform(
+                values,
+                np.diag(step),
+                grid_origin - native_origin,
+                output_shape=tuple(geometry["shape"]),
+                output=bool,
+                order=0,
+                mode="constant",
+                cval=0,
+                prefilter=False,
+            )
         bounds = imaging._foreground_bounds(values)
         if bounds is None:
             origin = np.zeros(3, dtype=int)
@@ -383,12 +416,22 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, r
                 origin = origin + native_origin
         cropped_affine = target_affine.copy()
         cropped_affine[:3, 3] = imaging._world(target_affine, origin)
-        descriptor = {"schema_version": 1, "key": key, "kind": "mask", "dtype": "uint8",
-                      "shape": list(cropped.shape), "origin_ijk": origin.tolist(),
-                      "affine_ras": cropped_affine.tolist(), "slope": 1.0, "intercept": 0.0,
-                      "quality": quality, "reference_geometry": reference,
-                      "geometry": geometry, "empty": bounds is None,
-                      **({"display_margin_mm": margin_mm} if margin_mm else {})}
+        descriptor = {
+            "schema_version": 1,
+            "key": key,
+            "kind": "mask",
+            "dtype": "uint8",
+            "shape": list(cropped.shape),
+            "origin_ijk": origin.tolist(),
+            "affine_ras": cropped_affine.tolist(),
+            "slope": 1.0,
+            "intercept": 0.0,
+            "quality": quality,
+            "reference_geometry": reference,
+            "geometry": geometry,
+            "empty": bounds is None,
+            **({"display_margin_mm": margin_mm} if margin_mm else {}),
+        }
         return _write(cache_dir, descriptor, cropped, source=(mask_path, source_digest), validate=validate)
 
 
@@ -401,8 +444,7 @@ def chunk_path(cache_dir, descriptor, key, index):
     return _entry(cache_dir, key) / f"{index}.bin.gz"
 
 
-def review_frame(ct_path, mask_path, plane, position_mm, parent_mask_path=None, *, overlays=None,
-                 native_axis=None, native_index=None, background_value=None):
+def review_frame(ct_path, mask_path, plane, position_mm, parent_mask_path=None, *, overlays=None, native_axis=None, native_index=None, background_value=None):
     """Exact reference-grid HU and binary overlays for a settled patient plane.
 
     This is the same pixel-centre geometry and interpolation used by the PNG
@@ -410,8 +452,7 @@ def review_frame(ct_path, mask_path, plane, position_mm, parent_mask_path=None, 
     """
     ct_path = Path(ct_path)
     image, affine = imaging._image(ct_path)
-    meta, mapping = imaging.slice_geometry(image.shape, affine, plane, position_mm,
-                                           native_axis=native_axis, native_index=native_index)
+    meta, mapping = imaging.slice_geometry(image.shape, affine, plane, position_mm, native_axis=native_axis, native_index=native_index)
     width, height = meta["width"], meta["height"]
     pixels = width * height
     if overlays is not None:
@@ -428,11 +469,11 @@ def review_frame(ct_path, mask_path, plane, position_mm, parent_mask_path=None, 
         raise ValueError("Review frame exceeds the 256 MiB decoded payload limit; select fewer overlays")
     if background_value is None:
         from .modalities import get_modality_adapter
+
         background_value = get_modality_adapter("CT").presentation()["background_value"]
     if not math.isfinite(background_value):
         raise ValueError("Image background must be finite")
-    intensity = imaging._reslice(imaging._ct_array(ct_path, image), mapping,
-                                 (height, width), order=1, cval=background_value)
+    intensity = imaging._reslice(imaging._ct_array(ct_path, image), mapping, (height, width), order=1, cval=background_value)
     # Group the four IEEE754 byte planes before gzip. This is lossless and
     # exploits the repeated exponent/high bytes instead of interleaving them
     # with noisy low mantissa bytes; masks keep their ordinary pixel order.
@@ -478,8 +519,14 @@ def review_frame(ct_path, mask_path, plane, position_mm, parent_mask_path=None, 
         parent_offset = pixels * 5
         body.append(np.asarray(sampled, dtype=np.uint8).tobytes(order="C"))
     meta["overlay_colors"] = {"current": "#38bdf8", "added": "#22c55e", "removed": "#f43f5e"}
-    frame = {"meta": meta, "dtype": "float32", "hu_encoding": "byte-shuffle", "pixels": pixels,
-             "current_offset": current_offset, "parent_offset": parent_offset}
+    frame = {
+        "meta": meta,
+        "dtype": "float32",
+        "hu_encoding": "byte-shuffle",
+        "pixels": pixels,
+        "current_offset": current_offset,
+        "parent_offset": parent_offset,
+    }
     if layers is not None:
         frame["overlays"] = layers
     else:

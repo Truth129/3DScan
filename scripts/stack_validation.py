@@ -26,18 +26,41 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGES = ("torch", "torchvision", "triton", "pytorch-triton-rocm", "TotalSegmentator",
-            "nnunetv2", "nnInteractive", "nninteractive-client", "numpy", "scipy",
-            "nibabel", "pydicom", "python-gdcm", "SimpleITK", "vtk", "fastapi", "pydantic",
-            "rocm", "rocm-sdk", "rocm-sdk-core", "rocm-sdk-libraries", "rocm-sdk-device-gfx1201")
+PACKAGES = (
+    "torch",
+    "torchvision",
+    "triton",
+    "pytorch-triton-rocm",
+    "TotalSegmentator",
+    "nnunetv2",
+    "nnInteractive",
+    "nninteractive-client",
+    "numpy",
+    "scipy",
+    "nibabel",
+    "pydicom",
+    "python-gdcm",
+    "SimpleITK",
+    "vtk",
+    "fastapi",
+    "pydantic",
+    "rocm",
+    "rocm-sdk",
+    "rocm-sdk-core",
+    "rocm-sdk-libraries",
+    "rocm-sdk-device-gfx1201",
+)
 
 
 def check_output_path(path):
     """Keep benchmark artifacts outside the live store and model trees."""
     path = Path(path).resolve()
     protected = [ROOT / "data", ROOT / ".runtime" / "nninteractive", ROOT / ".runtime" / "totalsegmentator"]
-    protected += [Path(os.environ[name]).expanduser().resolve() for name in
-                  ("SCAN3D_NNINTERACTIVE_MODEL", "TOTALSEG_WEIGHTS_PATH", "TOTALSEG_HOME_DIR") if os.environ.get(name)]
+    protected += [
+        Path(os.environ[name]).expanduser().resolve()
+        for name in ("SCAN3D_NNINTERACTIVE_MODEL", "TOTALSEG_WEIGHTS_PATH", "TOTALSEG_HOME_DIR")
+        if os.environ.get(name)
+    ]
     for directory in protected:
         directory = directory.resolve()
         if path == directory or directory in path.parents:
@@ -75,11 +98,16 @@ def provenance():
         name = distribution.metadata["Name"]
         if name and re.match(r"^(rocm|amd[-_]|hip[-_]|miopen|rccl|aotriton)", name, re.IGNORECASE):
             packages[name] = distribution.version
-    return {"schema_version": 1, "checked_at": datetime.now(timezone.utc).isoformat(),
-            "python": platform.python_version(), "python_implementation": platform.python_implementation(),
-            "kernel": platform.release(), "packages": packages,
-            "harness_sha256": sha256(__file__),
-            "sources_sha256": {p.name: sha256(p) for p in sorted((ROOT / "scan3d").glob("*.py"))}}
+    return {
+        "schema_version": 1,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "python": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "kernel": platform.release(),
+        "packages": packages,
+        "harness_sha256": sha256(__file__),
+        "sources_sha256": {p.name: sha256(p) for p in sorted((ROOT / "scan3d").glob("*.py"))},
+    }
 
 
 def new_output(path):
@@ -97,11 +125,15 @@ def loaded_libraries():
             fields = line.split(maxsplit=5)
             if len(fields) == 6 and fields[5].startswith("/") and ".so" in fields[5]:
                 paths.add(fields[5])
-        return {"loaded_native_libraries": sorted(paths),
-                "loaded_opt_rocm_libraries": sorted(path for path in paths if path.startswith("/opt/rocm")),
-                "library_environment": {key: os.environ[key] for key in
-                    ("LD_LIBRARY_PATH", "LD_PRELOAD", "ROCM_PATH", "HIP_PATH", "ROCR_VISIBLE_DEVICES",
-                     "HIP_VISIBLE_DEVICES", "HSA_OVERRIDE_GFX_VERSION") if key in os.environ}}
+        return {
+            "loaded_native_libraries": sorted(paths),
+            "loaded_opt_rocm_libraries": sorted(path for path in paths if path.startswith("/opt/rocm")),
+            "library_environment": {
+                key: os.environ[key]
+                for key in ("LD_LIBRARY_PATH", "LD_PRELOAD", "ROCM_PATH", "HIP_PATH", "ROCR_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "HSA_OVERRIDE_GFX_VERSION")
+                if key in os.environ
+            },
+        }
     except OSError as exc:
         return {"loaded_native_libraries": [], "library_map_error": str(exc)}
 
@@ -129,6 +161,7 @@ def gpu_smoke(args):
     try:
         import torch
         from scan3d.segmentation import _device_info
+
         with gpu_lock():
             info = _device_info(os.environ.get("SCAN3D_DEVICE", "gpu"))
             if "R9700" not in info.get("gpu_name", "").upper() or not info.get("hip"):
@@ -154,10 +187,16 @@ def gpu_smoke(args):
                         finite = bool(torch.isfinite(result).all())
                         if not finite:
                             raise RuntimeError("Convolution produced nonfinite values")
-                        report["checks"].append({"precision": precision, "iteration": iteration,
-                            "seconds": time.perf_counter() - started, "finite": finite,
-                            "allocated_bytes": torch.cuda.memory_allocated(device),
-                            "reserved_bytes": torch.cuda.memory_reserved(device)})
+                        report["checks"].append(
+                            {
+                                "precision": precision,
+                                "iteration": iteration,
+                                "seconds": time.perf_counter() - started,
+                                "finite": finite,
+                                "allocated_bytes": torch.cuda.memory_allocated(device),
+                                "reserved_bytes": torch.cuda.memory_reserved(device),
+                            }
+                        )
             report["status"] = "passed"
     except BaseException as exc:
         report.update(status="failed", error=str(exc))
@@ -169,6 +208,7 @@ def gpu_smoke(args):
 
 def _native_cli(ct, output, profile, options, runtime):
     from scan3d import imaging, segmentation
+
     ct_image, affine = imaging._image(ct)
     records = []
     structures = []
@@ -176,9 +216,22 @@ def _native_cli(ct, output, profile, options, runtime):
         task_dir = output / task
         task_dir.mkdir()
         native_path = output / (task + "-report.json")
-        command = [sys.executable, "-u", "-m", "totalsegmentator.bin.TotalSegmentator", "-i", str(ct),
-                   "-o", str(task_dir), "--task", task, "--device", runtime["selected_device"],
-                   "--report", str(native_path)]
+        command = [
+            sys.executable,
+            "-u",
+            "-m",
+            "totalsegmentator.bin.TotalSegmentator",
+            "-i",
+            str(ct),
+            "-o",
+            str(task_dir),
+            "--task",
+            task,
+            "--device",
+            runtime["selected_device"],
+            "--report",
+            str(native_path),
+        ]
         command += ["--" + key for key in ("robust_crop", "body_seg", "remove_small_blobs") if options[key]]
         progress("Native CLI: " + task)
         started = time.perf_counter()
@@ -188,7 +241,7 @@ def _native_cli(ct, output, profile, options, runtime):
             try:
                 while process.poll() is None:
                     resources.sample(process.pid)
-                    time.sleep(.2)
+                    time.sleep(0.2)
             except BaseException:
                 segmentation._stop(process)
                 raise
@@ -208,27 +261,37 @@ def _native_cli(ct, output, profile, options, runtime):
             if imaging._binary_nonempty(path, ct_image, affine):
                 name = path.name[:-7]
                 group, color = segmentation._appearance(name, task)
-                structures.append({"id": task + ":" + name, "task": task, "name": name.replace("_", " ").capitalize(),
-                                   "group": group, "color": color, "mask_file": str(path)})
-        records.append({"task": task, "elapsed_seconds": elapsed, "runtime_seconds": native.get("runtime_seconds"),
-                        "mask_validation_seconds": time.perf_counter() - validate_started,
-                        "resources": resources.result()})
+                structures.append(
+                    {"id": task + ":" + name, "task": task, "name": name.replace("_", " ").capitalize(), "group": group, "color": color, "mask_file": str(path)}
+                )
+        records.append(
+            {
+                "task": task,
+                "elapsed_seconds": elapsed,
+                "runtime_seconds": native.get("runtime_seconds"),
+                "mask_validation_seconds": time.perf_counter() - validate_started,
+                "resources": resources.result(),
+            }
+        )
     return structures, records
 
 
 def segment(args):
     output = new_output(args.output)
-    report = {"provenance": provenance(), "status": "running", "mode": args.mode,
-              "profile": args.profile, "modality": args.modality}
+    report = {"provenance": provenance(), "status": "running", "mode": args.mode, "profile": args.profile, "modality": args.modality}
     write_json(output / "report.json", report)
     try:
         from scan3d import segmentation
         from scan3d.segmentation_options import normalize_options
+
         ct = args.ct.resolve()
         source_hash = sha256(ct)
         args.tasks = args.tasks or (["total_mr"] if args.modality == "MR" else ["total", "lung_vessels"])
-        options = normalize_options(args.profile, {"tasks": args.tasks, "robust_crop": args.robust_crop,
-                      "body_seg": args.body_seg, "remove_small_blobs": args.remove_small_blobs}, modality=args.modality)
+        options = normalize_options(
+            args.profile,
+            {"tasks": args.tasks, "robust_crop": args.robust_crop, "body_seg": args.body_seg, "remove_small_blobs": args.remove_small_blobs},
+            modality=args.modality,
+        )
         report.update(source_ct_sha256=source_hash, options=options)
         with gpu_lock():
             runtime = segmentation._device_info(os.environ.get("SCAN3D_DEVICE", "gpu"))
@@ -237,8 +300,7 @@ def segment(args):
             report["runtime"] = runtime
             started = time.perf_counter()
             if args.mode == "wrapper":
-                structures = segmentation.segment(ct, output / "inference", args.profile, progress, lambda: False, options,
-                                                  modality=args.modality)
+                structures = segmentation.segment(ct, output / "inference", args.profile, progress, lambda: False, options, modality=args.modality)
                 manifest = json.loads((output / "inference" / "inference.json").read_text())
                 mask_root = output / "inference" / manifest["run_id"]
                 report["tasks"] = manifest["tasks"]
@@ -250,8 +312,7 @@ def segment(args):
             report["model_fingerprint"] = segmentation.model_fingerprint(args.profile, options, modality=args.modality)
             if not report["model_fingerprint"]["weights_complete"]:
                 raise RuntimeError("The exact model checkpoints could not be identified")
-            report["masks"] = {task + ":" + p.name[:-7]: str(p.relative_to(output))
-                               for task in args.tasks for p in sorted((mask_root / task).glob("*.nii.gz"))}
+            report["masks"] = {task + ":" + p.name[:-7]: str(p.relative_to(output)) for task in args.tasks for p in sorted((mask_root / task).glob("*.nii.gz"))}
             report["structures"] = [{**s, "mask_file": str(Path(s["mask_file"]).relative_to(output))} for s in structures]
             report["source_unchanged"] = sha256(ct) == source_hash
             if not report["source_unchanged"]:
@@ -269,24 +330,30 @@ def segment(args):
 def compare_masks(left, right):
     import numpy as np
     from scan3d.imaging import _binary_values
+
     a, ai, affine, _ = _binary_values(Path(left))
     b, bi, other, _ = _binary_values(Path(right))
     if ai.shape != bi.shape or not np.allclose(affine, other, rtol=0, atol=1e-4):
         raise ValueError("Compared mask grids differ")
     count_a = count_b = intersection = changed = 0
     for offset in range(0, a.shape[0], 16):
-        x, y = a[offset:offset + 16], b[offset:offset + 16]
+        x, y = a[offset : offset + 16], b[offset : offset + 16]
         count_a += int(np.count_nonzero(x))
         count_b += int(np.count_nonzero(y))
         intersection += int(np.count_nonzero(np.logical_and(x, y)))
         changed += int(np.count_nonzero(x != y))
     voxel_ml = abs(float(np.linalg.det(affine[:3, :3]))) / 1000
-    return {"left_voxels": count_a, "right_voxels": count_b, "changed_voxels": changed,
-            "dice": 2 * intersection / (count_a + count_b) if count_a + count_b else 1.,
-            "left_volume_ml": count_a * voxel_ml, "right_volume_ml": count_b * voxel_ml,
-            "volume_difference_ml": (count_b - count_a) * voxel_ml,
-            "relative_volume_difference": (count_b - count_a) / count_a if count_a else None,
-            "grid_matches": True}
+    return {
+        "left_voxels": count_a,
+        "right_voxels": count_b,
+        "changed_voxels": changed,
+        "dice": 2 * intersection / (count_a + count_b) if count_a + count_b else 1.0,
+        "left_volume_ml": count_a * voxel_ml,
+        "right_volume_ml": count_b * voxel_ml,
+        "volume_difference_ml": (count_b - count_a) * voxel_ml,
+        "relative_volume_difference": (count_b - count_a) / count_a if count_a else None,
+        "grid_matches": True,
+    }
 
 
 def compare(args):
@@ -299,22 +366,30 @@ def compare(args):
             raise ValueError("Cannot compare different " + field)
     if left["status"] != "passed" or right["status"] != "passed":
         raise ValueError("Both inference runs must have passed")
+
     # Runtime/package versions intentionally differ; checkpoint bytes must not.
     def weights(report):
         return report["model_fingerprint"]["models"]
+
     if weights(left) != weights(right):
         raise ValueError("Model configurations/checkpoint hashes differ")
     if left["masks"].keys() != right["masks"].keys():
         raise ValueError("Class label sets differ")
-    entries = {name: compare_masks(args.left / path, args.right / right["masks"][name])
-               for name, path in left["masks"].items()}
-    report = {"schema_version": 1, "status": "completed", "source_ct_sha256": left["source_ct_sha256"],
-              "left_provenance": left["provenance"], "right_provenance": right["provenance"],
-              "left_seconds": left["end_to_end_seconds"], "right_seconds": right["end_to_end_seconds"],
-              "labels": entries, "all_voxels_identical": all(e["changed_voxels"] == 0 for e in entries.values()),
-              "minimum_dice": min(e["dice"] for e in entries.values()),
-              "maximum_absolute_volume_difference_ml": max(abs(e["volume_difference_ml"]) for e in entries.values()),
-              "interpretation": "Numerical agreement only; no automatic clinical accuracy or promotion threshold."}
+    entries = {name: compare_masks(args.left / path, args.right / right["masks"][name]) for name, path in left["masks"].items()}
+    report = {
+        "schema_version": 1,
+        "status": "completed",
+        "source_ct_sha256": left["source_ct_sha256"],
+        "left_provenance": left["provenance"],
+        "right_provenance": right["provenance"],
+        "left_seconds": left["end_to_end_seconds"],
+        "right_seconds": right["end_to_end_seconds"],
+        "labels": entries,
+        "all_voxels_identical": all(e["changed_voxels"] == 0 for e in entries.values()),
+        "minimum_dice": min(e["dice"] for e in entries.values()),
+        "maximum_absolute_volume_difference_ml": max(abs(e["volume_difference_ml"]) for e in entries.values()),
+        "interpretation": "Numerical agreement only; no automatic clinical accuracy or promotion threshold.",
+    }
     write_json(args.output, report)
 
 
@@ -322,11 +397,12 @@ def seed_points(mask, affine):
     """Find two reproducible foreground seeds without a full-volume argwhere."""
     import numpy as np
     from scipy.ndimage import distance_transform_edt
+
     found = np.flatnonzero(mask.any(axis=(0, 1)))
     if not len(found):
         raise ValueError("A nonempty baseline mask is required")
     seeds = []
-    for fraction in (.4, .6):
+    for fraction in (0.4, 0.6):
         z = int(found[round((len(found) - 1) * fraction)])
         distance = distance_transform_edt(mask[:, :, z], sampling=np.linalg.norm(affine[:3, :2], axis=0))
         x, y = np.unravel_index(np.argmax(distance), distance.shape)
@@ -343,31 +419,29 @@ def interactive(args):
         import numpy as np
         from scan3d import imaging
         from scan3d.interactive import InteractiveRuntime
+
         ct, baseline = args.ct.resolve(), args.mask.resolve()
         hashes = [sha256(ct), sha256(baseline)]
         image, affine = imaging._image(ct)
         mask, _, _ = imaging._binary(baseline, image, affine)
         seeds = seed_points(mask, affine)
         del mask
-        prompts = [{"id": "runtime-seed-" + str(i), "kind": "point", "include": True,
-                    "ras": (affine @ np.r_[seed, 1])[:3].tolist()} for i, seed in enumerate(seeds)]
+        prompts = [
+            {"id": "runtime-seed-" + str(i), "kind": "point", "include": True, "ras": (affine @ np.r_[seed, 1])[:3].tolist()} for i, seed in enumerate(seeds)
+        ]
         report.update(source_ct_sha256=hashes[0], baseline_mask_sha256=hashes[1], seed_voxels=seeds)
         runtime = InteractiveRuntime()
         with gpu_lock():
-            for name, selected in (("first", prompts[:1]), ("repeat", prompts),
-                                   ("unchanged", prompts), ("undo_all", [])):
+            for name, selected in (("first", prompts[:1]), ("repeat", prompts), ("unchanged", prompts), ("undo_all", [])):
                 started = time.perf_counter()
-                result = runtime.predict(ct, baseline, selected, output / (name + ".nii.gz"),
-                                         progress, lambda: False, "isolated-runtime-validation")
-                report["steps"].append({"name": name, "wall_seconds": time.perf_counter() - started,
-                                        "provenance": result})
+                result = runtime.predict(ct, baseline, selected, output / (name + ".nii.gz"), progress, lambda: False, "isolated-runtime-validation")
+                report["steps"].append({"name": name, "wall_seconds": time.perf_counter() - started, "provenance": result})
                 write_json(output / "report.json", report)
             unchanged = compare_masks(output / "repeat.nii.gz", output / "unchanged.nii.gz")
             undo = compare_masks(baseline, output / "undo_all.nii.gz")
             if unchanged["changed_voxels"] or undo["changed_voxels"]:
                 raise RuntimeError("Repeated save or undo did not preserve exact mask voxels")
-            if (not report["steps"][1]["provenance"]["reused_prompt_prefix"] or
-                    report["steps"][1]["provenance"]["predictions_this_request"] != 1):
+            if not report["steps"][1]["provenance"]["reused_prompt_prefix"] or report["steps"][1]["provenance"]["predictions_this_request"] != 1:
                 raise RuntimeError("Second prompt did not reuse the warm session")
             if report["steps"][2]["provenance"]["predictions_this_request"] != 0:
                 raise RuntimeError("An unchanged prompt list unnecessarily repeated inference")
@@ -409,14 +483,16 @@ def interactive_worker(args):
         from scan3d import imaging
         from scan3d.interactive_worker import InteractiveWorker
         from scan3d.segmentation import _Resources
+
         ct, baseline = args.ct.resolve(), args.mask.resolve()
         hashes = [sha256(ct), sha256(baseline)]
         image, affine = imaging._image(ct)
         mask, _, _ = imaging._binary(baseline, image, affine)
         seeds = seed_points(mask, affine)
         del mask
-        prompts = [{"id": "worker-seed-" + str(i), "kind": "point", "include": True,
-                    "ras": (affine @ np.r_[seed, 1])[:3].tolist()} for i, seed in enumerate(seeds)]
+        prompts = [
+            {"id": "worker-seed-" + str(i), "kind": "point", "include": True, "ras": (affine @ np.r_[seed, 1])[:3].tolist()} for i, seed in enumerate(seeds)
+        ]
         vram = _Resources(track_r9700=True).vram_path
         worker = InteractiveWorker(args.engine)
 
@@ -434,14 +510,19 @@ def interactive_worker(args):
             entry = {"name": name, "pid_before": worker.pid}
             started = time.perf_counter()
             try:
-                entry["provenance"] = worker.predict(ct, baseline, selected, output / (name + ".nii.gz"), progress,
-                                                     lambda: action == "cancel" and bool(acted), session)
+                entry["provenance"] = worker.predict(
+                    ct, baseline, selected, output / (name + ".nii.gz"), progress, lambda: action == "cancel" and bool(acted), session
+                )
                 entry["outcome"] = "completed"
             except Exception as exc:
                 entry.update(outcome=type(exc).__name__, error=str(exc))
-            entry.update(wall_seconds=time.perf_counter() - started, pid_after=worker.pid, progress=messages,
-                         seconds_after_action=time.perf_counter() - acted[0] if acted else None,
-                         vram_used_bytes=int(vram.read_text()) if vram else None)
+            entry.update(
+                wall_seconds=time.perf_counter() - started,
+                pid_after=worker.pid,
+                progress=messages,
+                seconds_after_action=time.perf_counter() - acted[0] if acted else None,
+                vram_used_bytes=int(vram.read_text()) if vram else None,
+            )
             report["steps"].append(entry)
             write_json(output / "report.json", report)
             return entry
@@ -455,21 +536,24 @@ def interactive_worker(args):
             recovered = step("recover", prompts[:1], "worker-validation")
             pid, started = worker.pid, time.perf_counter()
             worker.release()
-            report["release"] = {"pid": pid, "seconds": time.perf_counter() - started,
-                                 "vram_used_bytes": int(vram.read_text()) if vram else None,
-                                 "child_exited": pid is not None and not Path(f"/proc/{pid}").exists()}
+            report["release"] = {
+                "pid": pid,
+                "seconds": time.perf_counter() - started,
+                "vram_used_bytes": int(vram.read_text()) if vram else None,
+                "child_exited": pid is not None and not Path(f"/proc/{pid}").exists(),
+            }
         provenance_of = lambda entry: entry.get("provenance") or {}
         report["checks"] = checks = {
             "cold_load_in_child": cold["outcome"] == "completed" and cold["pid_after"] not in (None, os.getpid()),
-            "warm_reuses_child_and_prefix": (warm["outcome"] == "completed" and warm["pid_after"] == cold["pid_after"]
-                                             and provenance_of(warm).get("reused_prompt_prefix") is True
-                                             and provenance_of(warm).get("predictions_this_request") == 1),
-            "cancel_is_cooperative": (cancelled["outcome"] == "SegmentationCancelled"
-                                      and cancelled["pid_after"] == cold["pid_after"]),
-            "kill_fails_only_its_request": (killed["outcome"] == "RuntimeError" and "SIGKILL" in killed["error"]
-                                            and killed["pid_after"] is None),
-            "fresh_child_after_kill": (recovered["outcome"] == "completed"
-                                       and recovered["pid_after"] not in (None, cold["pid_after"])),
+            "warm_reuses_child_and_prefix": (
+                warm["outcome"] == "completed"
+                and warm["pid_after"] == cold["pid_after"]
+                and provenance_of(warm).get("reused_prompt_prefix") is True
+                and provenance_of(warm).get("predictions_this_request") == 1
+            ),
+            "cancel_is_cooperative": (cancelled["outcome"] == "SegmentationCancelled" and cancelled["pid_after"] == cold["pid_after"]),
+            "kill_fails_only_its_request": (killed["outcome"] == "RuntimeError" and "SIGKILL" in killed["error"] and killed["pid_after"] is None),
+            "fresh_child_after_kill": (recovered["outcome"] == "completed" and recovered["pid_after"] not in (None, cold["pid_after"])),
             "release_stops_child": report["release"]["child_exited"],
             "harness_never_imported_torch": "torch" not in sys.modules,
             "sources_unchanged": hashes == [sha256(ct), sha256(baseline)],
@@ -497,6 +581,7 @@ def postprocess(args):
     try:
         from scan3d.config import Settings
         from scan3d.service import Service
+
         source = json.loads((args.segment / "report.json").read_text())
         if source["status"] != "passed" or source["source_ct_sha256"] != sha256(args.ct):
             raise ValueError("The completed segmentation and CT do not match")
@@ -509,10 +594,15 @@ def postprocess(args):
         for phase in ("cold", "warm"):
             revision = service.build_revision(case["id"], args.ct.resolve(), structures, "runtime_validation")
             service.store.commit_revision(revision)
-            report["builds"].append({"phase": phase, "timings": revision["processing_timings"],
-                                    "mesh_statistics": revision["mesh_statistics"],
-                                    "measurements": {s["id"]: {k: s[k] for k in ("voxel_count", "volume_ml")} for s in revision["structures"]},
-                                    "model_bytes": (Path(revision["directory"]) / "model.glb").stat().st_size})
+            report["builds"].append(
+                {
+                    "phase": phase,
+                    "timings": revision["processing_timings"],
+                    "mesh_statistics": revision["mesh_statistics"],
+                    "measurements": {s["id"]: {k: s[k] for k in ("voxel_count", "volume_ml")} for s in revision["structures"]},
+                    "model_bytes": (Path(revision["directory"]) / "model.glb").stat().st_size,
+                }
+            )
             write_json(output / "report.json", report)
         if report["builds"][0]["measurements"] != report["builds"][1]["measurements"]:
             raise RuntimeError("Cold/warm voxel measurements differ")
@@ -522,6 +612,7 @@ def postprocess(args):
             report["detailed"] = {"seconds": time.perf_counter() - started, "bytes": target.stat().st_size}
         if args.export_html:
             from scan3d.portable_export import ExportRequest, prepare_export
+
             started = time.perf_counter()
             plan = prepare_export(revision, case["id"], settings, ExportRequest())
             exported = output / "viewer.html"
@@ -530,8 +621,7 @@ def postprocess(args):
                     stream.write(chunk)
             if exported.stat().st_size != plan.byte_length:
                 raise RuntimeError("Portable HTML size differs from its export plan")
-            report["html_export"] = {"seconds": time.perf_counter() - started,
-                                     "bytes": exported.stat().st_size, "layers": ["segmentation"]}
+            report["html_export"] = {"seconds": time.perf_counter() - started, "bytes": exported.stat().st_size, "layers": ["segmentation"]}
         if hashes != {s["id"]: sha256(s["mask_file"]) for s in structures}:
             raise RuntimeError("Postprocessing changed a source mask")
         if source["source_ct_sha256"] != sha256(args.ct):

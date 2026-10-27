@@ -32,7 +32,7 @@ _DISPLAY_ASSET_IMPLEMENTATION = "quantized-glb-v3"
 # Display vertices snap to one absolute power-of-two grid in scene metres (about
 # 0.031 mm, 2 m per uint16 range). Shared by all structures, coincident boundaries
 # stay coincident, and requantizing decoded positions reproduces the same integers.
-_POSITION_STEP_M = 2.0 ** -15
+_POSITION_STEP_M = 2.0**-15
 _QUANTIZATION = "KHR_mesh_quantization"
 # uint16 indices, excluding the primitive restart value glTF reserves.
 _PRIMITIVE_VERTICES = 65535
@@ -46,6 +46,7 @@ class _Quantized(NamedTuple):
     Meshes beyond uint16 indices are consecutive primitives, ``parts`` holding
     (vertices, triangles) for each; only their seam vertices are repeated.
     """
+
     positions: np.ndarray  # (n, 3) uint16 grid offsets, parts concatenated
     normals: np.ndarray  # (n, 3) int8, normalized by 127
     faces: np.ndarray  # (m, 3) indices into the concatenated vertices
@@ -57,6 +58,7 @@ class _Quantized(NamedTuple):
 def _configure_smp():
     """Initialize VTK's available native parallel contour backend once."""
     from vtkmodules.vtkCommonCore import vtkSMPTools
+
     global _SMP_CONFIGURATION
     with _SMP_LOCK:
         if _SMP_CONFIGURATION is None:
@@ -72,8 +74,7 @@ def _configure_smp():
             # and report it explicitly rather than claiming GPU acceleration.
             vtkSMPTools.SetBackend("STDThread")
             vtkSMPTools.Initialize(threads)
-            _SMP_CONFIGURATION = {"backend": vtkSMPTools.GetBackend(),
-                                  "threads": vtkSMPTools.GetEstimatedNumberOfThreads()}
+            _SMP_CONFIGURATION = {"backend": vtkSMPTools.GetBackend(), "threads": vtkSMPTools.GetEstimatedNumberOfThreads()}
         return dict(_SMP_CONFIGURATION)
 
 
@@ -158,18 +159,39 @@ def _surface_identity(structure, detailed):
         raise ValueError("Structure colors must use #RRGGBB")
     digest = hash_file(Path(structure["mask_file"]))
     base_key = _key({"mask": digest, "implementation": _MESH_IMPLEMENTATION, "vtk": vtkVersion.GetVTKVersion()})
-    parameters = None if detailed else {"target": _DISPLAY_TREE_TRIANGLES if _delicate(structure) else _DISPLAY_ORGAN_TRIANGLES,
-                                       "local_error_mm": _DISPLAY_LOCAL_ERROR_MM, "preserve_topology": True}
+    parameters = (
+        None
+        if detailed
+        else {
+            "target": _DISPLAY_TREE_TRIANGLES if _delicate(structure) else _DISPLAY_ORGAN_TRIANGLES,
+            "local_error_mm": _DISPLAY_LOCAL_ERROR_MM,
+            "preserve_topology": True,
+        }
+    )
     implementation = _ASSET_IMPLEMENTATION if detailed else _DISPLAY_ASSET_IMPLEMENTATION
-    asset_key = _key({"base": base_key, "implementation": implementation, "detailed": bool(detailed),
-                      "parameters": parameters, "id": stable_id, "name": structure.get("name", stable_id), "color": color})
+    asset_key = _key(
+        {
+            "base": base_key,
+            "implementation": implementation,
+            "detailed": bool(detailed),
+            "parameters": parameters,
+            "id": stable_id,
+            "name": structure.get("name", stable_id),
+            "color": color,
+        }
+    )
     return base_key, asset_key
 
 
 def _display_simplification():
-    return {"algorithm": "vtkDecimatePro", "preserve_topology": True,
-            "local_error_mm": _DISPLAY_LOCAL_ERROR_MM, "organ_target_triangles": _DISPLAY_ORGAN_TRIANGLES,
-            "vascular_airway_target_triangles": _DISPLAY_TREE_TRIANGLES, "targets_are_soft": True}
+    return {
+        "algorithm": "vtkDecimatePro",
+        "preserve_topology": True,
+        "local_error_mm": _DISPLAY_LOCAL_ERROR_MM,
+        "organ_target_triangles": _DISPLAY_ORGAN_TRIANGLES,
+        "vascular_airway_target_triangles": _DISPLAY_TREE_TRIANGLES,
+        "targets_are_soft": True,
+    }
 
 
 def _contour(mask_path, decoded_mask=None):
@@ -208,11 +230,11 @@ def _contour(mask_path, decoded_mask=None):
     mesh.GetPoints().SetData(numpy_to_vtk(np.ascontiguousarray(points), deep=True))
     if np.linalg.det(affine[:3, :3]) < 0:
         from vtkmodules.vtkCommonDataModel import vtkCellArray
+
         faces = vtk_to_numpy(mesh.GetPolys().GetConnectivityArray()).reshape(-1, 3).copy()
         faces[:, [1, 2]] = faces[:, [2, 1]]
         cells = vtkCellArray()
-        cells.SetData(numpy_to_vtk(np.arange(0, faces.size + 1, 3, dtype=np.int64), deep=True),
-                      numpy_to_vtk(faces.reshape(-1), deep=True))
+        cells.SetData(numpy_to_vtk(np.arange(0, faces.size + 1, 3, dtype=np.int64), deep=True), numpy_to_vtk(faces.reshape(-1), deep=True))
         mesh.SetPolys(cells)
     return mesh
 
@@ -275,6 +297,7 @@ def _mesh(mask_path, detailed, delicate=False):
 
 def _save_base(mesh, path):
     from vtkmodules.util.numpy_support import vtk_to_numpy
+
     if mesh is None:
         points = np.empty((0, 3), dtype=np.float64)
         faces = np.empty((0, 3), dtype=np.int64)
@@ -293,6 +316,7 @@ def _load_base(path):
     from vtkmodules.util.numpy_support import numpy_to_vtk
     from vtkmodules.vtkCommonCore import vtkPoints
     from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData
+
     with np.load(path, allow_pickle=False) as saved:
         points = saved["points"]
         faces = saved["faces"]
@@ -307,8 +331,10 @@ def _load_base(path):
     vtk_points.SetData(numpy_to_vtk(np.ascontiguousarray(points, dtype=np.float64), deep=True))
     mesh.SetPoints(vtk_points)
     cells = vtkCellArray()
-    cells.SetData(numpy_to_vtk(np.arange(0, faces.size + 1, 3, dtype=np.int64), deep=True),
-                  numpy_to_vtk(np.ascontiguousarray(faces, dtype=np.int64).reshape(-1), deep=True))
+    cells.SetData(
+        numpy_to_vtk(np.arange(0, faces.size + 1, 3, dtype=np.int64), deep=True),
+        numpy_to_vtk(np.ascontiguousarray(faces, dtype=np.int64).reshape(-1), deep=True),
+    )
     mesh.SetPolys(cells)
     return mesh
 
@@ -331,8 +357,15 @@ def prepare_surface(structure, cache_dir: Path, detailed=False, progress=None, d
     timings["hash"] += time.perf_counter() - started
     delicate = _delicate(structure)
     asset_path = surface_asset_path(cache_dir, asset_key)
-    result = {"id": stable_id, "key": asset_key, "path": str(asset_path.resolve()), "triangles": 0,
-              "cache": cache, "timings_seconds": timings, "mesh_processing": _configure_smp()}
+    result = {
+        "id": stable_id,
+        "key": asset_key,
+        "path": str(asset_path.resolve()),
+        "triangles": 0,
+        "cache": cache,
+        "timings_seconds": timings,
+        "mesh_processing": _configure_smp(),
+    }
     with _cache_lock(cache_dir, asset_key):
         started = time.perf_counter()
         metadata = _valid_cache(asset_path)
@@ -407,7 +440,7 @@ def _split(faces, limit):
     while start < len(faces):
         # Vertices first referenced since `start`, counted at each triangle end.
         stop = min(len(faces), start + window)
-        fresh = np.cumsum(previous[3 * start:3 * stop] < 3 * start)[2::3]
+        fresh = np.cumsum(previous[3 * start : 3 * stop] < 3 * start)[2::3]
         end = start + int(np.searchsorted(fresh, limit, side="right"))
         if end == stop < len(faces):
             window *= 2
@@ -444,10 +477,14 @@ def _quantize(arrays, limit=_PRIMITIVE_VERTICES):
         return _Quantized(grid, encoded, faces, translation, scale, ((len(grid), len(faces)),))
     chunks = _split(faces, limit)
     offsets = np.cumsum([0] + [len(used) for used, _ in chunks[:-1]])
-    return _Quantized(np.concatenate([grid[used] for used, _ in chunks]),
-                      np.concatenate([encoded[used] for used, _ in chunks]),
-                      np.concatenate([local + offset for (_, local), offset in zip(chunks, offsets)]).astype("<u4"),
-                      translation, scale, tuple((len(used), len(local)) for used, local in chunks))
+    return _Quantized(
+        np.concatenate([grid[used] for used, _ in chunks]),
+        np.concatenate([encoded[used] for used, _ in chunks]),
+        np.concatenate([local + offset for (_, local), offset in zip(chunks, offsets)]).astype("<u4"),
+        translation,
+        scale,
+        tuple((len(used), len(local)) for used, local in chunks),
+    )
 
 
 def _float_arrays(arrays):
@@ -460,17 +497,22 @@ def _float_arrays(arrays):
 
 def _display_quantization(step):
     step_mm = step * 1000
-    return {"encoding": _QUANTIZATION, "position_step_mm": step_mm,
-            "position_error_bound_mm": step_mm * math.sqrt(3) / 2, "normals": "int8"}
+    return {"encoding": _QUANTIZATION, "position_step_mm": step_mm, "position_error_bound_mm": step_mm * math.sqrt(3) / 2, "normals": "int8"}
 
 
 def _write_model(structure_arrays, output_path: Path, detailed: bool = False) -> dict:
     """Write float32 detailed or quantized display GLBs; display meshes never measure."""
-    document = {"asset": {"version": "2.0", "generator": "3DScan physical mask surfaces"},
-                "scene": 0, "scenes": [{"nodes": []}], "nodes": [], "meshes": [],
-                "materials": [], "accessors": [], "bufferViews": [],
-                "extras": {"units": "metres", "coordinates": "scene=(-R,S,A)/1000",
-                           "detailed": detailed, "source": "segmentation masks"}}
+    document = {
+        "asset": {"version": "2.0", "generator": "3DScan physical mask surfaces"},
+        "scene": 0,
+        "scenes": [{"nodes": []}],
+        "nodes": [],
+        "meshes": [],
+        "materials": [],
+        "accessors": [],
+        "bufferViews": [],
+        "extras": {"units": "metres", "coordinates": "scene=(-R,S,A)/1000", "detailed": detailed, "source": "segmentation masks"},
+    }
     binary = bytearray()
     triangle_count = 0
     counts = {}
@@ -480,8 +522,7 @@ def _write_model(structure_arrays, output_path: Path, detailed: bool = False) ->
         while len(binary) % 4:
             binary.append(0)
         view = len(document["bufferViews"])
-        document["bufferViews"].append({"buffer": 0, "byteOffset": len(binary),
-                                        "byteLength": array.nbytes, "target": target})
+        document["bufferViews"].append({"buffer": 0, "byteOffset": len(binary), "byteLength": array.nbytes, "target": target})
         values = array
         if kind == "VEC3" and array.shape[1] == 4:
             # glTF aligns each vertex element to 4 bytes; the fourth column pads.
@@ -517,43 +558,57 @@ def _write_model(structure_arrays, output_path: Path, detailed: bool = False) ->
         color = str(structure.get("color", "#b7c4d0"))
         if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
             raise ValueError("Structure colors must use #RRGGBB")
-        srgb = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        srgb = [int(color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
         # glTF material factors use linear light; app/legend hex colors use sRGB.
-        rgb = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
-               for channel in srgb]
+        rgb = [channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4 for channel in srgb]
         material = len(document["materials"])
-        document["materials"].append({"name": stable_id, "pbrMetallicRoughness": {
-            "baseColorFactor": rgb + [1.0], "metallicFactor": 0.0, "roughnessFactor": 0.7},
-            "doubleSided": False})
+        document["materials"].append(
+            {"name": stable_id, "pbrMetallicRoughness": {"baseColorFactor": rgb + [1.0], "metallicFactor": 0.0, "roughnessFactor": 0.7}, "doubleSided": False}
+        )
         transform = {}
         primitives = []
         if detailed:
             if isinstance(arrays, _Quantized):
                 raise ValueError("Detailed models require float geometry")
             positions, normals, _ = arrays
-            primitives.append((accessor(positions, "VEC3", 5126, 34962, bounds=True), accessor(normals, "VEC3", 5126, 34962),
-                               accessor(faces.astype("<u4").reshape(-1), "SCALAR", 5125, 34963)))
+            primitives.append(
+                (
+                    accessor(positions, "VEC3", 5126, 34962, bounds=True),
+                    accessor(normals, "VEC3", 5126, 34962),
+                    accessor(faces.astype("<u4").reshape(-1), "SCALAR", 5125, 34963),
+                )
+            )
         else:
             # Cached quantized assets pass through bit-exactly into model.glb.
             quantized = _quantize(arrays)
             vertex = triangle = 0
             for vertices, triangles in quantized.parts:
-                local = quantized.faces[triangle:triangle + triangles] - vertex
-                primitives.append((
-                    accessor(padded(quantized.positions[vertex:vertex + vertices], "<u2"), "VEC3", 5123, 34962, bounds=True),
-                    accessor(padded(quantized.normals[vertex:vertex + vertices], "i1"), "VEC3", 5120, 34962, normalized=True),
-                    accessor(local.astype("<u2").reshape(-1), "SCALAR", 5123, 34963)))
+                local = quantized.faces[triangle : triangle + triangles] - vertex
+                primitives.append(
+                    (
+                        accessor(padded(quantized.positions[vertex : vertex + vertices], "<u2"), "VEC3", 5123, 34962, bounds=True),
+                        accessor(padded(quantized.normals[vertex : vertex + vertices], "i1"), "VEC3", 5120, 34962, normalized=True),
+                        accessor(local.astype("<u2").reshape(-1), "SCALAR", 5123, 34963),
+                    )
+                )
                 vertex += vertices
                 triangle += triangles
             transform = {"translation": list(quantized.translation), "scale": [quantized.scale] * 3}
             steps.append(quantized.scale)
         mesh_index = len(document["meshes"])
-        document["meshes"].append({"name": stable_id, "primitives": [{"attributes": {
-            "POSITION": position_accessor, "NORMAL": normal_accessor}, "indices": index_accessor,
-            "material": material, "mode": 4} for position_accessor, normal_accessor, index_accessor in primitives]})
+        document["meshes"].append(
+            {
+                "name": stable_id,
+                "primitives": [
+                    {"attributes": {"POSITION": position_accessor, "NORMAL": normal_accessor}, "indices": index_accessor, "material": material, "mode": 4}
+                    for position_accessor, normal_accessor, index_accessor in primitives
+                ],
+            }
+        )
         node_index = len(document["nodes"])
-        document["nodes"].append({"name": stable_id, "mesh": mesh_index, **transform, "extras": {
-            "structure_id": stable_id, "display_name": structure.get("name", stable_id)}})
+        document["nodes"].append(
+            {"name": stable_id, "mesh": mesh_index, **transform, "extras": {"structure_id": stable_id, "display_name": structure.get("name", stable_id)}}
+        )
         document["scenes"][0]["nodes"].append(node_index)
         triangle_count += len(faces)
         counts[stable_id] = len(faces)
@@ -575,9 +630,13 @@ def _write_model(structure_arrays, output_path: Path, detailed: bool = False) ->
             handle.write(encoded)
             handle.write(struct.pack("<II", len(binary), 0x004E4942))
             handle.write(binary)
-    return {"triangles": triangle_count, "structures": len(counts), "triangle_counts": counts,
-            "display_simplification": None if detailed else _display_simplification(),
-            "display_quantization": None if detailed else _display_quantization(max(steps))}
+    return {
+        "triangles": triangle_count,
+        "structures": len(counts),
+        "triangle_counts": counts,
+        "display_simplification": None if detailed else _display_simplification(),
+        "display_quantization": None if detailed else _display_quantization(max(steps)),
+    }
 
 
 def _read_glb(path):
@@ -590,9 +649,9 @@ def _read_glb(path):
         raise ValueError("Invalid surface GLB")
     if json_length % 4 or json_length > len(data) - 28:
         raise ValueError("Invalid surface JSON chunk")
-    document = json.loads(data[20:20 + json_length])
+    document = json.loads(data[20 : 20 + json_length])
     bin_length, bin_kind = struct.unpack_from("<II", data, 20 + json_length)
-    binary = memoryview(data)[28 + json_length:]
+    binary = memoryview(data)[28 + json_length :]
     if bin_kind != 0x004E4942 or len(binary) != bin_length:
         raise ValueError("Invalid surface buffer")
     if document.get("buffers") != [{"byteLength": len(binary)}]:
@@ -616,8 +675,7 @@ def _primitive_arrays(document, binary, primitive, node):
 
     def array(index, dtype, columns, component, kind, stride=None, normalized=False):
         item = accessor(index)
-        if (item.get("componentType") != component or item.get("type") != kind or "sparse" in item
-                or item.get("normalized", False) is not normalized):
+        if item.get("componentType") != component or item.get("type") != kind or "sparse" in item or item.get("normalized", False) is not normalized:
             raise ValueError("Invalid surface array format")
         view_index = item.get("bufferView")
         if not isinstance(view_index, int) or view_index < 0 or view_index >= len(document["bufferViews"]):
@@ -628,10 +686,20 @@ def _primitive_arrays(document, binary, primitive, node):
         length = view.get("byteLength")
         itemsize = np.dtype(dtype).itemsize
         width = (stride or columns * itemsize) // itemsize
-        if (view.get("buffer") != 0 or view.get("byteStride") != stride or item.get("byteOffset", 0) != 0
-                or not isinstance(count, int) or count <= 0 or not isinstance(offset, int) or offset < 0
-                or not isinstance(length, int) or length < 0 or offset % 4
-                or count * width * itemsize != length or offset + length > len(binary)):
+        if (
+            view.get("buffer") != 0
+            or view.get("byteStride") != stride
+            or item.get("byteOffset", 0) != 0
+            or not isinstance(count, int)
+            or count <= 0
+            or not isinstance(offset, int)
+            or offset < 0
+            or not isinstance(length, int)
+            or length < 0
+            or offset % 4
+            or count * width * itemsize != length
+            or offset + length > len(binary)
+        ):
             raise ValueError("Invalid surface array bounds")
         return np.frombuffer(binary, dtype=dtype, count=count * width, offset=offset).reshape(count, width)[:, :columns]
 
@@ -642,27 +710,40 @@ def _primitive_arrays(document, binary, primitive, node):
         positions = array(attributes["POSITION"], "<f4", 3, 5126, "VEC3")
         normals = array(attributes["NORMAL"], "<f4", 3, 5126, "VEC3")
         faces = array(primitive["indices"], "<u4", 1, 5125, "SCALAR")
-        if (len(positions) != len(normals) or len(faces) % 3 or not np.isfinite(positions).all()
-                or not np.isfinite(normals).all() or faces.max() >= len(positions)):
+        if (
+            len(positions) != len(normals)
+            or len(faces) % 3
+            or not np.isfinite(positions).all()
+            or not np.isfinite(normals).all()
+            or faces.max() >= len(positions)
+        ):
             raise ValueError("Invalid surface geometry")
         return positions, normals, faces.reshape(-1, 3)
 
     def vector(values):
-        return (isinstance(values, list) and len(values) == 3 and all(
-            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) for value in values))
+        return (
+            isinstance(values, list)
+            and len(values) == 3
+            and all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) for value in values)
+        )
 
     translation, scale = node.get("translation"), node.get("scale")
-    if (_QUANTIZATION not in document.get("extensionsRequired", []) or "matrix" in node or "rotation" in node
-            or not vector(translation) or not vector(scale) or len(set(scale)) != 1 or scale[0] <= 0):
+    if (
+        _QUANTIZATION not in document.get("extensionsRequired", [])
+        or "matrix" in node
+        or "rotation" in node
+        or not vector(translation)
+        or not vector(scale)
+        or len(set(scale)) != 1
+        or scale[0] <= 0
+    ):
         raise ValueError("Quantized surfaces require a uniform dequantization transform")
     positions = array(attributes["POSITION"], "<u2", 3, 5123, "VEC3", stride=8)
     normals = array(attributes["NORMAL"], "i1", 3, 5120, "VEC3", stride=4, normalized=True)
     faces = array(primitive["indices"], "<u2", 1, 5123, "SCALAR")
-    if (len(positions) != len(normals) or len(positions) > _PRIMITIVE_VERTICES or len(faces) % 3
-            or faces.max() >= len(positions)):
+    if len(positions) != len(normals) or len(positions) > _PRIMITIVE_VERTICES or len(faces) % 3 or faces.max() >= len(positions):
         raise ValueError("Invalid surface geometry")
-    return _Quantized(positions, normals, faces.reshape(-1, 3), tuple(map(float, translation)), float(scale[0]),
-                      ((len(positions), len(faces) // 3),))
+    return _Quantized(positions, normals, faces.reshape(-1, 3), tuple(map(float, translation)), float(scale[0]), ((len(positions), len(faces) // 3),))
 
 
 def _surface_arrays(document, binary, mesh, node):
@@ -673,10 +754,14 @@ def _surface_arrays(document, binary, mesh, node):
     if not decoded or not all(isinstance(part, _Quantized) for part in decoded):
         raise ValueError("Surface must have one float primitive or quantized parts")
     offsets = np.cumsum([0] + [len(part.positions) for part in decoded[:-1]])
-    return _Quantized(np.concatenate([part.positions for part in decoded]),
-                      np.concatenate([part.normals for part in decoded]),
-                      np.concatenate([part.faces.astype("<u4") + offset for part, offset in zip(decoded, offsets)]),
-                      decoded[0].translation, decoded[0].scale, tuple(part.parts[0] for part in decoded))
+    return _Quantized(
+        np.concatenate([part.positions for part in decoded]),
+        np.concatenate([part.normals for part in decoded]),
+        np.concatenate([part.faces.astype("<u4") + offset for part, offset in zip(decoded, offsets)]),
+        decoded[0].translation,
+        decoded[0].scale,
+        tuple(part.parts[0] for part in decoded),
+    )
 
 
 def _asset_arrays(path):
@@ -685,8 +770,7 @@ def _asset_arrays(path):
     return _surface_arrays(document, binary, document["meshes"][0], document["nodes"][0])
 
 
-def import_display_assets(structures, model_path: Path, cache_dir: Path,
-                          expected_simplification: dict, progress=None) -> dict:
+def import_display_assets(structures, model_path: Path, cache_dir: Path, expected_simplification: dict, progress=None) -> dict:
     """Split a trusted existing revision's app GLB without remeshing its masks.
 
     The caller must supply that revision's original structures and recorded
@@ -710,25 +794,33 @@ def import_display_assets(structures, model_path: Path, cache_dir: Path,
         # Legacy display models declare no extensions; current ones only quantization.
         extensions = document.get("extensionsUsed")
         quantized = extensions == [_QUANTIZATION]
-        if (document.get("asset") != {"version": "2.0", "generator": "3DScan physical mask surfaces"}
-                or document.get("extras") != {"units": "metres", "coordinates": "scene=(-R,S,A)/1000",
-                                              "detailed": False, "source": "segmentation masks"}
-                or document.get("scene") != 0
-                or document.get("scenes") != [{"nodes": list(range(len(structures)))}]
-                or len(document.get("nodes", [])) != len(structures)
-                or len(document.get("meshes", [])) != len(structures)
-                or (extensions is not None and not quantized) or document.get("extensionsRequired") != extensions
-                or any(key in document for key in ("extensions", "animations", "skins"))):
+        if (
+            document.get("asset") != {"version": "2.0", "generator": "3DScan physical mask surfaces"}
+            or document.get("extras") != {"units": "metres", "coordinates": "scene=(-R,S,A)/1000", "detailed": False, "source": "segmentation masks"}
+            or document.get("scene") != 0
+            or document.get("scenes") != [{"nodes": list(range(len(structures)))}]
+            or len(document.get("nodes", [])) != len(structures)
+            or len(document.get("meshes", [])) != len(structures)
+            or (extensions is not None and not quantized)
+            or document.get("extensionsRequired") != extensions
+            or any(key in document for key in ("extensions", "animations", "skins"))
+        ):
             raise ValueError("Existing model is not an unmodified 3DScan display model")
         validated = {}
         used_meshes = set()
         for node in document["nodes"]:
             stable_id = node.get("name")
             mesh_index = node.get("mesh")
-            if (set(node) - {"translation", "scale"} != {"name", "mesh", "extras"} or stable_id not in by_id
-                    or stable_id in validated or node.get("extras", {}).get("structure_id") != stable_id
-                    or not isinstance(mesh_index, int) or mesh_index < 0 or mesh_index >= len(structures)
-                    or mesh_index in used_meshes):
+            if (
+                set(node) - {"translation", "scale"} != {"name", "mesh", "extras"}
+                or stable_id not in by_id
+                or stable_id in validated
+                or node.get("extras", {}).get("structure_id") != stable_id
+                or not isinstance(mesh_index, int)
+                or mesh_index < 0
+                or mesh_index >= len(structures)
+                or mesh_index in used_meshes
+            ):
                 raise ValueError("Existing model structure identities do not match revision")
             used_meshes.add(mesh_index)
             mesh = document["meshes"][mesh_index]
@@ -739,9 +831,13 @@ def import_display_assets(structures, model_path: Path, cache_dir: Path,
                 raise ValueError("Existing model mixes surface encodings")
             for primitive in mesh["primitives"]:
                 material_index = primitive.get("material")
-                if (not isinstance(material_index, int) or material_index < 0 or material_index >= len(document["materials"])
-                        or document["materials"][material_index].get("name") != stable_id
-                        or document["materials"][material_index].get("doubleSided") is not False):
+                if (
+                    not isinstance(material_index, int)
+                    or material_index < 0
+                    or material_index >= len(document["materials"])
+                    or document["materials"][material_index].get("name") != stable_id
+                    or document["materials"][material_index].get("doubleSided") is not False
+                ):
                     raise ValueError("Existing surface material identity is invalid")
             validated[stable_id] = arrays
     except (KeyError, IndexError, TypeError, AttributeError, struct.error) as error:
@@ -770,13 +866,11 @@ def import_display_assets(structures, model_path: Path, cache_dir: Path,
                 _write_model([(structure, arrays)], asset_path, detailed=False)
                 _record_cache(asset_path, triangles=triangles)
                 timings["package"] += time.perf_counter() - started
-        assets.append({"id": str(structure["id"]), "key": asset_key,
-                       "path": str(asset_path.resolve()), "triangles": triangles})
+        assets.append({"id": str(structure["id"]), "key": asset_key, "path": str(asset_path.resolve()), "triangles": triangles})
     return {"surface_assets": assets, "cache": cache, "timings_seconds": timings}
 
 
-def build_model(structures, output_path: Path, detailed: bool = False, progress=None,
-                cache_dir: Path | None = None) -> dict:
+def build_model(structures, output_path: Path, detailed: bool = False, progress=None, cache_dir: Path | None = None) -> dict:
     """Build the portable combined model and immutable per-structure assets.
 
     Supplying cache_dir lets different revisions reuse unchanged structures and
@@ -817,10 +911,13 @@ def build_model(structures, output_path: Path, detailed: bool = False, progress=
         report = _write_model(prepared(), output_path, detailed)
         timings["package"] += time.perf_counter() - started
     else:
+
         def generated():
             for index, structure in enumerate(structures):
                 if progress:
-                    progress(f"Generating {'detailed' if detailed else 'display'} meshes: {index + 1}/{len(structures)} ({structure.get('name', structure['id'])})")
+                    progress(
+                        f"Generating {'detailed' if detailed else 'display'} meshes: {index + 1}/{len(structures)} ({structure.get('name', structure['id'])})"
+                    )
                 started = time.perf_counter()
                 mesh = _contour(Path(structure["mask_file"]))
                 timings["contour"] += time.perf_counter() - started

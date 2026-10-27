@@ -24,8 +24,7 @@ class SegmentationCancelled(InterruptedError):
     pass
 
 
-_LOBES = ("lung_lower_lobe_left", "lung_lower_lobe_right", "lung_middle_lobe_right",
-          "lung_upper_lobe_left", "lung_upper_lobe_right")
+_LOBES = ("lung_lower_lobe_left", "lung_lower_lobe_right", "lung_middle_lobe_right", "lung_upper_lobe_left", "lung_upper_lobe_right")
 _LUNG = {"lung_arteries", "lung_veins", "lung_airways", "lung_airways_wall"}
 
 
@@ -39,7 +38,14 @@ def _appearance(name, task=None):
     if name.startswith("lung_") and (task in (None, "total", "total_v3", "total_mr", "lung_vessels") or name in _LOBES):
         colors = ["#dca6d0", "#ad9ed8", "#e7ad8f", "#b5d59a", "#8fc3d7"]
         return "Lung lobes", colors[_LOBES.index(name)] if name in _LOBES else "#91cbd9"
-    if name.startswith(("rib_", "vertebrae_", "clavicula", "scapula", "hip_", "humerus_", "femur_")) or name in {"skull", "sacrum", "sternum", "costal_cartilages", "vertebrae", "intervertebral_discs"}:
+    if name.startswith(("rib_", "vertebrae_", "clavicula", "scapula", "hip_", "humerus_", "femur_")) or name in {
+        "skull",
+        "sacrum",
+        "sternum",
+        "costal_cartilages",
+        "vertebrae",
+        "intervertebral_discs",
+    }:
         return "Bones", "#d8cdb1"
     if name in {"heart", "atrial_appendage_left", "spinal_cord", "esophagus", "thyroid_gland"}:
         return "Chest organs", "#ce94a7"
@@ -50,19 +56,39 @@ def _appearance(name, task=None):
     if name.startswith(("gluteus_", "autochthon_", "iliopsoas_")):
         return "Muscles", colors[index]
     if task not in (None, "total", "total_v3", "total_mr"):
-        groups = {"body": "Body", "body_mr": "Body", "tissue_types_mr": "Tissues",
-                  "appendicular_bones_mr": "Bones", "vertebrae_mr": "Bones", "face_mr": "Head organs",
-                  "thigh_shoulder_muscles_mr": "Muscles", "brain_aneurysm": "Brain findings",
-                  "heartchambers_highres": "Heart", "brain_structures": "Brain structures",
-                  "cerebral_bleed": "Brain findings", "ventricle_parts": "Brain structures",
-                  "head_glands_cavities": "Head organs", "head_muscles": "Muscles",
-                  "headneck_muscles": "Muscles", "oculomotor_muscles": "Muscles",
-                  "abdominal_muscles": "Muscles", "thigh_shoulder_muscles": "Muscles",
-                  "headneck_bones_vessels": "Head and neck", "craniofacial_structures": "Head and neck",
-                  "teeth": "Teeth", "tissue_types": "Tissues", "tissue_4_types": "Tissues",
-                  "lung_nodules": "Lung findings", "pleural_pericard_effusion": "Chest findings",
-                  "appendicular_bones": "Bones", "vertebrae_body": "Bones", "vertebrae_pp": "Bones",
-                  "vertebrae_pp_refined": "Bones", "hip_implant": "Implants", "face": "Head organs"}
+        groups = {
+            "body": "Body",
+            "body_mr": "Body",
+            "tissue_types_mr": "Tissues",
+            "appendicular_bones_mr": "Bones",
+            "vertebrae_mr": "Bones",
+            "face_mr": "Head organs",
+            "thigh_shoulder_muscles_mr": "Muscles",
+            "brain_aneurysm": "Brain findings",
+            "heartchambers_highres": "Heart",
+            "brain_structures": "Brain structures",
+            "cerebral_bleed": "Brain findings",
+            "ventricle_parts": "Brain structures",
+            "head_glands_cavities": "Head organs",
+            "head_muscles": "Muscles",
+            "headneck_muscles": "Muscles",
+            "oculomotor_muscles": "Muscles",
+            "abdominal_muscles": "Muscles",
+            "thigh_shoulder_muscles": "Muscles",
+            "headneck_bones_vessels": "Head and neck",
+            "craniofacial_structures": "Head and neck",
+            "teeth": "Teeth",
+            "tissue_types": "Tissues",
+            "tissue_4_types": "Tissues",
+            "lung_nodules": "Lung findings",
+            "pleural_pericard_effusion": "Chest findings",
+            "appendicular_bones": "Bones",
+            "vertebrae_body": "Bones",
+            "vertebrae_pp": "Bones",
+            "vertebrae_pp_refined": "Bones",
+            "hip_implant": "Implants",
+            "face": "Head organs",
+        }
         return groups.get(task, task.replace("_", " ").capitalize()), colors[index]
     return "Abdominal organs", colors[index]
 
@@ -79,16 +105,21 @@ def _device_info(device):
     if ":" in device:
         index = int(device[4:])
     else:
-        candidates = [i for i in range(torch.cuda.device_count())
-                      if "R9700" in torch.cuda.get_device_name(i).upper()]
+        candidates = [i for i in range(torch.cuda.device_count()) if "R9700" in torch.cuda.get_device_name(i).upper()]
         if not candidates:
             raise RuntimeError("Default R9700 GPU was not enumerated; verify ROCm or explicitly configure SCAN3D_DEVICE=gpu:N")
         index = candidates[0]
     if index >= torch.cuda.device_count():
         raise ValueError("Requested GPU index is unavailable")
-    return {"device": device, "selected_device": f"gpu:{index}", "torch": torch.__version__, "gpu_index": index,
-            "gpu_name": torch.cuda.get_device_name(index), "hip": torch.version.hip,
-            "cuda": torch.version.cuda}
+    return {
+        "device": device,
+        "selected_device": f"gpu:{index}",
+        "torch": torch.__version__,
+        "gpu_index": index,
+        "gpu_name": torch.cuda.get_device_name(index),
+        "hip": torch.version.hip,
+        "cuda": torch.version.cuda,
+    }
 
 
 def _digest(path):
@@ -119,8 +150,7 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
         if config.get("crop") or config.get("cascade"):
             if config.get("crop_model") is not None:
                 # Upstream recursively invokes that task with its own defaults.
-                collect(config["crop_model"], label=label + ":crop_model",
-                        ancestors=(*ancestors, task))
+                collect(config["crop_model"], label=label + ":crop_model", ancestors=(*ancestors, task))
             elif any(name in {"body_trunc", "body_extremities"} for name in (config.get("crop") or [])):
                 configurations.append((label + ":crop", resolved_task_config("body", mode="fast")))
             elif task.endswith("_mr"):
@@ -163,18 +193,23 @@ def model_fingerprint(profile: str, options: dict | None = None, *, modality: st
     for task, config in configurations:
         ids = config["task_id"] if isinstance(config["task_id"], list) else [config["task_id"]]
         for dataset_id in ids:
-            descriptor = {"task": task, "dataset_id": dataset_id, "trainer": config["trainer"],
-                          "configuration": config["model"], "plans": config["plans"],
-                          "folds": config["folds"], "resample_mm": config.get("resample"), "files": []}
-            datasets = [p for p in base.glob(f"Dataset{dataset_id:03d}*")
-                        if p.is_dir() and p.name.split("_", 1)[0] == f"Dataset{dataset_id:03d}"]
+            descriptor = {
+                "task": task,
+                "dataset_id": dataset_id,
+                "trainer": config["trainer"],
+                "configuration": config["model"],
+                "plans": config["plans"],
+                "folds": config["folds"],
+                "resample_mm": config.get("resample"),
+                "files": [],
+            }
+            datasets = [p for p in base.glob(f"Dataset{dataset_id:03d}*") if p.is_dir() and p.name.split("_", 1)[0] == f"Dataset{dataset_id:03d}"]
             if len(datasets) == 1:
                 folder = datasets[0] / f"{config['trainer']}__{config['plans']}__{config['model']}"
                 folds = config["folds"]
                 if folds is None:
                     # nnU-Net auto-detects numeric fold directories when unset.
-                    folds = sorted(int(p.name[5:]) for p in folder.glob("fold_*")
-                                   if p.is_dir() and p.name[5:].isdigit())
+                    folds = sorted(int(p.name[5:]) for p in folder.glob("fold_*") if p.is_dir() and p.name[5:].isdigit())
                     descriptor["folds"] = folds
                 required = [folder / "plans.json", folder / "dataset.json"]
                 required += [folder / f"fold_{fold}" / "checkpoint_final.pth" for fold in folds]
@@ -182,20 +217,33 @@ def model_fingerprint(profile: str, options: dict | None = None, *, modality: st
                     if not path.is_file():
                         continue
                     stat = path.stat()
-                    descriptor["files"].append({"name": path.relative_to(base).as_posix(), "bytes": stat.st_size,
-                                                "sha256": _checkpoint_digest(str(path.resolve()), stat.st_size,
-                                                                             stat.st_mtime_ns, stat.st_ctime_ns)})
+                    descriptor["files"].append(
+                        {
+                            "name": path.relative_to(base).as_posix(),
+                            "bytes": stat.st_size,
+                            "sha256": _checkpoint_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns),
+                        }
+                    )
                 descriptor["complete"] = bool(folds) and len(descriptor["files"]) == len(required)
             else:
                 descriptor["complete"] = False
             models.append(descriptor)
     config_digest = hashlib.sha256(json.dumps(configurations, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    result = {"schema_version": 2, "versions": versions, "profile": profile, "modality": modality, "options": options,
-              "task_configuration_sha256": config_digest,
-              "device_request": os.environ.get("SCAN3D_DEVICE", "gpu"), "fast": False, "fastest": False,
-              "wrapper_sha256": _digest(Path(__file__)),
-              "options_adapter_sha256": _digest(Path(segmentation_options.__file__)), "models": models,
-              "weights_complete": bool(models) and all(model["complete"] for model in models)}
+    result = {
+        "schema_version": 2,
+        "versions": versions,
+        "profile": profile,
+        "modality": modality,
+        "options": options,
+        "task_configuration_sha256": config_digest,
+        "device_request": os.environ.get("SCAN3D_DEVICE", "gpu"),
+        "fast": False,
+        "fastest": False,
+        "wrapper_sha256": _digest(Path(__file__)),
+        "options_adapter_sha256": _digest(Path(segmentation_options.__file__)),
+        "models": models,
+        "weights_complete": bool(models) and all(model["complete"] for model in models),
+    }
     result["digest"] = hashlib.sha256(json.dumps(result, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return result
 
@@ -262,17 +310,19 @@ class _Resources:
                 pass
 
     def result(self):
-        return {"sample_interval_seconds": 0.2, "worker_tree_rss_peak_bytes": self.rss_peak,
-                "rss_scope": "Sampled sum of child process-tree RSS; shared pages may be counted more than once; excludes API parent",
-                "gpu_pci_device": self.pci_device, "whole_device_vram_baseline_bytes": self.vram_baseline,
-                "whole_device_vram_peak_bytes": self.vram_peak,
-                "whole_device_vram_peak_above_baseline_bytes": (self.vram_peak - self.vram_baseline
-                                                               if self.vram_peak is not None else None),
-                "vram_scope": "Sampled whole R9700 device use via AMD sysfs; includes graphics and other processes; not per-process allocation"}
+        return {
+            "sample_interval_seconds": 0.2,
+            "worker_tree_rss_peak_bytes": self.rss_peak,
+            "rss_scope": "Sampled sum of child process-tree RSS; shared pages may be counted more than once; excludes API parent",
+            "gpu_pci_device": self.pci_device,
+            "whole_device_vram_baseline_bytes": self.vram_baseline,
+            "whole_device_vram_peak_bytes": self.vram_peak,
+            "whole_device_vram_peak_above_baseline_bytes": (self.vram_peak - self.vram_baseline if self.vram_peak is not None else None),
+            "vram_scope": "Sampled whole R9700 device use via AMD sysfs; includes graphics and other processes; not per-process allocation",
+        }
 
 
-def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
-            options: dict | None = None, *, modality: str = "CT") -> list[dict]:
+def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, options: dict | None = None, *, modality: str = "CT") -> list[dict]:
     legacy_options = options is None
     options = normalize_options(profile, options, modality=modality)
     ct_path = Path(ct_path).resolve()
@@ -287,12 +337,24 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
     tasks = options["tasks"]
     run_dir = output_dir / ("run-" + uuid.uuid4().hex)
     run_dir.mkdir()
-    manifest = {"schema_version": 1, "engine": "TotalSegmentator",
-                "engine_version": metadata.version("TotalSegmentator"), "resolution": "standard_full",
-                "profile": profile, "modality": modality, "options": options, "output_selection": "all_nonempty_task_outputs",
-                "input_sha256": _digest(ct_path), "runtime": runtime,
-                "started_at": datetime.now(timezone.utc).isoformat(), "status": "running",
-                "run_id": run_dir.name, "tasks": [], "empty_labels": [], "qc": []}
+    manifest = {
+        "schema_version": 1,
+        "engine": "TotalSegmentator",
+        "engine_version": metadata.version("TotalSegmentator"),
+        "resolution": "standard_full",
+        "profile": profile,
+        "modality": modality,
+        "options": options,
+        "output_selection": "all_nonempty_task_outputs",
+        "input_sha256": _digest(ct_path),
+        "runtime": runtime,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "running",
+        "run_id": run_dir.name,
+        "tasks": [],
+        "empty_labels": [],
+        "qc": [],
+    }
     manifest_path = output_dir / "inference.json"
 
     def save_manifest():
@@ -317,20 +379,40 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
             # Buffered output can be inherited and replayed when those children
             # restore the original stream. Unbuffered output also makes tail -F
             # report each stage promptly instead of delaying it until exit.
-            command = [sys.executable, "-u", "-m", "totalsegmentator.bin.TotalSegmentator",
-                       "-i", str(ct_path), "-o", str(task_dir), "--task", task, "--device", effective_device,
-                       "--report", str(run_dir / f"{task}-report.json")]
+            command = [
+                sys.executable,
+                "-u",
+                "-m",
+                "totalsegmentator.bin.TotalSegmentator",
+                "-i",
+                str(ct_path),
+                "-o",
+                str(task_dir),
+                "--task",
+                task,
+                "--device",
+                effective_device,
+                "--report",
+                str(run_dir / f"{task}-report.json"),
+            ]
             for option in ("robust_crop", "body_seg", "remove_small_blobs"):
                 if options[option]:
                     command.append("--" + option)
             capabilities = task_capabilities(task)
-            effective = {"robust_crop": options["robust_crop"] and capabilities["robust_crop_supported"],
-                         "body_seg": options["body_seg"], "remove_small_blobs": options["remove_small_blobs"],
-                         "remove_small_blobs_mm3": (segmentation_options.REMOVE_SMALL_BLOBS_MM3
-                                                    if options["remove_small_blobs"] else None)}
-            record = {"task": task, "device": effective_device, "fast": False, "status": "running",
-                      "options": {key: value for key, value in options.items() if key != "tasks"},
-                      "effective_options": effective}
+            effective = {
+                "robust_crop": options["robust_crop"] and capabilities["robust_crop_supported"],
+                "body_seg": options["body_seg"],
+                "remove_small_blobs": options["remove_small_blobs"],
+                "remove_small_blobs_mm3": (segmentation_options.REMOVE_SMALL_BLOBS_MM3 if options["remove_small_blobs"] else None),
+            }
+            record = {
+                "task": task,
+                "device": effective_device,
+                "fast": False,
+                "status": "running",
+                "options": {key: value for key, value in options.items() if key != "tasks"},
+                "effective_options": effective,
+            }
             if options["robust_crop"] and not capabilities["robust_crop_supported"]:
                 record["option_notes"] = ["Robust crop is only used by tasks with a standard organ crop model."]
             if modality == "MR" and capabilities["uses_organ_crop"]:
@@ -376,7 +458,9 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
             if set(native.get("classes", {}).values()) - set(masks):
                 raise RuntimeError(f"TotalSegmentator {task} did not save every declared class mask")
             if task == "lung_vessels" and not _LUNG.issubset(masks):
-                raise RuntimeError("This lung_vessels model does not provide the required split artery/vein/airway outputs; verify the pinned TotalSegmentator version")
+                raise RuntimeError(
+                    "This lung_vessels model does not provide the required split artery/vein/airway outputs; verify the pinned TotalSegmentator version"
+                )
             record["labels"] = sorted(masks)
             record["status"] = "completed"
             progress(f"Checking {task} mask geometry and labels")
@@ -391,16 +475,18 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled,
                     manifest["qc"].append(f"Empty label omitted: {stable_id}; inspect scan coverage")
                     continue
                 group, color = _appearance(name, task)
-                structures.append({"id": f"{task}:{name}", "name": name.replace("_", " ").capitalize(),
-                                   "task": task, "group": group, "color": color, "mask_file": str(path)})
+                structures.append(
+                    {"id": f"{task}:{name}", "name": name.replace("_", " ").capitalize(), "task": task, "group": group, "color": color, "mask_file": str(path)}
+                )
             record["mask_validation_seconds"] = round(time.monotonic() - validation_started, 3)
             save_manifest()
         if not structures:
             raise RuntimeError("No nonempty structures were found in the requested task outputs")
         progress("Recording model checkpoint checksums")
         source_options = {"modality": modality} if modality != "CT" else {}
-        manifest["model_fingerprint"] = (model_fingerprint(profile, **source_options) if legacy_options
-                                         else model_fingerprint(profile, options, **source_options))
+        manifest["model_fingerprint"] = (
+            model_fingerprint(profile, **source_options) if legacy_options else model_fingerprint(profile, options, **source_options)
+        )
         if not manifest["model_fingerprint"]["weights_complete"]:
             raise RuntimeError("Inference completed but its exact model checkpoints could not be identified; results were not published")
         manifest["status"] = "completed"

@@ -13,28 +13,40 @@ from scan3d import segmentation
 from scan3d.segmentation_options import normalize_options, segmentation_catalog
 
 
-@pytest.mark.parametrize("name,task,group", [
-    ("eye_left", "head_glands_cavities", "Head organs"),
-    ("heart_myocardium", "heartchambers_highres", "Heart"),
-    ("body_trunc", "body", "Body"),
-    ("torso_fat", "tissue_types", "Tissues"),
-    ("lung_nodules", "lung_nodules", "Lung findings"),
-    ("lung_pleural", "pleural_pericard_effusion", "Chest findings"),
-    ("aorta", "heartchambers_highres", "Arteries"),
-    ("lung_veins", "lung_vessels", "Veins"),
-    ("skull", "craniofacial_structures", "Bones"),
-    ("liver", "total_v3", "Abdominal organs"),
-])
+@pytest.mark.parametrize(
+    "name,task,group",
+    [
+        ("eye_left", "head_glands_cavities", "Head organs"),
+        ("heart_myocardium", "heartchambers_highres", "Heart"),
+        ("body_trunc", "body", "Body"),
+        ("torso_fat", "tissue_types", "Tissues"),
+        ("lung_nodules", "lung_nodules", "Lung findings"),
+        ("lung_pleural", "pleural_pericard_effusion", "Chest findings"),
+        ("aorta", "heartchambers_highres", "Arteries"),
+        ("lung_veins", "lung_vessels", "Veins"),
+        ("skull", "craniofacial_structures", "Bones"),
+        ("liver", "total_v3", "Abdominal organs"),
+    ],
+)
 def test_task_appearance_has_meaningful_fallback_and_keeps_anatomical_priorities(name, task, group):
     assert segmentation._appearance(name, task)[0] == group
 
 
 def test_catalog_is_ct_only_stable_and_does_not_initialize_torch():
-    result = subprocess.run([sys.executable, "-c", "import sys; "
-                             "from scan3d.segmentation_options import segmentation_catalog; "
-                             "c=segmentation_catalog(); "
-                             "assert 'torch' not in sys.modules; "
-                             "print(len(c['tasks']))"], check=True, capture_output=True, text=True)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; "
+            "from scan3d.segmentation_options import segmentation_catalog; "
+            "c=segmentation_catalog(); "
+            "assert 'torch' not in sys.modules; "
+            "print(len(c['tasks']))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     assert int(result.stdout) >= 30
     catalog = segmentation_catalog()
     tasks = {item["id"]: item for item in catalog["tasks"]}
@@ -50,8 +62,7 @@ def test_catalog_is_ct_only_stable_and_does_not_initialize_torch():
 
 
 def test_options_defaults_are_explicit_and_historical_profiles_remain_compatible():
-    assert normalize_options("chest", {}) == {"tasks": ["total"], "robust_crop": False,
-                                                "body_seg": False, "remove_small_blobs": False}
+    assert normalize_options("chest", {}) == {"tasks": ["total"], "robust_crop": False, "body_seg": False, "remove_small_blobs": False}
     assert normalize_options("chest")["tasks"] == ["total", "lung_vessels"]
     assert normalize_options("abdomen")["tasks"] == ["total"]
     assert normalize_options("abdomen", {"tasks": ["lung_vessels"], "robust_crop": False})["robust_crop"] is True
@@ -78,13 +89,24 @@ def test_catalog_exposes_output_names_and_correct_vertebral_and_brain_labels():
     assert {"renal_arteries", "celiac_trunk", "superior_mesenteric_artery"} <= set(tasks["renal_arteries"]["classes"])
 
 
-@pytest.mark.parametrize("options", [
-    {"tasks": []}, {"tasks": "total"}, {"tasks": ["total", "total"]},
-    {"tasks": ["total_mr"]}, {"tasks": ["--device=cpu"]}, {"tasks": [123]},
-    {"tasks": ["test"]}, {"tasks": ["lung_vessels_LEGACY"]},
-    {"body_seg": "false"}, {"robust_crop": 1}, {"remove_small_blobs": 200},
-    {"fast": True}, {"device": "cpu"},
-])
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"tasks": []},
+        {"tasks": "total"},
+        {"tasks": ["total", "total"]},
+        {"tasks": ["total_mr"]},
+        {"tasks": ["--device=cpu"]},
+        {"tasks": [123]},
+        {"tasks": ["test"]},
+        {"tasks": ["lung_vessels_LEGACY"]},
+        {"body_seg": "false"},
+        {"robust_crop": 1},
+        {"remove_small_blobs": 200},
+        {"fast": True},
+        {"device": "cpu"},
+    ],
+)
 def test_rejects_unknown_tasks_and_untyped_or_unapproved_options(options):
     with pytest.raises(ValueError):
         normalize_options("chest", options)
@@ -137,19 +159,21 @@ def test_fingerprint_records_exact_task_options_and_auxiliary_crop_models(tmp_pa
     assert str(tmp_path) not in json.dumps(total)
 
 
-@pytest.mark.parametrize("task,flags,auxiliary_id", [
-    ("total", {"body_seg": True}, 300),
-    ("liver_vessels", {"robust_crop": True}, 297),
-    ("teeth", {}, 298),
-])
+@pytest.mark.parametrize(
+    "task,flags,auxiliary_id",
+    [
+        ("total", {"body_seg": True}, 300),
+        ("liver_vessels", {"robust_crop": True}, 297),
+        ("teeth", {}, 298),
+    ],
+)
 def test_auxiliary_checkpoint_changes_invalidate_cache_identity(tmp_path, monkeypatch, task, flags, auxiliary_id):
     weights = tmp_path / "weights"
     monkeypatch.setenv("TOTALSEG_WEIGHTS_PATH", str(weights))
     options = {"tasks": [task], **flags}
     missing = segmentation.model_fingerprint("chest", options)
     for model in missing["models"]:
-        directory = (weights / f"Dataset{model['dataset_id']:03d}_fixture"
-                     / f"{model['trainer']}__{model['plans']}__{model['configuration']}")
+        directory = weights / f"Dataset{model['dataset_id']:03d}_fixture" / f"{model['trainer']}__{model['plans']}__{model['configuration']}"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "plans.json").write_text("{}")
         (directory / "dataset.json").write_text("{}")
@@ -166,14 +190,17 @@ def test_auxiliary_checkpoint_changes_invalidate_cache_identity(tmp_path, monkey
     assert unchanged in changed["models"]
 
 
-@pytest.mark.parametrize("task,flags,expected_flags,names", [
-    ("total", {"body_seg": True, "remove_small_blobs": True}, {"--body_seg", "--remove_small_blobs"}, ["liver", "skull"]),
-    ("liver_vessels", {"robust_crop": True, "remove_small_blobs": True}, {"--robust_crop", "--remove_small_blobs"}, ["liver_vessels", "liver_tumor"]),
-    ("lung_vessels", {"robust_crop": False}, {"--robust_crop"}, sorted(segmentation._LUNG)),
-])
+@pytest.mark.parametrize(
+    "task,flags,expected_flags,names",
+    [
+        ("total", {"body_seg": True, "remove_small_blobs": True}, {"--body_seg", "--remove_small_blobs"}, ["liver", "skull"]),
+        ("liver_vessels", {"robust_crop": True, "remove_small_blobs": True}, {"--robust_crop", "--remove_small_blobs"}, ["liver_vessels", "liver_tumor"]),
+        ("lung_vessels", {"robust_crop": False}, {"--robust_crop"}, sorted(segmentation._LUNG)),
+    ],
+)
 def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, monkeypatch, task, flags, expected_flags, names):
     shape = (8, 9, 10)
-    affine = np.array([[-.7, -.15, 0., 34.], [.1, .9, .2, -71.], [0., .1, 1.8, 14.], [0., 0., 0., 1.]])
+    affine = np.array([[-0.7, -0.15, 0.0, 34.0], [0.1, 0.9, 0.2, -71.0], [0.0, 0.1, 1.8, 14.0], [0.0, 0.0, 0.0, 1.0]])
     ct_path = tmp_path / "ct.nii.gz"
     nib.save(nib.Nifti1Image(np.full(shape, 123, np.int16), affine), ct_path)
     commands = []
@@ -198,9 +225,11 @@ def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, mo
                 mask = np.zeros(shape, np.uint8)
                 mask[2:5, 3:6, 4:7] = 1
                 nib.save(nib.Nifti1Image(mask, affine), directory / f"{name}.nii.gz")
-            Path(command[command.index("--report") + 1]).write_text(json.dumps({
-                "device": "gpu", "fast": False, "fastest": False, "save_lowres": False,
-                "classes": {str(i + 1): name for i, name in enumerate(names)}}))
+            Path(command[command.index("--report") + 1]).write_text(
+                json.dumps(
+                    {"device": "gpu", "fast": False, "fastest": False, "save_lowres": False, "classes": {str(i + 1): name for i, name in enumerate(names)}}
+                )
+            )
 
         def poll(self):
             return 0

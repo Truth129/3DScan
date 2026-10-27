@@ -1,4 +1,5 @@
 """Remote clients receive compressed JSON and viewer assets, never double-encoded data."""
+
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -17,8 +18,7 @@ def http(tmp_path):
     license_text = Path("web/public/licenses/Slicer-LICENSE.txt").read_text()
     (dist / "offline-viewer.js").write_text("/*! " + license_text + " */\nvar Scan3DOffline={initOffline(){}};")
     (dist / "offline-viewer.css").write_text("body{background:#111}")
-    with TestClient(create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=dist)),
-                    base_url="http://127.0.0.1") as client:
+    with TestClient(create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=dist)), base_url="http://127.0.0.1") as client:
         yield client
 
 

@@ -13,10 +13,9 @@ from scan3d import imaging
 
 def oblique_reflected_affine():
     angle = np.deg2rad(27)
-    rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
-                         [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    rotation = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
     affine = np.eye(4)
-    affine[:3, :3] = rotation @ np.diag([-.8, 1.3, 2.1])
+    affine[:3, :3] = rotation @ np.diag([-0.8, 1.3, 2.1])
     affine[:3, 3] = [31, -52, 87]
     return affine
 
@@ -83,7 +82,7 @@ def test_binary_numeric_types_are_validated_without_changing_voxels(tmp_path, dt
     np.testing.assert_array_equal(result, values.astype(bool))
 
 
-@pytest.mark.parametrize("invalid", [-1, 2, .5, np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("invalid", [-1, 2, 0.5, np.nan, np.inf, -np.inf])
 def test_presence_checks_all_voxels_before_reporting_nonempty(tmp_path, invalid):
     # Valid min/max alone would miss a fractional voxel in this fixture.
     values = np.zeros((5, 6, 7), np.float32)
@@ -104,7 +103,7 @@ def test_complex_mask_is_rejected_instead_of_coerced(tmp_path):
             read(path)
 
 
-@pytest.mark.parametrize("slope,intercept", [(.5, 0), (1, -1)])
+@pytest.mark.parametrize("slope,intercept", [(0.5, 0), (1, -1)])
 def test_scaled_nifti_validates_effective_values(tmp_path, slope, intercept):
     expected = np.zeros((5, 6, 7), np.uint8)
     expected[1:4, 2:5, 3:6] = 1
@@ -119,7 +118,7 @@ def test_scaled_fractional_mask_is_rejected(tmp_path):
     raw = np.zeros((5, 6, 7), np.int16)
     raw[0, 0, 0] = 4
     raw[-1, -1, -1] = 2
-    path = save(tmp_path / "scaled.nii.gz", raw, slope=.25, intercept=0)
+    path = save(tmp_path / "scaled.nii.gz", raw, slope=0.25, intercept=0)
     for read in (imaging._binary_nonempty, imaging._binary):
         with pytest.raises(ValueError, match="only binary values"):
             read(path)
@@ -134,7 +133,7 @@ def test_presence_rejects_wrong_reference_geometry(tmp_path, mismatch):
     if mismatch == "shape":
         shape = (5, 6, 8)
     elif mismatch == "origin":
-        affine[0, 3] += .1
+        affine[0, 3] += 0.1
     else:
         affine[:3, 0] *= -1
     path = save(tmp_path / "mask.nii.gz", np.ones(shape, np.uint8), affine)

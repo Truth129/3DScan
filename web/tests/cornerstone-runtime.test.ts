@@ -13,16 +13,28 @@ const fake = vi.hoisted(() => ({
 }));
 
 vi.mock('@cornerstonejs/core', () => ({
-  init: fake.init, getShouldUseCPURendering: () => false,
-  imageLoader: { registerImageLoader: vi.fn() }, metaData: { addProvider: vi.fn(provider => { fake.metadataProvider = provider; }) },
-  cache: { setMaxCacheSize: vi.fn(), removeImageLoadObject: vi.fn() }, eventTarget: fake.eventTarget,
+  init: fake.init,
+  getShouldUseCPURendering: () => false,
+  imageLoader: { registerImageLoader: vi.fn() },
+  metaData: {
+    addProvider: vi.fn(provider => {
+      fake.metadataProvider = provider;
+    }),
+  },
+  cache: { setMaxCacheSize: vi.fn(), removeImageLoadObject: vi.fn() },
+  eventTarget: fake.eventTarget,
   utilities: { VoxelManager: { createImageVoxelManager: vi.fn(() => ({})) } },
-  Enums: { ViewportType: { STACK: 'stack' }, VOILUTFunctionType: { LINEAR_EXACT: 'LINEAR_EXACT' },
-    Events: { CAMERA_MODIFIED: 'camera', IMAGE_RENDERED: 'rendered', VOI_MODIFIED: 'voi', WEBGL_CONTEXT_LOST: 'lost' } },
+  Enums: {
+    ViewportType: { STACK: 'stack' },
+    VOILUTFunctionType: { LINEAR_EXACT: 'LINEAR_EXACT' },
+    Events: { CAMERA_MODIFIED: 'camera', IMAGE_RENDERED: 'rendered', VOI_MODIFIED: 'voi', WEBGL_CONTEXT_LOST: 'lost' },
+  },
   RenderingEngine: class {
     destroyed = false;
     viewport = {
-      camera: { zoom: 1 }, range: undefined as undefined | { lower: number; upper: number }, element: undefined as any,
+      camera: { zoom: 1 },
+      range: undefined as undefined | { lower: number; upper: number },
+      element: undefined as any,
       imageIds: [] as string[],
       setStack: async (_images: string[]) => {
         this.viewport.imageIds = _images;
@@ -30,29 +42,49 @@ vi.mock('@cornerstonejs/core', () => ({
         // Simulate the image's initial VOI event, which must not replace the
         // controls changed while this asynchronous image load was pending.
         this.viewport.range = { lower: -5, upper: 5 };
-        const event = new Event('voi'); Object.assign(event, { detail: { range: this.viewport.range } });
+        const event = new Event('voi');
+        Object.assign(event, { detail: { range: this.viewport.range } });
         this.viewport.element.dispatchEvent(event);
       },
-      setProperties: (properties: any) => { this.viewport.range = properties.voiRange; },
-      setViewPresentation: vi.fn((presentation: any) => { this.viewport.camera = presentation; }),
+      setProperties: (properties: any) => {
+        this.viewport.range = properties.voiRange;
+      },
+      setViewPresentation: vi.fn((presentation: any) => {
+        this.viewport.camera = presentation;
+      }),
       getViewPresentation: () => ({ ...this.viewport.camera }),
-      resetCamera: vi.fn(() => { this.viewport.camera = { zoom: 1 }; }),
+      resetCamera: vi.fn(() => {
+        this.viewport.camera = { zoom: 1 };
+      }),
       getCamera: () => this.viewport.camera,
-      setCamera: (camera: any) => { this.viewport.camera = camera; }, render: vi.fn(),
+      setCamera: (camera: any) => {
+        this.viewport.camera = camera;
+      },
+      render: vi.fn(),
       canvasToWorld: ([x, y]: [number, number]) => [x, y, 0],
     };
-    constructor(_id: string) { fake.engines.push(this); }
+    constructor(_id: string) {
+      fake.engines.push(this);
+    }
     enableElement(options: any) {
       if (fake.enableFailure) throw new Error('Simulated WebGL allocation failure');
       this.viewport.element = options.element;
     }
-    getViewport() { return this.viewport; }
-    destroy() { this.destroyed = true; }
+    getViewport() {
+      return this.viewport;
+    }
+    destroy() {
+      this.destroyed = true;
+    }
     resize = vi.fn();
   },
 }));
 vi.mock('@cornerstonejs/tools', () => ({
-  init: vi.fn(), addTool: vi.fn(), WindowLevelTool: { toolName: 'window' }, PanTool: { toolName: 'pan' }, ZoomTool: { toolName: 'zoom' },
+  init: vi.fn(),
+  addTool: vi.fn(),
+  WindowLevelTool: { toolName: 'window' },
+  PanTool: { toolName: 'pan' },
+  ZoomTool: { toolName: 'zoom' },
   Enums: { MouseBindings: { Secondary: 2, Auxiliary: 4, Wheel: 524288 } },
   ToolGroupManager: { createToolGroup: () => ({ addTool() {}, addViewport() {}, setToolActive() {} }), destroyToolGroup: fake.destroyGroup },
 }));
@@ -62,26 +94,59 @@ import { CornerstoneFrameViewport, cornerstoneFrameCacheStats } from '../src/lib
 function element() {
   return Object.assign(new EventTarget(), { dataset: {}, getBoundingClientRect: () => ({ width: 300, height: 200 }) }) as unknown as HTMLDivElement;
 }
-const frame: CTFrame = { meta: { width: 2, height: 2, plane: 'axial', position_mm: 0, extent_mm: [2, 2],
-  pixel_to_ras: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]] }, hu: new Float32Array([0, 20, 40, 60]), current: new Uint8Array(4) };
+const frame: CTFrame = {
+  meta: {
+    width: 2,
+    height: 2,
+    plane: 'axial',
+    position_mm: 0,
+    extent_mm: [2, 2],
+    pixel_to_ras: [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1],
+    ],
+  },
+  hu: new Float32Array([0, 20, 40, 60]),
+  current: new Uint8Array(4),
+};
 
 describe('Cornerstone viewport asynchronous ownership', () => {
   beforeEach(() => {
-    fake.enableFailure = false; fake.defer = undefined; fake.engines.length = 0; fake.observers.length = 0; fake.destroyGroup.mockClear();
-    vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { fake.observers.push(callback); } observe() {} disconnect() {} });
+    fake.enableFailure = false;
+    fake.defer = undefined;
+    fake.engines.length = 0;
+    fake.observers.length = 0;
+    fake.destroyGroup.mockClear();
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          fake.observers.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
   });
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it('keeps latest controls and camera while a replacement frame is loading', async () => {
     const changed = vi.fn();
     const viewer = await CornerstoneFrameViewport.create(element(), { windowLevel: changed });
     await viewer.setFrame(frame, 400, 40);
     let finish!: () => void;
-    fake.defer = new Promise(resolve => { finish = resolve; });
+    fake.defer = new Promise(resolve => {
+      finish = resolve;
+    });
     const pending = viewer.setFrame(frame, 400, 40);
     viewer.setWindow(1500, -600);
     viewer.setCamera({ zoom: 2 } as any);
-    finish(); await pending;
+    finish();
+    await pending;
     const viewport = fake.engines[0].viewport;
     expect(viewport.range).toEqual({ lower: -1350, upper: 150 });
     expect(viewport.camera).toEqual({ zoom: 2 });
@@ -96,17 +161,22 @@ describe('Cornerstone viewport asynchronous ownership', () => {
     const viewer = await CornerstoneFrameViewport.create(element());
     const original = { ...frame, overlays: [{ id: 'lung', current: frame.current, color: [230, 20, 40] as [number, number, number] }] };
     await viewer.setFrame(original, 400, 40);
-    const viewport = fake.engines[0].viewport, imageId = viewport.imageIds[0];
+    const viewport = fake.engines[0].viewport,
+      imageId = viewport.imageIds[0];
     viewer.setCamera({ zoom: 2 } as any);
-    const styled = { ...original, overlayOpacity: .4, overlays: [{ ...original.overlays[0], color: [20, 50, 230] as [number, number, number] }] };
+    const styled = { ...original, overlayOpacity: 0.4, overlays: [{ ...original.overlays[0], color: [20, 50, 230] as [number, number, number] }] };
     expect(viewer.setPresentation(styled)).toBe(true);
-    expect(viewer.frame).toBe(styled); expect(viewport.imageIds).toEqual([imageId]);
-    expect(viewport.camera).toEqual({ zoom: 2 }); expect(cornerstoneFrameCacheStats().images).toBe(1);
-    expect(viewer.frame!.hu).toBe(original.hu); expect(viewer.frame!.current).toBe(original.current);
+    expect(viewer.frame).toBe(styled);
+    expect(viewport.imageIds).toEqual([imageId]);
+    expect(viewport.camera).toEqual({ zoom: 2 });
+    expect(cornerstoneFrameCacheStats().images).toBe(1);
+    expect(viewer.frame!.hu).toBe(original.hu);
+    expect(viewer.frame!.current).toBe(original.current);
     expect(viewer.setPresentation({ ...styled, hu: frame.hu.slice() })).toBe(false);
     expect(viewer.setPresentation({ ...styled, overlays: [{ ...styled.overlays[0], current: frame.current.slice() }] })).toBe(false);
     expect(viewer.setPresentation({ ...styled, reference_image_id: 'other-source' })).toBe(false);
-    viewer.dispose(); expect(cornerstoneFrameCacheStats().images).toBe(0);
+    viewer.dispose();
+    expect(cornerstoneFrameCacheStats().images).toBe(0);
   });
 
   it('destroys a partially initialized engine when GPU allocation fails', async () => {
@@ -119,12 +189,28 @@ describe('Cornerstone viewport asynchronous ownership', () => {
 
   it('passes supplied modality, units, photometric interpretation and source coordinates to Cornerstone', async () => {
     const viewer = await CornerstoneFrameViewport.create(element());
-    await viewer.setFrame({ ...frame, reference_image_id: 'image-mr', modality: 'MR', scalar: { units: 'signal' },
-      source: { frame_of_reference_uid: '1.2.840.7' }, presentation: {
-        units: 'signal', background_value: 0, default_window: 800, default_level: 200,
-        photometric_interpretation: 'MONOCHROME1', preset_group: 'MR', preview_quantization_step: 0,
-      } }, 800, 200);
-    const imageId = fake.engines[0].viewport.imageIds[0], metadata = fake.metadataProvider!;
+    await viewer.setFrame(
+      {
+        ...frame,
+        reference_image_id: 'image-mr',
+        modality: 'MR',
+        scalar: { units: 'signal' },
+        source: { frame_of_reference_uid: '1.2.840.7' },
+        presentation: {
+          units: 'signal',
+          background_value: 0,
+          default_window: 800,
+          default_level: 200,
+          photometric_interpretation: 'MONOCHROME1',
+          preset_group: 'MR',
+          preview_quantization_step: 0,
+        },
+      },
+      800,
+      200,
+    );
+    const imageId = fake.engines[0].viewport.imageIds[0],
+      metadata = fake.metadataProvider!;
     expect(metadata('generalSeriesModule', imageId)).toEqual({ modality: 'MR' });
     expect(metadata('modalityLutModule', imageId)).toEqual({ rescaleSlope: 1, rescaleIntercept: 0, rescaleType: 'signal' });
     expect(metadata('imagePixelModule', imageId).photometricInterpretation).toBe('MONOCHROME1');
@@ -136,16 +222,22 @@ describe('Cornerstone viewport asynchronous ownership', () => {
     const fallback = vi.fn();
     const viewer = await CornerstoneFrameViewport.create(element(), { error: fallback });
     const dispatch = (id: string) => {
-      const event = new Event('lost'); Object.assign(event, { detail: { renderingEngineId: id } });
+      const event = new Event('lost');
+      Object.assign(event, { detail: { renderingEngineId: id } });
       fake.eventTarget.dispatchEvent(event);
     };
-    dispatch('unrelated-engine'); expect(fallback).not.toHaveBeenCalled();
-    dispatch(viewer.id); expect(fallback).toHaveBeenCalledOnce();
-    viewer.dispose(); dispatch(viewer.id); expect(fallback).toHaveBeenCalledOnce();
+    dispatch('unrelated-engine');
+    expect(fallback).not.toHaveBeenCalled();
+    dispatch(viewer.id);
+    expect(fallback).toHaveBeenCalledOnce();
+    viewer.dispose();
+    dispatch(viewer.id);
+    expect(fallback).toHaveBeenCalledOnce();
   });
 
   it('retains a hidden viewport without projecting or resizing a zero-size camera and resumes on show', async () => {
-    const host = element(), cameraChanged = vi.fn();
+    const host = element(),
+      cameraChanged = vi.fn();
     const viewer = await CornerstoneFrameViewport.create(host, { camera: cameraChanged });
     await viewer.setFrame(frame, 400, 40);
     const native = fake.engines[0] as any;

@@ -10,6 +10,7 @@ from scan3d.service import Service
 
 def test_cold_measurements_and_surface_generation_decode_each_mask_once(tmp_path, monkeypatch):
     from scan3d import imaging, surfaces
+
     original = imaging._binary
     counts, lock = Counter(), threading.Lock()
 

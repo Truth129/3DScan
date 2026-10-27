@@ -1,4 +1,5 @@
 """Disable anonymous usage telemetry without changing package-global settings."""
+
 import json
 import os
 from pathlib import Path
@@ -17,4 +18,3 @@ else:
 config["send_usage_stats"] = False
 config_path.write_text(json.dumps(config, indent=2) + "\n")
 print(f"TotalSegmentator usage statistics disabled: {config_path}")
-

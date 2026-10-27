@@ -13,12 +13,11 @@ from scan3d import surfaces
 
 def mask_file(path, offset=0):
     values = np.zeros((26, 28, 24), np.uint8)
-    values[4 + offset:19, 5:22, 3:19] = 1
+    values[4 + offset : 19, 5:22, 3:19] = 1
     values[11:16, 12:16, 8:12] = 0  # enclosed cavity must preserve inward faces
     angle = np.deg2rad(27)
     affine = np.eye(4)
-    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0],
-                              [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.8, 1.3, 2.1])
+    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.8, 1.3, 2.1])
     affine[:3, 3] = [27, -54, 82]
     image = nib.Nifti1Image(values, affine)
     image.header.set_xyzt_units("mm")
@@ -33,7 +32,7 @@ def structure(path, identity="total:liver"):
 def glb_document(path):
     data = path.read_bytes()
     length = struct.unpack_from("<I", data, 12)[0]
-    return json.loads(data[20:20 + length])
+    return json.loads(data[20 : 20 + length])
 
 
 def assert_display_matches(arrays, expected):
@@ -237,8 +236,7 @@ def test_import_existing_display_reuses_exact_same_keys_without_mask_decode(tmp_
     assert (tmp_path / "repackaged.glb").read_bytes() == binary_before
     repeated = surfaces.import_display_assets(entries, model, cache, original["display_simplification"])
     assert repeated["cache"]["surface_hits"] == 2
-    for imported_asset, prepared in zip(imported["surface_assets"],
-                                        [surfaces.prepare_surface(entry, cache) for entry in entries]):
+    for imported_asset, prepared in zip(imported["surface_assets"], [surfaces.prepare_surface(entry, cache) for entry in entries]):
         assert imported_asset["key"] == prepared["key"]
         assert prepared["cache"]["surface_hits"] == 1
 
@@ -249,8 +247,7 @@ def test_import_existing_display_reuses_exact_same_keys_without_mask_decode(tmp_
     assert changed["cache"]["surface_misses"] == 1
     assert changed["cache"]["base_misses"] == 1
     first_asset = changed["surface_assets"][0]
-    for before, after in zip(surfaces._asset_arrays(imported["surface_assets"][0]["path"]),
-                             surfaces._asset_arrays(first_asset["path"])):
+    for before, after in zip(surfaces._asset_arrays(imported["surface_assets"][0]["path"]), surfaces._asset_arrays(first_asset["path"])):
         np.testing.assert_array_equal(after, before)
 
 

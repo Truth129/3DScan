@@ -19,8 +19,7 @@ def test_native_box_has_one_slice_extent_and_native_axes(axis):
 
 @pytest.mark.parametrize("axis", [0, 1, 2])
 def test_lasso_fills_only_native_plane_including_boundary(axis):
-    prompt = normalized(dict(id="loop", kind="lasso", include=True, axis=axis, index=4,
-                             vertices=[[2, 2], [6, 2], [6, 6], [2, 6]]))
+    prompt = normalized(dict(id="loop", kind="lasso", include=True, axis=axis, index=4, vertices=[[2, 2], [6, 2], [6, 6], [2, 6]]))
     result = materialize_prompt(prompt, np.eye(4), (30, 32, 34))
     assert result["image"].dtype == np.uint8 and result["image"].shape[axis] == 1
     assert result["image"].sum() == 25
@@ -30,8 +29,7 @@ def test_lasso_fills_only_native_plane_including_boundary(axis):
 def test_physical_scribble_uses_full_affine_metric_and_cropped_binary_image():
     affine = np.eye(4)
     affine[:3, :3] = [[-2, 1, 0], [0, 3, 0], [0, 0, 4]]
-    prompt = normalized(dict(id="stroke", kind="scribble", include=True, axis=2, index=10,
-                             vertices=[[5, 8], [15, 8]], radius_mm=3), affine)
+    prompt = normalized(dict(id="stroke", kind="scribble", include=True, axis=2, index=10, vertices=[[5, 8], [15, 8]], radius_mm=3), affine)
     result = materialize_prompt(prompt, affine, (30, 32, 34))
     origin = np.asarray([a for a, b in result["interaction_bbox"]])
     occupied = np.argwhere(result["image"]) + origin
@@ -53,12 +51,12 @@ def test_legacy_point_normalizes_and_materializes_with_kernel_support():
     assert result["voxel"] == [3, 4, 5]
     assert result["support_bbox_ijk"] == [[0, 8], [0, 9], [1, 10]]
     from scan3d.interactive_batch import plan_batches
+
     plans = plan_batches([result], (192, 192, 192), 4, (30, 32, 34))
     assert plans[0]["prompt_ids"] == ["legacy"]
 
 
-@pytest.mark.parametrize("changes", [{"axis": True}, {"index": -1}, {"vertices": [[-1, 2], [4, 5]]},
-                                     {"vertices": [[2, 2], [2, 4]]}, {"radius_mm": 3}])
+@pytest.mark.parametrize("changes", [{"axis": True}, {"index": -1}, {"vertices": [[-1, 2], [4, 5]]}, {"vertices": [[2, 2], [2, 4]]}, {"radius_mm": 3}])
 def test_invalid_native_box_is_rejected(changes):
     prompt = dict(id="box", kind="bbox", include=True, axis=2, index=4, vertices=[[2, 2], [6, 6]])
     with pytest.raises(ValueError):

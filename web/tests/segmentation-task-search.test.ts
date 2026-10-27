@@ -3,9 +3,16 @@ import { searchSegmentationTasks } from '../src/lib/segmentation-task-search';
 import type { SegmentationTask } from '../src/types';
 
 const task = (id: string, label: string, classes: string[], licensed = false): SegmentationTask => ({
-  id, label, classes, modality: 'CT', class_count: classes.length,
-  license_required: licensed, license_available: !licensed,
-  robust_crop_default: false, robust_crop_supported: true, body_seg_supported: true,
+  id,
+  label,
+  classes,
+  modality: 'CT',
+  class_count: classes.length,
+  license_required: licensed,
+  license_available: !licensed,
+  robust_crop_default: false,
+  robust_crop_supported: true,
+  body_seg_supported: true,
 });
 const tasks = [
   task('total', 'Whole body — Total', ['skull', 'lung_upper_lobe_left', 'lung_lower_lobe_right']),
@@ -31,7 +38,8 @@ describe('task and output-name search', () => {
     expect(ids(searchSegmentationTasks(tasks, 'skin', 'total').matches)).toEqual(['body']);
   });
   it('retains the selected task and canonical option order without changing the catalogue', () => {
-    const before = JSON.stringify(tasks), result = searchSegmentationTasks(tasks, 'skull', 'body');
+    const before = JSON.stringify(tasks),
+      result = searchSegmentationTasks(tasks, 'skull', 'body');
     expect(result.retainedSelection).toBe(true);
     expect(ids(result.options)).toEqual(['total', 'body', 'craniofacial_structures', 'oculomotor_muscles']);
     expect(result.options[1]).toBe(tasks[2]);

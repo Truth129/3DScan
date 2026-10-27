@@ -16,9 +16,26 @@ const markers = computed(() => visibleReviewPrompts(props.prompts, props.meta, p
 </template>
 
 <style scoped>
-.ct-review-markers { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:hidden; }
-circle { fill:#10141ddd; stroke-width:2px; }
-path { fill:none; stroke-width:2px; }
-.include { stroke:#79e7b1; }
-.exclude { stroke:#ff919c; }
+.ct-review-markers {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+}
+circle {
+  fill: #10141ddd;
+  stroke-width: 2px;
+}
+path {
+  fill: none;
+  stroke-width: 2px;
+}
+.include {
+  stroke: #79e7b1;
+}
+.exclude {
+  stroke: #ff919c;
+}
 </style>

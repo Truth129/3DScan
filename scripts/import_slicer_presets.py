@@ -3,6 +3,7 @@
 Usage: python scripts/import_slicer_presets.py path/to/presets.xml
 The source XML and generated TypeScript are both retained for offline parity tests.
 """
+
 import hashlib
 import json
 from pathlib import Path
@@ -18,7 +19,7 @@ def knots(text, width):
     count = int(values.pop(0))
     if count != len(values) or count % width:
         raise ValueError("Invalid transfer-function control-point count")
-    result = [values[index:index + width] for index in range(0, count, width)]
+    result = [values[index : index + width] for index in range(0, count, width)]
     if not result or any(a[0] > b[0] for a, b in zip(result, result[1:])):
         raise ValueError("Transfer-function control points are not ordered")
     return result

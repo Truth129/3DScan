@@ -26,8 +26,7 @@ def main():
     directory.mkdir(parents=True)
     shape = (16, 18, 14)
     angle = np.deg2rad(31)
-    rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
-                         [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    rotation = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
     affine = np.eye(4)
     affine[:3, :3] = rotation @ np.diag([-0.8, 1.4, 2.2])
     affine[:3, 3] = [31, -52, 87]
@@ -44,8 +43,16 @@ def main():
     for index, mask in enumerate((first, second)):
         path = directory / f"mask{index}.nii.gz"
         nib.save(nib.Nifti1Image(mask, affine), path)
-        masks.append({"id": f"synthetic:structure_{index}", "name": f"Synthetic structure {index}",
-                      "task": "synthetic", "group": "Test", "color": "#88aabb", "mask_file": str(path)})
+        masks.append(
+            {
+                "id": f"synthetic:structure_{index}",
+                "name": f"Synthetic structure {index}",
+                "task": "synthetic",
+                "group": "Test",
+                "color": "#88aabb",
+                "mask_file": str(path),
+            }
+        )
     bundle = export_bundle(ct_path, masks, directory / "bundle.zip")
     with zipfile.ZipFile(bundle) as archive:
         archive.extractall(directory / "bundle")
@@ -65,8 +72,7 @@ def main():
         f"with open({str(slicer_report)!r}, 'w') as handle: json.dump(report, handle, indent=2)\n"
         "slicer.util.exit(0)\n"
     )
-    command = ["/opt/3dslicer/Slicer", "--no-main-window", "--no-splash", "--disable-settings",
-               "--ignore-slicerrc", "--python-script", str(script), "--exit"]
+    command = ["/opt/3dslicer/Slicer", "--no-main-window", "--no-splash", "--disable-settings", "--ignore-slicerrc", "--python-script", str(script), "--exit"]
     environment = dict(os.environ, QT_QPA_PLATFORM="xcb" if os.environ.get("SCAN3D_XVFB") == "1" else "offscreen")
     with (directory / "slicer.log").open("wb") as log:
         completed = subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=180)
@@ -79,11 +85,16 @@ def main():
         np.testing.assert_allclose(actual.affine, nib.load(ct_path).affine)
     _, header = nrrd.read(str(output), index_order="F")
     report = json.loads(slicer_report.read_text())
-    report.update(status="passed", strict_source_identity=True, overlapping_masks=True,
-                  oblique_reflected_affine=True, voxel_equality=True,
-                  source_hash_tags_preserved=all("Scan3D.ReferenceSHA256:" in header.get(f"Segment{i}_Tags", "")
-                                                 for i in range(2)),
-                  voxel_counts=[int(first.sum()), int(second.sum())], artifacts=str(directory))
+    report.update(
+        status="passed",
+        strict_source_identity=True,
+        overlapping_masks=True,
+        oblique_reflected_affine=True,
+        voxel_equality=True,
+        source_hash_tags_preserved=all("Scan3D.ReferenceSHA256:" in header.get(f"Segment{i}_Tags", "") for i in range(2)),
+        voxel_counts=[int(first.sum()), int(second.sum())],
+        artifacts=str(directory),
+    )
     (directory / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 

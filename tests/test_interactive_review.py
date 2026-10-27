@@ -39,8 +39,7 @@ class FakeRuntime:
         imaging._save_mask(mask, image, output_path)
         if self.during:
             self.during()
-        return {"engine": "fake-nninteractive", "version": "test", "checkpoint_sha256": "a" * 64,
-                "device": "test-boundary"}
+        return {"engine": "fake-nninteractive", "version": "test", "checkpoint_sha256": "a" * 64, "device": "test-boundary"}
 
     def release(self):
         self.released = True
@@ -52,10 +51,10 @@ def example(tmp_path):
     case = service.new_case("Oblique reflected correction fixture")
     folder = service.store.case_dir(case["id"]) / "fixture"
     folder.mkdir()
-    angle = .24
+    angle = 0.24
     rotation = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
     affine = np.eye(4)
-    affine[:3, :3] = rotation @ np.diag([-1.5, 2., 3.])
+    affine[:3, :3] = rotation @ np.diag([-1.5, 2.0, 3.0])
     affine[:3, 3] = [20, -10, 40]
     shape = (12, 10, 8)
     ct = nib.Nifti1Image(np.full(shape, 45, dtype=np.int16), affine)
@@ -63,17 +62,20 @@ def example(tmp_path):
     ct_file = folder / "reference.nii.gz"
     nib.save(ct, ct_file)
     structures = []
-    for name, bounds in (("liver", (slice(2, 7), slice(2, 7), slice(2, 7))),
-                         ("kidney_left", (slice(8, 11), slice(2, 5), slice(2, 6)))):
+    for name, bounds in (("liver", (slice(2, 7), slice(2, 7), slice(2, 7))), ("kidney_left", (slice(8, 11), slice(2, 5), slice(2, 6)))):
         mask = np.zeros(shape, dtype=np.uint8)
         mask[bounds] = 1
         target = folder / f"{name}.nii.gz"
         imaging._save_mask(mask, ct, target)
-        structures.append(dict(id=f"total:{name}", name=name, task="total", group="Abdominal organs",
-                               color="#c08090", mask_file=str(target)))
-    revision = service.build_revision(case["id"], ct_file, structures, source="synthetic_fixture",
+        structures.append(dict(id=f"total:{name}", name=name, task="total", group="Abdominal organs", color="#c08090", mask_file=str(target)))
+    revision = service.build_revision(
+        case["id"],
+        ct_file,
+        structures,
+        source="synthetic_fixture",
         acquisition={"series_uid": "fixture", "phase": "venous"},
-        inference_manifest={"engine": "fixture", "engine_version": "test", "qc": []})
+        inference_manifest={"engine": "fixture", "engine_version": "test", "qc": []},
+    )
     service.store.commit_revision(revision)
     service.interactive_runtime = FakeRuntime()
     prompt = dict(id="point-1", kind="point", ras=imaging._world(affine, [4, 4, 4]).tolist(), include=False)
@@ -302,7 +304,7 @@ def test_review_http_candidates_reuse_ct_and_authorize_masks_frames_and_history(
             job = client.get(f"/api/jobs/{prediction.json()['id']}").json()
             if job["status"] not in ("queued", "running"):
                 break
-            time.sleep(.02)
+            time.sleep(0.02)
         assert job["status"] == "completed", job
         current = client.get(review_url).json()
         assert current["status"] == "ready" and current["candidate"]["generation"] == 1
@@ -415,10 +417,12 @@ def test_http_mixed_tools_apply_once_full_refine_and_stale_generation(example):
     runtime = FakeRuntime()
     app.state.service.interactive_runtime = runtime
     prefix = f"/api/cases/{case['id']}"
-    prompts = [{k: v for k, v in point.items() if k != "kind"},
-               dict(id="box", kind="bbox", include=True, axis=2, index=4, vertices=[[2, 2], [6, 6]]),
-               dict(id="stroke", kind="scribble", include=False, axis=1, index=3, vertices=[[2, 2], [5, 5]]),
-               dict(id="loop", kind="lasso", include=True, axis=0, index=4, vertices=[[2, 2], [6, 2], [6, 6], [2, 6]])]
+    prompts = [
+        {k: v for k, v in point.items() if k != "kind"},
+        dict(id="box", kind="bbox", include=True, axis=2, index=4, vertices=[[2, 2], [6, 6]]),
+        dict(id="stroke", kind="scribble", include=False, axis=1, index=3, vertices=[[2, 2], [5, 5]]),
+        dict(id="loop", kind="lasso", include=True, axis=0, index=4, vertices=[[2, 2], [6, 2], [6, 6], [2, 6]]),
+    ]
 
     def wait(client, job):
         deadline = time.monotonic() + 10
@@ -427,7 +431,7 @@ def test_http_mixed_tools_apply_once_full_refine_and_stale_generation(example):
             if result["status"] not in ("queued", "running"):
                 assert result["status"] == "completed", result
                 return result
-            time.sleep(.02)
+            time.sleep(0.02)
         pytest.fail("Mixed interaction job did not finish")
 
     with TestClient(app, base_url="http://127.0.0.1") as http:
@@ -435,8 +439,7 @@ def test_http_mixed_tools_apply_once_full_refine_and_stale_generation(example):
         assert status["capabilities"]["bbox2d"] and not status["capabilities"]["bbox3d"]
         created = http.post(prefix + "/reviews", json={"revision_id": base["id"], "structure_id": "total:liver"}).json()
         url = prefix + "/reviews/" + created["id"]
-        update = http.patch(url, json={"expected_generation": 0, "prompts": prompts,
-                                      "options": {"autozoom": False, "start_empty": True}})
+        update = http.patch(url, json={"expected_generation": 0, "prompts": prompts, "options": {"autozoom": False, "start_empty": True}})
         assert update.status_code == 200, update.text
         assert update.json()["prompts"][0]["kind"] == "point"
         assert update.json()["prompts"][2]["radius_mm"] == 3
@@ -464,6 +467,7 @@ def test_http_mixed_tools_apply_once_full_refine_and_stale_generation(example):
 
 def test_new_named_structure_stays_empty_draft_until_explicit_acceptance(example, tmp_path):
     from scan3d import slicer_io
+
     service, case, base, prompt = example
     before = json.loads(json.dumps(base))
     draft = service.reviews.create_structure(case["id"], base["id"], "  Accessory finding  ", "Teaching", "#AB12Ef")
@@ -516,8 +520,7 @@ def test_new_named_structure_stays_empty_draft_until_explicit_acceptance(example
         assert mapping["structures"][-1]["id"] == target["id"]
         segmentation = tmp_path / "custom.seg.nrrd"
         segmentation.write_bytes(archive.read("segmentation.seg.nrrd"))
-    imported = slicer_io.import_segmentation(Path(base["ct_file"]), segmentation, accepted["structures"],
-                                            tmp_path / "reimported", require_source_hash=True)
+    imported = slicer_io.import_segmentation(Path(base["ct_file"]), segmentation, accepted["structures"], tmp_path / "reimported", require_source_hash=True)
     assert imported[-1]["id"] == target["id"] and imported[-1]["name"] == target["name"]
     for first, second in zip(accepted["structures"], imported):
         np.testing.assert_array_equal(imaging._binary(Path(first["mask_file"]))[0], imaging._binary(Path(second["mask_file"]))[0])
@@ -542,8 +545,9 @@ def test_new_structure_discard_and_empty_result_never_add_anatomy(example):
     assert service.store.revision(case["id"], base["id"])["structures"] == base["structures"]
 
 
-@pytest.mark.parametrize("values", [{"name": "  "}, {"name": "bad\nname"}, {"name": "a" * 129},
-                                    {"name": "Valid", "group": ""}, {"name": "Valid", "color": "#f00"}])
+@pytest.mark.parametrize(
+    "values", [{"name": "  "}, {"name": "bad\nname"}, {"name": "a" * 129}, {"name": "Valid", "group": ""}, {"name": "Valid", "color": "#f00"}]
+)
 def test_new_structure_metadata_is_validated_before_creation(example, values):
     service, case, base, _ = example
     with pytest.raises(ValueError):
@@ -557,8 +561,9 @@ def test_http_new_structure_empty_transport_candidate_comparison_and_atomic_save
     app.state.service.interactive_runtime = FakeRuntime()
     prefix = f"/api/cases/{case['id']}"
     with TestClient(app, base_url="http://127.0.0.1") as http:
-        response = http.post(prefix + "/reviews/new-structure", json={"revision_id": base["id"],
-                             "name": "New browser label", "group": "Custom", "color": "#d977aa"})
+        response = http.post(
+            prefix + "/reviews/new-structure", json={"revision_id": base["id"], "name": "New browser label", "group": "Custom", "color": "#d977aa"}
+        )
         assert response.status_code == 200, response.text
         draft = response.json()
         assert draft["new_structure"] and draft["options"]["start_empty"]
@@ -582,14 +587,15 @@ def test_http_new_structure_empty_transport_candidate_comparison_and_atomic_save
             job = http.get("/api/jobs/" + queued["id"]).json()
             if job["status"] not in ("queued", "running"):
                 break
-            time.sleep(.02)
+            time.sleep(0.02)
         assert job["status"] == "completed", job
         ready = http.get(review_url).json()
         candidate_url = prefix + "/revisions/" + ready["candidate"]["revision_id"]
         masks = http.get(candidate_url + "/mask-volume", params={"structure_id": target_id, "compare": True}).json()
         assert not masks["current"]["empty"] and masks["parent"]["empty"]
-        frame = http.get(candidate_url + "/review-frame", params={"structure_id": target_id, "compare": True,
-                       "plane": "axial", "native_axis": 2, "native_index": 1})
+        frame = http.get(
+            candidate_url + "/review-frame", params={"structure_id": target_id, "compare": True, "plane": "axial", "native_axis": 2, "native_index": 1}
+        )
         assert frame.status_code == 200, frame.text
         assert json.loads(frame.headers["X-CT-Frame"])["parent_offset"] is not None
         assert len(http.get(prefix + "/revisions").json()) == 1
@@ -599,7 +605,7 @@ def test_http_new_structure_empty_transport_candidate_comparison_and_atomic_save
             job = http.get("/api/jobs/" + save["id"]).json()
             if job["status"] not in ("queued", "running"):
                 break
-            time.sleep(.02)
+            time.sleep(0.02)
         assert job["status"] == "completed", job
         accepted = http.get(prefix + "/revisions/" + job["revision_id"]).json()
         assert accepted["structures"][-1]["id"] == target_id and len(accepted["structures"]) == len(base["structures"]) + 1
@@ -608,6 +614,7 @@ def test_http_new_structure_empty_transport_candidate_comparison_and_atomic_save
 def test_concurrent_new_targets_bound_dense_baseline_generation(example, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     import threading
+
     service, case, base, _ = example
     save = imaging._save_mask
     guard = threading.Lock()
@@ -619,7 +626,7 @@ def test_concurrent_new_targets_bound_dense_baseline_generation(example, monkeyp
             active += 1
             peak = max(peak, active)
         try:
-            time.sleep(.02)
+            time.sleep(0.02)
             return save(*args, **kwargs)
         finally:
             with guard:

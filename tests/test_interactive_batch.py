@@ -115,12 +115,15 @@ def test_nearby_points_share_one_native_patch_and_distant_points_are_not_dropped
     assert result["plans"][0]["zoom"] == 1
 
 
-@pytest.mark.parametrize("patch,shape,voxel", [
-    ([1, 1, 1], [1, 1, 1], [0, 0, 0]),
-    ([63, 65, 67], [120, 130, 140], [0, 129, 139]),
-    ([64, 64, 64], [3, 4, 5], [2, 0, 4]),
-    ([192, 192, 192], [512, 512, 729], [511, 511, 728]),
-])
+@pytest.mark.parametrize(
+    "patch,shape,voxel",
+    [
+        ([1, 1, 1], [1, 1, 1], [0, 0, 0]),
+        ([63, 65, 67], [120, 130, 140], [0, 129, 139]),
+        ([64, 64, 64], [3, 4, 5], [2, 0, 4]),
+        ([192, 192, 192], [512, 512, 729], [511, 511, 728]),
+    ],
+)
 def test_small_fov_edges_and_odd_patch_sizes_preserve_entire_support(patch, shape, voxel):
     prompts = [point("edge", voxel)]
     plans = batch.plan_batches(prompts, patch, 4, shape)
@@ -131,23 +134,20 @@ def test_small_fov_edges_and_odd_patch_sizes_preserve_entire_support(patch, shap
 
 def test_large_drawing_uses_zoom_but_is_tiled_when_support_exceeds_cap():
     shape, patch = [1200, 130, 1], [64, 64, 64]
-    prompts = [{"id": "wide", "kind": "bbox", "include": True,
-                "bbox_ijk": [[0, 1199], [4, 124], [0, 1]]}]
+    prompts = [{"id": "wide", "kind": "bbox", "include": True, "bbox_ijk": [[0, 1199], [4, 124], [0, 1]]}]
     plans = batch.plan_batches(prompts, patch, 4, shape)
     assert len(plans) > 1
     assert all(1 <= plan["zoom"] <= 4 for plan in plans)
     assert all(np.all(np.asarray(plan["scaled_patch_size"]) <= np.asarray(patch) * 4) for plan in plans)
     assert_covered(prompts, plans, shape)
-    medium = [{"id": "medium", "kind": "bbox", "include": True,
-               "bbox_ijk": [[20, 220], [10, 100], [0, 1]]}]
+    medium = [{"id": "medium", "kind": "bbox", "include": True, "bbox_ijk": [[20, 220], [10, 100], [0, 1]]}]
     medium_plans = batch.plan_batches(medium, patch, 4, shape)
     assert len(medium_plans) == 1 and medium_plans[0]["zoom"] > 1
     assert_covered(medium, medium_plans, shape)
 
 
 def test_zoom_cap_can_reduce_context_without_losing_annotation_voxels():
-    prompts = [{"id": "almost-max", "kind": "bbox", "include": True,
-                "bbox_ijk": [[0, 250], [0, 1], [2, 3]]}]
+    prompts = [{"id": "almost-max", "kind": "bbox", "include": True, "bbox_ijk": [[0, 250], [0, 1], [2, 3]]}]
     plans = batch.plan_batches(prompts, [64, 64, 64], 4, [1000, 10, 10])
     assert len(plans) == 1 and plans[0]["context_limited_by_zoom_cap"]
     assert_covered(prompts, plans, [1000, 10, 10])
@@ -158,10 +158,8 @@ def test_drawing_crops_are_registered_without_full_volume_buffers():
     scribble[2:8, 4, 0] = 1
     lasso = np.ones((12, 8, 1), np.uint8)
     prompts = [
-        {"id": "scribble", "kind": "scribble", "include": True, "image": scribble,
-         "interaction_bbox": [[10, 20], [20, 32], [1, 2]]},
-        {"id": "lasso", "kind": "lasso", "include": False, "image": lasso,
-         "interaction_bbox": [[22, 34], [22, 30], [1, 2]]},
+        {"id": "scribble", "kind": "scribble", "include": True, "image": scribble, "interaction_bbox": [[10, 20], [20, 32], [1, 2]]},
+        {"id": "lasso", "kind": "lasso", "include": False, "image": lasso, "interaction_bbox": [[22, 34], [22, 30], [1, 2]]},
     ]
     session = FakeSession()
     result = batch.register_and_predict(session, prompts, lambda m: None, lambda: False)
@@ -174,8 +172,7 @@ def test_drawing_crops_are_registered_without_full_volume_buffers():
 def test_polarities_registration_order_and_empty_batch():
     session = FakeSession()
     session.target[20, 20, 1] = 1
-    result = batch.register_and_predict(session, [point("remove", [20, 20, 1], False),
-                                                 point("add", [25, 20, 1])], lambda m: None, lambda: False)
+    result = batch.register_and_predict(session, [point("remove", [20, 20, 1], False), point("add", [25, 20, 1])], lambda m: None, lambda: False)
     assert result["prediction_calls"] == 1
     assert session.target[20, 20, 1] == 0 and session.target[25, 20, 1] == 1
     result = batch.register_and_predict(session, [], lambda m: None, lambda: False)
@@ -203,8 +200,7 @@ def test_version_and_model_capability_guards(monkeypatch):
     with pytest.raises(ValueError, match="does not support"):
         batch.register_and_predict(session, [point("one", [20, 20, 1])], lambda m: None, lambda: False)
     with pytest.raises(ValueError, match="2D box"):
-        batch.plan_batches([{"id": "3d", "kind": "bbox", "include": True,
-                             "bbox_ijk": [[1, 10], [1, 10], [1, 10]]}], [64] * 3, 4, [100] * 3)
+        batch.plan_batches([{"id": "3d", "kind": "bbox", "include": True, "bbox_ijk": [[1, 10], [1, 10], [1, 10]]}], [64] * 3, 4, [100] * 3)
 
 
 def test_support_understatement_nonbinary_and_out_of_bounds_inputs_are_rejected():
@@ -215,21 +211,22 @@ def test_support_understatement_nonbinary_and_out_of_bounds_inputs_are_rejected(
     with pytest.raises(ValueError, match="outside"):
         batch.plan_batches([point("bad", [-1, 0, 0])], [64] * 3, 4, [100] * 3)
     with pytest.raises(ValueError, match="binary"):
-        batch.plan_batches([{"id": "bad", "kind": "scribble", "include": True,
-                             "interaction_bbox": [[0, 2], [0, 2], [0, 1]],
-                             "image": np.full((2, 2, 1), 2, np.uint8)}], [64] * 3, 4, [100] * 3)
+        batch.plan_batches(
+            [{"id": "bad", "kind": "scribble", "include": True, "interaction_bbox": [[0, 2], [0, 2], [0, 1]], "image": np.full((2, 2, 1), 2, np.uint8)}],
+            [64] * 3,
+            4,
+            [100] * 3,
+        )
 
 
 def test_random_edge_and_tiling_coverage_is_deterministic():
     rng = np.random.default_rng(841)
     for _ in range(30):
         shape = np.array([int(rng.integers(20, 450)), int(rng.integers(20, 85)), 1])
-        prompts = [point(str(index), [int(rng.integers(shape[0])), int(rng.integers(shape[1])), 0])
-                   for index in range(8)]
+        prompts = [point(str(index), [int(rng.integers(shape[0])), int(rng.integers(shape[1])), 0]) for index in range(8)]
         low = [int(rng.integers(max(1, int(size) // 2))) for size in shape[:2]]
         high = [int(rng.integers(start + 1, int(size) + 1)) for start, size in zip(low, shape[:2])]
-        prompts.append({"id": "drawing", "kind": "bbox", "include": True,
-                        "bbox_ijk": [[low[0], high[0]], [low[1], high[1]], [0, 1]]})
+        prompts.append({"id": "drawing", "kind": "bbox", "include": True, "bbox_ijk": [[low[0], high[0]], [low[1], high[1]], [0, 1]]})
         plans = batch.plan_batches(prompts, [31, 33, 35], 2.5, shape)
         assert plans == batch.plan_batches(prompts, [31, 33, 35], 2.5, shape)
         assert_covered(prompts, plans, shape)

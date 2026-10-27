@@ -10,8 +10,14 @@ export interface RenderCTSession {
   onOverlayChange?(listener: () => void): () => void;
   getGPUVolume(signal?: AbortSignal): Promise<GPUVolumeSource>;
   getGPUOverlays(selection: string | readonly string[] | null, compare?: boolean, signal?: AbortSignal): Promise<GPUOverlaySources>;
-  requestSlice(plane: Plane, position: number, selection?: string | readonly string[] | null, compare?: boolean,
-    native?: { axis: 0 | 1 | 2; index: number }, consumer?: 'ct' | 'model-review'): Promise<CTFrame>;
+  requestSlice(
+    plane: Plane,
+    position: number,
+    selection?: string | readonly string[] | null,
+    compare?: boolean,
+    native?: { axis: 0 | 1 | 2; index: number },
+    consumer?: 'ct' | 'model-review',
+  ): Promise<CTFrame>;
 }
 export interface GPUOverlaySourceProvider {
   get(base: string, ids: readonly string[], signal: AbortSignal, marginMM?: number): Promise<GPUOverlaySources>;
@@ -31,9 +37,17 @@ export interface VolumeDisplayUnion extends VolumeDescriptor {
 
 export function isVolumeDisplayUnion(descriptor: VolumeDescriptor): descriptor is VolumeDisplayUnion {
   const candidate = descriptor as Partial<VolumeDisplayUnion>;
-  return candidate.quality === 'preview' && candidate.presentation_only === true && candidate.volume_mask_union === true
-    && descriptor.kind === 'mask' && descriptor.dtype === 'uint8' && descriptor.byte_length <= GPU_VOLUME_MASK_UNION_BYTES
-    && !!descriptor.reference_geometry && typeof descriptor.reference_image_id === 'string' && descriptor.reference_image_id.length > 0;
+  return (
+    candidate.quality === 'preview' &&
+    candidate.presentation_only === true &&
+    candidate.volume_mask_union === true &&
+    descriptor.kind === 'mask' &&
+    descriptor.dtype === 'uint8' &&
+    descriptor.byte_length <= GPU_VOLUME_MASK_UNION_BYTES &&
+    !!descriptor.reference_geometry &&
+    typeof descriptor.reference_image_id === 'string' &&
+    descriptor.reference_image_id.length > 0
+  );
 }
 
 export interface GPUVolumeSource {
@@ -46,15 +60,21 @@ export interface GPUOverlaySources {
   overlays: { id: string; current: GPUVolumeSource; parent: GPUVolumeSource | null }[];
 }
 
-export function gpuVolumeSlabRange(descriptor: VolumeDescriptor, zStart: number, depth: number): {
-  byteOffset: number; byteLength: number;
+export function gpuVolumeSlabRange(
+  descriptor: VolumeDescriptor,
+  zStart: number,
+  depth: number,
+): {
+  byteOffset: number;
+  byteLength: number;
 } {
-  if (!Number.isSafeInteger(zStart) || !Number.isSafeInteger(depth) || zStart < 0 || depth < 1
-      || zStart + depth > descriptor.shape[2]) throw new Error('Invalid GPU volume slab range');
+  if (!Number.isSafeInteger(zStart) || !Number.isSafeInteger(depth) || zStart < 0 || depth < 1 || zStart + depth > descriptor.shape[2])
+    throw new Error('Invalid GPU volume slab range');
   const sliceBytes = descriptor.byte_length / descriptor.shape[2];
-  const byteOffset = sliceBytes * zStart, byteLength = sliceBytes * depth;
-  if (!Number.isSafeInteger(byteOffset) || !Number.isSafeInteger(byteLength)
-      || byteLength < 1 || byteLength > GPU_VOLUME_SLAB_BYTES) throw new Error('GPU volume slab exceeds the transfer budget');
+  const byteOffset = sliceBytes * zStart,
+    byteLength = sliceBytes * depth;
+  if (!Number.isSafeInteger(byteOffset) || !Number.isSafeInteger(byteLength) || byteLength < 1 || byteLength > GPU_VOLUME_SLAB_BYTES)
+    throw new Error('GPU volume slab exceeds the transfer budget');
   return { byteOffset, byteLength };
 }
 

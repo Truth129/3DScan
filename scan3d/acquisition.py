@@ -3,6 +3,7 @@
 Study region, contrast timing and cardiac reconstruction timing describe the
 selected DICOM series. Inference tasks remain an independent explicit choice.
 """
+
 from __future__ import annotations
 
 import math
@@ -26,9 +27,9 @@ CONTRAST_PHASE_LABELS = {
 }
 
 
-def acquisition_labels(series_uid: str, profile: StudyProfile | str, phase: str, *,
-                       cardiac_phase: CardiacPhase | str | None = None,
-                       rr_percent: int | float | None = None) -> dict:
+def acquisition_labels(
+    series_uid: str, profile: StudyProfile | str, phase: str, *, cardiac_phase: CardiacPhase | str | None = None, rr_percent: int | float | None = None
+) -> dict:
     """Validate display/provenance metadata for HTTP and direct CLI callers.
 
     Contrast labels remain free text for existing saved recipes and clients.

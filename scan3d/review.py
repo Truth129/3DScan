@@ -19,8 +19,15 @@ import numpy as np
 from . import __version__, imaging
 from .errors import NotFound
 from .interactive_prompts import normalize_options, normalize_prompts
-from .relationships import (INDEPENDENT, ancestors, effective_relationship, normalize_relationship,
-                            reciprocal_updates, relationship_dirty, relationship_suggestions)
+from .relationships import (
+    INDEPENDENT,
+    ancestors,
+    effective_relationship,
+    normalize_relationship,
+    reciprocal_updates,
+    relationship_dirty,
+    relationship_suggestions,
+)
 from .store import ReviewConflict, identifier, now, safe_id
 
 
@@ -32,8 +39,7 @@ _OVERLAP_CHUNK_VOXELS = 4 * 1024 * 1024
 def _count_foreground(values, check_cancel):
     """Count complete binary masks in native order with bounded cancellation gaps."""
     count = 0
-    with np.nditer(values, flags=["external_loop", "buffered", "zerosize_ok"],
-                   op_flags=["readonly"], order="K", buffersize=_OVERLAP_CHUNK_VOXELS) as chunks:
+    with np.nditer(values, flags=["external_loop", "buffered", "zerosize_ok"], op_flags=["readonly"], order="K", buffersize=_OVERLAP_CHUNK_VOXELS) as chunks:
         for chunk in chunks:
             check_cancel()
             count += int(np.count_nonzero(chunk))
@@ -43,9 +49,9 @@ def _count_foreground(values, check_cancel):
 def _count_overlap(target, peer, check_cancel):
     """Compare matching ROI views without copying either complete source mask."""
     count = 0
-    with np.nditer([target, peer], flags=["external_loop", "buffered", "zerosize_ok"],
-                   op_flags=[["readonly"], ["readonly"]], order="K",
-                   buffersize=_OVERLAP_CHUNK_VOXELS) as chunks:
+    with np.nditer(
+        [target, peer], flags=["external_loop", "buffered", "zerosize_ok"], op_flags=[["readonly"], ["readonly"]], order="K", buffersize=_OVERLAP_CHUNK_VOXELS
+    ) as chunks:
         for selected, other in chunks:
             check_cancel()
             # Validated peers may be float-valued zero/one NIfTIs. Logical AND
@@ -56,9 +62,9 @@ def _count_overlap(target, peer, check_cancel):
 
 def _erase_overlap(target, peer, check_cancel):
     """Update only a private writable peer's ROI, flushing bounded buffer writes."""
-    with np.nditer([target, peer], flags=["external_loop", "buffered", "zerosize_ok"],
-                   op_flags=[["readonly"], ["readwrite"]], order="K",
-                   buffersize=_OVERLAP_CHUNK_VOXELS) as chunks:
+    with np.nditer(
+        [target, peer], flags=["external_loop", "buffered", "zerosize_ok"], op_flags=[["readonly"], ["readwrite"]], order="K", buffersize=_OVERLAP_CHUNK_VOXELS
+    ) as chunks:
         for selected, other in chunks:
             check_cancel()
             other[selected] = False
@@ -73,30 +79,46 @@ def _digest(path):
 
 
 def _prompt_digest(prompts):
-    return hashlib.sha256(json.dumps(prompts, sort_keys=True, separators=(",", ":"),
-                                     allow_nan=False).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(prompts, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
 def _summary(before_count, after_count, added, removed, voxel_volume_ml):
-    return dict(before_voxels=before_count, after_voxels=after_count,
-                changed_voxels=added + removed, added_voxels=added, removed_voxels=removed,
-                voxel_volume_ml=voxel_volume_ml, before_volume_ml=before_count * voxel_volume_ml,
-                after_volume_ml=after_count * voxel_volume_ml,
-                volume_delta_ml=(after_count - before_count) * voxel_volume_ml)
+    return dict(
+        before_voxels=before_count,
+        after_voxels=after_count,
+        changed_voxels=added + removed,
+        added_voxels=added,
+        removed_voxels=removed,
+        voxel_volume_ml=voxel_volume_ml,
+        before_volume_ml=before_count * voxel_volume_ml,
+        after_volume_ml=after_count * voxel_volume_ml,
+        volume_delta_ml=(after_count - before_count) * voxel_volume_ml,
+    )
 
 
 def _candidate_changes(candidate, selected):
     return {entry["id"]: entry for entry in candidate.get("affected_structures", [])} or {
-        selected["id"]: dict(id=selected["id"], mask_file=candidate["mask_file"], summary=candidate["summary"],
-                              relationship=candidate.get("relationship", selected.get("relationship")))}
+        selected["id"]: dict(
+            id=selected["id"],
+            mask_file=candidate["mask_file"],
+            summary=candidate["summary"],
+            relationship=candidate.get("relationship", selected.get("relationship")),
+        )
+    }
 
 
 def _changed_structure(structure, change):
     entry = dict(structure)
     if not change.get("metadata_only"):
         entry = {key: value for key, value in entry.items() if key not in _MEASUREMENTS}
-        entry.update(mask_file=change["mask_file"], volume_ml=change["summary"]["after_volume_ml"],
-                     voxel_count=change["summary"]["after_voxels"], bounds_ras=None, centroid_ras=None, qc=[])
+        entry.update(
+            mask_file=change["mask_file"],
+            volume_ml=change["summary"]["after_volume_ml"],
+            voxel_count=change["summary"]["after_voxels"],
+            bounds_ras=None,
+            centroid_ras=None,
+            qc=[],
+        )
     if change.get("relationship") is not None:
         entry["relationship"] = change["relationship"]
     return entry
@@ -104,24 +126,62 @@ def _changed_structure(structure, change):
 
 def public_review(record):
     """Return review state without source paths, checkpoint paths or mask paths."""
-    result = {key: record.get(key) for key in (
-        "id", "case_id", "revision_id", "structure_id", "status", "generation", "prompts",
-        "job_id", "error", "accepted_revision_id", "created_at", "updated_at",
-        "options", "batches", "relationship", "relationship_suggestions", "method",
-    )}
+    result = {
+        key: record.get(key)
+        for key in (
+            "id",
+            "case_id",
+            "revision_id",
+            "structure_id",
+            "status",
+            "generation",
+            "prompts",
+            "job_id",
+            "error",
+            "accepted_revision_id",
+            "created_at",
+            "updated_at",
+            "options",
+            "batches",
+            "relationship",
+            "relationship_suggestions",
+            "method",
+        )
+    }
     result["method"] = record.get("method", "nninteractive")
     candidate = record.get("candidate")
-    result["candidate"] = ({key: candidate[key] for key in (
-        "generation", "revision_id", "summary", "created_at", "relationship", "overlaps", "warnings", "total_changed_voxels", "relationship_changed",
-        "preview_3d_ready", "model_manifest_url",
-    ) if key in candidate} if candidate else None)
+    result["candidate"] = (
+        {
+            key: candidate[key]
+            for key in (
+                "generation",
+                "revision_id",
+                "summary",
+                "created_at",
+                "relationship",
+                "overlaps",
+                "warnings",
+                "total_changed_voxels",
+                "relationship_changed",
+                "preview_3d_ready",
+                "model_manifest_url",
+            )
+            if key in candidate
+        }
+        if candidate
+        else None
+    )
     if candidate:
         result["candidate"]["affected_structures"] = [
             {key: entry[key] for key in ("id", "name", "role", "summary", "metadata_only", "relationship") if key in entry}
-            for entry in candidate.get("affected_structures", [])]
+            for entry in candidate.get("affected_structures", [])
+        ]
     applied = record.get("batches", [])[-1]["end"] if record.get("batches") else 0
-    result.update(applied_prompt_count=applied, pending_count=max(0, len(record["prompts"]) - applied),
-                  dirty=not candidate or candidate["generation"] != record["generation"])
+    result.update(
+        applied_prompt_count=applied,
+        pending_count=max(0, len(record["prompts"]) - applied),
+        dirty=not candidate or candidate["generation"] != record["generation"],
+    )
     result["relationship_dirty"] = relationship_dirty(record)
     result["new_structure"] = bool(record.get("new_structure"))
     if record.get("new_structure"):
@@ -150,16 +210,25 @@ class ReviewManager:
     def _base(self, review):
         base = self.store.revision(review["case_id"], review["revision_id"])
         from .image_assets import bind_structures, public_image_asset
+
         asset = self.store.resolve_reference(base)
         if review.get("reference_image_id", asset["id"]) != asset["id"]:
             raise ReviewConflict("The correction belongs to another reference image")
-        base = {**base, "reference_image_id": asset["id"], "image_asset": public_image_asset(asset),
-                "structures": bind_structures(base["structures"], asset["id"])}
+        base = {
+            **base,
+            "reference_image_id": asset["id"],
+            "image_asset": public_image_asset(asset),
+            "structures": bind_structures(base["structures"], asset["id"]),
+        }
         selected = next((s for s in base["structures"] if s["id"] == review["structure_id"]), None)
         if selected is None and review.get("new_structure"):
             selected = review.get("target")
-            if (not selected or selected["id"] != review["structure_id"] or selected.get("task") != "custom"
-                    or not re.fullmatch(r"custom:[a-f0-9]{32}", selected["id"])):
+            if (
+                not selected
+                or selected["id"] != review["structure_id"]
+                or selected.get("task") != "custom"
+                or not re.fullmatch(r"custom:[a-f0-9]{32}", selected["id"])
+            ):
                 raise ValueError("The provisional structure identity is invalid")
             selected = bind_structures([selected], asset["id"])[0]
         if selected is None:
@@ -178,19 +247,36 @@ class ReviewManager:
         asset = self.store.resolve_reference(base)
         initial = effective_relationship(base["structures"], structure_id)
         chosen = initial if relationship is None else normalize_relationship(relationship, base["structures"], structure_id)
-        record = dict(id=identifier(), case_id=case_id, revision_id=revision_id, structure_id=structure_id,
-                      reference_image_id=asset["id"],
-                      status="draft", generation=0, prompts=[], job_id=None, candidate=None, candidates={},
-                      options=normalize_options(), batches=[], error=None, accepted_revision_id=None,
-                      relationship=chosen, initial_relationship=initial,
-                      relationship_suggestions=relationship_suggestions(base["structures"], structure_id),
-                      created_at=now(), updated_at=now(), schema_version=2, method=method)
+        record = dict(
+            id=identifier(),
+            case_id=case_id,
+            revision_id=revision_id,
+            structure_id=structure_id,
+            reference_image_id=asset["id"],
+            status="draft",
+            generation=0,
+            prompts=[],
+            job_id=None,
+            candidate=None,
+            candidates={},
+            options=normalize_options(),
+            batches=[],
+            error=None,
+            accepted_revision_id=None,
+            relationship=chosen,
+            initial_relationship=initial,
+            relationship_suggestions=relationship_suggestions(base["structures"], structure_id),
+            created_at=now(),
+            updated_at=now(),
+            schema_version=2,
+            method=method,
+        )
         return self.store.save("review_sessions", record)
 
-    def create_structure(self, case_id, revision_id, name, group="Custom", color="#e3a35d", relationship=None,
-                         method="nninteractive"):
+    def create_structure(self, case_id, revision_id, name, group="Custom", color="#e3a35d", relationship=None, method="nninteractive"):
         """Create an empty draft target, without changing the segmentation history."""
         method = _method(method)
+
         def label(value, maximum, field):
             if not isinstance(value, str):
                 raise ValueError(f"The segment {field} must be text")
@@ -218,16 +304,47 @@ class ReviewManager:
         with (self.service.settings.data_dir / "empty-mask-generation.lock").open("a") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             imaging._save_mask(np.zeros(image.shape, dtype=np.uint8), image, baseline)
-        target = dict(id=structure_id, name=name, task="custom", group=group, color=color.lower(),
-                      reference_image_id=asset["id"],
-                      mask_file=str(baseline), volume_ml=0., voxel_count=0, centroid_ras=None, bounds_ras=None, qc=[], relationship=chosen)
-        record = dict(id=session_id, case_id=case_id, revision_id=revision_id, structure_id=structure_id,
-                      reference_image_id=asset["id"],
-                      new_structure=True, target=target, status="draft", generation=0, prompts=[], job_id=None,
-                      candidate=None, candidates={}, options=normalize_options({"start_empty": True}), batches=[],
-                      relationship=chosen, initial_relationship=dict(INDEPENDENT), relationship_suggestions=[],
-                      error=None, accepted_revision_id=None, created_at=now(), updated_at=now(), schema_version=2,
-                      method=method)
+        target = dict(
+            id=structure_id,
+            name=name,
+            task="custom",
+            group=group,
+            color=color.lower(),
+            reference_image_id=asset["id"],
+            mask_file=str(baseline),
+            volume_ml=0.0,
+            voxel_count=0,
+            centroid_ras=None,
+            bounds_ras=None,
+            qc=[],
+            relationship=chosen,
+        )
+        record = dict(
+            id=session_id,
+            case_id=case_id,
+            revision_id=revision_id,
+            structure_id=structure_id,
+            reference_image_id=asset["id"],
+            new_structure=True,
+            target=target,
+            status="draft",
+            generation=0,
+            prompts=[],
+            job_id=None,
+            candidate=None,
+            candidates={},
+            options=normalize_options({"start_empty": True}),
+            batches=[],
+            relationship=chosen,
+            initial_relationship=dict(INDEPENDENT),
+            relationship_suggestions=[],
+            error=None,
+            accepted_revision_id=None,
+            created_at=now(),
+            updated_at=now(),
+            schema_version=2,
+            method=method,
+        )
         return self.store.save("review_sessions", record)
 
     def get(self, case_id, session_id):
@@ -253,8 +370,14 @@ class ReviewManager:
         _generation(expected_generation)
         base, selected = self._base(review)
         chosen = normalize_relationship(relationship, base["structures"], selected["id"]) if relationship is not None else None
-        return self.store.change_review(case_id, session_id, expected_generation, self._prompts(review, prompts),
-                                        options=normalize_options(options) if options is not None else None, relationship=chosen)
+        return self.store.change_review(
+            case_id,
+            session_id,
+            expected_generation,
+            self._prompts(review, prompts),
+            options=normalize_options(options) if options is not None else None,
+            relationship=chosen,
+        )
 
     def predict(self, case_id, session_id, generation, full_refine=False):
         review = self.get(case_id, session_id)
@@ -283,23 +406,28 @@ class ReviewManager:
         base, selected = self._base(review)
         candidate = review.get("candidates", {}).get(match[2])
         if candidate is None and review.get("new_structure") and match[2] == "0":
-            candidate = dict(revision_id=alias, mask_file=selected["mask_file"],
-                             summary={"after_volume_ml": 0., "after_voxels": 0})
+            candidate = dict(revision_id=alias, mask_file=selected["mask_file"], summary={"after_volume_ml": 0.0, "after_voxels": 0})
         if not candidate or candidate["revision_id"] != alias or not Path(candidate["mask_file"]).is_file():
             raise NotFound("Correction candidate not found")
         changes = _candidate_changes(candidate, selected)
-        structures = [_changed_structure(structure, changes[structure["id"]]) if structure["id"] in changes else dict(structure)
-                      for structure in base["structures"]]
+        structures = [
+            _changed_structure(structure, changes[structure["id"]]) if structure["id"] in changes else dict(structure) for structure in base["structures"]
+        ]
         if review.get("new_structure") and selected["id"] not in {entry["id"] for entry in structures}:
             structures.append(_changed_structure(selected, changes[selected["id"]]))
         parent = f"review-{review['id']}-0" if review.get("new_structure") and match[2] != "0" else base["id"]
-        return {**base, "id": alias, "parent_id": parent, "structures": structures,
-                "source": "direct_edit_candidate" if review.get("method") == "direct" else "nninteractive_candidate",
-                "review_status": "unreviewed", "model_url": None,
-                "model_manifest_url": (f"/api/cases/{case_id}/revisions/{alias}/model-manifest"
-                                       if candidate.get("preview_3d_ready") else None),
-                "surface_assets": candidate.get("surface_assets", []) if candidate.get("preview_3d_ready") else [],
-                "preview_3d_ready": bool(candidate.get("preview_3d_ready"))}
+        return {
+            **base,
+            "id": alias,
+            "parent_id": parent,
+            "structures": structures,
+            "source": "direct_edit_candidate" if review.get("method") == "direct" else "nninteractive_candidate",
+            "review_status": "unreviewed",
+            "model_url": None,
+            "model_manifest_url": (f"/api/cases/{case_id}/revisions/{alias}/model-manifest" if candidate.get("preview_3d_ready") else None),
+            "surface_assets": candidate.get("surface_assets", []) if candidate.get("preview_3d_ready") else [],
+            "preview_3d_ready": bool(candidate.get("preview_3d_ready")),
+        }
 
     def _surface_preview(self, job, review, base, selected, changes, after, image, affine):
         """Prepare affected display assets while the target's decoded mask lives.
@@ -309,12 +437,12 @@ class ReviewManager:
         anatomy and preserves its camera, CT and WebGL context.
         """
         from . import surfaces
+
         by_id = {item["id"]: item for item in base["structures"]}
         if review.get("new_structure"):
             by_id[selected["id"]] = selected
         changed = {item["id"]: item for item in changes}
-        assets = {asset["id"]: {key: asset[key] for key in ("id", "key", "triangles")}
-                  for asset in base.get("surface_assets", [])}
+        assets = {asset["id"]: {key: asset[key] for key in ("id", "key", "triangles")} for asset in base.get("surface_assets", [])}
         for identity, structure in by_id.items():
             self._running(job, "predicting")
             change = changed.get(identity)
@@ -322,23 +450,32 @@ class ReviewManager:
             if not (needs_asset or change and not change.get("metadata_only")):
                 continue
             source = _changed_structure(structure, change) if change else dict(structure)
-            prepared = surfaces.prepare_surface(source, self.service.surface_cache,
+            prepared = surfaces.prepare_surface(
+                source,
+                self.service.surface_cache,
                 decoded_mask=(after, image, affine) if identity == selected["id"] else None,
-                progress=lambda message: self.service.stage(job, message))
+                progress=lambda message: self.service.stage(job, message),
+            )
             if prepared["triangles"]:
                 assets[identity] = {key: prepared[key] for key in ("id", "key", "triangles")}
             else:
                 assets.pop(identity, None)
         alias = f"review-{review['id']}-{review['generation']}"
-        return dict(preview_3d_ready=True,
-                    model_manifest_url=f"/api/cases/{job['case_id']}/revisions/{alias}/model-manifest",
-                    surface_assets=[assets[identity] for identity in by_id if identity in assets])
+        return dict(
+            preview_3d_ready=True,
+            model_manifest_url=f"/api/cases/{job['case_id']}/revisions/{alias}/model-manifest",
+            surface_assets=[assets[identity] for identity in by_id if identity in assets],
+        )
 
     def _running(self, job, status):
         self.service.check_cancel(job)
         review = self.store.get("review_sessions", job["payload"]["session_id"])
-        if (review["case_id"] != job["case_id"] or review["generation"] != job["payload"]["generation"]
-                or review["status"] != status or review.get("job_id") != job["id"]):
+        if (
+            review["case_id"] != job["case_id"]
+            or review["generation"] != job["payload"]["generation"]
+            or review["status"] != status
+            or review.get("job_id") != job["id"]
+        ):
             raise InterruptedError("Correction job superseded by another draft")
         return review
 
@@ -348,14 +485,22 @@ class ReviewManager:
         updates = reciprocal_updates(base["structures"], selected, relationship)
         voxel_ml = summary["voxel_volume_ml"]
         changed_relationship = (selected.get("relationship") or INDEPENDENT) != relationship
-        affected = [dict(id=selected["id"], name=selected["name"], role="target", summary=summary,
-                         mask_file=str(target) if summary["changed_voxels"] else selected["mask_file"],
-                         metadata_only=not bool(summary["changed_voxels"]), relationship=relationship)]
+        affected = [
+            dict(
+                id=selected["id"],
+                name=selected["name"],
+                role="target",
+                summary=summary,
+                mask_file=str(target) if summary["changed_voxels"] else selected["mask_file"],
+                metadata_only=not bool(summary["changed_voxels"]),
+                relationship=relationship,
+            )
+        ]
         overlaps, warnings, checked = [], [], {}
         bounds = imaging._foreground_bounds(after)
         target_bounds = None
         if bounds is not None:
-            corners = imaging._world(affine, imaging._corners(bounds[0] - .5, bounds[1] + .5))
+            corners = imaging._world(affine, imaging._corners(bounds[0] - 0.5, bounds[1] + 0.5))
             target_bounds = np.stack((corners.min(axis=0), corners.max(axis=0)))
         parents = {entry["id"]: (entry.get("relationship") or {}).get("parent_id") for entry in base["structures"]}
         parents[selected["id"]] = relationship.get("parent_id")
@@ -365,8 +510,7 @@ class ReviewManager:
         # Every foreground voxel lies in this inclusive native-IJK box. The
         # entire target is authoritative, including unchanged baseline overlap;
         # a model's most recent prediction box is not sufficient here.
-        region = (tuple(slice(int(low), int(high) + 1) for low, high in zip(*bounds))
-                  if bounds is not None else None)
+        region = tuple(slice(int(low), int(high) + 1) for low, high in zip(*bounds)) if bounds is not None else None
         target_region = after[region] if region is not None else None
         check_cancel = lambda: self.service.check_cancel(job)
         self.service.stage(job, "Checking explicit sibling relationships and preserved overlaps")
@@ -397,9 +541,25 @@ class ReviewManager:
                 if overlap:
                     checked[peer_id] = dict(id=peer_id, mask_file=entry["mask_file"], sha256=digest)
                     removed = peer_id in exclusive
-                    reason = "explicit_sibling" if removed else "parent_or_child" if peer_id in protected else relationship["kind"] if relationship["kind"] == "independent" else "unselected"
-                    overlaps.append(dict(id=peer_id, name=entry["name"], voxel_count=overlap, volume_ml=overlap * voxel_ml,
-                                         policy="removed" if removed else "preserved", reason=reason))
+                    reason = (
+                        "explicit_sibling"
+                        if removed
+                        else "parent_or_child"
+                        if peer_id in protected
+                        else relationship["kind"]
+                        if relationship["kind"] == "independent"
+                        else "unselected"
+                    )
+                    overlaps.append(
+                        dict(
+                            id=peer_id,
+                            name=entry["name"],
+                            voxel_count=overlap,
+                            volume_ml=overlap * voxel_ml,
+                            policy="removed" if removed else "preserved",
+                            reason=reason,
+                        )
+                    )
                     if removed:
                         result_path = str(directory / f"peer-{hashlib.sha256(peer_id.encode()).hexdigest()}.nii.gz")
                         # Only a truly affected exclusive sibling needs a dense
@@ -418,19 +578,32 @@ class ReviewManager:
             removed = overlap if peer_id in exclusive else 0
             if removed or metadata_changed:
                 checked.setdefault(peer_id, dict(id=peer_id, mask_file=entry["mask_file"], sha256=_digest(entry["mask_file"])))
-                affected.append(dict(id=peer_id, name=entry["name"], role="exclusive_sibling",
-                                     summary=_summary(peer_count, peer_count - removed, 0, removed, voxel_ml),
-                                     mask_file=result_path, metadata_only=not bool(removed),
-                                     relationship=next_relationship or entry.get("relationship") or dict(INDEPENDENT)))
+                affected.append(
+                    dict(
+                        id=peer_id,
+                        name=entry["name"],
+                        role="exclusive_sibling",
+                        summary=_summary(peer_count, peer_count - removed, 0, removed, voxel_ml),
+                        mask_file=result_path,
+                        metadata_only=not bool(removed),
+                        relationship=next_relationship or entry.get("relationship") or dict(INDEPENDENT),
+                    )
+                )
         for entry in affected:
             entry["mask_sha256"] = _digest(entry["mask_file"])
         for entry in checked.values():
             self.service.check_cancel(job)
             if _digest(entry["mask_file"]) != entry["sha256"]:
                 raise ValueError("An overlapping source mask changed during candidate preparation")
-        return dict(relationship=relationship, affected_structures=affected, overlaps=overlaps, warnings=warnings,
-                    checked_sources=list(checked.values()), relationship_changed=bool(changed_relationship),
-                    total_changed_voxels=sum(entry["summary"]["changed_voxels"] for entry in affected))
+        return dict(
+            relationship=relationship,
+            affected_structures=affected,
+            overlaps=overlaps,
+            warnings=warnings,
+            checked_sources=list(checked.values()),
+            relationship_changed=bool(changed_relationship),
+            total_changed_voxels=sum(entry["summary"]["changed_voxels"] for entry in affected),
+        )
 
     def run_predict(self, job, runtime):
         review = self._running(job, "predicting")
@@ -446,11 +619,15 @@ class ReviewManager:
             alias = job["payload"].get("reuse_candidate_revision_id")
             previous = next((entry for entry in review.get("candidates", {}).values() if entry["revision_id"] == alias), None)
             if alias:
-                if (not previous or previous["ct_sha256"] != ct_digest or previous["before_mask_sha256"] != before_digest
-                        or previous.get("prompts_snapshot") != job["payload"]["prompts"]
-                        or previous.get("options") != job["payload"]["options"]
-                        or previous.get("batches_snapshot") != job["payload"]["batches"]
-                        or _digest(previous["mask_file"]) != previous["mask_sha256"]):
+                if (
+                    not previous
+                    or previous["ct_sha256"] != ct_digest
+                    or previous["before_mask_sha256"] != before_digest
+                    or previous.get("prompts_snapshot") != job["payload"]["prompts"]
+                    or previous.get("options") != job["payload"]["options"]
+                    or previous.get("batches_snapshot") != job["payload"]["batches"]
+                    or _digest(previous["mask_file"]) != previous["mask_sha256"]
+                ):
                     raise ValueError("The prediction source changed; apply a new prediction")
                 shutil.copyfile(previous["mask_file"], target)
                 provenance = {**previous.get("provenance", {}), "reused_prediction": True, "source_candidate": alias}
@@ -465,14 +642,28 @@ class ReviewManager:
                 provenance = dict(engine="mask-relationship-processing", version=__version__, reused_prediction=False, source="base_mask")
         elif job["payload"].get("method") == "direct":
             from .direct_edit import apply_strokes
-            provenance, decoded = apply_strokes(ct, mask_path, job["payload"]["prompts"], target,
-                options=job["payload"]["options"], progress=lambda message: self.service.stage(job, message),
-                cancelled=lambda: self.service.cancelled(job))
+
+            provenance, decoded = apply_strokes(
+                ct,
+                mask_path,
+                job["payload"]["prompts"],
+                target,
+                options=job["payload"]["options"],
+                progress=lambda message: self.service.stage(job, message),
+                cancelled=lambda: self.service.cancelled(job),
+            )
         else:
-            provenance = runtime.predict(ct, mask_path, job["payload"]["prompts"], target,
-                progress=lambda message: self.service.stage(job, message), cancelled=lambda: self.service.cancelled(job),
+            provenance = runtime.predict(
+                ct,
+                mask_path,
+                job["payload"]["prompts"],
+                target,
+                progress=lambda message: self.service.stage(job, message),
+                cancelled=lambda: self.service.cancelled(job),
                 session_key=f"{review['id']}:{review['revision_id']}:{before_digest}",
-                options=job["payload"]["options"], batches=job["payload"]["batches"])
+                options=job["payload"]["options"],
+                batches=job["payload"]["batches"],
+            )
         self._running(job, "predicting")
         self.service.stage(job, "Checking the candidate on the reference CT grid")
         if decoded is None:
@@ -488,7 +679,7 @@ class ReviewManager:
         before_count = after_count = added = removed = 0
         for start in range(0, before_flat.size, 4 * 1024 * 1024):
             self.service.check_cancel(job)
-            a, b = before_flat[start:start + 4 * 1024 * 1024], after_flat[start:start + 4 * 1024 * 1024]
+            a, b = before_flat[start : start + 4 * 1024 * 1024], after_flat[start : start + 4 * 1024 * 1024]
             before_count += int(np.count_nonzero(a))
             after_count += int(np.count_nonzero(b))
             added += int(np.count_nonzero(b & ~a))
@@ -497,18 +688,33 @@ class ReviewManager:
         summary = _summary(before_count, after_count, added, removed, voxel_volume_ml)
         del before, before_flat, after_flat, a, b
         overlap = self._overlaps(job, base, selected, after, image, affine, directory, target, summary)
-        preview = (self._surface_preview(job, review, base, selected, overlap["affected_structures"], after, image, affine)
-                   if job["payload"].get("method") == "direct" else {})
+        preview = (
+            self._surface_preview(job, review, base, selected, overlap["affected_structures"], after, image, affine)
+            if job["payload"].get("method") == "direct"
+            else {}
+        )
         del after
         if _digest(ct) != ct_digest or _digest(mask_path) != before_digest:
             raise ValueError("The source CT or mask changed during interactive prediction")
-        candidate = dict(generation=review["generation"], revision_id=f"review-{review['id']}-{review['generation']}",
-                         mask_file=str(target), summary=summary, created_at=now(), provenance=provenance,
-                         prompts_snapshot=job["payload"]["prompts"], options=job["payload"]["options"],
-                         batches_snapshot=job["payload"]["batches"],
-                         prompts_sha256=_prompt_digest(job["payload"]["prompts"]),
-                         ct_sha256=ct_digest, before_mask_sha256=before_digest, mask_sha256=_digest(target), **overlap, **preview)
+        candidate = dict(
+            generation=review["generation"],
+            revision_id=f"review-{review['id']}-{review['generation']}",
+            mask_file=str(target),
+            summary=summary,
+            created_at=now(),
+            provenance=provenance,
+            prompts_snapshot=job["payload"]["prompts"],
+            options=job["payload"]["options"],
+            batches_snapshot=job["payload"]["batches"],
+            prompts_sha256=_prompt_digest(job["payload"]["prompts"]),
+            ct_sha256=ct_digest,
+            before_mask_sha256=before_digest,
+            mask_sha256=_digest(target),
+            **overlap,
+            **preview,
+        )
         from .service import atomic_json
+
         atomic_json(directory / "candidate.json", candidate)
         self.service.check_cancel(job)
         return self.store.publish_review_candidate(job, candidate)
@@ -518,31 +724,34 @@ class ReviewManager:
         if self.store.get("cases", job["case_id"]).get("active_revision_id") != review["revision_id"]:
             raise ValueError("The active revision changed; start a review from the current revision")
         candidate = review.get("candidate")
-        if (not candidate or candidate["generation"] != review["generation"]
-                or candidate["revision_id"] != job["payload"].get("candidate_revision_id")):
+        if not candidate or candidate["generation"] != review["generation"] or candidate["revision_id"] != job["payload"].get("candidate_revision_id"):
             raise ValueError("The candidate changed; inspect the current preview before accepting")
         allow_empty = review.get("method") == "direct" and not review.get("new_structure")
-        if ((not candidate["summary"]["after_voxels"] and not allow_empty) or not (
-                candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]) or candidate.get("relationship_changed"))):
-            raise ValueError("Only a changed candidate can be accepted" if allow_empty else
-                             "Only a nonempty, changed candidate can be accepted")
+        if (not candidate["summary"]["after_voxels"] and not allow_empty) or not (
+            candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]) or candidate.get("relationship_changed")
+        ):
+            raise ValueError("Only a changed candidate can be accepted" if allow_empty else "Only a nonempty, changed candidate can be accepted")
         base, selected = self._base(review)
         ct = Path(base["ct_file"])
+
         def verify_sources():
             self._running(job, "accepting")
-            if (_digest(ct) != candidate["ct_sha256"] or _digest(selected["mask_file"]) != candidate["before_mask_sha256"]
-                    or _digest(candidate["mask_file"]) != candidate["mask_sha256"]):
+            if (
+                _digest(ct) != candidate["ct_sha256"]
+                or _digest(selected["mask_file"]) != candidate["before_mask_sha256"]
+                or _digest(candidate["mask_file"]) != candidate["mask_sha256"]
+            ):
                 raise ValueError("A correction source or candidate changed; generate a new candidate")
             records = {entry["id"]: entry for entry in base["structures"]}
             for entry in candidate.get("checked_sources", []):
                 self.service.check_cancel(job)
-                if (entry["id"] not in records or records[entry["id"]]["mask_file"] != entry["mask_file"]
-                        or _digest(entry["mask_file"]) != entry["sha256"]):
+                if entry["id"] not in records or records[entry["id"]]["mask_file"] != entry["mask_file"] or _digest(entry["mask_file"]) != entry["sha256"]:
                     raise ValueError("An overlapping source mask changed; generate a new candidate")
             for entry in candidate.get("affected_structures", []):
                 self.service.check_cancel(job)
                 if _digest(entry["mask_file"]) != entry["mask_sha256"]:
                     raise ValueError("An affected candidate mask changed; generate a new candidate")
+
         verify_sources()
         changes = _candidate_changes(candidate, selected)
         if candidate.get("relationship", INDEPENDENT) != job["payload"].get("relationship", INDEPENDENT):
@@ -573,31 +782,54 @@ class ReviewManager:
             entry["before_mask_sha256"] = source_hashes[entry["id"]]
             entry["after_mask_sha256"] = changes[entry["id"]]["mask_sha256"]
         from .service import atomic_json, code_fingerprint
+
         method = review.get("method", "nninteractive")
-        source = ("direct_edit_new_structure" if is_new else "direct_edit_correction") if method == "direct" else (
-            "nninteractive_new_structure" if is_new else "nninteractive_correction")
-        operation = dict(type=source, method=method,
-                         session_id=review["id"], generation=review["generation"],
-                         structure_id=review["structure_id"], input_revision_id=base["id"],
-                         prompts=job["payload"]["prompts"], prompts_sha256=candidate["prompts_sha256"],
-                         options=candidate.get("options"), batches=candidate.get("batches_snapshot"),
-                         summary=candidate["summary"], runtime=candidate.get("provenance"),
-                         relationship=candidate.get("relationship", INDEPENDENT),
-                         affected_structures=affected_ledger,
-                         overlaps=candidate.get("overlaps", []), warnings=candidate.get("warnings", []),
-                         total_changed_voxels=candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]),
-                         relationship_changed=candidate.get("relationship_changed", False),
-                         ct_sha256=candidate["ct_sha256"], before_mask_sha256=candidate["before_mask_sha256"],
-                         after_mask_sha256=candidate["mask_sha256"], code_version=__version__, code_sha256=code_fingerprint())
+        source = (
+            ("direct_edit_new_structure" if is_new else "direct_edit_correction")
+            if method == "direct"
+            else ("nninteractive_new_structure" if is_new else "nninteractive_correction")
+        )
+        operation = dict(
+            type=source,
+            method=method,
+            session_id=review["id"],
+            generation=review["generation"],
+            structure_id=review["structure_id"],
+            input_revision_id=base["id"],
+            prompts=job["payload"]["prompts"],
+            prompts_sha256=candidate["prompts_sha256"],
+            options=candidate.get("options"),
+            batches=candidate.get("batches_snapshot"),
+            summary=candidate["summary"],
+            runtime=candidate.get("provenance"),
+            relationship=candidate.get("relationship", INDEPENDENT),
+            affected_structures=affected_ledger,
+            overlaps=candidate.get("overlaps", []),
+            warnings=candidate.get("warnings", []),
+            total_changed_voxels=candidate.get("total_changed_voxels", candidate["summary"]["changed_voxels"]),
+            relationship_changed=candidate.get("relationship_changed", False),
+            ct_sha256=candidate["ct_sha256"],
+            before_mask_sha256=candidate["before_mask_sha256"],
+            after_mask_sha256=candidate["mask_sha256"],
+            code_version=__version__,
+            code_sha256=code_fingerprint(),
+        )
         if is_new:
             operation["new_structure"] = {key: value for key, value in selected.items() if key != "mask_file"}
             operation["new_structure"]["relationship"] = candidate.get("relationship", INDEPENDENT)
         self.service.stage(job, "Preparing the accepted correction and updating its surface")
-        revision = self.service.build_revision(job["case_id"], ct, structures,
+        revision = self.service.build_revision(
+            job["case_id"],
+            ct,
+            structures,
             source=source,
-            parent=base["id"], operation=operation, acquisition=base.get("acquisition"), job=job,
+            parent=base["id"],
+            operation=operation,
+            acquisition=base.get("acquisition"),
+            job=job,
             extra_qc=sorted(set(self.service._inherited_qc(base)) | set(candidate.get("warnings", []))),
-            inference_manifest=base.get("inference_manifest"))
+            inference_manifest=base.get("inference_manifest"),
+        )
         verify_sources()
         revision["review_status"] = "corrected"
         atomic_json(Path(revision["directory"]) / "revision.json", revision)

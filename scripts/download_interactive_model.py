@@ -1,4 +1,5 @@
 """Acquire the versioned public model; never send patient data to a model host."""
+
 import hashlib
 import os
 from pathlib import Path
@@ -13,8 +14,7 @@ CHECKPOINT_SHA256 = "b3ac4421f85457bbd1aa0d87f5e67bcb7bc8e2ce6b824b6ac45077cc5d6
 
 def main():
     folder = ROOT / ".runtime" / "nninteractive"
-    snapshot_download(repo_id="MIC-DKFZ/nnInteractive", revision=REVISION,
-                      allow_patterns=["nnInteractive_v1.0/**"], local_dir=folder, max_workers=2)
+    snapshot_download(repo_id="MIC-DKFZ/nnInteractive", revision=REVISION, allow_patterns=["nnInteractive_v1.0/**"], local_dir=folder, max_workers=2)
     checkpoint = folder / "nnInteractive_v1.0" / "fold_0" / "checkpoint_final.pth"
     sha = hashlib.sha256()
     with checkpoint.open("rb") as handle:

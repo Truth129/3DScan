@@ -71,7 +71,11 @@ export interface Job {
   created_at: string;
   progress?: { phase: string; completed: number; total: number; timings_seconds?: Record<string, number> };
 }
-export interface JobMeasurements { structures: Structure[]; completed: number; total: number }
+export interface JobMeasurements {
+  structures: Structure[];
+  completed: number;
+  total: number;
+}
 export interface SegmentationSettings {
   task: string;
   robust_crop: boolean;
@@ -158,7 +162,10 @@ export interface SliceMeta {
   extent_mm: number[];
   native?: { axis: 0 | 1 | 2; index: number };
 }
-export interface DisplayState { visible: boolean; opacity: number }
+export interface DisplayState {
+  visible: boolean;
+  opacity: number;
+}
 export type StructureDisplay = Record<string, DisplayState>;
 export interface OfflineManifest {
   image_context?: ImageContext;
@@ -175,15 +182,60 @@ export type InteractiveTool = 'navigate' | 'point' | 'scribble' | 'lasso' | 'bbo
 export type ScissorsShape = 'freehand' | 'rectangle' | 'circle';
 export type ScissorsOperation = 'erase_inside' | 'erase_outside';
 export type InteractiveMethod = 'direct' | 'nninteractive';
-export interface InteractivePoint { id: string; kind?: 'point'; ras: Point; include: boolean }
-export interface InteractiveDrawing { id: string; kind: 'bbox' | 'scribble' | 'lasso'; include: boolean; axis: 0 | 1 | 2; index: number; vertices: [number, number][]; radius_mm?: number }
-export interface InteractiveScissors { id: string; kind: 'scissors'; include: false; operation: ScissorsOperation; shape: ScissorsShape; vertices: [number, number][]; ras_to_clip: number[][] }
+export interface InteractivePoint {
+  id: string;
+  kind?: 'point';
+  ras: Point;
+  include: boolean;
+}
+export interface InteractiveDrawing {
+  id: string;
+  kind: 'bbox' | 'scribble' | 'lasso';
+  include: boolean;
+  axis: 0 | 1 | 2;
+  index: number;
+  vertices: [number, number][];
+  radius_mm?: number;
+}
+export interface InteractiveScissors {
+  id: string;
+  kind: 'scissors';
+  include: false;
+  operation: ScissorsOperation;
+  shape: ScissorsShape;
+  vertices: [number, number][];
+  ras_to_clip: number[][];
+}
 export type InteractivePrompt = InteractivePoint | InteractiveDrawing | InteractiveScissors;
-export interface InteractiveOptions { autozoom: boolean; start_empty: boolean }
-export interface SegmentRelationship { kind: 'independent' | 'subregion' | 'subdivision'; parent_id?: string; exclusive_with: string[] }
-export interface RelationshipSuggestion { id: string; name: string; exclusive_with: string[] }
-export interface InteractiveStructureInput { name: string; group: string; color: string; relationship?: SegmentRelationship; method?: InteractiveMethod }
-export interface MaskChangeSummary { changed_voxels: number; added_voxels: number; removed_voxels: number; before_volume_ml: number; after_volume_ml: number; after_voxels?: number }
+export interface InteractiveOptions {
+  autozoom: boolean;
+  start_empty: boolean;
+}
+export interface SegmentRelationship {
+  kind: 'independent' | 'subregion' | 'subdivision';
+  parent_id?: string;
+  exclusive_with: string[];
+}
+export interface RelationshipSuggestion {
+  id: string;
+  name: string;
+  exclusive_with: string[];
+}
+export interface InteractiveStructureInput {
+  name: string;
+  group: string;
+  color: string;
+  relationship?: SegmentRelationship;
+  method?: InteractiveMethod;
+}
+export interface MaskChangeSummary {
+  changed_voxels: number;
+  added_voxels: number;
+  removed_voxels: number;
+  before_volume_ml: number;
+  after_volume_ml: number;
+  after_voxels?: number;
+}
 export interface InteractiveStatus {
   installed: boolean;
   model_available: boolean;

@@ -1,4 +1,5 @@
 """Backups snapshot the database first, copy case files, and update incrementally."""
+
 import json
 import os
 from pathlib import Path
@@ -79,7 +80,6 @@ def test_backup_refuses_nested_destination_and_leaves_no_partial_snapshot(librar
 def test_backup_command_uses_the_configured_data_directory(library, tmp_path):
     _, case, data = library
     environment = dict(os.environ, SCAN3D_DATA_DIR=str(data), PYTHONPATH=str(Path(__file__).resolve().parents[1]))
-    result = subprocess.run([sys.executable, "-m", "scan3d", "backup", str(tmp_path / "copies")], env=environment,
-                            check=True, capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-m", "scan3d", "backup", str(tmp_path / "copies")], env=environment, check=True, capture_output=True, text=True)
     manifest = json.loads(result.stdout)
     assert manifest["data_dir"] == str(data) and (tmp_path / "copies" / manifest["snapshot"] / "cases" / case["id"]).is_dir()

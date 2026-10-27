@@ -3,6 +3,7 @@
 DICOM indexing is a deterministic double; these tests exercise the staged
 transport, its idempotent retries and its limits through the HTTP API.
 """
+
 import fcntl
 import io
 import json
@@ -30,20 +31,27 @@ def rig(tmp_path, monkeypatch):
             raise ValueError(failure["message"])
         indexed.append(Path(source))
         files = sorted(str(path) for path in Path(source).rglob("*") if path.is_file())
-        return [{"uid": "fixture-series", "description": "Synthetic series", "modality": "CT",
-                 "slice_count": len(files), "spacing": [1, 1, 1], "warnings": [], "files": files}]
+        return [
+            {
+                "uid": "fixture-series",
+                "description": "Synthetic series",
+                "modality": "CT",
+                "slice_count": len(files),
+                "spacing": [1, 1, 1],
+                "warnings": [],
+                "files": files,
+            }
+        ]
 
     monkeypatch.setattr(dicom, "index_dicom", index)
-    settings = Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", upload_limit=1024 ** 2)
+    settings = Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", upload_limit=1024**2)
     http = TestClient(create_app(settings), base_url="http://127.0.0.1")
-    yield SimpleNamespace(http=http, service=http.app.state.service, settings=settings,
-                          indexed=indexed, failure=failure)
+    yield SimpleNamespace(http=http, service=http.app.state.service, settings=settings, indexed=indexed, failure=failure)
     http.close()
 
 
 def start(rig, total_files, total_bytes, label=None):
-    response = rig.http.post("/api/imports", json={"label": label, "total_files": total_files,
-                                                    "total_bytes": total_bytes})
+    response = rig.http.post("/api/imports", json={"label": label, "total_files": total_files, "total_bytes": total_bytes})
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -51,8 +59,7 @@ def start(rig, total_files, total_bytes, label=None):
 def send(rig, upload, pieces):
     """Post (path, offset, file size, bytes) pieces as one multipart batch."""
     manifest = json.dumps([{"path": path, "offset": offset, "size": size} for path, offset, size, _ in pieces])
-    files = [("files", (f"part-{index}", data, "application/octet-stream"))
-             for index, (*_, data) in enumerate(pieces)]
+    files = [("files", (f"part-{index}", data, "application/octet-stream")) for index, (*_, data) in enumerate(pieces)]
     return rig.http.post(f"/api/imports/{upload['id']}/parts", data={"manifest": manifest}, files=files)
 
 
@@ -70,8 +77,7 @@ def test_folder_import_accepts_more_files_than_one_multipart_form(rig):
     assert upload["max_parts"] == MAX_PARTS < 1000
     names = list(contents)
     for first in range(0, len(names), upload["max_parts"]):
-        response = send(rig, upload, [(name, 0, len(contents[name]), contents[name])
-                                      for name in names[first:first + upload["max_parts"]]])
+        response = send(rig, upload, [(name, 0, len(contents[name]), contents[name]) for name in names[first : first + upload["max_parts"]]])
         assert response.status_code == 200, response.text
     assert response.json()["received_files"] == 1001
     assert rig.service.store.list("cases") == []
@@ -82,8 +88,7 @@ def test_folder_import_accepts_more_files_than_one_multipart_form(rig):
     assert "files" not in case["series"][0]
     source = rig.service.store.case_dir(case["id"]) / "dicom"
     assert rig.indexed == [source]
-    assert {path.relative_to(source).as_posix(): path.read_bytes()
-            for path in source.rglob("*") if path.is_file()} == contents
+    assert {path.relative_to(source).as_posix(): path.read_bytes() for path in source.rglob("*") if path.is_file()} == contents
     assert not (staged(rig, upload) / "files").exists()
 
 

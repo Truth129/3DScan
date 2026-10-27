@@ -22,7 +22,7 @@ def _anatomical_name(entry):
     # their editable name is the anatomical identity supplied by the reviewer.
     prefix = f"{task}:" if task and task != "custom" else None
     if prefix and structure_id.startswith(prefix):
-        name = structure_id[len(prefix):]
+        name = structure_id[len(prefix) :]
     else:
         name = entry.get("name", "")
     if not isinstance(name, str):
@@ -52,8 +52,7 @@ def _remap_relationship(value, replacements):
             raise ValueError("Invalid segment relationship parent")
         result["parent_id"] = replacements.get(parent, parent)
     peers = result.get("exclusive_with", [])
-    if (not isinstance(peers, list) or any(not isinstance(peer, str) for peer in peers)
-            or len(peers) != len(set(peers))):
+    if not isinstance(peers, list) or any(not isinstance(peer, str) for peer in peers) or len(peers) != len(set(peers)):
         raise ValueError("Invalid segment relationship exclusive siblings")
     if "exclusive_with" in result:
         # Several old aliases can resolve to the same replacement. That creates
@@ -72,8 +71,7 @@ def merge_task_outputs(previous, incoming, selected_tasks, *, reference_image_id
     """
     from .image_assets import bind_structures
 
-    scopes = {entry["reference_image_id"] for entry in previous + incoming
-              if entry.get("reference_image_id") is not None}
+    scopes = {entry["reference_image_id"] for entry in previous + incoming if entry.get("reference_image_id") is not None}
     if reference_image_id is not None:
         scopes.add(reference_image_id)
     if len(scopes) > 1:

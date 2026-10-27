@@ -70,8 +70,7 @@ def _status(config: dict) -> dict:
                     validated_at = stamp.isoformat()
             except ValueError:
                 pass
-    return {"configured": configured, "validated": True if validated_at else None,
-            "validated_at": validated_at}
+    return {"configured": configured, "validated": True if validated_at else None, "validated_at": validated_at}
 
 
 def license_status() -> dict:
@@ -90,8 +89,7 @@ def license_configured() -> bool:
 
 def _validate(key: str) -> None:
     try:
-        response = requests.post(VALIDATION_URL, json={"license_number": key},
-                                 timeout=(3.05, 5), allow_redirects=False)
+        response = requests.post(VALIDATION_URL, json={"license_number": key}, timeout=(3.05, 5), allow_redirects=False)
     except requests.RequestException:
         raise LicenseError(503, "The TotalSegmentator license service could not be reached. Your saved license is unchanged.") from None
     try:
@@ -115,8 +113,7 @@ def _write_config(config: dict) -> None:
     temporary = None
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix=".license-", suffix=".tmp",
-                                         dir=path.parent, delete=False) as stream:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix=".license-", suffix=".tmp", dir=path.parent, delete=False) as stream:
             temporary = Path(stream.name)
             os.fchmod(stream.fileno(), 0o600)
             json.dump(config, stream, indent=4, allow_nan=False)
@@ -148,11 +145,13 @@ def save_license(key: str) -> dict:
         # preserved. API writes also hold the job-store transaction idle guard.
         config = _read_config()
         if not config:
-            config = {"totalseg_id": "totalseg_" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8)),
-                      "send_usage_stats": False, "prediction_counter": 0}
+            config = {
+                "totalseg_id": "totalseg_" + "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(8)),
+                "send_usage_stats": False,
+                "prediction_counter": 0,
+            }
         config["license_number"] = key
-        config[_VALIDATION_FIELD] = {"sha256": hashlib.sha256(key.encode()).hexdigest(),
-                                     "validated_at": datetime.now(timezone.utc).isoformat()}
+        config[_VALIDATION_FIELD] = {"sha256": hashlib.sha256(key.encode()).hexdigest(), "validated_at": datetime.now(timezone.utc).isoformat()}
         _write_config(config)
         return _status(config)
 

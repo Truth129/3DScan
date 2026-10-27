@@ -17,10 +17,10 @@ from scipy import ndimage as ndi
 
 _CT_CACHE = OrderedDict()
 _CT_CACHE_LOCK = threading.RLock()
-_CT_CACHE_BYTES = 1024 ** 3
+_CT_CACHE_BYTES = 1024**3
 _SLICE_MASK_CACHE = OrderedDict()
 _SLICE_MASK_CACHE_LOCK = threading.RLock()
-_SLICE_MASK_CACHE_BYTES = 512 * 1024 ** 2
+_SLICE_MASK_CACHE_BYTES = 512 * 1024**2
 
 
 def _slice_mask(path, ct_image, ct_affine):
@@ -32,8 +32,7 @@ def _slice_mask(path, ct_image, ct_affine):
     """
     path = Path(path).resolve()
     stat = path.stat()
-    key = (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
-           tuple(ct_image.shape), np.asarray(ct_affine, dtype=np.float64).tobytes())
+    key = (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, tuple(ct_image.shape), np.asarray(ct_affine, dtype=np.float64).tobytes())
     with _SLICE_MASK_CACHE_LOCK:
         if key in _SLICE_MASK_CACHE:
             _SLICE_MASK_CACHE.move_to_end(key)
@@ -46,8 +45,9 @@ def _slice_mask(path, ct_image, ct_affine):
             if previous[0] == str(path):
                 del _SLICE_MASK_CACHE[previous]
         if mask.nbytes <= _SLICE_MASK_CACHE_BYTES:
-            while _SLICE_MASK_CACHE and (len(_SLICE_MASK_CACHE) >= 2
-                    or sum(value.nbytes for value in _SLICE_MASK_CACHE.values()) + mask.nbytes > _SLICE_MASK_CACHE_BYTES):
+            while _SLICE_MASK_CACHE and (
+                len(_SLICE_MASK_CACHE) >= 2 or sum(value.nbytes for value in _SLICE_MASK_CACHE.values()) + mask.nbytes > _SLICE_MASK_CACHE_BYTES
+            ):
                 _SLICE_MASK_CACHE.popitem(last=False)
             _SLICE_MASK_CACHE[key] = mask
         return mask
@@ -67,8 +67,7 @@ def _ct_array(path, image):
             raise ValueError("Reference CT contains nonfinite intensities")
         values.flags.writeable = False
         if values.nbytes <= _CT_CACHE_BYTES:
-            while _CT_CACHE and (len(_CT_CACHE) >= 2 or sum(x.nbytes for x in _CT_CACHE.values())
-                                 + values.nbytes > _CT_CACHE_BYTES):
+            while _CT_CACHE and (len(_CT_CACHE) >= 2 or sum(x.nbytes for x in _CT_CACHE.values()) + values.nbytes > _CT_CACHE_BYTES):
                 _CT_CACHE.popitem(last=False)
             _CT_CACHE[key] = values
         return values
@@ -84,9 +83,7 @@ def _image(path: Path, *, keep_file_open=None):
     if factor is None:
         raise ValueError("Unsupported image spatial units")
     affine[:3, :] *= factor
-    if (not np.isfinite(affine).all()
-            or not np.allclose(affine[3], [0, 0, 0, 1])
-            or abs(np.linalg.det(affine[:3, :3])) < 1e-9):
+    if not np.isfinite(affine).all() or not np.allclose(affine[3], [0, 0, 0, 1]) or abs(np.linalg.det(affine[:3, :3])) < 1e-9:
         raise ValueError("Image has an invalid voxel-to-patient transform")
     return image, affine
 
@@ -94,8 +91,7 @@ def _image(path: Path, *, keep_file_open=None):
 def _binary_values(mask_path: Path, ct_image=None, ct_affine=None):
     """Validate every voxel in its native storage order, without a dense copy."""
     image, affine = _image(mask_path)
-    if ct_image is not None and (image.shape != ct_image.shape
-            or not np.allclose(affine, ct_affine, rtol=0, atol=1e-4)):
+    if ct_image is not None and (image.shape != ct_image.shape or not np.allclose(affine, ct_affine, rtol=0, atol=1e-4)):
         raise ValueError("Mask geometry does not match the reference CT")
     values = np.asanyarray(image.dataobj)
     # Integer masks need only range checks: there are no representable integers
@@ -103,8 +99,13 @@ def _binary_values(mask_path: Path, ct_image=None, ct_affine=None):
     if values.dtype.kind not in "buif":
         raise ValueError("Per-structure masks must contain only binary values 0 and 1")
     minimum, maximum = values.min(), values.max()
-    if (not np.isfinite(minimum) or not np.isfinite(maximum) or minimum < 0 or maximum > 1
-            or (values.dtype.kind == "f" and not np.all((values == 0) | (values == 1)))):
+    if (
+        not np.isfinite(minimum)
+        or not np.isfinite(maximum)
+        or minimum < 0
+        or maximum > 1
+        or (values.dtype.kind == "f" and not np.all((values == 0) | (values == 1)))
+    ):
         raise ValueError("Per-structure masks must contain only binary values 0 and 1")
     return values, image, affine, bool(maximum)
 
@@ -142,8 +143,7 @@ def _bounds(shape, affine):
 def _foreground_bounds(mask):
     if not mask.any():
         return None
-    axes = [np.flatnonzero(mask.any(axis=tuple(j for j in range(3) if j != axis)))
-            for axis in range(3)]
+    axes = [np.flatnonzero(mask.any(axis=tuple(j for j in range(3) if j != axis))) for axis in range(3)]
     return np.array([x[0] for x in axes]), np.array([x[-1] for x in axes])
 
 
@@ -189,8 +189,7 @@ def analyze_mask(ct_path: Path, mask_path: Path, decoded_mask=None) -> dict:
     volume = count * abs(float(np.linalg.det(affine[:3, :3]))) / 1000
     qc = []
     if not count:
-        return {"volume_ml": 0.0, "voxel_count": 0, "centroid_ras": None,
-                "bounds_ras": None, "qc": ["Empty segmentation"]}
+        return {"volume_ml": 0.0, "voxel_count": 0, "centroid_ras": None, "bounds_ras": None, "qc": ["Empty segmentation"]}
     low, high = _foreground_bounds(mask)
     cropped = np.ascontiguousarray(mask[tuple(slice(int(a), int(b) + 1) for a, b in zip(low, high))])
     center_index = np.asarray(ndi.center_of_mass(cropped), dtype=np.float64) + low
@@ -200,9 +199,7 @@ def analyze_mask(ct_path: Path, mask_path: Path, decoded_mask=None) -> dict:
     world_min = np.full(3, np.inf)
     world_max = np.full(3, -np.inf)
     for axis in range(3):
-        values = (affine[axis, 0] * selected[0]
-                  + affine[axis, 1] * selected[1]
-                  + affine[axis, 2] * selected[2] + affine[axis, 3])
+        values = affine[axis, 0] * selected[0] + affine[axis, 1] * selected[1] + affine[axis, 2] * selected[2] + affine[axis, 3]
         half_width = np.abs(affine[axis, :3]).sum() / 2
         world_min[axis] = values.min() - half_width
         world_max[axis] = values.max() + half_width
@@ -211,9 +208,13 @@ def analyze_mask(ct_path: Path, mask_path: Path, decoded_mask=None) -> dict:
         qc.append(f"{components} disconnected components; this can be expected anatomy")
     if np.any(low == 0) or np.any(high == np.asarray(mask.shape) - 1):
         qc.append("Segmentation touches the scan boundary; inspect truncated anatomy")
-    return {"volume_ml": volume, "voxel_count": count,
-            "centroid_ras": _world(affine, center_index).tolist(),
-            "bounds_ras": [world_min.tolist(), world_max.tolist()], "qc": qc}
+    return {
+        "volume_ml": volume,
+        "voxel_count": count,
+        "centroid_ras": _world(affine, center_index).tolist(),
+        "bounds_ras": [world_min.tolist(), world_max.tolist()],
+        "qc": qc,
+    }
 
 
 def _point(value, name="Point"):
@@ -271,8 +272,7 @@ def refine_mask(ct_path: Path, mask_path: Path, output_path: Path, operation: di
         raise ValueError("The operation would remove the entire structure")
     voxel_ml = abs(float(np.linalg.det(affine[:3, :3]))) / 1000
     _save_mask(result, ct, output_path)
-    return {"changed_voxels": changed, "before_volume_ml": float(mask.sum()) * voxel_ml,
-            "after_volume_ml": float(result.sum()) * voxel_ml}
+    return {"changed_voxels": changed, "before_volume_ml": float(mask.sum()) * voxel_ml, "after_volume_ml": float(result.sum()) * voxel_ml}
 
 
 def probe(ct_path: Path, ras) -> dict:
@@ -317,11 +317,18 @@ def _reslice(values, voxel_from_pixel, shape, order, cval):
                 indices[axis] = lower + 1
                 plane += values[tuple(indices)].astype(np.float64) * fraction
         keep = [i for i in range(3) if i != axis]
-        return ndi.affine_transform(np.ascontiguousarray(plane), matrix[keep], offset[keep],
-                                    output_shape=shape, output=values.dtype, order=order,
-                                    mode="constant", cval=cval, prefilter=False)
-    return ndi.affine_transform(values, matrix, offset, output_shape=shape,
-                                order=order, mode="constant", cval=cval, prefilter=False)
+        return ndi.affine_transform(
+            np.ascontiguousarray(plane),
+            matrix[keep],
+            offset[keep],
+            output_shape=shape,
+            output=values.dtype,
+            order=order,
+            mode="constant",
+            cval=cval,
+            prefilter=False,
+        )
+    return ndi.affine_transform(values, matrix, offset, output_shape=shape, order=order, mode="constant", cval=cval, prefilter=False)
 
 
 MAX_FULL_FRAME_PIXELS = 8 * 1024**2
@@ -341,9 +348,14 @@ def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, nativ
     if plane not in {"axial", "coronal", "sagittal"}:
         raise ValueError("Plane must be axial, coronal or sagittal")
     if native_axis is not None or native_index is not None:
-        if (isinstance(native_axis, bool) or not isinstance(native_axis, int) or native_axis not in (0, 1, 2)
-                or isinstance(native_index, bool) or not isinstance(native_index, int)
-                or not 0 <= native_index < shape[native_axis]):
+        if (
+            isinstance(native_axis, bool)
+            or not isinstance(native_axis, int)
+            or native_axis not in (0, 1, 2)
+            or isinstance(native_index, bool)
+            or not isinstance(native_index, int)
+            or not 0 <= native_index < shape[native_axis]
+        ):
             raise ValueError("A native slice requires a valid voxel axis and integer index")
         u, v = [axis for axis in range(3) if axis != native_axis]
         spacing = np.linalg.norm(affine[:3, :3], axis=0)
@@ -356,14 +368,19 @@ def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, nativ
         mapping[3, 3] = 1
         mapping[u, 0], mapping[v, 1] = 1, 1
         mapping[native_axis, 2], mapping[native_axis, 3] = 1, native_index
-        return {"width": width, "height": height, "pixel_to_ras": (affine @ mapping).tolist(),
-                "position_mm": float(native_index), "plane": plane, "extent_mm": extent,
-                "native": {"axis": native_axis, "index": native_index}}, mapping
+        return {
+            "width": width,
+            "height": height,
+            "pixel_to_ras": (affine @ mapping).tolist(),
+            "position_mm": float(native_index),
+            "plane": plane,
+            "extent_mm": extent,
+            "native": {"axis": native_axis, "index": native_index},
+        }, mapping
     if not math.isfinite(float(position_mm)):
         raise ValueError("Slice position must be finite")
     # (fixed axis, horizontal axis, vertical axis). All screen axes decrease RAS.
-    fixed, horizontal, vertical = {"axial": (2, 0, 1), "coronal": (1, 0, 2),
-                                   "sagittal": (0, 1, 2)}[plane]
+    fixed, horizontal, vertical = {"axial": (2, 0, 1), "coronal": (1, 0, 2), "sagittal": (0, 1, 2)}[plane]
     bounds = _bounds(shape, affine)
     if not bounds[0, fixed] <= position_mm <= bounds[1, fixed]:
         raise ValueError("Slice position lies outside the reference CT")
@@ -380,28 +397,44 @@ def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, nativ
     pixel_to_ras[horizontal, 3] = bounds[1, horizontal] - extent[horizontal] / width / 2
     pixel_to_ras[vertical, 3] = bounds[1, vertical] - extent[vertical] / height / 2
     pixel_to_ras[fixed, 3] = position_mm
-    return {"width": width, "height": height, "pixel_to_ras": pixel_to_ras.tolist(),
-            "position_mm": float(position_mm), "plane": plane,
-            "extent_mm": [float(extent[horizontal]), float(extent[vertical])]}, np.linalg.inv(affine) @ pixel_to_ras
+    return {
+        "width": width,
+        "height": height,
+        "pixel_to_ras": pixel_to_ras.tolist(),
+        "position_mm": float(position_mm),
+        "plane": plane,
+        "extent_mm": [float(extent[horizontal]), float(extent[vertical])],
+    }, np.linalg.inv(affine) @ pixel_to_ras
 
 
-def slice_image(ct_path: Path, mask_path_or_none: Path | None, plane: str,
-                position_mm: float, window: float, level: float,
-                compare_mask_path: Path | None = None, *, overlays=None,
-                native_axis=None, native_index=None, background_value=None, invert=False,
-                overlay_opacity=None) -> dict:
+def slice_image(
+    ct_path: Path,
+    mask_path_or_none: Path | None,
+    plane: str,
+    position_mm: float,
+    window: float,
+    level: float,
+    compare_mask_path: Path | None = None,
+    *,
+    overlays=None,
+    native_axis=None,
+    native_index=None,
+    background_value=None,
+    invert=False,
+    overlay_opacity=None,
+) -> dict:
     """Reslice patient planes or exact native editing planes on the source grid."""
     image, affine = _image(ct_path)
     if not all(math.isfinite(float(x)) for x in (window, level)) or window <= 0:
         raise ValueError("Slice level must be finite; window must be positive")
     if overlay_opacity is not None and (not math.isfinite(overlay_opacity) or not 0 <= overlay_opacity <= 1):
         raise ValueError("Slice overlay opacity must be finite and between zero and one")
-    meta, voxel_from_pixel = slice_geometry(image.shape, affine, plane, position_mm,
-                                           native_axis=native_axis, native_index=native_index)
+    meta, voxel_from_pixel = slice_geometry(image.shape, affine, plane, position_mm, native_axis=native_axis, native_index=native_index)
     width, height = meta["width"], meta["height"]
     values = _ct_array(ct_path, image)
     if background_value is None:
         from .modalities import get_modality_adapter
+
         background_value = get_modality_adapter("CT").presentation()["background_value"]
     if not math.isfinite(background_value):
         raise ValueError("Image background must be finite")
@@ -419,8 +452,8 @@ def slice_image(ct_path: Path, mask_path_or_none: Path | None, plane: str,
         nonlocal rgb
         contour = selected & ~ndi.binary_erosion(selected)
         interior = selected & ~contour
-        fill = alpha if overlay_opacity is None else min(1., overlay_opacity * alpha / .22)
-        edge = 1. if overlay_opacity is None else min(1., overlay_opacity * 3)
+        fill = alpha if overlay_opacity is None else min(1.0, overlay_opacity * alpha / 0.22)
+        edge = 1.0 if overlay_opacity is None else min(1.0, overlay_opacity * 3)
         rgb[interior] = rgb[interior] * (1 - fill) + np.asarray(color) * fill
         rgb[contour] = rgb[contour] * (1 - edge) + np.asarray(color) * edge
 
@@ -439,7 +472,7 @@ def slice_image(ct_path: Path, mask_path_or_none: Path | None, plane: str,
         # structures. Selected order is also the deterministic paint order.
         for structure_id, current_path, previous_path, color in overlays:
             current = sample_mask(current_path)
-            overlay(current, tuple(int(color[i:i + 2], 16) for i in (1, 3, 5)))
+            overlay(current, tuple(int(color[i : i + 2], 16) for i in (1, 3, 5)))
             if previous_path:
                 previous = sample_mask(previous_path)
                 overlay(previous & ~current, (244, 63, 94), 0.45)
@@ -457,15 +490,35 @@ def slice_image(ct_path: Path, mask_path_or_none: Path | None, plane: str,
 def presentation_color(structure):
     """Match web/src/lib/appearance.ts for server-rendered CT overlays."""
     colors = {
-        "lung_upper_lobe_right": "#f29919", "lung_middle_lobe_right": "#33b34d", "lung_lower_lobe_right": "#1a80e6",
-        "lung_upper_lobe_left": "#f27fbf", "lung_lower_lobe_left": "#7f66e6", "heart": "#d95772",
-        "liver": "#cc6619", "spleen": "#8019e6", "kidney_left": "#d86a6a", "kidney_right": "#d86a6a",
-        "kidney_cyst_left": "#edbc85", "kidney_cyst_right": "#edbc85", "pancreas": "#f29919",
-        "gallbladder": "#80cc19", "stomach": "#f27fbf", "small_bowel": "#c39ad9", "duodenum": "#d9a3c6",
-        "colon": "#9c83cc", "urinary_bladder": "#e6c86a", "adrenal_gland_left": "#d9aa59",
-        "adrenal_gland_right": "#d9aa59", "autochthon_left": "#a47782", "autochthon_right": "#a47782",
-        "iliopsoas_left": "#b55c73", "iliopsoas_right": "#b55c73", "prostate": "#d9909d",
-        "spinal_cord": "#dfcfa5", "esophagus": "#c881aa", "thyroid_gland": "#bd77bf",
+        "lung_upper_lobe_right": "#f29919",
+        "lung_middle_lobe_right": "#33b34d",
+        "lung_lower_lobe_right": "#1a80e6",
+        "lung_upper_lobe_left": "#f27fbf",
+        "lung_lower_lobe_left": "#7f66e6",
+        "heart": "#d95772",
+        "liver": "#cc6619",
+        "spleen": "#8019e6",
+        "kidney_left": "#d86a6a",
+        "kidney_right": "#d86a6a",
+        "kidney_cyst_left": "#edbc85",
+        "kidney_cyst_right": "#edbc85",
+        "pancreas": "#f29919",
+        "gallbladder": "#80cc19",
+        "stomach": "#f27fbf",
+        "small_bowel": "#c39ad9",
+        "duodenum": "#d9a3c6",
+        "colon": "#9c83cc",
+        "urinary_bladder": "#e6c86a",
+        "adrenal_gland_left": "#d9aa59",
+        "adrenal_gland_right": "#d9aa59",
+        "autochthon_left": "#a47782",
+        "autochthon_right": "#a47782",
+        "iliopsoas_left": "#b55c73",
+        "iliopsoas_right": "#b55c73",
+        "prostate": "#d9909d",
+        "spinal_cord": "#dfcfa5",
+        "esophagus": "#c881aa",
+        "thyroid_gland": "#bd77bf",
     }
     name = structure["id"].rsplit(":", 1)[-1].lower()
     group = structure.get("group", "").lower()

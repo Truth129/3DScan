@@ -8,7 +8,8 @@ import { assertReferenceImage } from './image-domain';
 let ct: ResidentVolume | null = null;
 let overlays: ResidentOverlay[] = [];
 let masks = new Map<string, { volume: ResidentVolume; loaded: Set<number> }>();
-let ctVersion = 0, overlayVersion = 0;
+let ctVersion = 0,
+  overlayVersion = 0;
 interface Command {
   id: number;
   type: 'ct' | 'overlay' | 'chunk' | 'slice' | 'probe' | 'gpu-slab';
@@ -44,15 +45,16 @@ scope.onmessage = ({ data: command }) => {
     const transfer: Transferable[] = [];
     if (command.type === 'ct') {
       // Release the old scan before requesting a replacement allocation.
-      ct = null; overlays = []; masks.clear();
+      ct = null;
+      overlays = [];
+      masks.clear();
       ctVersion = command.ctVersion;
       overlayVersion = 0;
       ct = allocateVolume(command.descriptor!);
     } else {
       if (!ct || command.ctVersion !== ctVersion) throw new Error('Superseded local CT request');
       if (command.type === 'overlay') {
-        const entries = command.overlays ?? (command.current
-          ? [{ id: 'selected', current: command.current, parent: command.parent ?? null }] : []);
+        const entries = command.overlays ?? (command.current ? [{ id: 'selected', current: command.current, parent: command.parent ?? null }] : []);
         const descriptors = new Map<string, VolumeDescriptor>();
         for (const entry of entries) {
           assertReferenceImage(ct.descriptor, entry.current);
@@ -70,22 +72,30 @@ scope.onmessage = ({ data: command }) => {
           if (!masks.has(key)) masks.set(key, { volume: allocateVolume(descriptor), loaded: new Set() });
         }
         overlayVersion = command.overlayVersion!;
-        overlays = entries.map(entry => ({ id: entry.id, current: masks.get(entry.current.key)!.volume,
-          parent: entry.parent ? masks.get(entry.parent.key)!.volume : null }));
-        result = { allocatedBytes, missing: [...descriptors].map(([key, descriptor]) => ({ key,
-          indices: descriptor.chunks.filter(chunk => !masks.get(key)!.loaded.has(chunk.index)).map(chunk => chunk.index) })) };
+        overlays = entries.map(entry => ({
+          id: entry.id,
+          current: masks.get(entry.current.key)!.volume,
+          parent: entry.parent ? masks.get(entry.parent.key)!.volume : null,
+        }));
+        result = {
+          allocatedBytes,
+          missing: [...descriptors].map(([key, descriptor]) => ({
+            key,
+            indices: descriptor.chunks.filter(chunk => !masks.get(key)!.loaded.has(chunk.index)).map(chunk => chunk.index),
+          })),
+        };
       } else if (command.type === 'chunk') {
         if (command.slot !== 'ct' && command.overlayVersion !== overlayVersion) throw new Error('Superseded local CT overlay');
         const mask = command.maskKey ? masks.get(command.maskKey) : null;
-        const volume = command.slot === 'ct' ? ct : mask?.volume
-          ?? (command.slot === 'current' ? overlays[0]?.current : overlays[0]?.parent);
+        const volume = command.slot === 'ct' ? ct : (mask?.volume ?? (command.slot === 'current' ? overlays[0]?.current : overlays[0]?.parent));
         if (!volume) throw new Error('Local CT volume is unavailable');
         acceptChunk(volume, command.index!, command.bytes!);
         mask?.loaded.add(command.index!);
       } else if (command.type === 'slice') {
         const includeOverlays = command.includeOverlays !== false;
         if (includeOverlays && command.overlayVersion !== overlayVersion) throw new Error('Superseded local CT overlay');
-        if (includeOverlays && [...masks.values()].some(mask => mask.loaded.size !== mask.volume.descriptor.chunks.length)) throw new Error('Local CT overlay is incomplete');
+        if (includeOverlays && [...masks.values()].some(mask => mask.loaded.size !== mask.volume.descriptor.chunks.length))
+          throw new Error('Local CT overlay is incomplete');
         const slice = resliceVolume(ct, command.plane!, command.position!, null, null, includeOverlays ? overlays : [], command.native);
         result = slice;
         const buffers = new Set<ArrayBuffer>([slice.hu.buffer as ArrayBuffer, slice.current.buffer as ArrayBuffer]);
@@ -108,7 +118,6 @@ scope.onmessage = ({ data: command }) => {
     }
     scope.postMessage({ id: command.id, result }, transfer);
   } catch (error) {
-    scope.postMessage({ id: command.id, error: error instanceof Error ? error.message : String(error),
-      allocation: error instanceof RangeError });
+    scope.postMessage({ id: command.id, error: error instanceof Error ? error.message : String(error), allocation: error instanceof RangeError });
   }
 };

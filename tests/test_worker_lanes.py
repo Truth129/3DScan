@@ -20,9 +20,8 @@ from scan3d.store import Store, identifier
 from test_interactive_review import FakeRuntime, example  # noqa: F401 (fixture)
 
 
-def erase(identity="erase", *, index=4, vertices=((2., 2.), (5., 5.))):
-    return dict(id=identity, kind="scribble", include=False, axis=2, index=index,
-                vertices=[list(vertex) for vertex in vertices], radius_mm=1.5)
+def erase(identity="erase", *, index=4, vertices=((2.0, 2.0), (5.0, 5.0))):
+    return dict(id=identity, kind="scribble", include=False, axis=2, index=index, vertices=[list(vertex) for vertex in vertices], radius_mm=1.5)
 
 
 def finished(service, job, timeout=15):
@@ -31,7 +30,7 @@ def finished(service, job, timeout=15):
         current = service.store.get("jobs", job["id"])
         if current["status"] not in ("queued", "running"):
             return current
-        time.sleep(.02)
+        time.sleep(0.02)
     pytest.fail(f"{job['kind']} job did not finish")
 
 
@@ -92,7 +91,7 @@ def test_gpu_jobs_never_overlap_and_interactive_predictions_precede_queued_segme
             active[0] += 1
             peak[0] = max(peak[0], active[0])
             order.append(kind)
-        time.sleep(.05)
+        time.sleep(0.05)
         with guard:
             active[0] -= 1
 
@@ -155,8 +154,7 @@ def test_restart_recovers_running_jobs_on_both_lanes_then_both_lanes_resume(exam
     runtime = fake_engine_only(service, monkeypatch)
     model = service.reviews.create(case["id"], base["id"], "total:liver")
     model = service.reviews.update(case["id"], model["id"], 0, [prompt])
-    direct = direct_draft(service, case, base, "total:kidney_left",
-                          erase(index=3, vertices=((8., 2.), (10., 4.))))
+    direct = direct_draft(service, case, base, "total:kidney_left", erase(index=3, vertices=((8.0, 2.0), (10.0, 4.0))))
     jobs = [service.reviews.predict(case["id"], draft["id"], draft["generation"]) for draft in (model, direct)]
     # A worker set stops mid-job on each lane without finishing either.
     assert [service.store.claim("gpu")["id"], service.store.claim("cpu")["id"]] == [job["id"] for job in jobs]
@@ -234,19 +232,21 @@ def test_concurrent_revision_builds_share_one_preparation_budget(example, monkey
             active[0] += 1
             peak[0] = max(peak[0], active[0])
         try:
-            time.sleep(.05)
+            time.sleep(0.05)
             return original(*args, **kwargs)
         finally:
             with guard:
                 active[0] -= 1
 
     monkeypatch.setattr(builder, "_analyze", measured)
-    unmeasured = [{key: value for key, value in structure.items()
-                   if key not in ("volume_ml", "voxel_count", "centroid_ras", "bounds_ras", "qc")}
-                  for structure in base["structures"]]
+    unmeasured = [
+        {key: value for key, value in structure.items() if key not in ("volume_ml", "voxel_count", "centroid_ras", "bounds_ras", "qc")}
+        for structure in base["structures"]
+    ]
     with ThreadPoolExecutor(max_workers=2) as pool:
-        builds = [pool.submit(builder.build_revision, case["id"], Path(base["ct_file"]), unmeasured,
-                              source="budget_fixture", parent=base["id"]) for _ in range(2)]
+        builds = [
+            pool.submit(builder.build_revision, case["id"], Path(base["ct_file"]), unmeasured, source="budget_fixture", parent=base["id"]) for _ in range(2)
+        ]
         revisions = [build.result() for build in builds]
     # Without the shared budget each build would run its own worker at once.
     assert peak[0] == 1

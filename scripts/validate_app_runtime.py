@@ -98,10 +98,7 @@ def main() -> int:
         "python": sys.version,
         "executable": sys.executable,
         "stage": str(stage.relative_to(ROOT)) if stage.is_relative_to(ROOT) else str(stage),
-        "build_hashes": {
-            str(path.relative_to(stage)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted(stage.rglob("*")) if path.is_file()
-        },
+        "build_hashes": {str(path.relative_to(stage)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(stage.rglob("*")) if path.is_file()},
         "packages": {name: metadata.version(name) for name in ("fastapi", "pydantic", "numpy", "vtk", "SimpleITK")},
         "scope": "Disposable synthetic DICOM and masks; no production calls or neural inference",
         "status": "running",
@@ -111,24 +108,37 @@ def main() -> int:
     processes, handles = [], []
     try:
         with disposable_store(output, processes) as folder:
-            env = dict(os.environ,
-                       SCAN3D_DATA_DIR=folder,
-                       SCAN3D_TEST_WEB_DIR=str(stage),
-                       SCAN3D_IMPORT_ROOTS=str(output),
-                       TOTALSEG_HOME_DIR=str(output / "totalsegmentator"),
-                       XDG_CACHE_HOME=str(output / "cache"),
-                       PYTHONNOUSERSITE="1",
-                       PYTHONPATH=str(ROOT),
-                       PATH=str(Path(sys.executable).parent) + os.pathsep + str(ROOT / ".tools/bin") + os.pathsep + os.environ.get("PATH", ""))
+            env = dict(
+                os.environ,
+                SCAN3D_DATA_DIR=folder,
+                SCAN3D_TEST_WEB_DIR=str(stage),
+                SCAN3D_IMPORT_ROOTS=str(output),
+                TOTALSEG_HOME_DIR=str(output / "totalsegmentator"),
+                XDG_CACHE_HOME=str(output / "cache"),
+                PYTHONNOUSERSITE="1",
+                PYTHONPATH=str(ROOT),
+                PATH=str(Path(sys.executable).parent) + os.pathsep + str(ROOT / ".tools/bin") + os.pathsep + os.environ.get("PATH", ""),
+            )
             for name, command in (
-                ("server", [sys.executable, "-m", "uvicorn", "web.tests.interactive_test_server:create_test_app", "--factory",
-                            "--host", "127.0.0.1", "--port", str(args.port)]),
+                (
+                    "server",
+                    [
+                        sys.executable,
+                        "-m",
+                        "uvicorn",
+                        "web.tests.interactive_test_server:create_test_app",
+                        "--factory",
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        str(args.port),
+                    ],
+                ),
                 ("driver", [args.driver, f"--port={args.driver_port}", "--allowed-ips=127.0.0.1"]),
             ):
                 handle = (output / f"{name}.log").open("w")
                 handles.append(handle)
-                processes.append(subprocess.Popen(command, cwd=ROOT, env=env, stdout=handle,
-                                                  stderr=subprocess.STDOUT, start_new_session=True))
+                processes.append(subprocess.Popen(command, cwd=ROOT, env=env, stdout=handle, stderr=subprocess.STDOUT, start_new_session=True))
             base, driver = f"http://127.0.0.1:{args.port}", f"http://127.0.0.1:{args.driver_port}"
             for url in (base + "/api/health", driver + "/status"):
                 deadline = time.monotonic() + 90
@@ -141,20 +151,30 @@ def main() -> int:
                                 assert response.headers.get("X-Interactive-Test-Engine") == "true", "Refusing production API"
                         break
                     except OSError:
-                        time.sleep(.25)
+                        time.sleep(0.25)
                 else:
                     raise TimeoutError(f"Test process not ready: {url}")
             for name in args.workflows:
                 script, extra = WORKFLOWS[name]
                 # The direct editor appends -3d itself for its second mode.
                 destination = output / ("direct-edit" if name == "direct-edit-3d" else name)
-                command = [sys.executable, str(ROOT / "web/tests" / script), "--base-url", base,
-                           "--driver-url", driver, "--binary", args.binary, "--output", str(destination), *extra]
+                command = [
+                    sys.executable,
+                    str(ROOT / "web/tests" / script),
+                    "--base-url",
+                    base,
+                    "--driver-url",
+                    driver,
+                    "--binary",
+                    args.binary,
+                    "--output",
+                    str(destination),
+                    *extra,
+                ]
                 print(f"Running {name}", flush=True)
                 began = time.monotonic()
                 with (output / f"{name}.log").open("w") as handle:
-                    result = subprocess.run(command, cwd=ROOT, env=env, stdout=handle,
-                                            stderr=subprocess.STDOUT, timeout=1800)
+                    result = subprocess.run(command, cwd=ROOT, env=env, stdout=handle, stderr=subprocess.STDOUT, timeout=1800)
                 details = output / name / "report.json"
                 report["workflows"][name] = {
                     "returncode": result.returncode,

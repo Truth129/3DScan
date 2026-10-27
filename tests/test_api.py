@@ -17,8 +17,7 @@ from scan3d.service import Service, extract_zip
 
 @pytest.fixture
 def client(tmp_path):
-    settings = Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist",
-                        allowed_hosts=("127.0.0.1", "review.example"))
+    settings = Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", allowed_hosts=("127.0.0.1", "review.example"))
     app = create_app(settings)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         yield client, app.state.service
@@ -31,7 +30,7 @@ def completed(client, job_id):
         if job["status"] not in ("queued", "running"):
             assert job["status"] == "completed", job
             return job
-        time.sleep(.05)
+        time.sleep(0.05)
     pytest.fail("Worker did not finish")
 
 
@@ -60,8 +59,10 @@ def test_demo_review_refine_undo_slices_and_slicer_roundtrip(client):
     assert json.loads(image.headers["X-Slice-Meta"]) == meta
     assert np.asarray(meta["pixel_to_ras"]).shape == (4, 4)
     assert http.get(f"{prefix}/revisions/{rid}/probe", params=dict(x=37, y=5, z=-55)).json()["hu"] == 105
-    job = http.post(f"{prefix}/refinements", json={"revision_id": rid, "structure_id": liver["id"],
-        "operation": {"type": "erase_region", "bounds_ras": [[0, -80, -100], [37, 80, 0]]}})
+    job = http.post(
+        f"{prefix}/refinements",
+        json={"revision_id": rid, "structure_id": liver["id"], "operation": {"type": "erase_region", "bounds_ras": [[0, -80, -100], [37, 80, 0]]}},
+    )
     assert job.status_code == 200, job.text
     result = completed(http, job.json()["id"])
     new_id = result["revision_id"]
@@ -105,11 +106,11 @@ def test_legacy_slice_image_and_metadata_share_render_and_invalidate_replaced_fi
     # Its source stat signature still exercises decoded-image/PNG cache
     # invalidation. Bound references reject changed pixels in test_image_assets.
     revision = deepcopy(current)
-    revision['id'] = identifier()
-    revision.pop('reference_image_id', None)
-    revision.pop('image_asset', None)
-    for entry in revision['structures']:
-        entry.pop('reference_image_id', None)
+    revision["id"] = identifier()
+    revision.pop("reference_image_id", None)
+    revision.pop("image_asset", None)
+    for entry in revision["structures"]:
+        entry.pop("reference_image_id", None)
     # Uncompressed input keeps exactly the same file length after replacing HU
     # values, isolating ctime invalidation from changes to compressed length.
     ct_path = Path(revision["ct_file"]).with_name("cache-test-reference.nii")
@@ -141,6 +142,7 @@ def test_legacy_slice_image_and_metadata_share_render_and_invalidate_replaced_fi
     # Even when replacement preserves length and mtime, ctime identifies a new
     # input. The reference CT, decoded mask and PNG caches must all refresh.
     import os
+
     stat = ct_path.stat()
     ct = nib.load(ct_path)
     changed = nib.Nifti1Image(np.asarray(ct.dataobj) + 200, ct.affine, ct.header.copy())
@@ -235,6 +237,7 @@ def test_lazy_detailed_export_and_revision_scoped_surface_assets(client):
 
 def test_measurements_available_before_meshes_and_refinement_reuses_surfaces(client, monkeypatch):
     from scan3d import surfaces
+
     http, service = client
     case = http.post("/api/cases/demo").json()
     prefix = f"/api/cases/{case['id']}"
@@ -249,14 +252,15 @@ def test_measurements_available_before_meshes_and_refinement_reuses_surfaces(cli
         return original_build(structures, output_path, **kwargs)
 
     monkeypatch.setattr(surfaces, "build_model", paused_build)
-    response = http.post(f"{prefix}/refinements", json={"revision_id": rid, "structure_id": "synthetic:liver",
-        "operation": {"type": "erase_region", "bounds_ras": [[0, -80, -100], [37, 80, 0]]}})
+    response = http.post(
+        f"{prefix}/refinements",
+        json={"revision_id": rid, "structure_id": "synthetic:liver", "operation": {"type": "erase_region", "bounds_ras": [[0, -80, -100], [37, 80, 0]]}},
+    )
     job_id = response.json()["id"]
     try:
         assert started.wait(10)
         job = http.get(f"/api/jobs/{job_id}").json()
-        assert job["progress"] == {"phase": "meshes", "completed": 0, "total": 7,
-                                   "timings_seconds": job["progress"]["timings_seconds"]}
+        assert job["progress"] == {"phase": "meshes", "completed": 0, "total": 7, "timings_seconds": job["progress"]["timings_seconds"]}
         assert "measurements" not in job and "payload" not in job
         measured = http.get(f"/api/jobs/{job_id}/measurements").json()
         assert measured["completed"] == measured["total"] == 7

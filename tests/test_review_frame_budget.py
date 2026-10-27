@@ -22,7 +22,7 @@ def test_preflight_counts_all_layers_before_any_voxel_allocation(tmp_path, monke
     monkeypatch.setattr(imaging, "_ct_array", lambda *a: pytest.fail("Oversized frame decoded the CT"))
     monkeypatch.setattr(imaging, "_reslice", lambda *a, **k: pytest.fail("Oversized frame allocated pixels"))
     overlays = ((str(i), path, path if compare else None) for i in range(overlay_count))
-    assert review_volume._FRAME_MAX_BYTES == 256 * 1024 ** 2
+    assert review_volume._FRAME_MAX_BYTES == 256 * 1024**2
     with pytest.raises(ValueError, match="256 MiB decoded payload"):
         review_volume.review_frame(path, None, "axial", 0, overlays=overlays)
 
@@ -36,8 +36,7 @@ def test_exact_budget_accepts_generator_without_losing_layers(tmp_path, monkeypa
     monkeypatch.setattr(imaging, "_slice_mask", lambda *a: np.ones((2, 2, 2)))
     monkeypatch.setattr(imaging, "_reslice", lambda *a, **k: np.zeros((2, 2)))
     layers = [("a", path, None), ("b", path, None)]
-    result = review_volume.review_frame(path, None, "axial", 0,
-        overlays=(entry for entry in layers) if with_generator else layers)
+    result = review_volume.review_frame(path, None, "axial", 0, overlays=(entry for entry in layers) if with_generator else layers)
     assert len(gzip.decompress(result["body"])) == 24
     assert [entry["id"] for entry in result["frame"]["overlays"]] == ["a", "b"]
     with pytest.raises(ValueError, match="payload limit"):

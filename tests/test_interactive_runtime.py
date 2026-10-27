@@ -67,20 +67,19 @@ def runtime_files(tmp_path, monkeypatch):
         (directory / name).write_text(name)
     monkeypatch.setenv("SCAN3D_NNINTERACTIVE_MODEL", str(directory))
     monkeypatch.setattr(interactive.metadata, "version", lambda name: interactive.ENGINE_VERSION)
-    monkeypatch.setattr(interactive, "CHECKPOINT_SHA256",
-                        interactive._sha256(interactive._identity(directory / "fold_0/checkpoint_final.pth")))
-    device = {"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "AMD Radeon AI PRO R9700",
-              "torch": "2.8.0+rocm7.2.4", "hip": "7.2.4"}
+    monkeypatch.setattr(interactive, "CHECKPOINT_SHA256", interactive._sha256(interactive._identity(directory / "fold_0/checkpoint_final.pth")))
+    device = {"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "AMD Radeon AI PRO R9700", "torch": "2.8.0+rocm7.2.4", "hip": "7.2.4"}
     monkeypatch.setattr(interactive, "_device_info", lambda request: device)
     sessions = []
+
     def factory(info):
         session = FakeSession()
         sessions.append(session)
         return session
+
     monkeypatch.setattr(interactive, "_new_session", factory)
     angle = np.deg2rad(29)
-    rotate = np.array([[np.cos(angle), -np.sin(angle), 0],
-                       [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    rotate = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
     affine = np.eye(4)
     affine[:3, :3] = rotate @ np.diag([-0.8, 1.4, 2.2])
     affine[:3, 3] = [31, -52, 87]
@@ -91,22 +90,31 @@ def runtime_files(tmp_path, monkeypatch):
     baseline = save(tmp_path / "mask.nii.gz", mask, affine)
     # Prompts must be transformed with the stored, float32 NIfTI affine.
     affine = imaging._image(ct)[1]
+
     def point(identifier, voxel, include=True):
         ras = (affine @ np.r_[voxel, 1])[:3].tolist()
         return {"id": identifier, "ras": ras, "include": include}
-    return SimpleNamespace(directory=directory, ct=ct, mask=baseline, affine=affine,
-                           values=values, baseline=mask, sessions=sessions, point=point)
+
+    return SimpleNamespace(directory=directory, ct=ct, mask=baseline, affine=affine, values=values, baseline=mask, sessions=sessions, point=point)
 
 
 def predict(runtime, fixture, tmp_path, prompts, name="candidate.nii.gz", **kwargs):
-    return runtime.predict(fixture.ct, fixture.mask, prompts, tmp_path / name,
-                           kwargs.get("progress", lambda message: None),
-                           kwargs.get("cancelled", lambda: False), kwargs.get("session_key", "session-1"),
-                           batches=kwargs.get("batches"), options=kwargs.get("options"))
+    return runtime.predict(
+        fixture.ct,
+        fixture.mask,
+        prompts,
+        tmp_path / name,
+        kwargs.get("progress", lambda message: None),
+        kwargs.get("cancelled", lambda: False),
+        kwargs.get("session_key", "session-1"),
+        batches=kwargs.get("batches"),
+        options=kwargs.get("options"),
+    )
 
 
 class BatchRuntimeSession(FakeSession):
     """Deterministic binary model double retaining real batch scheduling calls."""
+
     MAX_AUTOZOOM_FACTOR = 4
 
     def __init__(self):
@@ -171,8 +179,7 @@ class BatchRuntimeSession(FakeSession):
     def _predict(self):
         assert len(self.new_interaction_centers) == len(self.new_interaction_zoom_out_factors) == 1
         center = np.asarray(self.new_interaction_centers[0])
-        size = np.rint(np.asarray(self.configuration_manager.patch_size)
-                       * self.new_interaction_zoom_out_factors[0]).astype(int)
+        size = np.rint(np.asarray(self.configuration_manager.patch_size) * self.new_interaction_zoom_out_factors[0]).astype(int)
         low, high = center - size // 2, center + size // 2 + size % 2
         self.calls.append({"evidence": [dict(item) for item in self.evidence], "autozoom": self.do_autozoom})
         for item in self.evidence:
@@ -194,6 +201,7 @@ def batch_runtime_files(runtime_files, monkeypatch):
         session = BatchRuntimeSession()
         runtime_files.sessions.append(session)
         return session
+
     monkeypatch.setattr(interactive, "_new_session", factory)
     return runtime_files
 
@@ -204,10 +212,12 @@ def boundary(end, *, autozoom=True, full=False):
 
 def test_readiness_does_not_import_gpu_or_expose_model_path(runtime_files, monkeypatch):
     original = builtins.__import__
+
     def import_guard(name, *args, **kwargs):
         if name.startswith(("torch", "nnInteractive")):
             raise AssertionError("Readiness imported a GPU dependency")
         return original(name, *args, **kwargs)
+
     monkeypatch.setattr(builtins, "__import__", import_guard)
     result = interactive.status()
     assert result["available"] and result["installed"] and result["model_available"]
@@ -231,7 +241,7 @@ def test_initial_mask_unchanged_then_oblique_reflected_point_refines_only_reques
     assert result["prompts"][0]["voxel"] == [7, 8, 9]
     assert result["changed_voxels"] == result["predictions_this_request"] == 1
     assert result["reused_prompt_prefix"]
-    assert result["after_volume_ml"] - result["before_volume_ml"] == pytest.approx(.8 * 1.4 * 2.2 / 1000)
+    assert result["after_volume_ml"] - result["before_volume_ml"] == pytest.approx(0.8 * 1.4 * 2.2 / 1000)
     assert result["checkpoint_sha256"] == interactive.CHECKPOINT_SHA256
     assert result["input_mask_sha256"] != result["output_mask_sha256"]
     assert len(fixture.sessions) == len(fixture.sessions[0].images) == len(fixture.sessions[0].initials) == 1
@@ -245,9 +255,11 @@ def test_initial_mask_unchanged_then_oblique_reflected_point_refines_only_reques
 def test_upstream_initial_mask_changes_are_rejected_before_prediction(runtime_files, tmp_path, monkeypatch):
     fixture, runtime = runtime_files, interactive.InteractiveRuntime()
     original = FakeSession.add_initial_seg_interaction
+
     def altered_initialization(session, baseline, run_prediction):
         original(session, baseline, run_prediction)
         session.target[0, 0, 0] ^= 1
+
     monkeypatch.setattr(FakeSession, "add_initial_seg_interaction", altered_initialization)
     with pytest.raises(RuntimeError, match="changed the saved mask during initialization"):
         predict(runtime, fixture, tmp_path, [fixture.point("one", [7, 8, 9])])
@@ -321,7 +333,7 @@ def test_metre_native_grid_uses_millimetre_prompts_and_preserves_header(runtime_
     candidate = nib.load(tmp_path / "candidate.nii.gz")
     np.testing.assert_allclose(candidate.affine, affine)
     assert candidate.header.get_xyzt_units()[0] == "meter"
-    assert result["after_volume_ml"] - result["before_volume_ml"] == pytest.approx(.8 * 1.4 * 2.2 / 1000)
+    assert result["after_volume_ml"] - result["before_volume_ml"] == pytest.approx(0.8 * 1.4 * 2.2 / 1000)
     runtime.release()
 
 
@@ -381,6 +393,7 @@ def test_mask_geometry_and_original_path_protected(runtime_files, tmp_path):
 def test_readiness_missing_package_and_incomplete_model(runtime_files, monkeypatch):
     def missing(name):
         raise metadata.PackageNotFoundError(name)
+
     monkeypatch.setattr(interactive.metadata, "version", missing)
     assert not interactive.status()["installed"]
     monkeypatch.setattr(interactive.metadata, "version", lambda name: interactive.ENGINE_VERSION)
@@ -400,8 +413,7 @@ def test_mismatched_package_version_is_explicit(runtime_files, monkeypatch):
 def test_interactive_kernel_settings_restore_environment_and_torch_globals(monkeypatch, initial_mode):
     threads = [32]
     backend = SimpleNamespace(benchmark=True)
-    fake = SimpleNamespace(backends=SimpleNamespace(cudnn=backend),
-                           get_num_threads=lambda: threads[0], set_num_threads=lambda n: threads.__setitem__(0, n))
+    fake = SimpleNamespace(backends=SimpleNamespace(cudnn=backend), get_num_threads=lambda: threads[0], set_num_threads=lambda n: threads.__setitem__(0, n))
     monkeypatch.setitem(sys.modules, "torch", fake)
     if initial_mode is None:
         monkeypatch.delenv("MIOPEN_FIND_MODE", raising=False)
@@ -420,11 +432,12 @@ def test_constructor_benchmark_override_is_disabled_before_model_warmup(monkeypa
     backend = SimpleNamespace(benchmark=False)
     fake_torch = SimpleNamespace(backends=SimpleNamespace(cudnn=backend), device=lambda name: name)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
     def constructor(**kwargs):
         backend.benchmark = True  # Upstream nnInteractive constructor behavior.
         return SimpleNamespace(arguments=kwargs)
-    monkeypatch.setitem(sys.modules, "nnInteractive.inference.inference_session",
-                        SimpleNamespace(nnInteractiveInferenceSession=constructor))
+
+    monkeypatch.setitem(sys.modules, "nnInteractive.inference.inference_session", SimpleNamespace(nnInteractiveInferenceSession=constructor))
     session = interactive._new_session({"gpu_index": 0})
     assert backend.benchmark is False
     assert session.arguments["device"] == "cuda:0" and not session.arguments["use_torch_compile"]
@@ -449,8 +462,7 @@ def test_explicit_apply_groups_nearby_points_once_then_predicts_only_new_warm_ba
     unchanged = predict(runtime, fixture, tmp_path, prompts, "unchanged.nii.gz", batches=history)
     assert unchanged["predictions_this_request"] == 0 and unchanged["reused_prompt_prefix"]
     assert len(session.calls) == 2
-    np.testing.assert_array_equal(nib.load(tmp_path / "next.nii.gz").dataobj,
-                                  nib.load(tmp_path / "unchanged.nii.gz").dataobj)
+    np.testing.assert_array_equal(nib.load(tmp_path / "next.nii.gz").dataobj, nib.load(tmp_path / "unchanged.nii.gz").dataobj)
     runtime.release()
 
 
@@ -463,8 +475,7 @@ def test_batch_undo_and_edit_replay_original_apply_boundaries_exactly(batch_runt
     session = fixture.sessions[0]
     undo = predict(runtime, fixture, tmp_path, first_two, "undo.nii.gz", batches=[boundary(2)])
     assert not undo["reused_prompt_prefix"] and undo["predictions_this_request"] == 1
-    np.testing.assert_array_equal(nib.load(tmp_path / "first.nii.gz").dataobj,
-                                  nib.load(tmp_path / "undo.nii.gz").dataobj)
+    np.testing.assert_array_equal(nib.load(tmp_path / "first.nii.gz").dataobj, nib.load(tmp_path / "undo.nii.gz").dataobj)
     edited = [fixture.point("one", [9, 7, 8]), first_two[1], three[2]]
     result = predict(runtime, fixture, tmp_path, edited, "edit.nii.gz", batches=[boundary(2), boundary(3)])
     assert not result["reused_prompt_prefix"] and result["predictions_this_request"] == 2
@@ -487,15 +498,13 @@ def test_equal_end_whole_refinement_boundary_is_reused_and_next_batch_starts_aft
     assert nib.load(tmp_path / "full.nii.gz").get_fdata()[1, 1, 1] == 1
     assert full["batch_statistics"][0]["resets_prompt_channels"]
     prompts.append(fixture.point("after-full", [8, 9, 10]))
-    appended = predict(runtime, fixture, tmp_path, prompts, "appended.nii.gz",
-                       batches=[*history, boundary(3)])
+    appended = predict(runtime, fixture, tmp_path, prompts, "appended.nii.gz", batches=[*history, boundary(3)])
     assert appended["reused_prompt_prefix"] and appended["predictions_this_request"] == 1
     assert len(session.full_calls) == 1 and len(session.calls) == 2
     assert len(session.calls[-1]["evidence"]) == 1  # Previous gestures were reset by official full refinement.
     undone = predict(runtime, fixture, tmp_path, prompts[:2], "undo-full.nii.gz", batches=[boundary(2)])
     assert not undone["reused_prompt_prefix"] and undone["predictions_this_request"] == 1
-    np.testing.assert_array_equal(nib.load(tmp_path / "before-full.nii.gz").dataobj,
-                                  nib.load(tmp_path / "undo-full.nii.gz").dataobj)
+    np.testing.assert_array_equal(nib.load(tmp_path / "before-full.nii.gz").dataobj, nib.load(tmp_path / "undo-full.nii.gz").dataobj)
     runtime.release()
 
 
@@ -508,8 +517,7 @@ def test_start_empty_initializes_zero_but_measures_against_saved_source_and_repl
     assert result["before_voxel_count"] == int(fixture.baseline.sum())
     assert result["after_voxel_count"] == 1 and result["changed_voxels"] == int(fixture.baseline.sum()) + 1
     assert nib.load(tmp_path / "candidate.nii.gz").get_fdata().sum() == 1
-    changed = predict(runtime, fixture, tmp_path, prompts, "saved-start.nii.gz",
-                      batches=[boundary(1)], options={"start_empty": False})
+    changed = predict(runtime, fixture, tmp_path, prompts, "saved-start.nii.gz", batches=[boundary(1)], options={"start_empty": False})
     assert not changed["reused_prompt_prefix"] and changed["predictions_this_request"] == 1
     assert changed["after_voxel_count"] == int(fixture.baseline.sum()) + 1
     assert session.initial_modes == [False, False] and len(session.images) == 1
@@ -521,8 +529,9 @@ def test_changed_persisted_autozoom_or_apply_grouping_replays_history(batch_runt
     fixture, runtime = batch_runtime_files, interactive.InteractiveRuntime()
     prompts = [fixture.point("one", [7, 8, 9]), fixture.point("two", [8, 9, 10])]
     predict(runtime, fixture, tmp_path, prompts, batches=[boundary(1), boundary(2)])
-    changed = predict(runtime, fixture, tmp_path, prompts, "changed-options.nii.gz",
-                      batches=[boundary(1, autozoom=False), boundary(2)], options={"autozoom": False})
+    changed = predict(
+        runtime, fixture, tmp_path, prompts, "changed-options.nii.gz", batches=[boundary(1, autozoom=False), boundary(2)], options={"autozoom": False}
+    )
     session = fixture.sessions[0]
     assert not changed["reused_prompt_prefix"] and changed["predictions_this_request"] == 2
     assert [item["autozoom"] for item in session.calls[-2:]] == [False, True]
@@ -540,8 +549,7 @@ def test_cancelled_batch_invalidates_runtime_and_retry_replays_all_apply_groups(
     stopped = [False]
     fixture.sessions[0].after_batch = lambda: stopped.__setitem__(0, True)
     with pytest.raises(interactive.SegmentationCancelled):
-        predict(runtime, fixture, tmp_path, prompts, "cancelled-batch.nii.gz",
-                batches=[boundary(1), boundary(2)], cancelled=lambda: stopped[0])
+        predict(runtime, fixture, tmp_path, prompts, "cancelled-batch.nii.gz", batches=[boundary(1), boundary(2)], cancelled=lambda: stopped[0])
     assert runtime._session is None and not (tmp_path / "cancelled-batch.nii.gz").exists()
     result = predict(runtime, fixture, tmp_path, prompts, "retry-batch.nii.gz", batches=[boundary(1), boundary(2)])
     assert not result["reused_prompt_prefix"] and result["predictions_this_request"] == 2
@@ -552,13 +560,12 @@ def test_cancelled_batch_invalidates_runtime_and_retry_replays_all_apply_groups(
 
 def test_runtime_materializes_all_drawing_tools_into_one_apply_without_ras_axis_confusion(batch_runtime_files, tmp_path):
     fixture, runtime = batch_runtime_files, interactive.InteractiveRuntime()
-    prompts = [fixture.point("point", [7, 8, 9]),
-               {"id": "box", "kind": "bbox", "include": True, "axis": 0, "index": 6,
-                "vertices": [[3, 4], [6, 7]]},
-               {"id": "scribble", "kind": "scribble", "include": False, "axis": 1, "index": 5,
-                "vertices": [[2, 3], [5, 7]], "radius_mm": 1.},
-               {"id": "lasso", "kind": "lasso", "include": True, "axis": 2, "index": 6,
-                "vertices": [[2, 2], [5, 2], [5, 5], [2, 5]]}]
+    prompts = [
+        fixture.point("point", [7, 8, 9]),
+        {"id": "box", "kind": "bbox", "include": True, "axis": 0, "index": 6, "vertices": [[3, 4], [6, 7]]},
+        {"id": "scribble", "kind": "scribble", "include": False, "axis": 1, "index": 5, "vertices": [[2, 3], [5, 7]], "radius_mm": 1.0},
+        {"id": "lasso", "kind": "lasso", "include": True, "axis": 2, "index": 6, "vertices": [[2, 2], [5, 2], [5, 5], [2, 5]]},
+    ]
     result = predict(runtime, fixture, tmp_path, prompts, batches=[boundary(4)])
     session = fixture.sessions[0]
     assert result["predictions_this_request"] == 1

@@ -13,18 +13,23 @@ def _matching_versions(versions, required=()):
     if not isinstance(versions, dict) or any(name not in versions for name in required):
         return False
     try:
-        return all(isinstance(name, str) and isinstance(version, str) and metadata.version(name) == version
-                   for name, version in versions.items())
+        return all(isinstance(name, str) and isinstance(version, str) and metadata.version(name) == version for name, version in versions.items())
     except metadata.PackageNotFoundError:
         return False
 
 
 def diagnose(live=True):
-    result = {"ready": False, "inference_verified": False, "kfd": Path("/dev/kfd").exists(),
-              "dcm2niix": bool(shutil.which("dcm2niix")), "reason": "ROCm PyTorch is not installed"}
+    result = {
+        "ready": False,
+        "inference_verified": False,
+        "kfd": Path("/dev/kfd").exists(),
+        "dcm2niix": bool(shutil.which("dcm2niix")),
+        "reason": "ROCm PyTorch is not installed",
+    }
     if live:
         try:
             import torch
+
             result.update(torch_version=torch.__version__, hip_version=torch.version.hip)
             if not torch.version.hip:
                 result["reason"] = "The installed PyTorch build does not have ROCm support"
@@ -59,8 +64,9 @@ def diagnose(live=True):
                 ready = bool(matches and proof_matches and proof.get("gpu_ready"))
                 result.update(ready=ready, torch_version=current)
                 if ready:
-                    result.update(hip_version=checks.get("hip_version"),
-                                  devices=[d["name"] for d in checks.get("devices", [])], checked_at=proof.get("checked_at"))
+                    result.update(
+                        hip_version=checks.get("hip_version"), devices=[d["name"] for d in checks.get("devices", [])], checked_at=proof.get("checked_at")
+                    )
                     result["reason"] = "Native ROCm convolution verified; model inference is tracked separately"
                 elif not (matches and proof_matches):
                     result["reason"] = "GPU validation proof does not match the installed runtime"

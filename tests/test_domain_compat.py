@@ -3,6 +3,7 @@
 Run without the imaging/GPU environment:
     python3.14 -B -m unittest discover -s tests -p test_domain_compat.py
 """
+
 from dataclasses import FrozenInstanceError, replace
 import json
 import re
@@ -18,18 +19,23 @@ from scan3d.modalities import CT_PRESENTATION, ScalarPresentation, get_modality_
 
 class DomainCompatibilityTests(unittest.TestCase):
     def test_enum_values_retain_the_existing_json_contract(self):
-        result = json.loads(json.dumps({
-            "modality": Modality.CT, "kind": ImageKind.VOLUME3D,
-            "capabilities": [ImageCapability.MPR], "quality": VolumeQuality.FULL,
-        }))
-        self.assertEqual(result, {"modality": "CT", "kind": "volume3d",
-                                  "capabilities": ["mpr"], "quality": "full"})
+        result = json.loads(
+            json.dumps(
+                {
+                    "modality": Modality.CT,
+                    "kind": ImageKind.VOLUME3D,
+                    "capabilities": [ImageCapability.MPR],
+                    "quality": VolumeQuality.FULL,
+                }
+            )
+        )
+        self.assertEqual(result, {"modality": "CT", "kind": "volume3d", "capabilities": ["mpr"], "quality": "full"})
 
     def test_cardiac_labels_accept_enums_and_emit_plain_strings(self):
-        result = acquisition_labels("series", StudyProfile.CORCTA, "coronary_arterial",
-                                    cardiac_phase=CardiacPhase.BEST_DIASTOLIC, rr_percent=69)
-        self.assertEqual(result, {"series_uid": "series", "profile": "corcta", "phase": "coronary_arterial",
-                                  "cardiac_phase": "best_diastolic", "rr_percent": 69})
+        result = acquisition_labels("series", StudyProfile.CORCTA, "coronary_arterial", cardiac_phase=CardiacPhase.BEST_DIASTOLIC, rr_percent=69)
+        self.assertEqual(
+            result, {"series_uid": "series", "profile": "corcta", "phase": "coronary_arterial", "cardiac_phase": "best_diastolic", "rr_percent": 69}
+        )
         self.assertIs(type(result["profile"]), str)
         self.assertIs(type(result["cardiac_phase"]), str)
 

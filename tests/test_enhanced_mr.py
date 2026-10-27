@@ -1,4 +1,5 @@
 """Header/frame boundaries for static Enhanced MR without patient data."""
+
 from copy import deepcopy
 from pathlib import Path
 import shutil
@@ -39,8 +40,18 @@ def write_enhanced_mr(path, *, shared_geometry=False, reflected=False, temporal_
     source.SOPClassUID = source.file_meta.MediaStorageSOPClassUID = ENHANCED_MR_STORAGE
     source.SOPInstanceUID = source.file_meta.MediaStorageSOPInstanceUID = generate_uid()
     source.NumberOfFrames = count
-    for name in ("ImagePositionPatient", "ImageOrientationPatient", "PixelSpacing", "SliceThickness",
-                 "SpacingBetweenSlices", "RescaleSlope", "RescaleIntercept", "EchoTime", "RepetitionTime", "InversionTime"):
+    for name in (
+        "ImagePositionPatient",
+        "ImageOrientationPatient",
+        "PixelSpacing",
+        "SliceThickness",
+        "SpacingBetweenSlices",
+        "RescaleSlope",
+        "RescaleIntercept",
+        "EchoTime",
+        "RepetitionTime",
+        "InversionTime",
+    ):
         del source[name]
     source.ImageType = ["ORIGINAL", "PRIMARY", "T1", "NONE"]
     source.DimensionOrganizationType = "3D"
@@ -63,20 +74,32 @@ def write_enhanced_mr(path, *, shared_geometry=False, reflected=False, temporal_
     frames = []
     for index, ds in enumerate(slices):
         temporal = temporal_indices[index] if temporal_indices is not None else 1
-        frame = _group("FrameContentSequence", StackID="1", InStackPositionNumber=index + 1,
-                       TemporalPositionIndex=temporal,
-                       DimensionIndexValues=[1, index + 1] + ([temporal] if temporal_indices is not None else []))
+        frame = _group(
+            "FrameContentSequence",
+            StackID="1",
+            InStackPositionNumber=index + 1,
+            TemporalPositionIndex=temporal,
+            DimensionIndexValues=[1, index + 1] + ([temporal] if temporal_indices is not None else []),
+        )
         frame.update(_group("PlanePositionSequence", ImagePositionPatient=list(ds.ImagePositionPatient)))
         geometry = _group("PlaneOrientationSequence", ImageOrientationPatient=list(ds.ImageOrientationPatient))
-        geometry.update(_group("PixelMeasuresSequence", PixelSpacing=list(ds.PixelSpacing),
-                               SliceThickness=ds.SliceThickness, SpacingBetweenSlices=ds.SpacingBetweenSlices))
-        geometry.update(_group("PixelValueTransformationSequence", RescaleSlope=ds.RescaleSlope,
-                               RescaleIntercept=ds.RescaleIntercept, RescaleType="US"))
+        geometry.update(
+            _group("PixelMeasuresSequence", PixelSpacing=list(ds.PixelSpacing), SliceThickness=ds.SliceThickness, SpacingBetweenSlices=ds.SpacingBetweenSlices)
+        )
+        geometry.update(_group("PixelValueTransformationSequence", RescaleSlope=ds.RescaleSlope, RescaleIntercept=ds.RescaleIntercept, RescaleType="US"))
         (shared if shared_geometry else frame).update(geometry)
-        frame.update(_group("MRImageFrameTypeSequence", FrameType=["ORIGINAL", "PRIMARY", "T1", "NONE"],
-                           PixelPresentation="MONOCHROME", VolumetricProperties="VOLUME",
-                           VolumeBasedCalculationTechnique="NONE", ComplexImageComponent="MAGNITUDE", AcquisitionContrast="T1"))
-        frame.update(_group("MREchoSequence", EffectiveEchoTime=3.))
+        frame.update(
+            _group(
+                "MRImageFrameTypeSequence",
+                FrameType=["ORIGINAL", "PRIMARY", "T1", "NONE"],
+                PixelPresentation="MONOCHROME",
+                VolumetricProperties="VOLUME",
+                VolumeBasedCalculationTechnique="NONE",
+                ComplexImageComponent="MAGNITUDE",
+                AcquisitionContrast="T1",
+            )
+        )
+        frame.update(_group("MREchoSequence", EffectiveEchoTime=3.0))
         frames.append(frame)
     source.SharedFunctionalGroupsSequence = Sequence([shared])
     source.PerFrameFunctionalGroupsSequence = Sequence(frames)
@@ -96,7 +119,7 @@ def test_enhanced_static_frame_views_keep_original_source_identity_and_metadata(
     items = _read(path)
     before = deepcopy(items[0][1])
     stack = resolve_stack(items)
-    assert stack.errors == () and stack.spacing == pytest.approx([.7, .8, 1.6])
+    assert stack.errors == () and stack.spacing == pytest.approx([0.7, 0.8, 1.6])
     assert len(stack.original_items) == 1 and len(stack.frames) == 5
     assert stack.temporal_position_index == temporal and stack.stack_id == "1"
     assert [frame.frame_index for frame in stack.frames] == list(range(5))
@@ -106,27 +129,37 @@ def test_enhanced_static_frame_views_keep_original_source_identity_and_metadata(
     stack.frames[0].header.ImageType = ["DERIVED", "PRIMARY"]
     assert stack.frames[1].header.ImageType == ["ORIGINAL", "PRIMARY", "T1", "NONE"]
     assert items[0][1] == before
-    record, = dicom.index_dicom(tmp_path)
+    (record,) = dicom.index_dicom(tmp_path)
     assert record["supported"] and record["storage_kind"] == "enhanced_mr"
     assert record["slice_count"] == record["acquired_frame_count"] == 5 and len(record["files"]) == 1
     assert record["temporal_position_index"] == temporal
-    assert record["frame_selector"] == {"source_sop_instance_uid": before.SOPInstanceUID,
-                                        "stack_id": "1", "temporal_position_index": temporal}
+    assert record["frame_selector"] == {"source_sop_instance_uid": before.SOPInstanceUID, "stack_id": "1", "temporal_position_index": temporal}
 
 
-@pytest.mark.parametrize("change,diagnostic", [
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MREchoSequence[0].update({"EffectiveEchoTime": 4}), "EchoTime"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].PixelValueTransformationSequence[0].update({"RescaleSlope": .5}), "rescale"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].FrameContentSequence[0].update({"StackID": "2"}), "stacks"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].FrameContentSequence[0].update({"TemporalPositionIndex": 2}), "temporal"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"ComplexImageComponent": "PHASE"}), "magnitude"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"FrameType": ["ORIGINAL", "PRIMARY", "DIFFUSION", "NONE"]}), "diffusion"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"PixelPresentation": "COLOR"}), "MONOCHROME"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"VolumeBasedCalculationTechnique": "MIP"}), "projections"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].update(_group("MRDiffusionSequence", DiffusionBValue=1000)), "diffusion"),
-    (lambda ds: ds.PerFrameFunctionalGroupsSequence.pop(), "count"),
-    (lambda ds: ds.SharedFunctionalGroupsSequence[0].update({"PlaneOrientationSequence": deepcopy(ds.PerFrameFunctionalGroupsSequence[0].PlaneOrientationSequence)}), "ambiguous"),
-])
+@pytest.mark.parametrize(
+    "change,diagnostic",
+    [
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MREchoSequence[0].update({"EffectiveEchoTime": 4}), "EchoTime"),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].PixelValueTransformationSequence[0].update({"RescaleSlope": 0.5}), "rescale"),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].FrameContentSequence[0].update({"StackID": "2"}), "stacks"),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].FrameContentSequence[0].update({"TemporalPositionIndex": 2}), "temporal"),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"ComplexImageComponent": "PHASE"}), "magnitude"),
+        (
+            lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"FrameType": ["ORIGINAL", "PRIMARY", "DIFFUSION", "NONE"]}),
+            "diffusion",
+        ),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"PixelPresentation": "COLOR"}), "MONOCHROME"),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"VolumeBasedCalculationTechnique": "MIP"}), "projections"),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].update(_group("MRDiffusionSequence", DiffusionBValue=1000)), "diffusion"),
+        (lambda ds: ds.PerFrameFunctionalGroupsSequence.pop(), "count"),
+        (
+            lambda ds: ds.SharedFunctionalGroupsSequence[0].update(
+                {"PlaneOrientationSequence": deepcopy(ds.PerFrameFunctionalGroupsSequence[0].PlaneOrientationSequence)}
+            ),
+            "ambiguous",
+        ),
+    ],
+)
 def test_enhanced_mixed_or_ambiguous_headers_are_rejected_without_source_mutation(tmp_path, change, diagnostic):
     path = write_enhanced_mr(tmp_path / "source.dcm")
     items = _read(path)
@@ -140,15 +173,22 @@ def test_enhanced_mixed_or_ambiguous_headers_are_rejected_without_source_mutatio
     assert items[0][1] == before
 
 
-@pytest.mark.parametrize("marker,value", [("ConcatenationUID", generate_uid()), ("ConcatenationFrameOffsetNumber", 0),
-                                         ("InConcatenationNumber", 1), ("InConcatenationTotalNumber", 2),
-                                         ("SOPInstanceUIDOfConcatenationSource", generate_uid())])
+@pytest.mark.parametrize(
+    "marker,value",
+    [
+        ("ConcatenationUID", generate_uid()),
+        ("ConcatenationFrameOffsetNumber", 0),
+        ("InConcatenationNumber", 1),
+        ("InConcatenationTotalNumber", 2),
+        ("SOPInstanceUIDOfConcatenationSource", generate_uid()),
+    ],
+)
 def test_enhanced_partial_concatenations_remain_explicitly_unsupported(tmp_path, marker, value):
     path = write_enhanced_mr(tmp_path / "source.dcm")
     ds = pydicom.dcmread(path)
     ds.update({marker: value})
     ds.save_as(path, enforce_file_format=True)
-    record, = dicom.index_dicom(tmp_path)
+    (record,) = dicom.index_dicom(tmp_path)
     assert not record["supported"] and "concatenation" in record["unsupported_reason"]
 
 
@@ -157,17 +197,20 @@ def test_enhanced_partial_concatenations_remain_explicitly_unsupported(tmp_path,
 def test_native_enhanced_conversion_stages_one_original_and_preserves_fractional_signal(tmp_path, monkeypatch, shared_geometry, reflected):
     path = write_enhanced_mr(tmp_path / "source.dcm", shared_geometry=shared_geometry, reflected=reflected)
     original = path.read_bytes()
-    record, = dicom.index_dicom(tmp_path)
+    (record,) = dicom.index_dicom(tmp_path)
     native_run = dicom.subprocess.run
     staged_counts = []
+
     def run(command, **kwargs):
         staged_counts.append(len(list(Path(command[-1]).glob("*.dcm"))))
         return native_run(command, **kwargs)
+
     monkeypatch.setattr(dicom.subprocess, "run", run)
     converted = dicom.convert_series(record["files"], tmp_path / "converted")
     assert staged_counts == [1] and path.read_bytes() == original
     assert np.any(np.asarray(nib.load(converted).dataobj) != np.rint(np.asarray(nib.load(converted).dataobj)))
     import json
+
     manifest = json.loads((converted.parent / "conversion.json").read_text())
     assert manifest["storage_kind"] == "enhanced_mr" and manifest["slice_count"] == 5
     assert manifest["source_instance_count"] == 1
@@ -185,10 +228,10 @@ def test_enhanced_physical_order_can_differ_from_source_frame_storage_order(tmp_
     original = path.read_bytes()
     stack = resolve_stack(_read(path))
     assert stack.errors == () and [frame.frame_index for frame in stack.frames] == [4, 3, 2, 1, 0]
-    record, = dicom.index_dicom(tmp_path)
+    (record,) = dicom.index_dicom(tmp_path)
     converted = dicom.convert_series(record["files"], tmp_path / "converted")
     assert path.read_bytes() == original
     import json
+
     manifest = json.loads((converted.parent / "conversion.json").read_text())
     assert [frame["frame_index"] for frame in manifest["source_frame_order"]] == [4, 3, 2, 1, 0]
-

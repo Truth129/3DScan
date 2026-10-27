@@ -26,7 +26,9 @@ def main():
     process = sub.add_parser("process", help="Prepare a selected CT series for viewing without segmentation")
     process.add_argument("case")
     process.add_argument("--series", required=True)
-    process.add_argument("--profile", choices=PROFILE_IDS, default="chest_abdomen", help="Scan region/study label; does not crop the CT or select inference tasks")
+    process.add_argument(
+        "--profile", choices=PROFILE_IDS, default="chest_abdomen", help="Scan region/study label; does not crop the CT or select inference tasks"
+    )
     process.add_argument("--phase", required=True)
     process.add_argument("--cardiac-phase", choices=CARDIAC_PHASE_IDS, help="Optional cardiac reconstruction timing label")
     process.add_argument("--rr-percent", type=float, help="Optional cardiac reconstruction position within the R–R interval (0–100)")
@@ -49,23 +51,28 @@ def main():
     if args.command == "serve":
         import uvicorn
         from .api import create_app
+
         uvicorn.run(create_app(), host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False)
         return
     if args.command == "doctor":
         from .doctor import diagnose
+
         print(json.dumps(diagnose(), indent=2))
         return
     if args.command == "backup":
         # Only reads the live database and files, so it is safe while the service runs.
         from .backup import backup as write_backup
         from .config import Settings
+
         print(json.dumps(write_backup(Settings.from_env().data_dir, args.destination), indent=2))
         return
     from .service import Service
     from .store import public_case, public_job
+
     service = Service()
     if args.command == "demo":
         from .demo import create_demo
+
         print(json.dumps(public_case(create_demo(service), service.settings), indent=2))
     elif args.command == "import":
         print(json.dumps(public_case(service.import_local(args.path, args.label), service.settings), indent=2))
@@ -75,24 +82,23 @@ def main():
         print(json.dumps(service.optimize_assets(args.case), indent=2))
     else:
         if args.command == "process":
-            job = service.process(args.case, args.series, args.profile, args.phase,
-                cardiac_phase=args.cardiac_phase, rr_percent=args.rr_percent)
+            job = service.process(args.case, args.series, args.profile, args.phase, cardiac_phase=args.cardiac_phase, rr_percent=args.rr_percent)
         elif args.command == "segment":
             revision_id = args.revision or service.store.get("cases", args.case).get("active_revision_id")
             if not revision_id:
                 raise ValueError("Prepare a CT with process before requesting segmentation")
-            job = service.segment_case(args.case, revision_id, args.task, args.robust_crop,
-                                       args.body_seg, args.remove_small_blobs)
+            job = service.segment_case(args.case, revision_id, args.task, args.robust_crop, args.body_seg, args.remove_small_blobs)
         elif args.command == "include-all":
             job = service.include_all_outputs(args.case)
         else:
             from .api import Refine
-            payload = Refine(revision_id=args.revision, structure_id=args.structure,
-                             operation=json.loads(args.recipe.read_text())).model_dump()
+
+            payload = Refine(revision_id=args.revision, structure_id=args.structure, operation=json.loads(args.recipe.read_text())).model_dump()
             service.store.revision(args.case, args.revision)
             job = service.store.enqueue(args.case, "refine", payload)
         print(f"Job {job['id']}", flush=True)
         from .store import job_lane
+
         # Only this job's lane: stopping after it must not cancel other work.
         service.start(lanes=(job_lane(job),))
         try:

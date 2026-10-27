@@ -11,8 +11,7 @@ from . import __version__, imaging
 from .interactive_prompts import materialize_prompt, normalize_options, normalize_prompts
 
 
-def apply_strokes(ct_path, mask_path, prompts, output_path, *, options=None,
-                  progress=lambda _: None, cancelled=lambda: False):
+def apply_strokes(ct_path, mask_path, prompts, output_path, *, options=None, progress=lambda _: None, cancelled=lambda: False):
     """Replay exact ordered strokes from the immutable source mask.
 
     A physical-radius stroke changes only voxel centres on its one native CT
@@ -20,6 +19,7 @@ def apply_strokes(ct_path, mask_path, prompts, output_path, *, options=None,
     shear. Each stroke allocates its cropped plane, never another full volume.
     Return the validated arrays so candidate summaries need no second decode.
     """
+
     def check_cancel():
         if cancelled():
             raise InterruptedError("Direct editing cancelled")
@@ -41,10 +41,17 @@ def apply_strokes(ct_path, mask_path, prompts, output_path, *, options=None,
         check_cancel()
         if stroke["kind"] == "scissors":
             from .scissors import erase_projected
-            removed = erase_projected(after, affine, stroke, cancelled=cancelled,
-                progress=lambda fraction: progress(f"Applying 3D {stroke['shape']} cut {index}/{len(strokes)}: {round(fraction * 100)}%"))
-            operations.append(dict(id=stroke["id"], kind="scissors", shape=stroke["shape"],
-                                   operation=stroke["operation"], removed_voxels=removed, unlimited_depth=True))
+
+            removed = erase_projected(
+                after,
+                affine,
+                stroke,
+                cancelled=cancelled,
+                progress=lambda fraction: progress(f"Applying 3D {stroke['shape']} cut {index}/{len(strokes)}: {round(fraction * 100)}%"),
+            )
+            operations.append(
+                dict(id=stroke["id"], kind="scissors", shape=stroke["shape"], operation=stroke["operation"], removed_voxels=removed, unlimited_depth=True)
+            )
             continue
         progress(f"Applying {'paint' if stroke['include'] else 'erase'} stroke {index}/{len(strokes)}")
         materialized = materialize_prompt(stroke, affine, image.shape)
@@ -57,10 +64,19 @@ def apply_strokes(ct_path, mask_path, prompts, output_path, *, options=None,
     imaging._save_mask(after, image, output_path)
     check_cancel()
     cuts = sum(stroke["kind"] == "scissors" for stroke in strokes)
-    provenance = dict(engine="direct-edit" if cuts else "direct-paint", version=__version__, device="cpu",
-                      stroke_count=len(strokes) - cuts, cut_count=cuts, operation_count=len(strokes), operations=operations,
-                      replay="ordered_from_immutable_source",
-                      scope="native_brushes_and_projected_3d_cuts" if cuts else "native_slice_voxel_centres", radius_units="mm",
-                      smoothing=False, cavity_filling=False,
-                      runtime_seconds=round(time.monotonic() - started, 6))
+    provenance = dict(
+        engine="direct-edit" if cuts else "direct-paint",
+        version=__version__,
+        device="cpu",
+        stroke_count=len(strokes) - cuts,
+        cut_count=cuts,
+        operation_count=len(strokes),
+        operations=operations,
+        replay="ordered_from_immutable_source",
+        scope="native_brushes_and_projected_3d_cuts" if cuts else "native_slice_voxel_centres",
+        radius_units="mm",
+        smoothing=False,
+        cavity_filling=False,
+        runtime_seconds=round(time.monotonic() - started, 6),
+    )
     return provenance, (before, after, image, affine)

@@ -21,11 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_
 from .domain import Modality, PhotometricInterpretation
 
 
-MIB = 1024 ** 2
+MIB = 1024**2
 MAX_CT_BYTES = 512 * MIB
 MAX_MASK_BYTES = 192 * MIB
-MAX_SOURCE_BYTES = 2 * 1024 ** 3
-MAX_WORKING_BYTES = 4 * 1024 ** 3
+MAX_SOURCE_BYTES = 2 * 1024**3
+MAX_WORKING_BYTES = 4 * 1024**3
 MAX_MODEL_BYTES = 128 * MIB
 MAX_HTML_BYTES = 512 * MIB
 MAX_BUNDLE_BYTES = 16 * MIB
@@ -34,15 +34,47 @@ _BASE64_READ_BYTES = 48 * 1024  # A multiple of three: only the last block pads.
 
 # IDs from the pinned generated Slicer preset catalog, plus the app's aliases.
 # A regression test checks this set against the generated frontend data.
-SUPPORTED_VOLUME_PRESETS = frozenset({
-    "CT-AAA", "CT-AAA2", "CT-Bone", "CT-Bones", "CT-Cardiac", "CT-Cardiac2", "CT-Cardiac3",
-    "CT-Chest-Contrast-Enhanced", "CT-Chest-Vessels", "CT-Coronary-Arteries", "CT-Coronary-Arteries-2",
-    "CT-Coronary-Arteries-3", "CT-Cropped-Volume-Bone", "CT-Fat", "CT-Liver-Vasculature", "CT-Lung",
-    "CT-MIP", "CT-Muscle", "CT-Pulmonary-Arteries", "CT-Soft-Tissue", "CT-Air", "CT-X-ray",
-    "MR-Angio", "MR-Default", "MR-MIP", "MR-T2-Brain", "DTI-FA-Brain", "US-Fetal",
-    "uCT-Bone-8bit", "uCT-Bone-16bit", "uCT-Skull", "angiography", "bone", "soft-tissue", "lung",
-    "CT-Cinematic-Heart", "MR-SignalWindow",
-})
+SUPPORTED_VOLUME_PRESETS = frozenset(
+    {
+        "CT-AAA",
+        "CT-AAA2",
+        "CT-Bone",
+        "CT-Bones",
+        "CT-Cardiac",
+        "CT-Cardiac2",
+        "CT-Cardiac3",
+        "CT-Chest-Contrast-Enhanced",
+        "CT-Chest-Vessels",
+        "CT-Coronary-Arteries",
+        "CT-Coronary-Arteries-2",
+        "CT-Coronary-Arteries-3",
+        "CT-Cropped-Volume-Bone",
+        "CT-Fat",
+        "CT-Liver-Vasculature",
+        "CT-Lung",
+        "CT-MIP",
+        "CT-Muscle",
+        "CT-Pulmonary-Arteries",
+        "CT-Soft-Tissue",
+        "CT-Air",
+        "CT-X-ray",
+        "MR-Angio",
+        "MR-Default",
+        "MR-MIP",
+        "MR-T2-Brain",
+        "DTI-FA-Brain",
+        "US-Fetal",
+        "uCT-Bone-8bit",
+        "uCT-Bone-16bit",
+        "uCT-Skull",
+        "angiography",
+        "bone",
+        "soft-tissue",
+        "lung",
+        "CT-Cinematic-Heart",
+        "MR-SignalWindow",
+    }
+)
 
 
 class ExportTooLarge(ValueError):
@@ -72,7 +104,7 @@ class ExportLayers(PortableInput):
 
 class ExportDisplay(PortableInput):
     visible: StrictBool = True
-    opacity: Unit = .5
+    opacity: Unit = 0.5
     color: str | None = Field(default=None, pattern=r"^#[a-fA-F0-9]{6}$")
 
 
@@ -80,7 +112,7 @@ class ExportCinematic(PortableInput):
     myocardiumHU: float = Field(default=80, ge=-500, le=1500)
     bloodHU: float = Field(default=400, ge=-400, le=3000)
     shadows: float = Field(default=1.5, ge=0, le=2)
-    shadowReach: float = Field(default=.3, ge=0, le=1)
+    shadowReach: float = Field(default=0.3, ge=0, le=1)
 
     @model_validator(mode="after")
     def contrast(self):
@@ -98,7 +130,7 @@ class ExportSignalWindow(PortableInput):
 class ExportVolume(PortableInput):
     preset: str = Field(default="angiography", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     shift: float = Field(default=0, ge=-500, le=500)
-    density: float = Field(default=1, ge=.1, le=3)
+    density: float = Field(default=1, ge=0.1, le=3)
     quality: Literal["auto", "detail"] = "auto"
     crop: tuple[tuple[Unit, Unit, Unit], tuple[Unit, Unit, Unit]] = ((0, 0, 0), (1, 1, 1))
     cinematic: ExportCinematic = Field(default_factory=ExportCinematic)
@@ -121,7 +153,7 @@ class ExportVolumeMask(PortableInput):
 
     @model_validator(mode="after")
     def canonical_margin(self):
-        self.margin_mm = math.floor(self.margin_mm * 1000 + .5) / 1000
+        self.margin_mm = math.floor(self.margin_mm * 1000 + 0.5) / 1000
         return self
 
 
@@ -144,7 +176,7 @@ class ExportCamera(PortableInput):
     position_ras: Point3
     target_ras: Point3
     up_ras: Point3
-    zoom: float = Field(default=1, ge=.25, le=20)
+    zoom: float = Field(default=1, ge=0.25, le=20)
     height_mm: float = Field(gt=0, le=10_000_000)
     name: str | None = Field(default=None, max_length=32, pattern=r"^[A-Za-z_-]+$")
 
@@ -178,6 +210,7 @@ class ExportRequest(PortableInput):
 
 def _json(value):
     import json
+
     # Anatomical/custom names are data, including a literal </script> sequence.
     return json.dumps(value, ensure_ascii=True, allow_nan=False, separators=(",", ":")).replace("<", "\\u003c").encode()
 
@@ -224,13 +257,17 @@ def _portable_manifest(revision, case_id, image_context=None):
     for item in revision["structures"]:
         entry = {**{key: item[key] for key in fields if key in item}, "qc": []}
         if entry.get("relationship"):
-            entry["relationship"] = {key: entry["relationship"][key] for key in ("kind", "parent_id", "exclusive_with")
-                                     if key in entry["relationship"]}
+            entry["relationship"] = {key: entry["relationship"][key] for key in ("kind", "parent_id", "exclusive_with") if key in entry["relationship"]}
         structures.append(entry)
     geometry = {key: revision["geometry"][key] for key in ("shape", "affine_ras", "spacing", "bounds_ras", "center_ras")}
-    result = dict(label=f"Scan3D case {case_id[:8]}", review_status=revision.get("review_status", "unreviewed"),
-                  structures=structures, geometry=geometry, synthetic=bool(revision.get("synthetic")),
-                  source="synthetic_demo" if revision.get("synthetic") else "portable_export")
+    result = dict(
+        label=f"Scan3D case {case_id[:8]}",
+        review_status=revision.get("review_status", "unreviewed"),
+        structures=structures,
+        geometry=geometry,
+        synthetic=bool(revision.get("synthetic")),
+        source="synthetic_demo" if revision.get("synthetic") else "portable_export",
+    )
     if revision.get("pipeline_version"):
         result["pipeline_version"] = revision["pipeline_version"]
     provenance = revision.get("inference_manifest") or {}
@@ -255,7 +292,8 @@ def _image_context(revision):
 
     asset = reference_image(revision)
     return {
-        "reference_image_id": asset["id"], "modality": asset["modality"],
+        "reference_image_id": asset["id"],
+        "modality": asset["modality"],
         "scalar": {key: asset["scalar"][key] for key in ("dtype", "slope", "intercept", "units")},
         "presentation": normalize_presentation(asset["presentation"]),
     }
@@ -272,14 +310,15 @@ def _state_for_image(state, image_context):
     if volume.shift != 0:
         raise ValueError("MR signal-window appearances do not support CT HU shifts")
     signal_window = volume.signal_window or ExportSignalWindow(
-        window=policy["default_window"], level=policy["default_level"],
-        invert=policy["photometric_interpretation"] == PhotometricInterpretation.MONOCHROME1)
-    plane_defaults = {key: policy[f"default_{key}"] for key in ("window", "level")
-                      if key not in state.plane.model_fields_set}
-    return state.model_copy(update={
-        "volume": volume.model_copy(update={"preset": "MR-SignalWindow", "signal_window": signal_window}),
-        "plane": state.plane.model_copy(update=plane_defaults),
-    })
+        window=policy["default_window"], level=policy["default_level"], invert=policy["photometric_interpretation"] == PhotometricInterpretation.MONOCHROME1
+    )
+    plane_defaults = {key: policy[f"default_{key}"] for key in ("window", "level") if key not in state.plane.model_fields_set}
+    return state.model_copy(
+        update={
+            "volume": volume.model_copy(update={"preset": "MR-SignalWindow", "signal_window": signal_window}),
+            "plane": state.plane.model_copy(update=plane_defaults),
+        }
+    )
 
 
 def _file(path, maximum, label):
@@ -292,6 +331,7 @@ def _file(path, maximum, label):
 
 def _source_preflight(path, *, ct=False):
     from . import imaging
+
     image, affine = imaging._image(Path(path))
     voxels = math.prod(image.shape)
     itemsize = image.get_data_dtype().itemsize
@@ -356,8 +396,7 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
     cache = settings.data_dir / "review-cache"
     if layers.ct_volume or layers.ct_plane:
         image, affine = _source_preflight(revision["ct_file"], ct=True)
-        if (list(image.shape) != revision["geometry"]["shape"]
-                or not np.allclose(affine, revision["geometry"]["affine_ras"], rtol=0, atol=1e-4)):
+        if list(image.shape) != revision["geometry"]["shape"] or not np.allclose(affine, revision["geometry"]["affine_ras"], rtol=0, atol=1e-4):
             raise ValueError("The CT geometry changed; the saved revision cannot be exported")
         if layers.ct_plane and state.plane.index >= image.shape[state.plane.axis]:
             raise ValueError("The exported CT plane lies outside the reference CT")
@@ -373,17 +412,18 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
         for identity in mask_ids:
             _source_preflight(structures[identity]["mask_file"])
         reference_image_id = image_context["reference_image_id"] if image_context else None
-        ct = review_volume.scalar_volume(revision["ct_file"], cache, "full",
-            presentation=image_context["presentation"] if image_context else None,
-            reference_image_id=reference_image_id)
+        ct = review_volume.scalar_volume(
+            revision["ct_file"], cache, "full", presentation=image_context["presentation"] if image_context else None, reference_image_id=reference_image_id
+        )
         if image_context is not None:
             ct = {**ct, **image_context}
         if ct["byte_length"] > MAX_CT_BYTES:
             raise ExportTooLarge("The CT exceeds the portable viewer memory limit")
         mask_bytes = 0
         for identity, margin_mm in mask_requests:
-            descriptor = review_volume.mask_volume(revision["ct_file"], structures[identity]["mask_file"], cache, "full",
-                margin_mm=margin_mm, reference_image_id=reference_image_id)
+            descriptor = review_volume.mask_volume(
+                revision["ct_file"], structures[identity]["mask_file"], cache, "full", margin_mm=margin_mm, reference_image_id=reference_image_id
+            )
             if reference_image_id is not None:
                 descriptor = {**descriptor, "reference_image_id": reference_image_id}
             mask_bytes += descriptor["byte_length"]
@@ -392,9 +432,14 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
             masks.append((review_volume.volume_mask_alias(identity, margin_mm), descriptor))
         if union_ids:
             from .volume_mask_union import volume_mask_union
-            descriptor = volume_mask_union(revision["ct_file"],
-                [(identity, structures[identity]["mask_file"]) for identity in union_ids], cache,
-                state.volume_mask.margin_mm, reference_image_id=reference_image_id)
+
+            descriptor = volume_mask_union(
+                revision["ct_file"],
+                [(identity, structures[identity]["mask_file"]) for identity in union_ids],
+                cache,
+                state.volume_mask.margin_mm,
+                reference_image_id=reference_image_id,
+            )
             if mask_bytes + descriptor["byte_length"] > MAX_MASK_BYTES:
                 raise ExportTooLarge("Selected mask crops exceed the 192 MiB portable viewer limit; select fewer plane overlays")
             masks.append((f"volume-mask-union:{descriptor['key']}", descriptor))
@@ -403,43 +448,79 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
     state_json = _json(state.model_dump(mode="json", exclude_none=True))
     if len(manifest) + len(state_json) > MAX_METADATA_BYTES:
         raise ExportTooLarge("The viewer metadata exceeds the portable export size limit")
-    policy = ("default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; "
-              "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
-              "connect-src 'none'; object-src 'none'; base-uri 'none'")
-    parts = [b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-             b'<meta name="viewport" content="width=device-width,initial-scale=1">'
-             b'<meta name="referrer" content="no-referrer">'
-             + f'<meta http-equiv="Content-Security-Policy" content="{policy}">'.encode()
-             + b'<title>3DScan portable viewer</title><style>' + css
-             + b'</style></head><body><div id="app"></div><script>' + script
-             + b'</script><script>Scan3DOffline.initOffline(', manifest, b',']
+    policy = (
+        "default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; "
+        "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; "
+        "connect-src 'none'; object-src 'none'; base-uri 'none'"
+    )
+    parts = [
+        b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        b'<meta name="viewport" content="width=device-width,initial-scale=1">'
+        b'<meta name="referrer" content="no-referrer">'
+        + f'<meta http-equiv="Content-Security-Policy" content="{policy}">'.encode()
+        + b"<title>3DScan portable viewer</title><style>"
+        + css
+        + b'</style></head><body><div id="app"></div><script>'
+        + script
+        + b"</script><script>Scan3DOffline.initOffline(",
+        manifest,
+        b",",
+    ]
     if model:
         parts.extend((b'"', model, b'"'))
     else:
-        parts.append(b'null')
+        parts.append(b"null")
     if not legacy:
         parts.extend((b',{"schema_version":1,"layers":', _json(layers.model_dump()), b',"state":', state_json))
 
         def embedded_volume(descriptor, identity=None):
             # Native cached descriptors contain no paths/URLs. Retain only the
             # public transport schema, with chunk data separate from metadata.
-            value = {key: descriptor[key] for key in ("schema_version", "key", "kind", "dtype", "quality", "approximate",
-                "preview_quantization_hu", "preview_quantization_error", "reference_image_id", "modality", "scalar", "presentation",
-                "reference_geometry", "shape", "affine_ras", "geometry", "slope", "intercept",
-                "byte_length", "chunk_depth", "chunks", "origin_ijk", "empty", "display_margin_mm",
-                "presentation_only", "volume_mask_union", "selected_structure_ids", "pooling",
-                "native_crop_origin_ijk", "native_crop_shape") if key in descriptor}
-            value["chunks"] = [{key: chunk[key] for key in ("index", "start_k", "depth", "byte_offset", "byte_length")}
-                               for chunk in descriptor["chunks"]]
+            value = {
+                key: descriptor[key]
+                for key in (
+                    "schema_version",
+                    "key",
+                    "kind",
+                    "dtype",
+                    "quality",
+                    "approximate",
+                    "preview_quantization_hu",
+                    "preview_quantization_error",
+                    "reference_image_id",
+                    "modality",
+                    "scalar",
+                    "presentation",
+                    "reference_geometry",
+                    "shape",
+                    "affine_ras",
+                    "geometry",
+                    "slope",
+                    "intercept",
+                    "byte_length",
+                    "chunk_depth",
+                    "chunks",
+                    "origin_ijk",
+                    "empty",
+                    "display_margin_mm",
+                    "presentation_only",
+                    "volume_mask_union",
+                    "selected_structure_ids",
+                    "pooling",
+                    "native_crop_origin_ijk",
+                    "native_crop_shape",
+                )
+                if key in descriptor
+            }
+            value["chunks"] = [{key: chunk[key] for key in ("index", "start_k", "depth", "byte_offset", "byte_length")} for chunk in descriptor["chunks"]]
             opening = b'{"descriptor":' if identity is None else b'{"id":' + _json(identity) + b',"descriptor":'
             parts.extend((opening, _json(value), b',"chunks":['))
             for index, chunk in enumerate(descriptor["chunks"]):
                 if index:
-                    parts.append(b',')
+                    parts.append(b",")
                 file = review_volume.chunk_path(cache, descriptor, descriptor["key"], chunk["index"])
-                parts.extend((b'{"index":' + str(chunk["index"]).encode() + b',"gzip_base64":"',
-                              _file(file, MAX_HTML_BYTES, "A volume slab"), b'"}'))
-            parts.append(b']}')
+                parts.extend((b'{"index":' + str(chunk["index"]).encode() + b',"gzip_base64":"', _file(file, MAX_HTML_BYTES, "A volume slab"), b'"}'))
+            parts.append(b"]}")
 
         if ct is not None:
             parts.append(b',"ct":')
@@ -447,10 +528,10 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
         parts.append(b',"masks":[')
         for index, (identity, descriptor) in enumerate(masks):
             if index:
-                parts.append(b',')
+                parts.append(b",")
             embedded_volume(descriptor, identity)
-        parts.append(b']}')
-    parts.append(b');</script></body></html>')
+        parts.append(b"]}")
+    parts.append(b");</script></body></html>")
     length = sum(part.encoded_length if isinstance(part, EncodedFile) else len(part) for part in parts)
     if length > MAX_HTML_BYTES:
         raise ExportTooLarge("The portable HTML exceeds the 512 MiB download limit; export fewer layers or masks")

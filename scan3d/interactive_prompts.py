@@ -4,6 +4,7 @@ Drawing coordinates are native voxel centres on one source-image plane. The
 remaining axes in increasing order are u/v; physical brushes use the complete
 in-plane affine metric, including anisotropy, obliquity and shear.
 """
+
 from __future__ import annotations
 
 import re
@@ -34,9 +35,9 @@ def normalize_prompts(prompts, affine, shape):
             raise ValueError("Every interaction must be a prompt record")
         kind = item.get("kind", "point")
         common = {"id", "kind", "include"}
-        allowed = common | ({"ras"} if kind == "point" else
-                            {"operation", "shape", "vertices", "ras_to_clip"} if kind == "scissors" else
-                            {"axis", "index", "vertices"})
+        allowed = common | (
+            {"ras"} if kind == "point" else {"operation", "shape", "vertices", "ras_to_clip"} if kind == "scissors" else {"axis", "index", "vertices"}
+        )
         if kind == "scribble":
             allowed.add("radius_mm")
         if kind not in {"point", "bbox", "scribble", "lasso", "scissors"} or set(item) - allowed:
@@ -49,6 +50,7 @@ def normalize_prompts(prompts, affine, shape):
         record = dict(id=identity, kind=kind, include=item["include"])
         if kind == "scissors":
             from .scissors import normalize_scissors
+
             record.update(normalize_scissors(item))
             vertex_count += len(record["vertices"])
         elif kind == "point":
@@ -88,8 +90,8 @@ def normalize_prompts(prompts, affine, shape):
                     raise ValueError("A lasso must enclose a nonzero area")
             record.update(axis=axis, index=index, vertices=vertices.tolist())
             if kind == "scribble":
-                radius = item.get("radius_mm", 3.)
-                if isinstance(radius, bool) or not isinstance(radius, (int, float)) or not np.isfinite(radius) or not .5 <= radius <= 30:
+                radius = item.get("radius_mm", 3.0)
+                if isinstance(radius, bool) or not isinstance(radius, (int, float)) or not np.isfinite(radius) or not 0.5 <= radius <= 30:
                     raise ValueError("Scribble radius must be between 0.5 and 30 mm")
                 record["radius_mm"] = float(radius)
             vertex_count += len(vertices)
@@ -115,7 +117,7 @@ def materialize_prompt(prompt, affine, shape):
     vertices = np.asarray(prompt["vertices"], dtype=float)
     basis = np.asarray(affine)[:3, axes]
     metric = basis.T @ basis
-    radius = prompt.get("radius_mm", 0.)
+    radius = prompt.get("radius_mm", 0.0)
     reach = radius * np.sqrt(np.diag(np.linalg.inv(metric)))
     low = np.maximum(0, np.floor(vertices.min(axis=0) - reach).astype(int))
     high = np.minimum(np.asarray(shape)[axes], np.ceil(vertices.max(axis=0) + reach).astype(int) + 1)
@@ -140,7 +142,7 @@ def materialize_prompt(prompt, affine, shape):
     else:
         u, v = np.meshgrid(np.arange(low[0], high[0]), np.arange(low[1], high[1]), indexing="ij")
         for first, second in zip(vertices, np.roll(vertices, -1, axis=0)):
-            crosses = ((first[1] > v) != (second[1] > v))
+            crosses = (first[1] > v) != (second[1] > v)
             if second[1] != first[1]:
                 crossing = (second[0] - first[0]) * (v - first[1]) / (second[1] - first[1]) + first[0]
                 plane ^= crosses & (u < crossing)

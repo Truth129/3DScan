@@ -48,11 +48,11 @@ log = logging.getLogger("scan3d.interactive_worker")
 PROTOCOL = 1
 ENGINE = "scan3d.interactive:InteractiveRuntime"
 # The engine checks cancellation between model steps, each lasting seconds.
-CANCEL_GRACE_SECONDS = 10.
+CANCEL_GRACE_SECONDS = 10.0
 # A hang shows as silence, not elapsed time. A cold model load is the longest
 # step without progress and takes far less than this on the R9700.
-STALL_SECONDS = 600.
-STOP_SECONDS = 5.
+STALL_SECONDS = 600.0
+STOP_SECONDS = 5.0
 _ERRORS = {"cancelled": SegmentationCancelled, "invalid": ValueError, "failed": RuntimeError}
 
 
@@ -84,7 +84,7 @@ class _Channel:
                 raise EOFError("The nnInteractive worker channel closed")
             self._buffer += chunk
         line = bytes(self._buffer[:end])
-        del self._buffer[:end + 1]
+        del self._buffer[: end + 1]
         return json.loads(line)
 
     def close(self):
@@ -103,7 +103,11 @@ class _Child:
             env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(ROOT), env.get("PYTHONPATH"))))
             self.process = subprocess.Popen(
                 [sys.executable, "-P", "-m", "scan3d.interactive_worker", str(child.fileno()), engine],
-                pass_fds=(child.fileno(),), stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+                pass_fds=(child.fileno(),),
+                stdin=subprocess.DEVNULL,
+                env=env,
+                start_new_session=True,
+            )
         except BaseException:
             parent.close()
             raise
@@ -167,8 +171,7 @@ class InteractiveWorker:
 
     def __init__(self, engine=ENGINE, *, cancel_grace=CANCEL_GRACE_SECONDS, stall_seconds=None):
         self.engine, self.cancel_grace = engine, cancel_grace
-        self.stall_seconds = (float(os.environ.get("SCAN3D_NNINTERACTIVE_STALL_SECONDS", STALL_SECONDS))
-                              if stall_seconds is None else stall_seconds)
+        self.stall_seconds = float(os.environ.get("SCAN3D_NNINTERACTIVE_STALL_SECONDS", STALL_SECONDS)) if stall_seconds is None else stall_seconds
         self._child = None
         self._requests = itertools.count(1)
         self._lock = threading.Lock()
@@ -179,11 +182,16 @@ class InteractiveWorker:
         child = self._child
         return child.process.pid if child is not None and child.process.poll() is None else None
 
-    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key,
-                *, batches=None, options=None):
-        args = {"ct_path": str(ct_path), "mask_path": str(mask_path), "prompts": prompts,
-                "output_path": str(output_path), "session_key": session_key,
-                "batches": batches, "options": options}
+    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None):
+        args = {
+            "ct_path": str(ct_path),
+            "mask_path": str(mask_path),
+            "prompts": prompts,
+            "output_path": str(output_path),
+            "session_key": session_key,
+            "batches": batches,
+            "options": options,
+        }
         with self._lock:
             if cancelled():
                 raise SegmentationCancelled("nnInteractive correction was cancelled")
@@ -225,26 +233,23 @@ class InteractiveWorker:
                     self._stop()
                     if isinstance(reason, InterruptedError):
                         raise SegmentationCancelled(
-                            f"nnInteractive did not stop within {self.cancel_grace:g} s of cancellation; "
-                            "its worker process was stopped") from reason
+                            f"nnInteractive did not stop within {self.cancel_grace:g} s of cancellation; its worker process was stopped"
+                        ) from reason
                     raise reason
                 if time.monotonic() - heard > self.stall_seconds:
                     settled = True
                     self._stop()
-                    raise RuntimeError(f"nnInteractive reported no progress for {self.stall_seconds:g} s; "
-                                       "its worker process was stopped")
+                    raise RuntimeError(f"nnInteractive reported no progress for {self.stall_seconds:g} s; its worker process was stopped")
                 try:
-                    message = child.channel.receive(.2)
+                    message = child.channel.receive(0.2)
                 except (EOFError, OSError, ValueError):
                     settled, self._child = True, None
                     ending = child.ended()
                     if reason is not None:
                         raise reason from None
                     if not child.ready:
-                        raise RuntimeError(f"The nnInteractive worker process could not start; it {ending}. "
-                                           "Inspect the service log") from None
-                    raise RuntimeError(f"The nnInteractive worker process {ending} during this correction; "
-                                       "the next correction starts a fresh worker") from None
+                        raise RuntimeError(f"The nnInteractive worker process could not start; it {ending}. Inspect the service log") from None
+                    raise RuntimeError(f"The nnInteractive worker process {ending} during this correction; the next correction starts a fresh worker") from None
                 if message is None:
                     continue
                 heard, event = time.monotonic(), message.get("event")
@@ -253,8 +258,7 @@ class InteractiveWorker:
                         # The checkout changed under a running server; restart it.
                         settled = True
                         self._stop()
-                        raise RuntimeError("The nnInteractive worker process runs different scan3d code; "
-                                           "restart the service")
+                        raise RuntimeError("The nnInteractive worker process runs different scan3d code; restart the service")
                     child.ready = True
                 elif message.get("id") != request:
                     continue
@@ -273,8 +277,7 @@ class InteractiveWorker:
                     if message.get("kind") == "failed":
                         # A GPU fault can poison the HIP context; start the next one clean.
                         self._stop()
-                    raise _ERRORS.get(message.get("kind"), RuntimeError)(
-                        message.get("message") or "nnInteractive correction failed")
+                    raise _ERRORS.get(message.get("kind"), RuntimeError)(message.get("message") or "nnInteractive correction failed")
         finally:
             if not settled:
                 self._stop()
@@ -282,8 +285,7 @@ class InteractiveWorker:
     def _stop(self):
         child, self._child = self._child, None
         if child is not None and not child.stop(graceful=False):
-            log.error("nnInteractive worker process %s did not exit; its GPU memory may remain in use",
-                      child.process.pid)
+            log.error("nnInteractive worker process %s did not exit; its GPU memory may remain in use", child.process.pid)
 
     def release(self):
         """Stop the child before TotalSegmentator runs and at shutdown.
@@ -294,8 +296,7 @@ class InteractiveWorker:
         with self._lock:
             child, self._child = self._child, None
             if child is not None and not child.stop(graceful=True):
-                raise RuntimeError("The nnInteractive worker process did not exit; "
-                                   "its GPU memory may still be in use")
+                raise RuntimeError("The nnInteractive worker process did not exit; its GPU memory may still be in use")
 
 
 def _serve(channel, engine):
@@ -324,26 +325,29 @@ def _serve(channel, engine):
         request, args = message.get("id"), message.get("args") or {}
         try:
             provenance = engine.predict(
-                Path(args["ct_path"]), Path(args["mask_path"]), args["prompts"], Path(args["output_path"]),
+                Path(args["ct_path"]),
+                Path(args["mask_path"]),
+                args["prompts"],
+                Path(args["output_path"]),
                 lambda text: channel.send({"event": "progress", "id": request, "message": str(text)}),
-                lambda: cancelled[0] == request, args["session_key"],
-                batches=args.get("batches"), options=args.get("options"))
+                lambda: cancelled[0] == request,
+                args["session_key"],
+                batches=args.get("batches"),
+                options=args.get("options"),
+            )
             channel.send({"event": "result", "id": request, "provenance": provenance})
         except Exception as exc:
-            kind = ("cancelled" if isinstance(exc, InterruptedError) else
-                    "invalid" if isinstance(exc, ValueError) else "failed")
+            kind = "cancelled" if isinstance(exc, InterruptedError) else "invalid" if isinstance(exc, ValueError) else "failed"
             if kind == "failed":
                 log.exception("nnInteractive request %s failed", request)
-            channel.send({"event": "error", "id": request, "kind": kind,
-                          "message": str(exc) or type(exc).__name__})
+            channel.send({"event": "error", "id": request, "kind": kind, "message": str(exc) or type(exc).__name__})
     engine.release()
 
 
 def main(argv=None):
     """Child entry point: python -P -m scan3d.interactive_worker FD MODULE:FACTORY."""
     descriptor, engine = sys.argv[1:] if argv is None else argv
-    logging.basicConfig(level=logging.INFO,
-                        format="scan3d.interactive_worker[%(process)d] %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.INFO, format="scan3d.interactive_worker[%(process)d] %(levelname)s %(message)s")
     # A native fault prints the Python stack to the service journal.
     faulthandler.enable()
     channel = _Channel(socket.socket(fileno=int(descriptor)))

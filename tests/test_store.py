@@ -64,8 +64,13 @@ def test_public_records_do_not_expose_local_sources():
     record = dict(id="a", references={"a": "/private"}, source_dir="/private", series=[dict(uid="series", files=["/private/a.dcm"])])
     assert "references" not in public_case(record)
     assert "files" not in public_case(record)["series"][0]
-    revision = dict(id="b", ct_file="/private/ct", directory="/private", structures=[dict(id="total:liver", mask_file="/private/mask")],
-                    inference_manifest={"engine_version": "2.18.0", "tasks": [{"task": "total", "report": {"input": "/private/source"}}]})
+    revision = dict(
+        id="b",
+        ct_file="/private/ct",
+        directory="/private",
+        structures=[dict(id="total:liver", mask_file="/private/mask")],
+        inference_manifest={"engine_version": "2.18.0", "tasks": [{"task": "total", "report": {"input": "/private/source"}}]},
+    )
     public = public_revision(revision)
     assert "ct_file" not in public and "directory" not in public
     assert "mask_file" not in public["structures"][0]

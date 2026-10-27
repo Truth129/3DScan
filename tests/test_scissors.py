@@ -18,8 +18,11 @@ from test_direct_edit import direct_case, apply, execute, load, stroke
 
 def projection(affine, shape, view="axial"):
     # Build an independently defined camera from patient-space corners.
-    rows = {"axial": np.eye(3), "side": np.array([[0., 0, 1], [0, 1, 0], [-1, 0, 0]]),
-            "oblique": np.array([[.8, .6, 0], [-.3, .4, .8660254037844386], [.5196152422706631, -.6928203230275509, .5]])}[view]
+    rows = {
+        "axial": np.eye(3),
+        "side": np.array([[0.0, 0, 1], [0, 1, 0], [-1, 0, 0]]),
+        "oblique": np.array([[0.8, 0.6, 0], [-0.3, 0.4, 0.8660254037844386], [0.5196152422706631, -0.6928203230275509, 0.5]]),
+    }[view]
     corners = imaging._world(affine, imaging._corners(np.zeros(3), np.asarray(shape) - 1))
     camera_corners = corners @ rows.T
     low, high = camera_corners.min(axis=0), camera_corners.max(axis=0)
@@ -32,16 +35,23 @@ def projection(affine, shape, view="axial"):
 
 def polygon(shape):
     if shape == "rectangle":
-        return [[-.5, -.4], [.5, -.4], [.5, .45], [-.5, .45]]
+        return [[-0.5, -0.4], [0.5, -0.4], [0.5, 0.45], [-0.5, 0.45]]
     if shape == "circle":
         angle = np.arange(64) * 2 * np.pi / 64
-        return np.column_stack((.5 * np.cos(angle), .45 * np.sin(angle))).tolist()
-    return [[-.7, -.6], [.55, -.6], [.55, -.15], [-.05, -.15], [-.05, .65], [-.7, .65]]
+        return np.column_stack((0.5 * np.cos(angle), 0.45 * np.sin(angle))).tolist()
+    return [[-0.7, -0.6], [0.55, -0.6], [0.55, -0.15], [-0.05, -0.15], [-0.05, 0.65], [-0.7, 0.65]]
 
 
 def cut(affine, shape, *, identity="cut", kind="rectangle", operation="erase_inside", view="axial", vertices=None):
-    return dict(id=identity, kind="scissors", include=False, operation=operation, shape=kind,
-                vertices=vertices or polygon(kind), ras_to_clip=projection(affine, shape, view).tolist())
+    return dict(
+        id=identity,
+        kind="scissors",
+        include=False,
+        operation=operation,
+        shape=kind,
+        vertices=vertices or polygon(kind),
+        ras_to_clip=projection(affine, shape, view).tolist(),
+    )
 
 
 def scalar_inside(point, vertices):
@@ -69,7 +79,7 @@ def oracle(before, affine, prompt):
     for voxel in np.ndindex(before.shape):
         if not before[voxel]:
             continue
-        clip = matrix @ np.r_[imaging._world(affine, voxel), 1.]
+        clip = matrix @ np.r_[imaging._world(affine, voxel), 1.0]
         inside = scalar_inside(clip[:2], prompt["vertices"])
         if inside == (prompt["operation"] == "erase_inside"):
             result[voxel] = False
@@ -80,7 +90,7 @@ def oracle(before, affine, prompt):
 @pytest.mark.parametrize("operation", ["erase_inside", "erase_outside"])
 @pytest.mark.parametrize("view", ["axial", "side", "oblique"])
 def test_projected_cut_matches_patient_space_oracle_and_ignores_clip_depth(shape, operation, view):
-    affine = np.array([[-.8, .2, 0, 31.], [.1, 1.4, .3, -52.], [0, .1, 2.2, 87.], [0, 0, 0, 1.]])
+    affine = np.array([[-0.8, 0.2, 0, 31.0], [0.1, 1.4, 0.3, -52.0], [0, 0.1, 2.2, 87.0], [0, 0, 0, 1.0]])
     before = np.ones((7, 8, 9), dtype=bool)
     before[::3, ::2, ::4] = False
     prompt = cut(affine, before.shape, kind=shape, operation=operation, view=view)
@@ -97,27 +107,41 @@ def test_projected_cut_matches_patient_space_oracle_and_ignores_clip_depth(shape
 @pytest.mark.parametrize("operation,remaining", [("erase_inside", 80), ("erase_outside", 45)])
 def test_rectangle_boundary_centres_are_included_at_all_depths(operation, remaining):
     target = np.ones((5, 5, 5), dtype=bool)
-    matrix = np.diag([.5, .5, .01, 1.]); matrix[:3, 3] = [-1, -1, 1000]
-    prompt = dict(id="boundary", kind="scissors", include=False, shape="rectangle", operation=operation,
-                  vertices=[[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]], ras_to_clip=matrix.tolist())
+    matrix = np.diag([0.5, 0.5, 0.01, 1.0])
+    matrix[:3, 3] = [-1, -1, 1000]
+    prompt = dict(
+        id="boundary",
+        kind="scissors",
+        include=False,
+        shape="rectangle",
+        operation=operation,
+        vertices=[[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]],
+        ras_to_clip=matrix.tolist(),
+    )
     scissors.erase_projected(target, np.eye(4), prompt)
     assert np.count_nonzero(target) == remaining
     assert target[1, 1, 0] == (operation == "erase_outside")
     assert target[3, 3, 4] == (operation == "erase_outside")
 
 
-@pytest.mark.parametrize("change", [
-    {"include": True}, {"operation": "paint"}, {"shape": "triangle"},
-    {"vertices": [[-2, 0], [0, 1], [1, 0]]},
-    {"vertices": [[0, 0], [.2, .2], [.4, .4]]},
-    {"vertices": [[0, 0], [float("nan"), 1], [1, 0]]},
-    {"vertices": [[-.5, -.5], [.5, .5], [.5, -.5], [-.5, .5]]},
-    {"ras_to_clip": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, .01, 1]]},
-    {"ras_to_clip": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 2]]},
-    {"ras_to_clip": [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]},
-    {"ras_to_clip": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1e-14, 0], [0, 0, 0, 1]]},
-    {"ras_to_clip": [[1, 0], [0, 1]]}, {"unexpected": "field"},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"include": True},
+        {"operation": "paint"},
+        {"shape": "triangle"},
+        {"vertices": [[-2, 0], [0, 1], [1, 0]]},
+        {"vertices": [[0, 0], [0.2, 0.2], [0.4, 0.4]]},
+        {"vertices": [[0, 0], [float("nan"), 1], [1, 0]]},
+        {"vertices": [[-0.5, -0.5], [0.5, 0.5], [0.5, -0.5], [-0.5, 0.5]]},
+        {"ras_to_clip": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0.01, 1]]},
+        {"ras_to_clip": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 2]]},
+        {"ras_to_clip": [[1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]},
+        {"ras_to_clip": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1e-14, 0], [0, 0, 0, 1]]},
+        {"ras_to_clip": [[1, 0], [0, 1]]},
+        {"unexpected": "field"},
+    ],
+)
 def test_invalid_or_perspective_cut_is_rejected_before_editing(change):
     prompt = {**cut(np.eye(4), (7, 8, 9)), **change}
     with pytest.raises(ValueError):
@@ -128,8 +152,8 @@ def test_projection_and_vertices_are_owned_and_total_vertex_budget_is_enforced()
     prompt = cut(np.eye(4), (7, 8, 9))
     normalized = normalize_prompts([prompt], np.eye(4), (7, 8, 9))[0]
     prompt["ras_to_clip"][0][0] = 44
-    prompt["vertices"][0][0] = .9
-    assert normalized["ras_to_clip"][0][0] != 44 and normalized["vertices"][0][0] == -.5
+    prompt["vertices"][0][0] = 0.9
+    assert normalized["ras_to_clip"][0][0] != 44 and normalized["vertices"][0][0] == -0.5
     long = cut(np.eye(4), (7, 8, 9), kind="circle")
     long["vertices"] = long["vertices"] * 32
     with pytest.raises(ValueError, match="8192"):
@@ -169,7 +193,7 @@ def test_paint_and_cuts_interleave_exactly_and_ai_rejects_scissors(direct_case, 
     projected = np.asarray(corners) @ native_projection.T
     scissors_prompt = cut(affine, image.shape, vertices=projected[:, :2].tolist())
     scissors_prompt["ras_to_clip"] = matrix.tolist()
-    paint = stroke(vertices=[[2., 3.], [2., 3.]], radius=.5)
+    paint = stroke(vertices=[[2.0, 3.0], [2.0, 3.0]], radius=0.5)
     first = tmp_path / "paint-cut.nii.gz"
     second = tmp_path / "cut-paint.nii.gz"
     provenance, _ = apply_strokes(base["ct_file"], source, [paint, scissors_prompt], first)
@@ -224,7 +248,7 @@ def test_cut_preview_only_rebuilds_target_reuses_decoded_mask_and_undo_surface_c
 
 def test_complete_cut_empty_target_has_no_preview_asset_and_can_save_revision(direct_case):
     service, case, base, affine = direct_case
-    prompt = cut(affine, base["geometry"]["shape"], vertices=[[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]])
+    prompt = cut(affine, base["geometry"]["shape"], vertices=[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]])
     draft = apply(service, case, base, [prompt])
     candidate = draft["candidate"]
     assert candidate["summary"]["after_voxels"] == 0

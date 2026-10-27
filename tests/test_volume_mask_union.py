@@ -27,16 +27,19 @@ def save(path, values, affine):
 
 
 def decode(cache, descriptor):
-    raw = b"".join(gzip.decompress(review_volume.chunk_path(cache, descriptor,
-        descriptor["key"], chunk["index"]).read_bytes()) for chunk in descriptor["chunks"])
+    raw = b"".join(
+        gzip.decompress(review_volume.chunk_path(cache, descriptor, descriptor["key"], chunk["index"]).read_bytes()) for chunk in descriptor["chunks"]
+    )
     assert len(raw) == descriptor["byte_length"] <= union._MAX_BYTES
     return np.frombuffer(raw, dtype=np.uint8).reshape(descriptor["shape"], order="F")
 
 
 def fixture(tmp_path, affine=None, shape=(19, 23, 29)):
     affine = np.eye(4) if affine is None else affine
-    first = np.zeros(shape, np.uint8); first[2:11, 3:13, 5:16] = 1
-    second = np.zeros(shape, np.uint8); second[7:16, 9:20, 11:25] = 1
+    first = np.zeros(shape, np.uint8)
+    first[2:11, 3:13, 5:16] = 1
+    second = np.zeros(shape, np.uint8)
+    second[7:16, 9:20, 11:25] = 1
     ct = save(tmp_path / "ct.nii", np.zeros(shape, np.int16), affine)
     a = save(tmp_path / "a.nii", first, affine)
     b = save(tmp_path / "b.nii", second, affine)
@@ -48,10 +51,9 @@ def fixture(tmp_path, affine=None, shape=(19, 23, 29)):
 def test_union_geometry_overlap_and_native_margin_are_exact(tmp_path, shear, margin):
     angle = np.deg2rad(31)
     affine = np.eye(4)
-    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0],
-        [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-.8, 1.4, 2.2])
+    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.8, 1.4, 2.2])
     if shear:
-        affine[:3, 1] += affine[:3, 0] * .23
+        affine[:3, 1] += affine[:3, 0] * 0.23
     affine[:3, 3] = [43, -17, 91]
     ct, masks, a, b, cache = fixture(tmp_path, affine)
     original_hashes = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in [ct, *(p for _, p in masks)]}
@@ -64,8 +66,7 @@ def test_union_geometry_overlap_and_native_margin_are_exact(tmp_path, shear, mar
     origin = np.asarray(result["native_crop_origin_ijk"])
     high = origin + result["native_crop_shape"]
     np.testing.assert_array_equal(decode(cache, result), expected[tuple(slice(a, b) for a, b in zip(origin, high))])
-    np.testing.assert_allclose(result["affine_ras"], actual_affine @ np.array([
-        [1, 0, 0, origin[0]], [0, 1, 0, origin[1]], [0, 0, 1, origin[2]], [0, 0, 0, 1]]))
+    np.testing.assert_allclose(result["affine_ras"], actual_affine @ np.array([[1, 0, 0, origin[0]], [0, 1, 0, origin[1]], [0, 0, 1, origin[2]], [0, 0, 0, 1]]))
     assert result["reference_geometry"] == imaging.geometry(ct)
     assert result["reference_image_id"] == "source-one"
     assert result["quality"] == "preview" and result["presentation_only"] and result["volume_mask_union"]
@@ -81,8 +82,8 @@ def test_conservative_reduction_keeps_thin_foreground_and_voxel_faces(tmp_path, 
     monkeypatch.setattr(union, "_MAX_BYTES", 257)
     monkeypatch.setattr(union, "_STREAM_BYTES", 17)
     angle = np.deg2rad(27)
-    affine = np.eye(4); affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0],
-        [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-.7, 1.3, 2.1])
+    affine = np.eye(4)
+    affine[:3, :3] = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]) @ np.diag([-0.7, 1.3, 2.1])
     shape = (31, 37, 41)
     values = np.zeros(shape, np.uint8)
     values[0, 0, 0] = values[-1, -1, -1] = 1
@@ -94,16 +95,16 @@ def test_conservative_reduction_keeps_thin_foreground_and_voxel_faces(tmp_path, 
     pooled = decode(cache, result)
     assert pooled.size <= 257 and result["approximate"]
     source_affine = imaging._image(ct)[1]
-    np.testing.assert_allclose(imaging._bounds(pooled.shape, np.asarray(result["affine_ras"])),
-                               imaging._bounds(shape, source_affine), atol=1e-5)
+    np.testing.assert_allclose(imaging._bounds(pooled.shape, np.asarray(result["affine_ras"])), imaging._bounds(shape, source_affine), atol=1e-5)
     points = np.indices(shape).reshape(3, -1).T
     all_world = imaging._world(source_affine, points)
     native_expanded = cKDTree(all_world[values.reshape(-1) == 1]).query(all_world)[0] <= margin + 1e-7
     world = all_world[native_expanded]
     inverse = np.linalg.inv(result["affine_ras"])
-    target = np.floor(imaging._world(inverse, world) + .5).astype(int)
+    target = np.floor(imaging._world(inverse, world) + 0.5).astype(int)
     assert np.all(pooled[tuple(target.T)] == 1)
-    expected = np.zeros_like(pooled); expected[tuple(target.T)] = 1
+    expected = np.zeros_like(pooled)
+    expected[tuple(target.T)] = 1
     np.testing.assert_array_equal(pooled, expected)
 
 
@@ -118,7 +119,7 @@ def test_crop_before_reduction_keeps_small_selection_at_native_resolution(tmp_pa
 def test_budget_is_hard_bounded_for_large_and_thin_grids(shape):
     target = union._bounded_shape(shape)
     assert all(1 <= a <= b for a, b in zip(target, shape))
-    assert int(np.prod(target)) <= 8 * 1024 ** 2
+    assert int(np.prod(target)) <= 8 * 1024**2
 
 
 def test_empty_selection_and_empty_masks_are_explicit(tmp_path):
@@ -138,9 +139,11 @@ def test_content_selection_reference_margin_and_algorithm_bound_cache(tmp_path, 
     monkeypatch.setattr(review_volume, "mask_volume", lambda *a, **k: pytest.fail("Warm union decoded masks"))
     assert union.volume_mask_union(ct, masks[::-1] + masks[:1], cache, reference_image_id="source-one") == result
     monkeypatch.setattr(review_volume, "mask_volume", generate)
-    changed = [union.volume_mask_union(ct, masks[:1], cache, reference_image_id="source-one"),
+    changed = [
+        union.volume_mask_union(ct, masks[:1], cache, reference_image_id="source-one"),
         union.volume_mask_union(ct, masks, cache, reference_image_id="source-two"),
-        union.volume_mask_union(ct, masks, cache, 1, reference_image_id="source-one")]
+        union.volume_mask_union(ct, masks, cache, 1, reference_image_id="source-one"),
+    ]
     stat = masks[0][1].stat()
     replacement = save(tmp_path / "replacement.nii", np.zeros_like(a), np.eye(4))
     replacement.replace(masks[0][1])
@@ -179,10 +182,12 @@ def test_concurrent_selection_shares_one_union_generation(tmp_path, monkeypatch)
     ct, masks, _, _, cache = fixture(tmp_path)
     original = review_volume._write
     calls = []
+
     def write(cache, descriptor, *args, **kwargs):
         if descriptor.get("volume_mask_union"):
             calls.append(1)
         return original(cache, descriptor, *args, **kwargs)
+
     monkeypatch.setattr(review_volume, "_write", write)
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: union.volume_mask_union(ct, masks, cache), range(4)))
@@ -194,12 +199,14 @@ def test_cancelled_publication_leaves_no_union_and_keeps_originals(tmp_path, mon
     stopped = threading.Event()
     original = review_volume._write
     key = None
+
     def write(cache, descriptor, *args, **kwargs):
         nonlocal key
         if descriptor.get("volume_mask_union"):
             key = descriptor["key"]
             stopped.set()
         return original(cache, descriptor, *args, **kwargs)
+
     monkeypatch.setattr(review_volume, "_write", write)
     with pytest.raises(CancelledError):
         union.volume_mask_union(ct, masks, cache, cancelled=stopped.is_set)
@@ -212,26 +219,29 @@ def test_cancelled_publication_leaves_no_union_and_keeps_originals(tmp_path, mon
 def test_changed_input_before_publish_is_rejected(tmp_path, monkeypatch):
     ct, masks, a, _, cache = fixture(tmp_path)
     original = review_volume._write
+
     def write(cache, descriptor, *args, **kwargs):
         if descriptor.get("volume_mask_union"):
             save(masks[0][1], np.zeros_like(a), np.eye(4))
         return original(cache, descriptor, *args, **kwargs)
+
     monkeypatch.setattr(review_volume, "_write", write)
     with pytest.raises(ValueError, match="input changed"):
         union.volume_mask_union(ct, masks, cache)
     assert not list(cache.glob("volumes/*/.*"))
-    assert not any(json.loads(p.read_text())["descriptor"].get("volume_mask_union")
-                   for p in cache.glob("volumes/*/*/manifest.json"))
+    assert not any(json.loads(p.read_text())["descriptor"].get("volume_mask_union") for p in cache.glob("volumes/*/*/manifest.json"))
 
 
 def test_cancelled_native_decode_does_not_publish_derivatives(tmp_path, monkeypatch):
     ct, masks, _, _, cache = fixture(tmp_path)
     stopped = threading.Event()
     original = imaging._binary
+
     def binary(*args, **kwargs):
         result = original(*args, **kwargs)
         stopped.set()
         return result
+
     monkeypatch.setattr(imaging, "_binary", binary)
     with pytest.raises(CancelledError):
         union.volume_mask_union(ct, masks, cache, cancelled=stopped.is_set)
@@ -243,21 +253,28 @@ def test_api_union_chunks_case_selection_source_and_margin_ownership(tmp_path):
     app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "missing"))
     service = app.state.service
     case = service.new_case("Union transport")
-    revision = {"case_id": case["id"], "id": uuid.uuid4().hex, "ct_file": str(ct),
-        "geometry": imaging.geometry(ct), "structures": [{"id": i, "mask_file": str(p)} for i, p in masks]}
+    revision = {
+        "case_id": case["id"],
+        "id": uuid.uuid4().hex,
+        "ct_file": str(ct),
+        "geometry": imaging.geometry(ct),
+        "structures": [{"id": i, "mask_file": str(p)} for i, p in masks],
+    }
     service.store.save("revisions", revision)
     prefix = f"/api/cases/{case['id']}/revisions/{revision['id']}"
     params = [("structure_ids", "b"), ("structure_ids", "a"), ("structure_ids", "a"), ("margin_mm", 0)]
     with TestClient(app, base_url="http://127.0.0.1") as client:
         response = client.get(prefix + "/volume-mask", params=params)
         assert response.status_code == 200 and "no-store" in response.headers["cache-control"]
-        result = response.json(); descriptor = result["current"]
+        result = response.json()
+        descriptor = result["current"]
         assert result["source_id"] == "volume-mask-union:" + descriptor["key"]
         assert descriptor["reference_image_id"] == service.store.resolve_reference(revision)["id"]
         assert str(tmp_path) not in json.dumps(result)
         chunks = [client.get(chunk["url"]) for chunk in descriptor["chunks"]]
-        assert all(chunk.status_code == 200 and chunk.headers["content-encoding"] == "gzip"
-            and "immutable" in chunk.headers["cache-control"] for chunk in chunks)
+        assert all(
+            chunk.status_code == 200 and chunk.headers["content-encoding"] == "gzip" and "immutable" in chunk.headers["cache-control"] for chunk in chunks
+        )
         actual = np.frombuffer(b"".join(c.content for c in chunks), np.uint8).reshape(descriptor["shape"], order="F")
         np.testing.assert_array_equal(actual, (a | b)[2:16, 3:20, 5:25])
         chunk = descriptor["chunks"][0]["url"]
@@ -276,20 +293,25 @@ def test_api_union_chunks_case_selection_source_and_margin_ownership(tmp_path):
 
 def test_api_union_preserves_mr_reference_and_presentation(tmp_path):
     from scan3d.image_assets import create_image_asset
+
     ct, masks, _, _, _ = fixture(tmp_path)
     app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "missing"))
     service = app.state.service
     case = service.new_case("MR union transport")
     asset = create_image_asset(case["id"], ct, modality="MR")
     service.store.register_image_asset(asset)
-    revision = {"case_id": case["id"], "id": uuid.uuid4().hex, "ct_file": str(ct),
-        "reference_image_id": asset["id"], "image_asset": asset,
-        "geometry": imaging.geometry(ct), "structures": [{"id": i, "mask_file": str(p),
-            "reference_image_id": asset["id"]} for i, p in masks]}
+    revision = {
+        "case_id": case["id"],
+        "id": uuid.uuid4().hex,
+        "ct_file": str(ct),
+        "reference_image_id": asset["id"],
+        "image_asset": asset,
+        "geometry": imaging.geometry(ct),
+        "structures": [{"id": i, "mask_file": str(p), "reference_image_id": asset["id"]} for i, p in masks],
+    }
     service.store.save("revisions", revision)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        response = client.get(f"/api/cases/{case['id']}/revisions/{revision['id']}/volume-mask",
-                              params=[("structure_ids", "a"), ("structure_ids", "b")])
+        response = client.get(f"/api/cases/{case['id']}/revisions/{revision['id']}/volume-mask", params=[("structure_ids", "a"), ("structure_ids", "b")])
         assert response.status_code == 200, response.text
         descriptor = response.json()["current"]
         assert descriptor["reference_image_id"] == asset["id"] and descriptor["modality"] == "MR"

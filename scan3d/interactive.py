@@ -88,8 +88,7 @@ def _sha256(identity: tuple) -> str:
 
 def _model_files(directory: Path) -> list[Path]:
     # Deliberately load the pinned fold instead of guessing among checkpoints.
-    files = [directory / "fold_0" / "checkpoint_final.pth", directory / "plans.json",
-             directory / "dataset.json"]
+    files = [directory / "fold_0" / "checkpoint_final.pth", directory / "plans.json", directory / "dataset.json"]
     modern = directory / "inference_info.json"
     files.append(modern if modern.is_file() else directory / "inference_session_class.json")
     if any(not path.is_file() or path.stat().st_size == 0 for path in files):
@@ -122,10 +121,16 @@ def status() -> dict:
         reason = f"This correction adapter requires nnInteractive {ENGINE_VERSION} and its matching client"
     elif not model_available:
         reason = "The pinned nnInteractive model has not been installed completely"
-    return {"installed": installed, "version": versions["nnInteractive"],
-            "model_available": model_available, "available": reason is None,
-            "reason": reason, "model_id": MODEL_ID, "model_revision": MODEL_REVISION,
-            "license": MODEL_LICENSE}
+    return {
+        "installed": installed,
+        "version": versions["nnInteractive"],
+        "model_available": model_available,
+        "available": reason is None,
+        "reason": reason,
+        "model_id": MODEL_ID,
+        "model_revision": MODEL_REVISION,
+        "license": MODEL_LICENSE,
+    }
 
 
 def _new_session(device_info: dict):
@@ -134,8 +139,12 @@ def _new_session(device_info: dict):
 
     session = nnInteractiveInferenceSession(
         device=torch.device(f"cuda:{device_info['gpu_index']}"),
-        use_torch_compile=False, verbose=False, torch_n_threads=min(8, os.cpu_count() or 1),
-        do_autozoom=True, interactions_storage="blosc2", enable_undo=True,
+        use_torch_compile=False,
+        verbose=False,
+        torch_n_threads=min(8, os.cpu_count() or 1),
+        do_autozoom=True,
+        interactions_storage="blosc2",
+        enable_undo=True,
     )
     # The upstream constructor overrides this flag; change it before its model
     # initialization performs the first 192-cubed warmup convolution.
@@ -145,9 +154,9 @@ def _new_session(device_info: dict):
 
 def _prompts(prompts: list[dict], affine: np.ndarray, shape: tuple) -> list[dict]:
     from .interactive_prompts import normalize_prompts
+
     normalized = normalize_prompts(prompts, affine, shape)
-    return [{**item, "voxel": _voxel(affine, shape, item["ras"]).tolist()}
-            if item["kind"] == "point" else item for item in normalized]
+    return [{**item, "voxel": _voxel(affine, shape, item["ras"]).tolist()} if item["kind"] == "point" else item for item in normalized]
 
 
 def _batches(records, count):
@@ -161,9 +170,13 @@ def _batches(records, count):
         full = record.get("full_refine", False)
         autozoom = record.get("autozoom", True)
         legacy = record.get("legacy", False)
-        if (isinstance(end, bool) or not isinstance(end, int) or not previous <= end <= count
-                or not all(isinstance(value, bool) for value in (full, autozoom, legacy))
-                or (end == previous and not full)):
+        if (
+            isinstance(end, bool)
+            or not isinstance(end, int)
+            or not previous <= end <= count
+            or not all(isinstance(value, bool) for value in (full, autozoom, legacy))
+            or (end == previous and not full)
+        ):
             raise ValueError("Invalid correction apply boundary")
         result.append({"end": end, "autozoom": autozoom, "full_refine": full, "legacy": legacy})
         previous = end
@@ -176,15 +189,19 @@ def _summary(before: np.ndarray, after: np.ndarray, affine: np.ndarray) -> dict:
     # Slab reductions avoid allocating a full-volume difference mask per click.
     changed = before_count = after_count = 0
     for offset in range(0, before.shape[0], 16):
-        initial = before[offset:offset + 16]
-        current = after[offset:offset + 16]
+        initial = before[offset : offset + 16]
+        current = after[offset : offset + 16]
         changed += int(np.count_nonzero(initial != current))
         before_count += int(np.count_nonzero(initial))
         after_count += int(np.count_nonzero(current))
     voxel_ml = abs(float(np.linalg.det(affine[:3, :3]))) / 1000
-    return {"changed_voxels": changed, "before_voxel_count": before_count,
-            "after_voxel_count": after_count, "before_volume_ml": before_count * voxel_ml,
-            "after_volume_ml": after_count * voxel_ml}
+    return {
+        "changed_voxels": changed,
+        "before_voxel_count": before_count,
+        "after_voxel_count": after_count,
+        "before_volume_ml": before_count * voxel_ml,
+        "after_volume_ml": after_count * voxel_ml,
+    }
 
 
 class InteractiveRuntime:
@@ -241,30 +258,41 @@ class InteractiveRuntime:
             raise RuntimeError("This nnInteractive checkpoint cannot refine an existing mask with points")
         self._model_identity = identity
         self._model_provenance = {
-            "engine": "nnInteractive", "engine_version": ENGINE_VERSION,
-            "model_id": MODEL_ID, "model_repository": MODEL_REPOSITORY,
-            "model_revision": MODEL_REVISION, "checkpoint_sha256": checkpoint_hash,
-            "model_files_sha256": hashes, "license": MODEL_LICENSE,
-            "device": device["selected_device"], "gpu_name": device["gpu_name"],
-            "torch_version": device["torch"], "hip_version": device["hip"],
-            "compile": False, "autozoom": True, "interaction_storage": "blosc2",
-            "miopen_find_mode": MIOPEN_FIND_MODE, "convolution_benchmark": False,
+            "engine": "nnInteractive",
+            "engine_version": ENGINE_VERSION,
+            "model_id": MODEL_ID,
+            "model_repository": MODEL_REPOSITORY,
+            "model_revision": MODEL_REVISION,
+            "checkpoint_sha256": checkpoint_hash,
+            "model_files_sha256": hashes,
+            "license": MODEL_LICENSE,
+            "device": device["selected_device"],
+            "gpu_name": device["gpu_name"],
+            "torch_version": device["torch"],
+            "hip_version": device["hip"],
+            "compile": False,
+            "autozoom": True,
+            "interaction_storage": "blosc2",
+            "miopen_find_mode": MIOPEN_FIND_MODE,
+            "convolution_benchmark": False,
             "torch_threads": min(8, os.cpu_count() or 1),
-            "axis_order": "native_i_j_k", "coordinate_system": "RAS_mm",
+            "axis_order": "native_i_j_k",
+            "coordinate_system": "RAS_mm",
             "wrapper_sha256": _sha256(_identity(Path(__file__))),
         }
 
-    def predict(self, ct_path: Path, mask_path: Path, prompts: list[dict], output_path: Path,
-                progress, cancelled, session_key: str, *, batches=None, options=None) -> dict:
+    def predict(
+        self, ct_path: Path, mask_path: Path, prompts: list[dict], output_path: Path, progress, cancelled, session_key: str, *, batches=None, options=None
+    ) -> dict:
         thread = threading.get_ident()
         if self._owner_thread is not None and self._owner_thread != thread:
             raise RuntimeError("nnInteractive runtime must remain on its owning GPU worker thread")
         with _kernel_settings():
-            return self._predict(ct_path, mask_path, prompts, output_path, progress, cancelled, session_key,
-                                 batches=batches, options=options)
+            return self._predict(ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, batches=batches, options=options)
 
-    def _predict(self, ct_path: Path, mask_path: Path, prompts: list[dict], output_path: Path,
-                 progress, cancelled, session_key: str, *, batches=None, options=None) -> dict:
+    def _predict(
+        self, ct_path: Path, mask_path: Path, prompts: list[dict], output_path: Path, progress, cancelled, session_key: str, *, batches=None, options=None
+    ) -> dict:
         """Write an uncommitted candidate, reusing an exact warm prompt prefix.
 
         Undo, edited prompts, a changed baseline, or a different session reloads
@@ -312,10 +340,12 @@ class InteractiveRuntime:
                 self._image, self._affine = image, affine
                 self._state_key = None
             state_key = (session_key, ct_identity, mask_identity, settings["start_empty"], history is not None)
-            prefix = (self._state_key == state_key and len(normalized) >= len(self._applied)
-                      and normalized[:len(self._applied)] == self._applied
-                      and (history is None or (len(history) >= len(self._applied_batches)
-                           and history[:len(self._applied_batches)] == self._applied_batches)))
+            prefix = (
+                self._state_key == state_key
+                and len(normalized) >= len(self._applied)
+                and normalized[: len(self._applied)] == self._applied
+                and (history is None or (len(history) >= len(self._applied_batches) and history[: len(self._applied_batches)] == self._applied_batches))
+            )
             if not prefix:
                 progress("Initializing correction from the saved segmentation")
                 baseline, _, _ = _binary(mask_path, image, affine)
@@ -330,8 +360,7 @@ class InteractiveRuntime:
                 # mask semantics. Slab comparisons bound temporary memory even
                 # for a whole-body CT rather than allocating a full-volume diff.
                 if self._target.shape != initial.shape or any(
-                    not np.array_equal(self._target[offset:offset + 16], initial[offset:offset + 16])
-                    for offset in range(0, baseline.shape[0], 16)
+                    not np.array_equal(self._target[offset : offset + 16], initial[offset : offset + 16]) for offset in range(0, baseline.shape[0], 16)
                 ):
                     raise RuntimeError("nnInteractive changed the saved mask during initialization")
                 self._state_key, self._applied, self._applied_batches = state_key, [], []
@@ -341,20 +370,20 @@ class InteractiveRuntime:
             prediction_started = time.monotonic()
             batch_statistics = []
             if history is None:
-                for prompt in normalized[len(self._applied):]:
+                for prompt in normalized[len(self._applied) :]:
                     self._cancel(cancelled)
                     if prompt["kind"] != "point":
                         raise ValueError("Drawing tools require persisted Apply batch boundaries")
                     progress(f"Refining segmentation with point {len(self._applied) + 1} of {len(normalized)}")
-                    changed_bbox = self._session.add_point_interaction(
-                        prompt["voxel"], include_interaction=prompt["include"], run_prediction=True)
+                    changed_bbox = self._session.add_point_interaction(prompt["voxel"], include_interaction=prompt["include"], run_prediction=True)
                     self._cancel(cancelled)
                     self._applied.append(prompt)
                     applied_now += 1
             else:
                 from .interactive_batch import register_and_predict, refine_whole_mask
                 from .interactive_prompts import materialize_prompt
-                for batch in history[len(self._applied_batches):]:
+
+                for batch in history[len(self._applied_batches) :]:
                     self._cancel(cancelled)
                     start, end = len(self._applied), batch["end"]
                     pending = normalized[start:end]
@@ -362,14 +391,12 @@ class InteractiveRuntime:
                         for prompt in pending:
                             if prompt["kind"] != "point":
                                 raise ValueError("Legacy prediction history supports points only")
-                            changed_bbox = self._session.add_point_interaction(
-                                prompt["voxel"], include_interaction=prompt["include"], run_prediction=True)
+                            changed_bbox = self._session.add_point_interaction(prompt["voxel"], include_interaction=prompt["include"], run_prediction=True)
                             self._cancel(cancelled)
                             applied_now += 1
                     elif pending:
                         materialized = [materialize_prompt(prompt, affine, image.shape) for prompt in pending]
-                        stats = register_and_predict(self._session, materialized, progress, cancelled,
-                                                     autozoom=batch["autozoom"])
+                        stats = register_and_predict(self._session, materialized, progress, cancelled, autozoom=batch["autozoom"])
                         batch_statistics.append(stats)
                         changed_bbox = stats.get("changed_bbox_ijk", changed_bbox)
                         applied_now += stats["prediction_regions"]
@@ -387,23 +414,34 @@ class InteractiveRuntime:
             if self._target.dtype != np.uint8 or self._target.min() < 0 or self._target.max() > 1:
                 raise RuntimeError("nnInteractive returned a nonbinary candidate mask")
             summary = _summary(self._baseline, self._target, affine)
-            provenance = {**self._model_provenance, **summary, "prompts": normalized,
-                          "prompt_count": len(normalized), "predictions_this_request": applied_now,
-                          "apply_batches": history, "options": settings, "batch_statistics": batch_statistics,
-                          "autozoom": settings["autozoom"],
-                          "batch_adapter_sha256": _sha256(_identity(Path(__file__).with_name("interactive_batch.py"))),
-                          "prompt_rasterizer_sha256": _sha256(_identity(Path(__file__).with_name("interactive_prompts.py"))),
-                          "reused_prompt_prefix": prefix, "last_changed_bbox_ijk": changed_bbox,
-                          "source_ct_sha256": _sha256(ct_identity),
-                          "input_mask_sha256": _sha256(mask_identity)}
+            provenance = {
+                **self._model_provenance,
+                **summary,
+                "prompts": normalized,
+                "prompt_count": len(normalized),
+                "predictions_this_request": applied_now,
+                "apply_batches": history,
+                "options": settings,
+                "batch_statistics": batch_statistics,
+                "autozoom": settings["autozoom"],
+                "batch_adapter_sha256": _sha256(_identity(Path(__file__).with_name("interactive_batch.py"))),
+                "prompt_rasterizer_sha256": _sha256(_identity(Path(__file__).with_name("interactive_prompts.py"))),
+                "reused_prompt_prefix": prefix,
+                "last_changed_bbox_ijk": changed_bbox,
+                "source_ct_sha256": _sha256(ct_identity),
+                "input_mask_sha256": _sha256(mask_identity),
+            }
             self._cancel(cancelled)
             artifact_started = time.monotonic()
             _save_mask(self._target, image, output_path)
             provenance["output_mask_sha256"] = _sha256(_identity(output_path))
             provenance["elapsed_seconds"] = time.monotonic() - started
-            provenance["timings"] = {"model_seconds": model_seconds, "prepare_seconds": prepare_seconds,
-                                     "prediction_seconds": prediction_seconds,
-                                     "write_seconds": time.monotonic() - artifact_started}
+            provenance["timings"] = {
+                "model_seconds": model_seconds,
+                "prepare_seconds": prepare_seconds,
+                "prediction_seconds": prediction_seconds,
+                "write_seconds": time.monotonic() - artifact_started,
+            }
             return provenance
         except BaseException:
             self.release()

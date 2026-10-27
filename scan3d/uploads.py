@@ -7,6 +7,7 @@ received must match exactly, so a retried batch cannot duplicate or alter a
 file. Staged uploads stay outside the case library until finished; abandoned
 uploads are discarded after a day without activity.
 """
+
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -45,8 +46,7 @@ def _store_range(stream, length, path, offset, received):
 
 
 def _progress(upload_id, state):
-    return {"id": upload_id, **{key: state[key] for key in (
-        "received_files", "total_files", "received_bytes", "total_bytes")}}
+    return {"id": upload_id, **{key: state[key] for key in ("received_files", "total_files", "received_bytes", "total_bytes")}}
 
 
 class Uploads:
@@ -97,9 +97,18 @@ class Uploads:
         directory = self.root / upload_id
         (directory / "files").mkdir(parents=True)
         (directory / "pending").mkdir()
-        state = dict(schema_version=1, label=label, total_files=total_files, total_bytes=total_bytes,
-                     received_files=0, received_bytes=0, expanded_bytes=0, case_id=None,
-                     created_at=now(), updated_at=now())
+        state = dict(
+            schema_version=1,
+            label=label,
+            total_files=total_files,
+            total_bytes=total_bytes,
+            received_files=0,
+            received_bytes=0,
+            expanded_bytes=0,
+            case_id=None,
+            created_at=now(),
+            updated_at=now(),
+        )
         atomic_json(directory / "state.json", state)
         return {**_progress(upload_id, state), "max_parts": MAX_PARTS}
 
@@ -151,8 +160,7 @@ class Uploads:
                     part.replace(target)
                     state["received_files"] += 1
                     if zipfile.is_zipfile(target):
-                        extract_zip(target, files / (relative.stem + "_expanded"),
-                                    limit - state["received_bytes"] - state["expanded_bytes"])
+                        extract_zip(target, files / (relative.stem + "_expanded"), limit - state["received_bytes"] - state["expanded_bytes"])
                         with zipfile.ZipFile(target) as archive:
                             state["expanded_bytes"] += sum(member.file_size for member in archive.infolist())
             finally:
@@ -171,10 +179,8 @@ class Uploads:
                     return case
                 # Indexing was interrupted, for example by a restart; repeat it.
             else:
-                if (state["received_files"] != state["total_files"] or state["received_bytes"] != state["total_bytes"]
-                        or any((directory / "pending").iterdir())):
-                    raise ImportConflict(f"The upload is incomplete: {state['received_files']:,} of "
-                                         f"{state['total_files']:,} files were received")
+                if state["received_files"] != state["total_files"] or state["received_bytes"] != state["total_bytes"] or any((directory / "pending").iterdir()):
+                    raise ImportConflict(f"The upload is incomplete: {state['received_files']:,} of {state['total_files']:,} files were received")
                 case = self.service.new_case(state["label"])
                 shutil.move(directory / "files", self.service.store.case_dir(case["id"]) / "dicom")
                 state.update(case_id=case["id"], updated_at=now())

@@ -19,7 +19,8 @@ export function initOffline(manifest: OfflineManifest, modelBase64: string | nul
   }
   let data: ArrayBuffer | undefined;
   if (modelBase64) {
-    const binary = atob(modelBase64), bytes = new Uint8Array(binary.length);
+    const binary = atob(modelBase64),
+      bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     data = bytes.buffer;
   }

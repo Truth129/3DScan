@@ -16,19 +16,25 @@ export function ctOverlayColor(color: Structure['color']): [number, number, numb
 
 /** Palette is presentation only; the independent binary masks remain intact. */
 export function colorCTOverlays(frame: CTFrame, selections?: readonly CTOverlaySelection[], overlayOpacity?: number): CTFrame {
-  const opacity = overlayOpacity === undefined ? undefined : Math.max(0, Math.min(1, Number.isFinite(overlayOpacity) ? overlayOpacity : .4));
+  const opacity = overlayOpacity === undefined ? undefined : Math.max(0, Math.min(1, Number.isFinite(overlayOpacity) ? overlayOpacity : 0.4));
   if (selections === undefined) return opacity === undefined ? frame : { ...frame, overlayOpacity: opacity };
   const colors = new Map(selections.map(item => [item.id, ctOverlayColor(item.color)]));
   const overlays = frame.overlays ?? (selections.length ? [{ id: selections[0].id, current: frame.current, parent: frame.parent }] : []);
-  const styled = overlays.map(layer => ({ ...layer, color: colors.get(layer.id) ?? [56, 189, 248] as [number, number, number] }));
-  if (frame.overlays && (opacity === undefined || opacity === frame.overlayOpacity)
-      && styled.every((layer, index) => layer.color.every((value, channel) => value === (frame.overlays![index].color ?? [56, 189, 248])[channel]))) return frame;
+  const styled = overlays.map(layer => ({ ...layer, color: colors.get(layer.id) ?? ([56, 189, 248] as [number, number, number]) }));
+  if (
+    frame.overlays &&
+    (opacity === undefined || opacity === frame.overlayOpacity) &&
+    styled.every((layer, index) => layer.color.every((value, channel) => value === (frame.overlays![index].color ?? [56, 189, 248])[channel]))
+  )
+    return frame;
   return { ...frame, ...(opacity === undefined ? {} : { overlayOpacity: opacity }), overlays: styled };
 }
 
 /** Count retained buffers once, including aliases in the legacy first layer. */
 export function ctFrameBytes(frame: CTFrame): number {
   const arrays = [frame.hu, frame.current, frame.parent, ...(frame.overlays ?? []).flatMap(layer => [layer.current, layer.parent])];
-  return [...new Set(arrays.filter((array): array is Float32Array | Uint8Array => !!array).map(array => array.buffer))]
-    .reduce((sum, buffer) => sum + buffer.byteLength, 0);
+  return [...new Set(arrays.filter((array): array is Float32Array | Uint8Array => !!array).map(array => array.buffer))].reduce(
+    (sum, buffer) => sum + buffer.byteLength,
+    0,
+  );
 }

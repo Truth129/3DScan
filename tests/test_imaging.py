@@ -35,8 +35,7 @@ def save(path, values, affine, units="mm"):
 @pytest.fixture
 def fixture(tmp_path):
     angle = np.deg2rad(31)
-    rotate = np.array([[np.cos(angle), -np.sin(angle), 0],
-                       [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
+    rotate = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
     affine = np.eye(4)
     affine[:3, :3] = rotate @ np.diag([-0.8, 1.4, 2.2])
     affine[:3, 3] = [31, -52, 87]
@@ -52,8 +51,7 @@ def fixture(tmp_path):
 
 
 def entry(mask_path, identifier="total:liver"):
-    return {"id": identifier, "name": "Liver", "task": "total", "group": "Organs",
-            "color": "#bb6655", "mask_file": str(mask_path)}
+    return {"id": identifier, "name": "Liver", "task": "total", "group": "Organs", "color": "#bb6655", "mask_file": str(mask_path)}
 
 
 def test_oblique_reflected_geometry_and_volume(fixture):
@@ -79,8 +77,7 @@ def test_meter_units_and_saved_mask_forms(tmp_path):
     mask_path = save(tmp_path / "mask.nii.gz", mask, affine, "meter")
     np.testing.assert_allclose(imaging.geometry(ct_path)["spacing"], [1, 2, 3], rtol=1e-6)
     output = tmp_path / "refined.nii.gz"
-    result = imaging.refine_mask(ct_path, mask_path, output,
-                                {"type": "erase_region", "bounds_ras": [[0, -9, -1], [1.1, 1, 20]]})
+    result = imaging.refine_mask(ct_path, mask_path, output, {"type": "erase_region", "bounds_ras": [[0, -9, -1], [1.1, 1, 20]]})
     assert result["changed_voxels"] == 25
     corrected = nib.load(output)
     assert corrected.header.get_xyzt_units()[0] == "meter"
@@ -91,20 +88,16 @@ def test_meter_units_and_saved_mask_forms(tmp_path):
 def test_components_and_non_destructive_refinement(fixture, tmp_path):
     ct_path, mask_path, affine, _, original = fixture
     seed = (affine @ [14, 15, 3, 1])[:3]
-    result = imaging.refine_mask(ct_path, mask_path, tmp_path / "keep.nii.gz",
-                                {"type": "keep_component", "seed_ras": seed.tolist()})
+    result = imaging.refine_mask(ct_path, mask_path, tmp_path / "keep.nii.gz", {"type": "keep_component", "seed_ras": seed.tolist()})
     assert result["changed_voxels"] == 6 * 7 * 8
     assert nib.load(tmp_path / "keep.nii.gz").get_fdata().sum() == 27
     np.testing.assert_array_equal(nib.load(mask_path).get_fdata(), original)
     with pytest.raises(ValueError, match="does not change"):
-        imaging.refine_mask(ct_path, tmp_path / "keep.nii.gz", tmp_path / "again.nii.gz",
-                            {"type": "keep_component", "seed_ras": seed.tolist()})
+        imaging.refine_mask(ct_path, tmp_path / "keep.nii.gz", tmp_path / "again.nii.gz", {"type": "keep_component", "seed_ras": seed.tolist()})
     with pytest.raises(ValueError, match="entire"):
-        imaging.refine_mask(ct_path, tmp_path / "keep.nii.gz", tmp_path / "empty.nii.gz",
-                            {"type": "remove_component", "seed_ras": seed.tolist()})
+        imaging.refine_mask(ct_path, tmp_path / "keep.nii.gz", tmp_path / "empty.nii.gz", {"type": "remove_component", "seed_ras": seed.tolist()})
     with pytest.raises(ValueError, match="new mask"):
-        imaging.refine_mask(ct_path, mask_path, mask_path,
-                            {"type": "keep_component", "seed_ras": seed.tolist()})
+        imaging.refine_mask(ct_path, mask_path, mask_path, {"type": "keep_component", "seed_ras": seed.tolist()})
 
 
 def test_region_operates_on_world_voxel_centers(fixture, tmp_path):
@@ -166,21 +159,16 @@ def test_fast_reslice_matches_full_patient_coordinate_sampling(fixed):
         mapping[fixed, :2] = 0
         # Exercise fractional interpolation, exact voxel centres, and the
         # half-voxel border where mode='constant' must remain outside the CT.
-        positions = [-0.1, 0, 2.37, 4.5, values.shape[fixed] - 1,
-                     values.shape[fixed] - 0.9]
+        positions = [-0.1, 0, 2.37, 4.5, values.shape[fixed] - 1, values.shape[fixed] - 0.9]
     rows, columns = np.indices((11, 12), dtype=np.float64)
     for position in positions:
         if fixed is not None:
             mapping[fixed, 3] = position
-        coordinates = (mapping[:3, 0, None, None] * columns
-                       + mapping[:3, 1, None, None] * rows
-                       + mapping[:3, 3, None, None])
-        expected = ndi.map_coordinates(values, coordinates, order=1,
-                                       mode="constant", cval=-1024, prefilter=False)
+        coordinates = mapping[:3, 0, None, None] * columns + mapping[:3, 1, None, None] * rows + mapping[:3, 3, None, None]
+        expected = ndi.map_coordinates(values, coordinates, order=1, mode="constant", cval=-1024, prefilter=False)
         actual = imaging._reslice(values, mapping, rows.shape, order=1, cval=-1024)
         np.testing.assert_allclose(actual, expected, rtol=0, atol=0.0005)
-        expected_mask = ndi.map_coordinates(mask, coordinates, order=0,
-                                            mode="constant", cval=0, prefilter=False)
+        expected_mask = ndi.map_coordinates(mask, coordinates, order=0, mode="constant", cval=0, prefilter=False)
         actual_mask = imaging._reslice(mask, mapping, rows.shape, order=0, cval=0)
         # affine_transform evaluates the affine in C; the reference grid is
         # evaluated by NumPy first. Fused arithmetic can put an exact physical
@@ -192,12 +180,9 @@ def test_fast_reslice_matches_full_patient_coordinate_sampling(fixed):
             assert np.all((point >= 0) & (point <= np.asarray(mask.shape) - 1)), point
             lower = np.floor(point).astype(int)
             tolerance = 4 * np.spacing(np.maximum(1, np.abs(point)))
-            ties = np.abs(point - (lower + .5)) <= tolerance
+            ties = np.abs(point - (lower + 0.5)) <= tolerance
             assert np.any(ties), {"pixel": [row, column], "voxel": point}
-            neighbours = [
-                (int(index), int(index + 1)) if tie else (int(np.floor(value + .5)),)
-                for index, value, tie in zip(lower, point, ties)
-            ]
+            neighbours = [(int(index), int(index + 1)) if tie else (int(np.floor(value + 0.5)),) for index, value, tie in zip(lower, point, ties)]
             allowed = {bool(mask[index]) for index in product(*neighbours)}
             assert bool(actual_mask[row, column]) in allowed
 
@@ -215,8 +200,7 @@ def test_native_slab_half_voxel_selects_upper_slice(axis):
     mapping[keep[0], 0] = 1
     mapping[keep[1], 1] = 1
     mapping[axis, 3] = 4.5
-    np.testing.assert_array_equal(
-        imaging._reslice(mask, mapping, (3, 4), order=0, cval=0), np.ones((3, 4), dtype=bool))
+    np.testing.assert_array_equal(imaging._reslice(mask, mapping, (3, 4), order=0, cval=0), np.ones((3, 4), dtype=bool))
 
 
 def test_misaligned_or_nonbinary_masks_rejected(fixture, tmp_path):
@@ -286,10 +270,10 @@ def read_glb(path):
     assert magic == 0x46546C67 and version == 2 and total == len(data)
     json_length, kind = struct.unpack_from("<II", data, 12)
     assert kind == 0x4E4F534A
-    doc = json.loads(data[20:20 + json_length])
+    doc = json.loads(data[20 : 20 + json_length])
     bin_length, bin_kind = struct.unpack_from("<II", data, 20 + json_length)
     assert bin_kind == 0x004E4942
-    binary = data[28 + json_length:]
+    binary = data[28 + json_length :]
     assert bin_length == len(binary)
     return doc, binary
 
@@ -306,8 +290,7 @@ def test_glb_real_geometry_scale_identity_and_winding(fixture, tmp_path):
     def array(index, dtype, columns):
         acc = doc["accessors"][index]
         view = doc["bufferViews"][acc["bufferView"]]
-        return np.frombuffer(binary, dtype=dtype, count=acc["count"] * columns,
-                             offset=view.get("byteOffset", 0)).reshape(-1, columns)
+        return np.frombuffer(binary, dtype=dtype, count=acc["count"] * columns, offset=view.get("byteOffset", 0)).reshape(-1, columns)
 
     positions = array(primitive["attributes"]["POSITION"], "<f4", 3)
     faces = array(primitive["indices"], "<u4", 1).reshape(-1, 3)
@@ -336,8 +319,7 @@ def test_display_simplification_preserves_thin_branch_tips_and_closed_topology(t
     shape = (64, 64, 64)
     skeleton = np.zeros(shape, bool)
     center = np.array([32, 32, 30])
-    tips = [np.array([32, 32, 5]), np.array([8, 32, 55]), np.array([56, 32, 55]),
-            np.array([32, 8, 40])]
+    tips = [np.array([32, 32, 5]), np.array([8, 32, 55]), np.array([56, 32, 55]), np.array([32, 8, 40])]
     for tip in tips:
         points = np.rint(np.linspace(center, tip, 100)).astype(int)
         skeleton[tuple(points.T)] = True
@@ -372,8 +354,7 @@ def test_slicer_overlap_roundtrip(fixture, tmp_path):
     data, header = nrrd.read(str(unpacked / "segmentation.seg.nrrd"))
     assert data.shape[0] == 2
     assert header["Segment0_ID"] == structures[0]["id"]
-    imported = slicer_io.import_segmentation(ct_path, unpacked / "segmentation.seg.nrrd", structures,
-                                           tmp_path / "corrected", require_source_hash=True)
+    imported = slicer_io.import_segmentation(ct_path, unpacked / "segmentation.seg.nrrd", structures, tmp_path / "corrected", require_source_hash=True)
     for item, expected in zip(imported, [mask, second_mask]):
         np.testing.assert_array_equal(nib.load(item["mask_file"]).get_fdata(), expected)
     mapping = json.loads((unpacked / "mapping.json").read_text())
@@ -388,10 +369,17 @@ def test_slicer_cropped_labelmap_origin_not_double_offset(fixture, tmp_path):
     cropped_affine = affine.copy()
     cropped_affine[:3, 3] = (affine @ np.r_[low, 1])[:3]
     flip = np.diag([-1, -1, 1])
-    header = {"space": "left-posterior-superior", "space directions": (flip @ cropped_affine[:3, :3]).T,
-              "space origin": flip @ cropped_affine[:3, 3], "encoding": "gzip",
-              "Segmentation_ReferenceImageExtentOffset": "2 3 4", "Segment0_ID": "total:liver",
-              "Segment0_Name": "Liver", "Segment0_Layer": "0", "Segment0_LabelValue": "1"}
+    header = {
+        "space": "left-posterior-superior",
+        "space directions": (flip @ cropped_affine[:3, :3]).T,
+        "space origin": flip @ cropped_affine[:3, 3],
+        "encoding": "gzip",
+        "Segmentation_ReferenceImageExtentOffset": "2 3 4",
+        "Segment0_ID": "total:liver",
+        "Segment0_Name": "Liver",
+        "Segment0_Layer": "0",
+        "Segment0_LabelValue": "1",
+    }
     seg_path = tmp_path / "crop.seg.nrrd"
     nrrd.write(str(seg_path), cropped, header)
     imported = slicer_io.import_segmentation(ct_path, seg_path, [entry(mask_path)], tmp_path / "out")
@@ -507,9 +495,15 @@ def test_dicom_unsupported_jpeg2000_explains_installed_decoder_and_keeps_private
     log.chmod(0o644)
     patient_details = b"Patient: PRIVATE_NAME, source /private/patient/source.dcm"
     monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
-    monkeypatch.setattr(dicom.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
-        returncode=2, stdout=b"Warning: Unsupported transfer syntax: " + syntax.encode() + b"\n" + patient_details,
-        stderr=b"No valid DICOM images were found"))
+    monkeypatch.setattr(
+        dicom.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=2,
+            stdout=b"Warning: Unsupported transfer syntax: " + syntax.encode() + b"\n" + patient_details,
+            stderr=b"No valid DICOM images were found",
+        ),
+    )
     with pytest.raises(RuntimeError, match="JPEG 2000.*OpenJPEG") as error:
         dicom.convert_series(files, output)
     assert "verify the selected" not in str(error.value)
@@ -525,17 +519,18 @@ def test_dicom_unsupported_jpeg2000_explains_installed_decoder_and_keeps_private
 def test_dicom_unknown_unsupported_compression_never_exposes_converter_metadata(tmp_path, monkeypatch):
     files = conversion_sources(tmp_path)
     monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
-    monkeypatch.setattr(dicom.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
-        returncode=2, stdout="Unsupported transfer syntax: PRIVATE_UNKNOWN_SYNTAX /private/patient",
-        stderr=""))
+    monkeypatch.setattr(
+        dicom.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=2, stdout="Unsupported transfer syntax: PRIVATE_UNKNOWN_SYNTAX /private/patient", stderr=""),
+    )
     with pytest.raises(RuntimeError, match="installed DICOM converter.*required decoder") as error:
         dicom.convert_series(files, tmp_path / "converted")
     assert "PRIVATE_UNKNOWN_SYNTAX" not in str(error.value) and "/private" not in str(error.value)
 
 
 @pytest.mark.parametrize("returncode,output_count", [(0, 0), (0, 2), (2, 0), (8, 1)])
-def test_dicom_missing_multiple_or_partially_failed_converter_outputs_are_never_accepted(
-        tmp_path, monkeypatch, returncode, output_count):
+def test_dicom_missing_multiple_or_partially_failed_converter_outputs_are_never_accepted(tmp_path, monkeypatch, returncode, output_count):
     files = conversion_sources(tmp_path)
     output = tmp_path / "converted"
     monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
@@ -549,7 +544,7 @@ def test_dicom_missing_multiple_or_partially_failed_converter_outputs_are_never_
         return SimpleNamespace(returncode=returncode, stdout=b"source /private/patient", stderr=b"conversion details")
 
     monkeypatch.setattr(dicom.subprocess, "run", convert)
-    message = ("exactly one" if not returncode else "no readable CT images" if returncode == 2 else "exit 8")
+    message = "exactly one" if not returncode else "no readable CT images" if returncode == 2 else "exit 8"
     with pytest.raises((ValueError, RuntimeError), match=message) as error:
         dicom.convert_series(files, output)
     assert "/private" not in str(error.value)
@@ -577,6 +572,7 @@ def test_dicom_timeout_keeps_partial_private_diagnostics(tmp_path, monkeypatch):
 def compressed_conversion_sources(tmp_path):
     from PIL import features
     from pydicom.pixels.decoders import JPEG2000LosslessDecoder
+
     if not features.check_codec("jpg_2000") or "gdcm" not in JPEG2000LosslessDecoder.available_plugins:
         pytest.skip("Independent JPEG 2000 fixture encoding/GDCM decoding is unavailable")
     files = conversion_sources(tmp_path, str(JPEG2000Lossless))
@@ -619,8 +615,7 @@ def test_dicom_codec_fallback_preserves_original_bytes_hu_and_oblique_geometry(t
         target = Path(command[command.index("-o") + 1])
         calls.append((source, target))
         if len(calls) == 1:
-            assert all((source / f"{index:06d}.dcm").stat().st_ino == Path(name).stat().st_ino
-                       for index, name in enumerate(files))
+            assert all((source / f"{index:06d}.dcm").stat().st_ino == Path(name).stat().st_ino for index, name in enumerate(files))
             (target / "native-partial.nii.gz").write_bytes(b"must never be accepted")
             return SimpleNamespace(returncode=1, stdout=b"OpenJPEG failed to read the header /private/patient", stderr=b"")
         assert source != calls[0][0] and target != calls[0][1]
@@ -630,8 +625,16 @@ def test_dicom_codec_fallback_preserves_original_bytes_hu_and_oblique_geometry(t
             assert normalized.stat().st_ino != Path(name).stat().st_ino
             before, after = pydicom.dcmread(name), pydicom.dcmread(normalized)
             assert after.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
-            for key in ("SOPInstanceUID", "FrameOfReferenceUID", "ImagePositionPatient", "ImageOrientationPatient",
-                        "PixelSpacing", "RescaleSlope", "RescaleIntercept", "LossyImageCompression"):
+            for key in (
+                "SOPInstanceUID",
+                "FrameOfReferenceUID",
+                "ImagePositionPatient",
+                "ImageOrientationPatient",
+                "PixelSpacing",
+                "RescaleSlope",
+                "RescaleIntercept",
+                "LossyImageCompression",
+            ):
                 assert getattr(after, key) == getattr(before, key)
             before.pixel_array_options(decoding_plugin="gdcm")
             np.testing.assert_array_equal(after.pixel_array, before.pixel_array)
@@ -650,11 +653,12 @@ def test_dicom_codec_fallback_preserves_original_bytes_hu_and_oblique_geometry(t
         expected = ds.pixel_array.astype(float) * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
         rows, columns = np.indices(expected.shape)
         orientation = np.asarray(ds.ImageOrientationPatient, float)
-        lps = (np.asarray(ds.ImagePositionPatient, float)[:, None, None]
-               + orientation[:3, None, None] * columns * float(ds.PixelSpacing[1])
-               + orientation[3:, None, None] * rows * float(ds.PixelSpacing[0]))
-        locations = nib.affines.apply_affine(np.linalg.inv(result.affine),
-                                             np.moveaxis(lps * np.array([-1, -1, 1])[:, None, None], 0, -1))
+        lps = (
+            np.asarray(ds.ImagePositionPatient, float)[:, None, None]
+            + orientation[:3, None, None] * columns * float(ds.PixelSpacing[1])
+            + orientation[3:, None, None] * rows * float(ds.PixelSpacing[0])
+        )
+        locations = nib.affines.apply_affine(np.linalg.inv(result.affine), np.moveaxis(lps * np.array([-1, -1, 1])[:, None, None], 0, -1))
         np.testing.assert_allclose(locations, np.rint(locations), rtol=0, atol=1e-4)
         np.testing.assert_array_equal(values[tuple(np.moveaxis(np.rint(locations).astype(int), -1, 0))], expected)
     manifest = json.loads((output / "conversion.json").read_text())
@@ -667,11 +671,11 @@ def test_dicom_codec_fallback_preserves_original_bytes_hu_and_oblique_geometry(t
     assert "Normalized retry" in (output / "dcm2niix.log").read_text()
 
 
-@pytest.mark.parametrize("native_message,expected_calls", [(b"generic conversion error", 1),
-                                                          (b"Failed to decode frame", 2)])
+@pytest.mark.parametrize("native_message,expected_calls", [(b"generic conversion error", 1), (b"Failed to decode frame", 2)])
 @pytest.mark.parametrize("retry_exit,retry_outputs", [(0, 0), (1, 1)])
 def test_dicom_fallback_is_targeted_and_failed_or_empty_retry_never_uses_primary_partial_output(
-        tmp_path, monkeypatch, native_message, expected_calls, retry_exit, retry_outputs):
+    tmp_path, monkeypatch, native_message, expected_calls, retry_exit, retry_outputs
+):
     files = compressed_conversion_sources(tmp_path)
     calls = []
     monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
@@ -700,10 +704,11 @@ def test_dicom_fallback_is_targeted_and_failed_or_empty_retry_never_uses_primary
 def test_gpu_selection_uses_discrete_r9700_and_never_silently_falls_back(monkeypatch):
     available = True
     names = ["AMD Radeon 610M", "AMD Radeon AI PRO R9700"]
-    fake = SimpleNamespace(__version__="test", version=SimpleNamespace(hip="7.2.4", cuda=None),
-                           cuda=SimpleNamespace(is_available=lambda: available,
-                                                device_count=lambda: len(names),
-                                                get_device_name=lambda i: names[i]))
+    fake = SimpleNamespace(
+        __version__="test",
+        version=SimpleNamespace(hip="7.2.4", cuda=None),
+        cuda=SimpleNamespace(is_available=lambda: available, device_count=lambda: len(names), get_device_name=lambda i: names[i]),
+    )
     monkeypatch.setitem(sys.modules, "torch", fake)
     assert segmentation._device_info("gpu")["selected_device"] == "gpu:1"
     assert segmentation._device_info("gpu:0")["selected_device"] == "gpu:0"
@@ -730,18 +735,29 @@ def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixtur
             self.returncode = 0
             destination = Path(command[command.index("-o") + 1])
             task = command[command.index("--task") + 1]
-            names = (["liver", "spleen", "brain", "skull", "vertebrae_C1", "humerus_left",
-                      "femur_left", "gluteus_maximus_left", "atrial_appendage_left"]
-                     if task == "total" else sorted(segmentation._LUNG))
+            names = (
+                ["liver", "spleen", "brain", "skull", "vertebrae_C1", "humerus_left", "femur_left", "gluteus_maximus_left", "atrial_appendage_left"]
+                if task == "total"
+                else sorted(segmentation._LUNG)
+            )
             for name in names:
                 mask = np.zeros(ct.shape, np.uint8)
                 if name != "spleen":
                     mask[2:5, 3:6, 4:7] = 1
                 save(destination / f"{name}.nii.gz", mask, affine)
-            Path(command[command.index("--report") + 1]).write_text(json.dumps({
-                "device": "gpu", "fast": False, "fastest": False, "save_lowres": False,
-                "classes": {str(i): name for i, name in enumerate(names)},
-                "nnunetv2_version": "test", "runtime_seconds": 1}))
+            Path(command[command.index("--report") + 1]).write_text(
+                json.dumps(
+                    {
+                        "device": "gpu",
+                        "fast": False,
+                        "fastest": False,
+                        "save_lowres": False,
+                        "classes": {str(i): name for i, name in enumerate(names)},
+                        "nnunetv2_version": "test",
+                        "runtime_seconds": 1,
+                    }
+                )
+            )
 
         def poll(self):
             return 0
@@ -751,10 +767,16 @@ def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixtur
     first = segmentation.segment(ct_path, destination, profile, lambda _: None, lambda: False)
     second = segmentation.segment(ct_path, destination, profile, lambda _: None, lambda: False)
     retained = {entry["id"]: entry for entry in first}
-    assert set(retained) == {"total:liver", "total:brain", "total:skull", "total:vertebrae_C1",
-                             "total:humerus_left", "total:femur_left", "total:gluteus_maximus_left",
-                             "total:atrial_appendage_left"} | (
-        {f"lung_vessels:{name}" for name in segmentation._LUNG} if profile != "abdomen" else set())
+    assert set(retained) == {
+        "total:liver",
+        "total:brain",
+        "total:skull",
+        "total:vertebrae_C1",
+        "total:humerus_left",
+        "total:femur_left",
+        "total:gluteus_maximus_left",
+        "total:atrial_appendage_left",
+    } | ({f"lung_vessels:{name}" for name in segmentation._LUNG} if profile != "abdomen" else set())
     assert retained["total:skull"]["group"] == "Bones"
     assert retained["total:vertebrae_C1"]["group"] == "Bones"
     assert retained["total:humerus_left"]["group"] == "Bones"
@@ -763,8 +785,7 @@ def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixtur
     assert retained["total:gluteus_maximus_left"]["group"] == "Muscles"
     assert retained["total:atrial_appendage_left"]["group"] == "Chest organs"
     assert first[0]["mask_file"] != second[0]["mask_file"]
-    assert [command[command.index("--task") + 1] for command in commands] == (
-        ["total", "total"] if profile == "abdomen" else ["total", "lung_vessels"] * 2)
+    assert [command[command.index("--task") + 1] for command in commands] == (["total", "total"] if profile == "abdomen" else ["total", "lung_vessels"] * 2)
     assert "--fast" not in commands[0]
     assert commands[0][commands[0].index("--device") + 1] == "gpu:1"
     manifest = json.loads((destination / "inference.json").read_text())
@@ -782,8 +803,7 @@ def test_checkpoint_fingerprint_changes_when_weight_bytes_change(tmp_path, monke
     incomplete = segmentation.model_fingerprint("abdomen")
     assert incomplete["weights_complete"] is False
     for item in incomplete["models"]:
-        folder = (tmp_path / "weights" / f"Dataset{item['dataset_id']:03d}_fixture"
-                  / f"{item['trainer']}__{item['plans']}__{item['configuration']}")
+        folder = tmp_path / "weights" / f"Dataset{item['dataset_id']:03d}_fixture" / f"{item['trainer']}__{item['plans']}__{item['configuration']}"
         folder.mkdir(parents=True)
         (folder / "plans.json").write_text("{}")
         (folder / "dataset.json").write_text("{}")
@@ -800,9 +820,14 @@ def test_checkpoint_fingerprint_changes_when_weight_bytes_change(tmp_path, monke
 
 def test_slicer_rejects_different_lattice(fixture, tmp_path):
     ct_path, mask_path, affine, _, mask = fixture
-    header = {"space": "right-anterior-superior", "space directions": affine[:3, :3].T * 0.5,
-              "space origin": affine[:3, 3], "Segment0_ID": "total:liver",
-              "Segment0_Layer": "0", "Segment0_LabelValue": "1"}
+    header = {
+        "space": "right-anterior-superior",
+        "space directions": affine[:3, :3].T * 0.5,
+        "space origin": affine[:3, 3],
+        "Segment0_ID": "total:liver",
+        "Segment0_Layer": "0",
+        "Segment0_LabelValue": "1",
+    }
     path = tmp_path / "wrong_grid.seg.nrrd"
     nrrd.write(str(path), mask, header)
     with pytest.raises(ValueError, match="different voxel grid"):
@@ -811,25 +836,27 @@ def test_slicer_rejects_different_lattice(fixture, tmp_path):
 
 def test_slicer_strict_case_hash_prevents_cross_case_and_missing_identity(fixture, tmp_path):
     ct_path, mask_path, affine, ct, mask = fixture
-    header = {"space": "right-anterior-superior", "space directions": affine[:3, :3].T,
-              "space origin": affine[:3, 3], "Segment0_ID": "total:liver",
-              "Segment0_Layer": "0", "Segment0_LabelValue": "1"}
+    header = {
+        "space": "right-anterior-superior",
+        "space directions": affine[:3, :3].T,
+        "space origin": affine[:3, 3],
+        "Segment0_ID": "total:liver",
+        "Segment0_Layer": "0",
+        "Segment0_LabelValue": "1",
+    }
     path = tmp_path / "no_identity.seg.nrrd"
     nrrd.write(str(path), mask, header)
     with pytest.raises(ValueError, match="lacks the source CT identity"):
-        slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "missing",
-                                      require_source_hash=True)
+        slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "missing", require_source_hash=True)
     different = save(tmp_path / "different_ct.nii.gz", ct + 1, affine)
     header["Segment0_Tags"] = f"Scan3D.ReferenceSHA256:{slicer_io._reference_digest(different)}|"
     nrrd.write(str(path), mask, header)
     with pytest.raises(ValueError, match="different reference CT"):
-        slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "different",
-                                      require_source_hash=True)
+        slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "different", require_source_hash=True)
     # A valid segment tag alone suffices when Slicer discards custom globals.
     header["Segment0_Tags"] = f"Scan3D.ReferenceSHA256:{slicer_io._reference_digest(ct_path)}|"
     nrrd.write(str(path), mask, header)
-    corrected = slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "valid",
-                                              require_source_hash=True)
+    corrected = slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "valid", require_source_hash=True)
     np.testing.assert_array_equal(nib.load(corrected[0]["mask_file"]).get_fdata(), mask)
 
 
@@ -881,8 +908,7 @@ def test_real_dcm2niix_preserves_patient_coordinates_and_rescaled_hu(tmp_path):
     assert imaging.geometry(converted)["spacing"] == pytest.approx([0.7, 0.8, 1.5], rel=1e-6)
 
 
-@pytest.mark.parametrize("attribute,value", [("AcquisitionNumber", 2), ("ConvolutionKernel", "LUNG"),
-                                             ("TemporalPositionIdentifier", 2)])
+@pytest.mark.parametrize("attribute,value", [("AcquisitionNumber", 2), ("ConvolutionKernel", "LUNG"), ("TemporalPositionIdentifier", 2)])
 def test_dicom_does_not_merge_distinct_acquisitions_or_kernels(tmp_path, attribute, value):
     series, frame = generate_uid(), generate_uid()
     write_dicom(tmp_path / "a.dcm", series, frame, 0)

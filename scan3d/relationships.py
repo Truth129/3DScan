@@ -6,10 +6,16 @@ from __future__ import annotations
 INDEPENDENT = {"kind": "independent", "exclusive_with": []}
 # Exact IDs emitted by the pinned TotalSegmentator `total` adapter. These are
 # suggestions requiring the reviewer's explicit selection, never automatic edits.
-LUNG_LOBES = frozenset(f"total:{name}" for name in (
-    "lung_upper_lobe_left", "lung_lower_lobe_left", "lung_upper_lobe_right",
-    "lung_middle_lobe_right", "lung_lower_lobe_right",
-))
+LUNG_LOBES = frozenset(
+    f"total:{name}"
+    for name in (
+        "lung_upper_lobe_left",
+        "lung_lower_lobe_left",
+        "lung_upper_lobe_right",
+        "lung_middle_lobe_right",
+        "lung_lower_lobe_right",
+    )
+)
 
 
 def _parents(structures, target_id, relationship):
@@ -39,8 +45,13 @@ def normalize_relationship(value, structures, target_id):
     ids = {entry["id"] for entry in structures}
     if parent is not None and (not isinstance(parent, str) or parent not in ids or parent == target_id):
         raise ValueError("The parent must be another segment in this revision")
-    if (not isinstance(peers, list) or len(peers) > 128 or any(not isinstance(peer, str) for peer in peers)
-            or len(peers) != len(set(peers)) or any(peer not in ids or peer == target_id for peer in peers)):
+    if (
+        not isinstance(peers, list)
+        or len(peers) > 128
+        or any(not isinstance(peer, str) for peer in peers)
+        or len(peers) != len(set(peers))
+        or any(peer not in ids or peer == target_id for peer in peers)
+    ):
         raise ValueError("Exclusive siblings must be unique existing segment IDs, excluding the target")
     if kind == "independent" and (parent or peers):
         raise ValueError("Independent segments have neither a parent nor exclusive siblings")
@@ -66,9 +77,13 @@ def effective_relationship(structures, target_id):
     selected = next((entry for entry in structures if entry["id"] == target_id), {})
     own = selected.get("relationship") or INDEPENDENT
     peers = set(own.get("exclusive_with", []))
-    peers.update(entry["id"] for entry in structures if entry["id"] != target_id
-                 and entry.get("relationship", {}).get("kind") == "subdivision"
-                 and target_id in entry["relationship"].get("exclusive_with", []))
+    peers.update(
+        entry["id"]
+        for entry in structures
+        if entry["id"] != target_id
+        and entry.get("relationship", {}).get("kind") == "subdivision"
+        and target_id in entry["relationship"].get("exclusive_with", [])
+    )
     value = {**own, "exclusive_with": sorted(peers)}
     if peers:
         value["kind"] = "subdivision"
@@ -79,8 +94,7 @@ def relationship_suggestions(structures, target_id):
     if target_id not in LUNG_LOBES:
         return []
     peers = sorted(LUNG_LOBES.intersection(entry["id"] for entry in structures) - {target_id})
-    return ([{"id": "totalsegmentator-lung-lobes-v1", "name": "Lung lobes", "exclusive_with": peers}]
-            if peers else [])
+    return [{"id": "totalsegmentator-lung-lobes-v1", "name": "Lung lobes", "exclusive_with": peers}] if peers else []
 
 
 def relationship_dirty(review):
@@ -105,8 +119,7 @@ def reciprocal_updates(structures, target, relationship):
         peers.discard(target["id"])
         if entry["id"] in chosen:
             peers.add(target["id"])
-        value = {"kind": "subdivision" if peers else "subregion" if old.get("parent_id") else "independent",
-                 "exclusive_with": sorted(peers)}
+        value = {"kind": "subdivision" if peers else "subregion" if old.get("parent_id") else "independent", "exclusive_with": sorted(peers)}
         if old.get("parent_id"):
             value["parent_id"] = old["parent_id"]
         result[entry["id"]] = normalize_relationship(value, graph, entry["id"])
