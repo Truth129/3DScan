@@ -363,6 +363,8 @@ Source hashes record the exact processing code and downloaded model checkpoints.
   model/checkpoint identity, device, timings and exact voxel/volume changes.
 - nibabel/SimpleITK and full affine transforms preserve patient geometry. Meshes
   use glTF metres; API coordinates and measurements use millimetres/millilitres.
+  Display meshes are quantized (KHR_mesh_quantization, within 0.03 mm) to halve
+  transfer size; detailed exports remain float32. Masks stay authoritative.
 - Three.js owns one 3D scene with on-demand rendering. CT review starts with a
   small local navigation preview and selected overlay preloaded on case open.
   The full CT caches automatically in the background for fully local,
@@ -399,7 +401,8 @@ Source hashes record the exact processing code and downloaded model checkpoints.
 
 Existing cases can enable incremental assets without resegmentation:
 `python -m scan3d optimize CASE_ID`. This preserves masks, measurements, review
-status and revision identity. `SCAN3D_POSTPROCESS_WORKERS` defaults to 4, reduced
+status and revision identity, and re-encodes older float32 display meshes as
+quantized assets. `SCAN3D_POSTPROCESS_WORKERS` defaults to 4, reduced
 using a conservative available-memory estimate; `SCAN3D_MESH_THREADS` defaults
 to 16 for VTK's available native CPU backend. Inference and browser drawing use
 the GPU; exact voxel counting remains on the CPU after an end-to-end benchmark.
