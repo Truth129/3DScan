@@ -1,8 +1,10 @@
 """Evidence checks for the runtime benchmark, using oblique synthetic masks."""
 
 import argparse
+from contextlib import nullcontext
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import nibabel as nib
@@ -113,3 +115,19 @@ def test_compare_checks_same_ct_options_and_weights(tmp_path, masks):
         validation.write_json(right / "report.json", {**common, key: replacement})
         with pytest.raises(ValueError):
             validation.compare(args)
+
+
+def test_supervised_worker_harness_runs_every_step_without_a_gpu(tmp_path, masks, monkeypatch):
+    values, _, save = masks
+    tests = str(Path(__file__).resolve().parent)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, (tests, os.environ.get("PYTHONPATH")))))
+    # A dry run must never contend with a real GPU validation for its lock.
+    monkeypatch.setattr(validation, "gpu_lock", nullcontext)
+    args = argparse.Namespace(ct=save("ct", (values * 40).astype(np.int16)), mask=save("mask"),
+                              output=tmp_path / "worker-proof", engine="fake_interactive_engine:PointwiseEngine")
+    validation.interactive_worker(args)
+    report = json.loads((args.output / "report.json").read_text())
+    assert report["status"] == "passed" and all(report["checks"].values()), report["checks"]
+    assert [step["outcome"] for step in report["steps"]] == [
+        "completed", "completed", "SegmentationCancelled", "RuntimeError", "completed"]
+    assert report["steps"][1]["provenance"]["pid"] == report["steps"][0]["pid_after"]
