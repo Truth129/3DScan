@@ -16,12 +16,13 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model_validator
 
 from . import __version__
 from .config import Settings
 from .service import Service, extract_zip, safe_relative
 from .store import ReviewConflict, public_case, public_job, public_revision
+from .uploads import ImportConflict, Uploads
 from .portable_export import ExportRequest
 from .acquisition import CardiacPhase, StudyProfile
 from .domain import Modality, VolumeQuality
@@ -52,6 +53,21 @@ class Input(BaseModel):
 class ImportLocal(Input):
     path: str
     label: str | None = Field(None, max_length=128)
+
+
+class ImportStart(Input):
+    label: str | None = Field(None, max_length=128)
+    total_files: int = Field(ge=1, le=100_000)
+    total_bytes: int = Field(ge=0)
+
+
+class ImportPart(Input):
+    path: str = Field(min_length=1, max_length=1024)
+    offset: int = Field(ge=0)
+    size: int = Field(ge=0)
+
+
+import_manifest = TypeAdapter(list[ImportPart])
 
 
 class Process(Input):
@@ -253,6 +269,10 @@ def create_app(settings: Settings | None = None):
     async def review_conflict(request, exc):
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+    @app.exception_handler(ImportConflict)
+    async def import_conflict(request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @app.middleware("http")
     async def same_origin(request: Request, call_next):
         # Local filesystem endpoints must not be callable by an unrelated browser origin.
@@ -366,6 +386,27 @@ def create_app(settings: Settings | None = None):
             case.update(status="import_failed", error=str(exc))
             service.store.save("cases", case)
             raise
+
+    # Browsers upload in bounded batches: one multipart form cannot carry more
+    # than 1,000 files, and batches give progress and retry over remote links.
+    uploads = Uploads(service)
+
+    @app.post("/api/imports")
+    def import_start(body: ImportStart):
+        return uploads.start(body.label, body.total_files, body.total_bytes)
+
+    @app.post("/api/imports/{upload_id}/parts")
+    def import_parts(upload_id: str, manifest: str = Form(...), files: list[UploadFile] = File(...)):
+        entries = [entry.model_dump() for entry in import_manifest.validate_json(manifest)]
+        return uploads.receive(upload_id, entries, [(uploaded.file, uploaded.size) for uploaded in files])
+
+    @app.post("/api/imports/{upload_id}/finish")
+    def import_finish(upload_id: str):
+        return public_case(uploads.finish(upload_id))
+
+    @app.delete("/api/imports/{upload_id}")
+    def import_cancel(upload_id: str):
+        return uploads.cancel(upload_id)
 
     @app.get("/api/cases/{case_id}")
     def case(case_id: str):

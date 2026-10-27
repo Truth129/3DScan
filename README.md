@@ -131,6 +131,10 @@ explains its noncommercial license terms.
 ## Review a case
 
 1. Import a DICOM folder or ZIP, or create the clearly labelled synthetic demo.
+   Browser imports upload in bounded batches with a progress bar, so folders of
+   any size up to the import limit work. Interrupted batches are resent
+   automatically, **Cancel upload** discards the staged files, and the case
+   appears only after every file has arrived.
 2. Select one reconstruction, scan region/study and contrast phase. The study
    list includes **Coronary CTA (CorCTA)** and **Cardiac CT**, along with chest,
    abdomen, pelvis, head/neck and whole-body coverage. Contrast labels include

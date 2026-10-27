@@ -258,11 +258,10 @@ async function openCase(id: string) {
   } catch (reason) { if (generation === caseGeneration) fail(reason); }
   finally { if (generation === caseGeneration) loading.value = false; }
 }
-async function imported(files: File[], label: string) {
-  importing.value = true; error.value = '';
-  try { const next = await api.import(files, label); await refreshCases(); importOpen.value = false; await openCase(next.id); toast('Scan imported. Select a CT or static MR series to continue.'); }
+async function imported(next: Case) {
+  importOpen.value = false; error.value = '';
+  try { await refreshCases(); await openCase(next.id); toast('Scan imported. Select a CT or static MR series to continue.'); }
   catch (reason) { fail(reason); }
-  finally { importing.value = false; }
 }
 async function demo() {
   importing.value = true; error.value = '';
@@ -685,7 +684,7 @@ onBeforeUnmount(() => {
       <nav v-if="revision && !prepareOpen" class="mobile-navigation" aria-label="Mobile workspace panels"><button :class="{ active: mobilePanel === 'anatomy' }" @click="setPanel('anatomy', true); mobilePanel = 'anatomy'">☷ Anatomy</button><button :class="{ active: mobilePanel === 'model' }" @click="setPanel('model', true); mobilePanel = 'model'">◇ 3D model</button><button :class="{ active: mobilePanel === 'review' }" @click="setPanel('review', true); mobilePanel = 'review'">⊞ {{ sourceLabel }} review</button></nav>
       <footer class="app-footer"><span><span class="live-dot"></span> LOCAL PROCESSING <i>·</i> {{ synthetic ? 'SYNTHETIC FIXTURE' : ctOnly ? `SOURCE ${sourceLabel}` : 'TOTAL SEGMENTATOR' }}</span><span>{{ revision ? `${ctOnly ? `${sourceLabel} ready` : `${revision.structures.length} structures`} · revision ${revision.id.slice(0, 8)}` : 'Select a series to begin' }}</span><span>Verify anatomy on the source images</span></footer>
     </template>
-    <ImportDialog v-if="importOpen" :busy="importing" @close="importOpen = false" @import="imported" @demo="demo" />
+    <ImportDialog v-if="importOpen" :busy="importing" @close="importOpen = false" @imported="imported" @demo="demo" />
     <ExportViewerDialog v-if="exportSnapshot && revision && activeCase" :key="`${activeCase.id}:${revision.id}`" :base="base" :label="activeCase.label" :snapshot="exportSnapshot" :modality="sourceLabel" :has-structures="!!revision.structures.length" @close="exportSnapshot = undefined" />
   </div>
 </template>

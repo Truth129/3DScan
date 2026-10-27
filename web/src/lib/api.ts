@@ -36,12 +36,6 @@ export const api = {
   image: (id: string, imageId: string) => request<ImageAsset>(`${caseUrl(id)}/images/${encodeURIComponent(imageId)}`),
   health: () => request<Record<string, unknown>>('/api/health'),
   demo: () => request<Case>('/api/cases/demo', { method: 'POST' }),
-  async import(files: File[], label: string) {
-    const data = new FormData();
-    for (const file of files) data.append('files', file, file.webkitRelativePath || file.name);
-    if (label.trim()) data.append('label', label.trim());
-    return request<Case>('/api/cases/import', { method: 'POST', body: data });
-  },
   process: (id: string, data: ProcessRequest) => request<Job>(`${caseUrl(id)}/process`, json('POST', data)),
   segmentationOptions: (modality = 'CT', signal?: AbortSignal) => request<SegmentationCatalog>(`/api/segmentation-options?modality=${encodeURIComponent(modality)}`, { signal }),
   totalSegmentatorLicense: (signal?: AbortSignal) => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', { signal }),
