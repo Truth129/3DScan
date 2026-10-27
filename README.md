@@ -29,7 +29,8 @@ the existing approved private Tailscale address. The service uses the original
 cases, weights and license configuration. See [production operation and
 rollback](docs/PRODUCTION_RUNTIME.md).
 
-Normal workstation commands select that same runtime:
+Normal workstation commands select that same runtime. Run them in bash: zsh and
+fish cannot source `scripts/production-env.sh`, and it refuses them.
 
 ```bash
 source scripts/production-env.sh

@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Production data and model locations; independent from experimental stores.
+# Other shells have no BASH_SOURCE and would resolve the root one level too high,
+# pointing SCAN3D_DATA_DIR and the model paths outside this checkout.
+if [ -z "${BASH_SOURCE[0]:-}" ]; then
+  echo "Source scripts/production-env.sh from bash; other shells resolve the wrong project root." >&2
+  return 1 2>/dev/null || exit 1
+fi
 SCAN3D_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 export SCAN3D_ROOT
 # A production release may pin source independently from the editable checkout.
