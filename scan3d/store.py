@@ -546,9 +546,16 @@ class Store:
             self.reconcile_review(review["case_id"], review["id"])
 
 
-def public_case(record):
+def public_case(record, settings=None):
+    """Client view; with settings, series of a modality not offered here read as unavailable."""
     result = {k: v for k, v in record.items() if k not in ("source_dir", "references")}
-    result["series"] = [{k: v for k, v in series.items() if k != "files"} for series in record.get("series", [])]
+    result["series"] = []
+    for series in record.get("series", []):
+        view = {k: v for k, v in series.items() if k != "files"}
+        reason = settings.modality_unavailable(series.get("modality", "CT")) if settings else None
+        if reason:
+            view.update(supported=False, unsupported_reason=reason)
+        result["series"].append(view)
     return result
 
 

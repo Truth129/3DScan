@@ -262,6 +262,10 @@ class _FrameCache:
 def create_app(settings: Settings | None = None):
     service = Service(settings)
 
+    def case_view(record):
+        # Series of modalities this deployment does not offer read as unavailable.
+        return public_case(record, service.settings)
+
     @asynccontextmanager
     async def lifespan(app):
         service.start()
@@ -315,11 +319,11 @@ def create_app(settings: Settings | None = None):
         from .doctor import diagnose
         lanes = {lane: thread.is_alive() for lane, thread in service.threads.items()}
         return {"status": "ok", "worker": bool(lanes) and all(lanes.values()), "lanes": lanes,
-                "gpu": diagnose(live=False), "version": __version__}
+                "modalities": list(service.settings.modalities), "gpu": diagnose(live=False), "version": __version__}
 
     @app.get("/api/cases")
     def cases():
-        return [public_case(case) for case in service.store.list("cases")]
+        return [case_view(case) for case in service.store.list("cases")]
 
     @app.get("/api/interactive/status")
     def interactive_status():
@@ -373,11 +377,11 @@ def create_app(settings: Settings | None = None):
     @app.post("/api/cases/demo")
     def demo():
         from .demo import create_demo
-        return public_case(create_demo(service))
+        return case_view(create_demo(service))
 
     @app.post("/api/cases/import-local")
     def import_local(body: ImportLocal):
-        return public_case(service.import_local(body.path, body.label))
+        return case_view(service.import_local(body.path, body.label))
 
     @app.post("/api/cases/import")
     def import_files(files: list[UploadFile] = File(...), label: str | None = Form(None)):
@@ -408,7 +412,7 @@ def create_app(settings: Settings | None = None):
                     total += sum(p.stat().st_size for p in expanded.rglob("*") if p.is_file())
                     if total > service.settings.upload_limit:
                         raise ValueError("Expanded uploads exceed import limit")
-            return public_case(service.finish_import(case, source))
+            return case_view(service.finish_import(case, source))
         except Exception as exc:
             case.update(status="import_failed", error=str(exc))
             service.store.save("cases", case)
@@ -429,7 +433,7 @@ def create_app(settings: Settings | None = None):
 
     @app.post("/api/imports/{upload_id}/finish")
     def import_finish(upload_id: str):
-        return public_case(uploads.finish(upload_id))
+        return case_view(uploads.finish(upload_id))
 
     @app.delete("/api/imports/{upload_id}")
     def import_cancel(upload_id: str):
@@ -437,7 +441,7 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/cases/{case_id}")
     def case(case_id: str):
-        return public_case(service.store.get("cases", case_id))
+        return case_view(service.store.get("cases", case_id))
 
     @app.post("/api/cases/{case_id}/process")
     def process(case_id: str, body: Process):
@@ -452,7 +456,9 @@ def create_app(settings: Settings | None = None):
     @app.get("/api/imaging-capabilities")
     def imaging_capabilities():
         from .modalities import modality_capabilities
-        return modality_capabilities()
+        capabilities = modality_capabilities()
+        return {**capabilities, "modalities": [{**entry, "enabled": entry["modality"] in service.settings.modalities}
+                                               for entry in capabilities["modalities"]]}
 
     @app.get("/api/cases/{case_id}/images")
     def image_assets(case_id: str):
@@ -576,7 +582,7 @@ def create_app(settings: Settings | None = None):
 
     @app.post("/api/cases/{case_id}/activate")
     def activate(case_id: str, body: Activate):
-        return public_case(service.store.activate(case_id, body.revision_id))
+        return case_view(service.store.activate(case_id, body.revision_id))
 
     @app.patch("/api/cases/{case_id}/revisions/{revision_id}")
     def review(case_id: str, revision_id: str, body: Review):

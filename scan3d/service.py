@@ -217,6 +217,8 @@ class Service:
             raise ValueError("Select a series belonging to this case")
         if selected.get("supported") is False:
             raise ValueError(selected.get("unsupported_reason") or "This series is unavailable for volume preparation")
+        if reason := self.settings.modality_unavailable(selected.get("modality", "CT")):
+            raise ValueError(reason)
         if selected.get("modality", "CT") != "CT" and (cardiac_phase is not None or rr_percent is not None):
             raise ValueError("Cardiac CT timing does not apply to a static MR volume")
         acquisition = acquisition_labels(series_uid, profile, phase,
@@ -235,6 +237,8 @@ class Service:
         reference = self.store.resolve_reference(parent)
         if "segmentation" not in reference["capabilities"]:
             raise ValueError("This source image does not support segmentation")
+        if reason := self.settings.modality_unavailable(reference["modality"]):
+            raise ValueError(reason)
         options = normalize_options(profile, dict(tasks=[task or default_task(reference["modality"])], robust_crop=robust_crop,
             body_seg=body_seg, remove_small_blobs=remove_small_blobs), modality=reference["modality"])
         return self.store.enqueue(case_id, "segment", dict(revision_id=revision_id, options=options,
@@ -369,6 +373,8 @@ class Service:
         series = next(s for s in case["series"] if s["uid"] == job["payload"]["series_uid"])
         if series.get("supported") is False:
             raise ValueError(series.get("unsupported_reason") or "This series is unavailable for volume preparation")
+        if reason := self.settings.modality_unavailable(series.get("modality", "CT")):
+            raise ValueError(reason)
         case_dir = self.store.case_dir(case["id"])
         self.stage(job, "Checking and converting selected DICOM series")
         digest = hashlib.sha256()

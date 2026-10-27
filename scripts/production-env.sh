@@ -37,5 +37,7 @@ export MIOPEN_CUSTOM_CACHE_DIR="$XDG_CACHE_HOME/miopen-kernels"
 export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
 export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
 export SCAN3D_DEVICE="${SCAN3D_DEVICE:-gpu}"
+# Production stays CT-only until MRI is qualified on this workstation; set CT,MR to offer it.
+export SCAN3D_MODALITIES=CT
 # The validated AMD wheel family supplies its own coordinated userspace.
 unset ROCM_PATH ROCM_HOME HIP_PATH HIP_HOME LD_LIBRARY_PATH LD_PRELOAD HIPBLASLT_TENSILE_LIBPATH HSA_OVERRIDE_GFX_VERSION

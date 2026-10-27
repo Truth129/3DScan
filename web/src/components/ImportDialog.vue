@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { uploadImport, type ImportProgress } from '../lib/import-upload';
 import type { Case } from '../types';
-const props = defineProps<{ busy: boolean }>();
+const props = defineProps<{ busy: boolean; mrEnabled?: boolean }>();
 const emit = defineEmits<{ close: []; imported: [result: Case]; demo: [] }>();
 const files = ref<File[]>([]), label = ref(''), folder = ref<HTMLInputElement>(), archive = ref<HTMLInputElement>(), dragging = ref(false);
 const progress = ref<ImportProgress>(), message = ref<{ text: string; error: boolean }>();
@@ -53,7 +53,7 @@ onBeforeUnmount(() => { controller?.abort(); window.removeEventListener('beforeu
   <div class="dialog-backdrop" @click.self="close" @keydown.esc="close">
     <section class="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title">
       <header><span class="eyebrow">NEW CASE</span><button class="icon-button" aria-label="Close import" :disabled="locked" @click="close">×</button></header>
-      <h2 id="import-title">Start with an imaging study.</h2><p class="muted">Import a DICOM folder or ZIP archive. Choose a CT reconstruction or static 3D MR sequence before processing.</p>
+      <h2 id="import-title">Start with an imaging study.</h2><p class="muted">Import a DICOM folder or ZIP archive. Choose a CT reconstruction{{ mrEnabled ? ' or static 3D MR sequence' : '' }} before processing.</p>
       <label class="field">Case label <span class="optional">optional · pseudonymous</span><input v-model="label" placeholder="e.g. Chest–abdomen 01" :disabled="locked" autofocus /></label>
       <div class="drop-zone" :class="{ dragging }" @dragover.prevent="dragging = !locked" @dragleave.prevent="dragging = false" @drop.prevent="drop">
         <svg viewBox="0 0 40 40" fill="none"><path d="M7 12h10l4 4h12v17H7V12Z"/><path d="M20 26V18m0 0-4 4m4-4 4 4"/></svg>

@@ -203,6 +203,9 @@ const series = computed(() => activeCase.value?.series.find(s => s.uid === serie
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
 // The bundled models are research tools without regulatory clearance.
 const researchNotice = 'Research use only · not for diagnostic use';
+// The workstation lists the modalities it offers; production stays CT-only.
+const mrEnabled = computed(() => Array.isArray(health.value.modalities) && health.value.modalities.includes('MR'));
+const sourceKinds = computed(() => mrEnabled.value ? 'CT or static MR' : 'CT');
 
 function fail(reason: unknown) { error.value = reason instanceof Error ? reason.message : String(reason); }
 function openExport() {
@@ -263,7 +266,7 @@ async function openCase(id: string) {
 }
 async function imported(next: Case) {
   importOpen.value = false; error.value = '';
-  try { await refreshCases(); await openCase(next.id); toast('Scan imported. Select a CT or static MR series to continue.'); }
+  try { await refreshCases(); await openCase(next.id); toast(`Scan imported. Select a ${sourceKinds.value} series to continue.`); }
   catch (reason) { fail(reason); }
 }
 async function demo() {
@@ -611,7 +614,7 @@ onBeforeUnmount(() => {
 
     <main v-if="!activeCase && !loading" class="welcome">
       <div class="welcome-orbit"><svg viewBox="0 0 180 200" fill="none"><path d="M78 29c-10 19-8 35-19 52-9 14-32 28-32 56 0 30 19 41 38 32 18-8 17-40 17-69V29Zm24 0c10 19 8 35 19 52 9 14 32 28 32 56 0 30-19 41-38 32-18-8-17-40-17-69V29Z"/><path d="M90 20v56m0-10L68 91m22-25 22 25"/><circle cx="90" cy="100" r="82" stroke-dasharray="3 7"/></svg></div>
-      <span class="eyebrow">FROM SCAN TO SPATIAL UNDERSTANDING</span><h1>A clearer view of anatomy.</h1><p>Explore CT and static 3D MR scans with linked slices and 3D views.<br />Segment locally. Review the source images. Refine with confidence.</p>
+      <span class="eyebrow">FROM SCAN TO SPATIAL UNDERSTANDING</span><h1>A clearer view of anatomy.</h1><p>Explore {{ mrEnabled ? 'CT and static 3D MR' : 'CT' }} scans with linked slices and 3D views.<br />Segment locally. Review the source images. Refine with confidence.</p>
       <div class="button-row"><button class="button primary large" @click="importOpen = true">Import your first scan →</button><button class="button secondary large" :disabled="importing" @click="demo">Explore synthetic demo</button></div>
       <p class="eyebrow welcome-notice">{{ researchNotice }}</p>
       <div class="welcome-features"><span>01 <strong>Local GPU inference</strong></span><span>02 <strong>Revisioned corrections</strong></span><span>03 <strong>Portable 3D viewer</strong></span></div>
@@ -635,7 +638,7 @@ onBeforeUnmount(() => {
       <div v-if="!revision || prepareOpen" class="prepare-workspace">
         <section class="prepare-panel"><div class="prepare-heading"><span class="eyebrow">{{ revision ? 'SELECT IMAGE SERIES' : '01 / OPEN SCAN' }}</span><button v-if="revision" class="text-button" @click="prepareOpen = false">← Back to current result</button></div><h2>Choose the right series.</h2><p class="muted">Choose one CT reconstruction or static 3D MR sequence. Separate phases, sequences and echoes remain independent source images.</p><p v-if="revision" class="retained-result-note">Your current result remains available while another series is selected or opened.</p>
           <SeriesPicker :key="activeCase.id" v-model="seriesUid" :series="activeCase.series" :disabled="busy" />
-          <p v-if="!activeCase.series.length" class="warning">No supported image series found. Import a DICOM folder or ZIP containing CT or static MR slices.</p>
+          <p v-if="!activeCase.series.length" class="warning">No supported image series found. Import a DICOM folder or ZIP containing {{ sourceKinds }} slices.</p>
           <p v-if="selectedModality === 'MR'" class="help">MR signal values are sequence dependent. Review each sequence independently; this workflow supports static volumes, without temporal or echo blending.</p><AcquisitionFields v-else v-model="acquisition" :disabled="busy" />
           <div v-if="series" class="processing-note"><span>⌁</span><p>Open the selected source image for slice review and volume rendering. Choose a segmentation task separately when you need anatomical segments.</p></div>
           <button class="button primary large full" :disabled="!seriesUid || !!acquisitionError || seriesUnsupported || busy" @click="process">{{ busyJob ? `Opening ${selectedModality}…` : `Open ${selectedModality} →` }}</button>
@@ -689,7 +692,7 @@ onBeforeUnmount(() => {
       <nav v-if="revision && !prepareOpen" class="mobile-navigation" aria-label="Mobile workspace panels"><button :class="{ active: mobilePanel === 'anatomy' }" @click="setPanel('anatomy', true); mobilePanel = 'anatomy'">☷ Anatomy</button><button :class="{ active: mobilePanel === 'model' }" @click="setPanel('model', true); mobilePanel = 'model'">◇ 3D model</button><button :class="{ active: mobilePanel === 'review' }" @click="setPanel('review', true); mobilePanel = 'review'">⊞ {{ sourceLabel }} review</button></nav>
       <footer class="app-footer"><span><span class="live-dot"></span> LOCAL PROCESSING <i>·</i> {{ synthetic ? 'SYNTHETIC FIXTURE' : ctOnly ? `SOURCE ${sourceLabel}` : 'TOTAL SEGMENTATOR' }}</span><span>{{ revision ? `${ctOnly ? `${sourceLabel} ready` : `${revision.structures.length} structures`} · revision ${revision.id.slice(0, 8)}` : 'Select a series to begin' }}</span><span>Verify anatomy on the source images</span></footer>
     </template>
-    <ImportDialog v-if="importOpen" :busy="importing" @close="importOpen = false" @imported="imported" @demo="demo" />
+    <ImportDialog v-if="importOpen" :busy="importing" :mr-enabled="mrEnabled" @close="importOpen = false" @imported="imported" @demo="demo" />
     <ExportViewerDialog v-if="exportSnapshot && revision && activeCase" :key="`${activeCase.id}:${revision.id}`" :base="base" :label="activeCase.label" :snapshot="exportSnapshot" :modality="sourceLabel" :has-structures="!!revision.structures.length" @close="exportSnapshot = undefined" />
   </div>
 </template>

@@ -305,3 +305,21 @@ def test_mr_slice_png_honors_monochrome1_display_inversion(mr_rig):
         planes.append(np.asarray(Image.open(BytesIO(response.content)), dtype=np.uint16))
     np.testing.assert_array_equal(planes[0] + planes[1], np.full(planes[0].shape, 255, dtype=np.uint16))
 
+
+
+def test_ct_only_deployment_keeps_prepared_mr_but_refuses_new_mr_work(mr_rig):
+    rig = mr_rig
+    case, revision = prepare_mr(rig)
+    ct_only = TestClient(create_app(Settings(rig.tmp_path / "data", (rig.tmp_path,), web_dir=rig.tmp_path / "web",
+                                             modalities=("CT",))), base_url="http://127.0.0.1")
+    reason = "MR images are not enabled on this workstation"
+    series = ct_only.get(f"/api/cases/{case['id']}").json()["series"][0]
+    assert series["supported"] is False and series["unsupported_reason"] == reason
+    segment = ct_only.post(f"/api/cases/{case['id']}/segment", json={"revision_id": revision["id"], "task": "total_mr"})
+    process = ct_only.post(f"/api/cases/{case['id']}/process", json={
+        "series_uid": series["uid"], "profile": "other", "phase": "unknown"})
+    assert segment.status_code == process.status_code == 400
+    assert segment.json()["detail"] == process.json()["detail"] == reason
+    assert len(rig.service.store.list("jobs", case["id"])) == 1  # Only the original preparation.
+    assert ct_only.get(f"/api/cases/{case['id']}/revisions/{revision['id']}").status_code == 200
+    ct_only.close()

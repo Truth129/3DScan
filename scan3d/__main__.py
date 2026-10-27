@@ -66,9 +66,9 @@ def main():
     service = Service()
     if args.command == "demo":
         from .demo import create_demo
-        print(json.dumps(public_case(create_demo(service)), indent=2))
+        print(json.dumps(public_case(create_demo(service), service.settings), indent=2))
     elif args.command == "import":
-        print(json.dumps(public_case(service.import_local(args.path, args.label)), indent=2))
+        print(json.dumps(public_case(service.import_local(args.path, args.label), service.settings), indent=2))
     elif args.command == "job":
         print(json.dumps(public_job(service.store.get("jobs", args.id)), indent=2))
     elif args.command == "optimize":
