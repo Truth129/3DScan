@@ -1,7 +1,6 @@
 """Multiple CT overlays preserve independent masks, HU and revision identity."""
 
 import gzip
-from io import BytesIO
 import json
 import os
 import uuid
@@ -9,7 +8,6 @@ import uuid
 from fastapi.testclient import TestClient
 import nibabel as nib
 import numpy as np
-from PIL import Image
 import pytest
 from scipy import ndimage as ndi
 
@@ -89,35 +87,6 @@ def test_multi_frame_independent_oblique_masks_and_unchanged_hu(source, plane, a
     np.testing.assert_array_equal(np.asarray(nib.load(first_path).dataobj), first)
 
 
-def test_multi_png_uses_anatomy_colors_contours_and_per_structure_comparison(source):
-    ct, (first_path, second_path, previous_path), _ = source
-    position = imaging.geometry(ct)["center_ras"][2]
-    result = review_volume.review_frame(ct, None, "axial", position, overlays=(("total:liver", first_path, previous_path), ("total:spleen", second_path, None)))
-    hu, layers = unpack(result)
-    colors = [imaging.presentation_color({"id": "total:liver", "color": "#000000"}), imaging.presentation_color({"id": "total:spleen", "color": "#000000"})]
-    assert colors == ["#cc6619", "#8019e6"]
-    png = imaging.slice_image(
-        ct, None, "axial", position, 400, -500, overlays=(("total:liver", first_path, previous_path, colors[0]), ("total:spleen", second_path, None, colors[1]))
-    )
-    grayscale = np.rint(np.clip((hu - (-500 - 400 / 2)) / 400, 0, 1) * 255).astype(np.uint8)
-    expected = np.repeat(grayscale[..., None], 3, axis=2).astype(np.float32)
-
-    def paint(selected, color, alpha):
-        expected[selected] = expected[selected] * (1 - alpha) + np.asarray(color) * alpha
-        expected[selected & ~ndi.binary_erosion(selected)] = color
-
-    for (_, current, previous), color in zip(layers, colors):
-        paint(current, tuple(int(color[i : i + 2], 16) for i in (1, 3, 5)), 0.22)
-        if previous is not None:
-            assert (previous & ~current).any() and (current & ~previous).any()
-            paint(previous & ~current, (244, 63, 94), 0.45)
-            paint(current & ~previous, (34, 197, 94), 0.45)
-    actual = np.asarray(Image.open(BytesIO(png["image"])))
-    np.testing.assert_array_equal(actual, np.rint(expected).astype(np.uint8))
-    assert {tuple(color) for color in actual.reshape(-1, 3)}.issuperset({(204, 102, 25), (128, 25, 230)})
-    assert png["meta"]["overlays"] == [{"id": "total:liver", "color": colors[0]}, {"id": "total:spleen", "color": colors[1]}]
-
-
 @pytest.fixture
 def api(source, tmp_path):
     ct, (first, second, previous), _ = source
@@ -169,11 +138,6 @@ def test_api_multi_legacy_identity_dedup_and_unknown_rejected_before_decode(api,
     assert frame["overlays"][1]["parent_offset"] is None
     assert response.content[: frame["pixels"] * 4] == single.content[: frame["pixels"] * 4]
     assert str(ct.parent) not in response.headers["x-ct-frame"]
-    png = client.get(prefix + "/slice", params=query)
-    meta = client.get(prefix + "/slice-meta", params=query)
-    assert png.status_code == meta.status_code == 200
-    assert json.loads(png.headers["x-slice-meta"]) == meta.json()
-    assert meta.json()["overlays"] == [{"id": "total:liver", "color": "#cc6619"}, {"id": "total:spleen", "color": "#8019e6"}]
 
     def forbidden(*args, **kwargs):
         pytest.fail("An invalid selection must fail before decoding CT or masks")
@@ -182,9 +146,8 @@ def test_api_multi_legacy_identity_dedup_and_unknown_rejected_before_decode(api,
     monkeypatch.setattr(imaging, "_slice_mask", forbidden)
     invalid = [*base, ("structure_ids", "total:liver"), ("structure_ids", "other-case:unknown")]
     too_many = [*base, *(("structure_ids", f"unknown:{i}") for i in range(129))]
-    for endpoint in ("/review-frame", "/slice", "/slice-meta"):
-        assert client.get(prefix + endpoint, params=invalid).status_code == 400
-        assert client.get(prefix + endpoint, params=too_many).status_code == 400
+    assert client.get(prefix + "/review-frame", params=invalid).status_code == 400
+    assert client.get(prefix + "/review-frame", params=too_many).status_code == 400
     other = service.new_case("Other case")
     assert client.get(f"/api/cases/{other['id']}/revisions/{revision_id}/review-frame", params=query).status_code == 404
 

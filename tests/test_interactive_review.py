@@ -325,8 +325,6 @@ def test_review_http_candidates_reuse_ct_and_authorize_masks_frames_and_history(
         frame = client.get(candidate_url + "/review-frame", params=frame_query)
         assert frame.status_code == 200, frame.text
         assert "X-CT-Frame" in frame.headers
-        png = client.get(candidate_url + "/slice", params=frame_query)
-        assert png.status_code == 200 and png.content.startswith(b"\x89PNG")
         candidate_metadata = client.get(candidate_url)
         assert candidate_metadata.status_code == 200, candidate_metadata.text
         metadata = candidate_metadata.json()

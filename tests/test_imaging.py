@@ -22,7 +22,7 @@ from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, JPEG2000Lossless
 from pydicom.encaps import encapsulate
 import pytest
 
-from scan3d import dicom, imaging, segmentation, slicer_io, surfaces
+from scan3d import dicom, imaging, review_volume, segmentation, slicer_io, surfaces
 
 
 def save(path, values, affine, units="mm"):
@@ -117,32 +117,15 @@ def test_region_operates_on_world_voxel_centers(fixture, tmp_path):
 def test_anatomical_slice_transform_and_probe(fixture, plane, fixed):
     ct_path, mask_path, affine, ct, _ = fixture
     center = np.array(imaging.geometry(ct_path)["center_ras"])
-    result = imaging.slice_image(ct_path, mask_path, plane, center[fixed], 400, -700)
-    image = Image.open(BytesIO(result["image"]))
-    meta = result["meta"]
-    assert image.size == (meta["width"], meta["height"])
+    frame = review_volume.review_frame(ct_path, mask_path, plane, center[fixed])["frame"]
+    meta = frame["meta"]
+    assert frame["pixels"] == meta["width"] * meta["height"]
     transform = np.array(meta["pixel_to_ras"])
     assert transform[fixed, 3] == pytest.approx(center[fixed])
     assert transform[fixed, 0] == transform[fixed, 1] == 0
     point = (affine @ [5, 6, 7, 1])[:3]
     assert imaging.probe(ct_path, point)["hu"] == ct[5, 6, 7]
     assert imaging.probe(ct_path, point)["voxel"] == [5, 6, 7]
-    assert np.asarray(image).max() > 0
-
-
-def test_slice_comparison_distinguishes_removed_and_added(tmp_path):
-    shape = (20, 20, 10)
-    ct = save(tmp_path / "ct.nii.gz", np.full(shape, -200, np.int16), np.eye(4))
-    old = np.zeros(shape, np.uint8)
-    old[3:9, 3:9] = 1
-    new = np.zeros(shape, np.uint8)
-    new[6:12, 6:12] = 1
-    parent = save(tmp_path / "old.nii.gz", old, np.eye(4))
-    current = save(tmp_path / "new.nii.gz", new, np.eye(4))
-    rendered = imaging.slice_image(ct, current, "axial", 4, 400, -200, compare_mask_path=parent)
-    pixels = np.array(Image.open(BytesIO(rendered["image"])))
-    assert np.any(np.all(pixels == [244, 63, 94], axis=-1))
-    assert np.any(np.all(pixels == [34, 197, 94], axis=-1))
 
 
 @pytest.mark.parametrize("fixed", [None, 0, 1, 2])

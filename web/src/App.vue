@@ -169,8 +169,6 @@ const interactiveOpen = ref(false),
   interactiveNative = ref(true);
 const workspaceMode = ref<'model' | 'review'>('model'),
   reviewFocus = ref<'both' | 'ct' | 'model'>('both');
-const ctViewer = ref<'standard' | 'cornerstone'>('cornerstone'),
-  ctViewerError = ref('');
 const pendingStructures = ref<Structure[]>([]);
 const reviewStructures = computed(() =>
   displayStructures(
@@ -501,8 +499,6 @@ async function openCase(id: string) {
   sourceAssets.value = [];
   loading.value = true;
   error.value = '';
-  ctViewer.value = 'cornerstone';
-  ctViewerError.value = '';
   setInteractiveReview(undefined);
   pendingStructures.value = [];
   interactiveTool.value = 'navigate';
@@ -769,14 +765,6 @@ function removeTarget(id: string) {
   ctPinned.value = ctPinned.value.filter(value => value !== id);
   if (selected.value === id) selected.value = revision.value?.structures[0]?.id || '';
 }
-function cornerstoneFallback(reason: string) {
-  ctViewer.value = 'standard';
-  ctViewerError.value = reason;
-}
-function retryCornerstone() {
-  ctViewerError.value = '';
-  ctViewer.value = 'cornerstone';
-}
 function cornerstoneWindowLevel(value: [number, number]) {
   windowWidth.value = value[0];
   level.value = value[1];
@@ -864,7 +852,7 @@ async function prepareLocalCT(url: string) {
           if (session && localCT.value === session) ctOverlayError.value = reason?.message ?? '';
         },
         onError: reason => {
-          if (session && localCT.value === session) useServerCT(reason.message);
+          if (session && localCT.value === session) failLocalCT(reason.message);
         },
       });
       localCT.value = session;
@@ -892,10 +880,10 @@ async function prepareLocalCT(url: string) {
     localCT.value = undefined;
     localCTFull.value = false;
     localCTReady.value = false;
-    ctLocalError.value = reason instanceof Error ? reason.message : `Local ${sourceLabel.value} navigation is unavailable. Server previews remain available.`;
+    ctLocalError.value = reason instanceof Error ? reason.message : `Local ${sourceLabel.value} navigation is unavailable. Retry loading the source images.`;
   }
 }
-function useServerCT(reason: string) {
+function failLocalCT(reason: string) {
   ctGeneration++;
   cancelFullCT();
   localCT.value?.dispose();
@@ -928,7 +916,7 @@ async function cacheFullCT() {
         if (candidate && localCT.value === candidate) ctOverlayError.value = reason?.message ?? '';
       },
       onError: reason => {
-        if (candidate && localCT.value === candidate) useServerCT(reason.message);
+        if (candidate && localCT.value === candidate) failLocalCT(reason.message);
       },
     });
     fullCandidate = candidate;
@@ -974,7 +962,7 @@ async function retryCTOverlays() {
     ctOverlayRetrying.value = false;
   }
 }
-const ctDeliveryMode = computed(() => (localCTReady.value ? (localCTFull.value ? 'full' : 'progressive') : ctLocalError.value ? 'server' : 'loading'));
+const ctDeliveryMode = computed(() => (localCTReady.value ? (localCTFull.value ? 'full' : 'progressive') : ctLocalError.value ? 'error' : 'loading'));
 const ctPercent = computed(() => Math.round((100 * (ctProgress.value?.loadedBytes || 0)) / Math.max(1, ctProgress.value?.totalBytes || 1)));
 const fullCTPercent = computed(() => Math.round((100 * (fullCTProgress.value?.loadedBytes || 0)) / Math.max(1, fullCTProgress.value?.totalBytes || 1)));
 watch(
@@ -1740,10 +1728,6 @@ onBeforeUnmount(() => {
                 step="any"
             /></label>
           </div>
-          <div v-if="ctViewerError" class="ct-viewer-error" role="status">
-            Cornerstone could not render this view: {{ ctViewerError }}. Fallback {{ sourceLabel }} navigation is active.
-            <button class="text-button" @click="retryCornerstone">Retry Cornerstone</button>
-          </div>
           <label class="ct-overlay-opacity"
             >2D overlay opacity <input v-model.number="overlayOpacity" type="range" min="0" max="1" step="0.05" aria-label="2D overlay opacity" /><output
               >{{ Math.round(overlayOpacity * 100) }}%</output
@@ -1767,7 +1751,7 @@ onBeforeUnmount(() => {
             <span v-else-if="ctDeliveryMode === 'progressive'">{{
               ctCaching ? `Local navigation ready · preloading full ${sourceLabel}` : 'Local navigation · full detail after movement'
             }}</span>
-            <span v-else>Server previews · local navigation unavailable</span>
+            <span v-else>Source images unavailable</span>
             <button
               v-if="localCTReady && !localCTFull && !ctCaching"
               class="text-button"
@@ -1803,7 +1787,6 @@ onBeforeUnmount(() => {
               :overlay-opacity="overlayOpacity"
               v-for="plane in ['axial', 'coronal', 'sagittal'] as const"
               :key="plane"
-              :viewer="ctViewer"
               :modality="sourceLabel"
               :case-id="activeCase.id"
               :revision-id="ctRevisionId"
@@ -1827,8 +1810,6 @@ onBeforeUnmount(() => {
               @point="setPoint"
               @prompt="interactivePanel?.addPrompt($event)"
               @gesture="interactivePanel?.addGesture($event)"
-              @fallback="useServerCT"
-              @viewer-fallback="cornerstoneFallback"
               @window-level="cornerstoneWindowLevel"
             />
           </div>

@@ -342,9 +342,10 @@ Use **Expand ↗** in the top-right corner of the 3D view to fill the screen.
 volume mask and anatomy controls stay in place. This also works in review and
 the portable offline viewer.
 
-**Cornerstone3D is the default CT viewer.** It reuses the resident CT worker
-through a custom image loader. The viewer dropdown is removed; rendering
-failures provide fallback navigation and a retry action. The current bridge
+**Cornerstone3D is the only 2D CT viewer.** It reuses the resident CT worker
+through a custom image loader. WebGL is required: rendering failures show an
+error and **Retry**, which rebuilds the affected viewport without downloading
+the CT again. The custom slice renderer and server PNG routes are removed. The current bridge
 provides GPU slice viewing and review integration; direct browser DICOM loading
 and a full Cornerstone volume/MPR migration remain later stages. See
 [the Cornerstone plan](docs/CORNERSTONE_PLAN.md) and

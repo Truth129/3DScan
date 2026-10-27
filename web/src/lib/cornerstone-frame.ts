@@ -27,7 +27,9 @@ export function cornerstonePlane(meta: SliceMeta) {
   const rowCosines = x.map(value => value / columnPixelSpacing) as Point;
   const columnCosines = y.map(value => value / rowPixelSpacing) as Point;
   if (Math.abs(rowCosines.reduce((sum, value, index) => sum + value * columnCosines[index], 0)) > 1e-5) {
-    throw new Error('This Cornerstone preview requires orthogonal in-plane CT axes. Use the standard viewer for this grid.');
+    throw new Error(
+      'This native plane has sheared pixel axes. Use patient-aligned navigation; native editing of this plane requires an orthogonal display reslice.',
+    );
   }
   return {
     rows: meta.height,

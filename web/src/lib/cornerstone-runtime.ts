@@ -23,7 +23,7 @@ async function libraries(): Promise<Libraries> {
       // Each engine owns one slice viewport. The default seven-context pool per
       // engine exhausts the browser limit when three CT planes and 3D coexist.
       core.init({ rendering: { useCPURendering: false, preferSizeOverAccuracy: false, webGlContextCount: 1 }, debug: {} });
-      if (core.getShouldUseCPURendering()) throw new Error('Cornerstone GPU rendering is unavailable. Use the standard viewer.');
+      if (core.getShouldUseCPURendering()) throw new Error('Cornerstone requires WebGL. Check browser graphics support and retry.');
       tools.init();
       core.imageLoader.registerImageLoader('scan3d-frame', imageId => {
         const record = records.get(imageId);
@@ -124,7 +124,7 @@ export class CornerstoneFrameViewport {
     element.addEventListener(core.Enums.Events.VOI_MODIFIED, this.voiChanged);
     this.contextLost = event => {
       if (this.disposed || (event as CustomEvent<{ renderingEngineId?: string }>).detail.renderingEngineId !== this.id) return;
-      callbacks.error?.('Cornerstone lost its WebGL context. Returning to the standard viewer.');
+      callbacks.error?.('Cornerstone lost its WebGL context. Retry to restore this view.');
     };
     core.eventTarget.addEventListener(core.Enums.Events.WEBGL_CONTEXT_LOST, this.contextLost);
     this.resizeObserver = new ResizeObserver(() => {
@@ -139,6 +139,7 @@ export class CornerstoneFrameViewport {
     });
     this.resizeObserver.observe(element);
     element.dataset.renderer = 'cornerstone-webgl';
+    element.dataset.rendererId = this.id;
   }
 
   static async create(element: HTMLDivElement, callbacks: CornerstoneCallbacks = {}) {
@@ -326,5 +327,6 @@ export class CornerstoneFrameViewport {
     for (const key of [...records.keys()]) if (key.startsWith(`scan3d-frame:${this.id}:`)) this.releaseImage(key);
     this.currentFrame = undefined;
     delete this.element.dataset.renderer;
+    delete this.element.dataset.rendererId;
   }
 }

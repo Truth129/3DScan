@@ -185,6 +185,16 @@ describe('Cornerstone viewport asynchronous ownership', () => {
     expect(fake.engines[0].destroyed).toBe(true);
     expect(fake.destroyGroup).toHaveBeenCalledTimes(1);
     expect(cornerstoneFrameCacheStats().images).toBe(0);
+    fake.enableFailure = false;
+    const host = element();
+    const retry = await CornerstoneFrameViewport.create(host);
+    await retry.setFrame(frame, 400, 40);
+    expect(host.dataset.rendererId).toBe(retry.id);
+    expect(cornerstoneFrameCacheStats().images).toBe(1);
+    expect(fake.engines[1].destroyed).toBe(false);
+    retry.dispose();
+    expect(host.dataset.rendererId).toBeUndefined();
+    expect(cornerstoneFrameCacheStats().images).toBe(0);
   });
 
   it('passes supplied modality, units, photometric interpretation and source coordinates to Cornerstone', async () => {
@@ -218,21 +228,21 @@ describe('Cornerstone viewport asynchronous ownership', () => {
     viewer.dispose();
   });
 
-  it('falls back only for its own lost context and removes the listener before disposal', async () => {
-    const fallback = vi.fn();
-    const viewer = await CornerstoneFrameViewport.create(element(), { error: fallback });
+  it('reports only its own lost context and removes the listener before disposal', async () => {
+    const onError = vi.fn();
+    const viewer = await CornerstoneFrameViewport.create(element(), { error: onError });
     const dispatch = (id: string) => {
       const event = new Event('lost');
       Object.assign(event, { detail: { renderingEngineId: id } });
       fake.eventTarget.dispatchEvent(event);
     };
     dispatch('unrelated-engine');
-    expect(fallback).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
     dispatch(viewer.id);
-    expect(fallback).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
     viewer.dispose();
     dispatch(viewer.id);
-    expect(fallback).toHaveBeenCalledOnce();
+    expect(onError).toHaveBeenCalledOnce();
   });
 
   it('retains a hidden viewport without projecting or resizing a zero-size camera and resumes on show', async () => {

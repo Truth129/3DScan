@@ -1,13 +1,10 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, h } from 'vue';
-import CTServerSlice from './CTServerSlice.vue';
-import CTLocalSlice from './CTLocalSlice.vue';
+import { computed, onBeforeUnmount, ref, shallowRef, watch, type Component } from 'vue';
 import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point } from '../types';
 import type { LocalCTSession } from '../lib/ct-volume';
 import type { CTOverlaySelection } from '../lib/ct-overlays';
 const props = withDefaults(
   defineProps<{
-    viewer?: 'standard' | 'cornerstone';
     modality?: string;
     caseId: string;
     revisionId: string;
@@ -36,53 +33,70 @@ const emit = defineEmits<{
   point: [point: Point];
   prompt: [point: Point];
   gesture: [prompt: InteractivePrompt];
-  fallback: [reason: string];
-  viewerFallback: [reason: string];
   windowLevel: [value: [number, number]];
 }>();
-const CornerstoneCTView = defineAsyncComponent({
-  loader: () => import('./CornerstoneCTView.vue'),
-  delay: 0,
-  timeout: 60000,
-  loadingComponent: {
-    render: () =>
-      h('section', { class: 'ct-slice ct-viewer-loading', role: 'status' }, [
-        h('header', props.plane),
-        h('div', { class: 'ct-image' }, [h('span', { class: 'ct-local-loading' }, `Preparing ${props.modality ?? 'CT'} viewer…`)]),
-      ]),
-  },
-  onError(error, _retry, fail) {
-    emit('viewerFallback', error.message);
-    fail();
-  },
-});
+const CornerstoneCTView = shallowRef<Component>(),
+  loadError = ref('');
+let loading = false,
+  disposed = false;
+let loadTimer: ReturnType<typeof setTimeout> | undefined;
+async function loadViewer() {
+  if (loading || disposed || CornerstoneCTView.value) return;
+  loading = true;
+  loadError.value = '';
+  try {
+    const module = await Promise.race([
+      import('./CornerstoneCTView.vue'),
+      new Promise<never>((_resolve, reject) => {
+        loadTimer = setTimeout(() => reject(new Error('Loading the viewer timed out. Check your connection and retry.')), 60000);
+      }),
+    ]);
+    if (!disposed) CornerstoneCTView.value = module.default;
+  } catch (reason) {
+    if (!disposed) loadError.value = reason instanceof Error ? reason.message : 'The viewer could not be loaded.';
+  } finally {
+    clearTimeout(loadTimer);
+    loading = false;
+  }
+}
 const core = computed(() => {
-  const { viewer, localSession, localReady, fullResolution, ...rest } = props;
+  const { localSession, localReady, fullResolution, ...rest } = props;
   return rest;
+});
+watch(
+  () => props.localReady && !!props.localSession,
+  ready => {
+    if (ready) void loadViewer();
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => {
+  disposed = true;
+  clearTimeout(loadTimer);
 });
 </script>
 
 <template>
-  <CornerstoneCTView
-    v-if="viewer !== 'standard' && localReady && localSession"
+  <component
+    :is="CornerstoneCTView"
+    v-if="CornerstoneCTView && localReady && localSession"
     v-bind="core"
     :session="localSession"
     :full-resolution="fullResolution"
     @point="emit('point', $event)"
     @prompt="emit('prompt', $event)"
     @gesture="emit('gesture', $event)"
-    @fallback="emit('viewerFallback', $event)"
     @window-level="emit('windowLevel', $event)"
   />
-  <CTLocalSlice
-    v-else-if="localReady && localSession"
-    v-bind="core"
-    :session="localSession"
-    :full-resolution="fullResolution"
-    @point="emit('point', $event)"
-    @prompt="emit('prompt', $event)"
-    @gesture="emit('gesture', $event)"
-    @fallback="emit('fallback', $event)"
-  />
-  <CTServerSlice v-else v-bind="core" @point="emit('point', $event)" @prompt="emit('prompt', $event)" @gesture="emit('gesture', $event)" />
+  <section v-else class="ct-slice ct-viewer-loading" data-viewer="cornerstone">
+    <header>
+      <h3>{{ plane }}</h3>
+    </header>
+    <div class="ct-image">
+      <div v-if="loadError" class="slice-error" role="alert">
+        Cornerstone could not load: {{ loadError }} <button class="text-button" @click="loadViewer">Retry</button>
+      </div>
+      <span v-else class="ct-local-loading" role="status">{{ localReady ? `Preparing ${modality ?? 'CT'} viewer…` : 'Loading source images…' }}</span>
+    </div>
+  </section>
 </template>

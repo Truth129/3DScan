@@ -41,7 +41,7 @@ const emit = defineEmits<{
   point: [point: Point];
   prompt: [point: Point];
   gesture: [prompt: InteractivePrompt];
-  fallback: [reason: string];
+  error: [reason: string];
   windowLevel: [value: [number, number]];
 }>();
 const element = ref<HTMLDivElement>(),
@@ -66,6 +66,7 @@ const marking = computed(() => !!props.reviewTool && props.reviewTool !== 'navig
 const canMark = computed(
   () =>
     !props.reviewDisabled &&
+    !error.value &&
     overlaysAvailable.value &&
     !loading.value &&
     paintedContext.value === context &&
@@ -77,6 +78,7 @@ const overlayKey = computed(() => JSON.stringify(overlayIds.value));
 const labels: Record<Plane, string[]> = { axial: ['A', 'R', 'L', 'P'], coronal: ['S', 'R', 'L', 'I'], sagittal: ['S', 'A', 'P', 'I'] };
 let viewer: CornerstoneFrameViewport | undefined;
 let disposed = false,
+  viewerGeneration = 0,
   generation = 0,
   context = '',
   grid = '',
@@ -93,7 +95,7 @@ const bitmap = document.createElement('canvas');
 const annotationClip = ref('');
 
 function refreshCamera() {
-  if (!viewer || !element.value || disposed || !viewer.frame) return;
+  if (!viewer || !element.value || disposed || error.value || !viewer.frame) return;
   const frame = viewer.frame,
     info = delivery.get(frame);
   if (!info) return;
@@ -202,16 +204,22 @@ function remember(key: string, value: CTFrame) {
 }
 async function present(value: CTFrame, resolution: 'preview' | 'full', requestContext: string) {
   if (!viewer || disposed || requestContext !== context) return;
-  const colored = colorCTOverlays(value, props.overlays, props.overlayOpacity);
-  delivery.set(colored, { context: requestContext, quality: resolution });
-  const nextGrid = `${props.caseId}:${referenceGridKey(props.geometry)}:${props.plane}:${!!props.nativeReview}`;
-  const reset = nextGrid !== grid;
-  grid = nextGrid;
-  if (await viewer.setFrame(colored, props.window, props.level, reset)) {
-    refreshPresentation();
-    refreshCamera();
-    await nextTick();
-    queueOverlay();
+  const instance = viewer;
+  try {
+    const colored = colorCTOverlays(value, props.overlays, props.overlayOpacity);
+    delivery.set(colored, { context: requestContext, quality: resolution });
+    const nextGrid = `${props.caseId}:${referenceGridKey(props.geometry)}:${props.plane}:${!!props.nativeReview}`;
+    const reset = nextGrid !== grid;
+    grid = nextGrid;
+    if ((await instance.setFrame(colored, props.window, props.level, reset)) && instance === viewer && requestContext === context) {
+      refreshPresentation();
+      refreshCamera();
+      await nextTick();
+      queueOverlay();
+    }
+  } catch (reason) {
+    if (!disposed && instance === viewer && requestContext === context)
+      viewerError(reason instanceof Error ? reason.message : `Cornerstone could not display this ${modalityLabel.value} frame.`);
   }
 }
 async function detail(id: number, key: string, at: number, requestContext: string) {
@@ -279,7 +287,7 @@ async function load() {
   }
 }
 function click(event: MouseEvent) {
-  if (!viewer?.frame || !element.value || loading.value || marking.value || event.button !== 0) return;
+  if (!viewer?.frame || !element.value || loading.value || error.value || marking.value || event.button !== 0) return;
   if (pointerStart && Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 4) return;
   const rect = element.value.getBoundingClientRect(),
     ras = viewer.canvasToRas([event.clientX - rect.left, event.clientY - rect.top]);
@@ -303,8 +311,43 @@ function slide(event: Event) {
     emit('point', next);
   }
 }
-onMounted(async () => {
+function releaseViewer() {
+  viewerGeneration++;
+  generation++;
+  clearTimeout(detailTimer);
+  detailController?.abort();
+  cancelAnimationFrame(drawRequest);
+  drawRequest = 0;
+  const previous = viewer;
+  viewer = undefined;
+  previous?.dispose();
+  displayMeta.value = undefined;
+  paintedContext.value = '';
+  displayedPosition.value = undefined;
+  annotationClip.value = '';
+  lastOverlayFrame = undefined;
+  bitmap.width = bitmap.height = 0;
+  if (element.value)
+    for (const key of ['quality', 'contextKey', 'nativeAxis', 'nativeIndex', 'pixelToRas', 'positionMm', 'overlayIds', 'frameBytes'])
+      delete element.value.dataset[key];
+  const canvas = overlay.value;
+  canvas?.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+}
+function viewerError(reason: string) {
+  releaseViewer();
+  error.value = reason;
+  loading.value = false;
+  emit('error', reason);
+}
+async function initialize() {
+  releaseViewer();
+  const id = viewerGeneration;
+  error.value = '';
+  detailError.value = '';
+  loading.value = true;
+  grid = '';
   await nextTick();
+  if (disposed || id !== viewerGeneration) return;
   try {
     const instance = await CornerstoneFrameViewport.create(element.value!, {
       camera: refreshCamera,
@@ -312,13 +355,10 @@ onMounted(async () => {
         if (!disposed) emit('windowLevel', [width, center]);
       },
       error: reason => {
-        if (!disposed) {
-          error.value = reason;
-          emit('fallback', reason);
-        }
+        if (!disposed && id === viewerGeneration) viewerError(reason);
       },
     });
-    if (disposed) {
+    if (disposed || id !== viewerGeneration) {
       instance.dispose();
       return;
     }
@@ -326,12 +366,11 @@ onMounted(async () => {
     viewer.setEditing(marking.value);
     await load();
   } catch (reason) {
-    if (disposed) return;
-    error.value = reason instanceof Error ? reason.message : 'Cornerstone GPU rendering is unavailable.';
-    loading.value = false;
-    emit('fallback', error.value);
+    if (disposed || id !== viewerGeneration) return;
+    viewerError(reason instanceof Error ? reason.message : 'Cornerstone requires WebGL. Check browser graphics support and retry.');
   }
-});
+}
+onMounted(() => void initialize());
 watch(
   () => [props.session, props.caseId, props.revisionId, props.plane, position.value, overlayKey.value, props.compare, props.fullResolution, props.nativeReview],
   () => {
@@ -358,15 +397,9 @@ watch(() => props.point, queueOverlay, { deep: true });
 watch(marking, value => viewer?.setEditing(value));
 onBeforeUnmount(() => {
   disposed = true;
-  generation++;
-  cancelAnimationFrame(drawRequest);
-  clearTimeout(detailTimer);
-  detailController?.abort();
+  releaseViewer();
   unsubscribeOverlay?.();
   details.clear();
-  viewer?.dispose();
-  lastOverlayFrame = undefined;
-  bitmap.width = bitmap.height = 0;
 });
 defineExpose({
   patientToCanvas: (point: Point) => viewer?.rasToCanvas(point),
@@ -380,12 +413,12 @@ defineExpose({
   <section class="ct-slice cornerstone-slice" data-viewer="cornerstone">
     <header>
       <h3>{{ displayMeta?.native ? `Native ${['i', 'j', 'k'][displayMeta.native.axis]}` : plane }}</h3>
-      <span>{{
+      <span v-if="!error">{{
         displayMeta?.native
           ? `Slice ${displayMeta.native.index + 1} / ${geometry.shape[displayMeta.native.axis]}`
           : `${(displayedPosition ?? position).toFixed(1)} mm`
       }}</span>
-      <span class="ct-quality" :class="quality">{{ quality === 'full' ? 'Full' : 'Preview' }}</span>
+      <span v-if="!error" class="ct-quality" :class="quality">{{ quality === 'full' ? 'Full' : 'Preview' }}</span>
     </header>
     <div class="ct-image cornerstone-image" :class="{ 'is-loading': loading, 'ct-marking': marking && canMark }">
       <div
@@ -414,17 +447,14 @@ defineExpose({
       <span class="slice-direction left">{{ (displayMeta?.native ? nativeEdgeLabels(displayMeta) : labels[plane])[1] }}</span>
       <span class="slice-direction right">{{ (displayMeta?.native ? nativeEdgeLabels(displayMeta) : labels[plane])[2] }}</span>
       <span class="slice-direction bottom">{{ (displayMeta?.native ? nativeEdgeLabels(displayMeta) : labels[plane])[3] }}</span>
-      <div v-if="error" class="slice-error">
-        {{ error }} <button class="text-button" @click="load">Retry</button>
-        <button class="text-button" @click="emit('fallback', error)">Use standard viewer</button>
-      </div>
+      <div v-if="error" class="slice-error" role="alert">{{ error }} <button class="text-button" @click="initialize">Retry</button></div>
       <span v-if="loading" class="ct-local-loading" :class="{ 'ct-updating': !!displayMeta }">{{
         displayMeta ? 'Updating overlay…' : 'Preparing Cornerstone…'
       }}</span>
-      <span v-else-if="marking && !canMark" class="ct-local-loading ct-updating">{{
+      <span v-else-if="!error && marking && !canMark" class="ct-local-loading ct-updating">{{
         reviewDisabled ? 'Editing paused' : !overlaysAvailable ? 'Editing paused: selected overlays are unavailable' : 'Waiting for full-resolution detail'
       }}</span>
-      <button class="cornerstone-reset text-button" title="Reset Cornerstone pan and zoom" @click="viewer?.reset()">Reset view</button>
+      <button v-if="!error" class="cornerstone-reset text-button" title="Reset Cornerstone pan and zoom" @click="viewer?.reset()">Reset view</button>
     </div>
     <p v-if="detailError" class="ct-detail-error" role="status">{{ detailError }}</p>
     <label class="slice-slider"

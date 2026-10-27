@@ -188,13 +188,13 @@ def test_import_and_prepare_are_CT_only_and_preserve_source_hu(rig, monkeypatch)
     assert public["structures"] == [] and "ct_file" not in public
 
 
-def test_CT_only_revision_serves_slices_probe_and_raw_volume_without_masks(rig):
+def test_CT_only_revision_serves_frames_probe_and_raw_volume_without_masks(rig):
     case, revision = prepared(rig)
     prefix = f"/api/cases/{case['id']}/revisions/{revision['id']}"
     manifest = rig.http.get(prefix + "/model-manifest")
     assert manifest.status_code == 200 and manifest.json()["structures"] == []
-    image = rig.http.get(prefix + "/slice", params={"plane": "axial", "position_mm": revision["geometry"]["center_ras"][2]})
-    assert image.status_code == 200 and image.content[:8] == b"\x89PNG\r\n\x1a\n"
+    frame = rig.http.get(prefix + "/review-frame", params={"plane": "axial", "position_mm": revision["geometry"]["center_ras"][2]})
+    assert frame.status_code == 200 and "X-CT-Frame" in frame.headers
     voxel = np.array([5, 6, 7])
     ras = np.asarray(revision["geometry"]["affine_ras"]) @ np.r_[voxel, 1]
     probe = rig.http.get(prefix + "/probe", params=dict(zip(("x", "y", "z"), ras[:3])))

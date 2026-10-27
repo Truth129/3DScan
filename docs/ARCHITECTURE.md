@@ -80,7 +80,12 @@ flowchart LR
 ```
 
 The workstation parses DICOM; Cornerstone receives prepared image frames rather
-than raw DICOM in this pipeline. The browser GPU renders the remote viewer;
+than raw DICOM in this pipeline. Cornerstone is the only 2D slice renderer;
+worker reslicing and exact scalar/binary `/review-frame` transport remain. The
+custom slice renderer and server PNG endpoints are removed. A failed viewport
+shows an error with Retry, which releases its engine, tools and images before
+rebuilding from the App-owned resident CT session. Other planes keep their
+viewports and cameras. A source-worker failure has its own source-load Retry. The browser GPU renders the remote viewer;
 the workstation ROCm GPU runs model inference. Warm navigation, windowing and
 camera changes use resident client data.
 

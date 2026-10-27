@@ -138,8 +138,10 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 
 ## Next steps
 
-1. **Cornerstone refactor**, phases 1 and 2. Details and design constraints are in
-   `docs/CORNERSTONE_PLAN.md`.
+1. **Cornerstone refactor**, phase 2 (native volume MPR). Phase 1 is complete
+   in the checkout: Cornerstone-only slices, explicit Retry and no PNG routes.
+   Production remains the frozen CT release. Details and design constraints are
+   in `docs/CORNERSTONE_PLAN.md`.
 2. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SEG/SR export, which adds a dependency to the pinned runtime

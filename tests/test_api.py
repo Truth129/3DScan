@@ -5,7 +5,6 @@ import time
 import threading
 import zipfile
 
-import nibabel as nib
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -34,7 +33,7 @@ def completed(client, job_id):
     pytest.fail("Worker did not finish")
 
 
-def test_demo_review_refine_undo_slices_and_slicer_roundtrip(client):
+def test_demo_review_refine_undo_frames_and_slicer_roundtrip(client):
     http, service = client
     response = http.post("/api/cases/demo")
     assert response.status_code == 200, response.text
@@ -52,11 +51,10 @@ def test_demo_review_refine_undo_slices_and_slicer_roundtrip(client):
     model = http.get(revision["model_url"])
     assert model.content[:4] == b"glTF"
     liver = next(s for s in revision["structures"] if s["id"] == "synthetic:liver")
-    query = {"plane": "axial", "position_mm": -50, "structure_id": liver["id"], "window": 400, "level": 40}
-    image = http.get(f"{prefix}/revisions/{rid}/slice", params=query)
-    assert image.content[:8] == b"\x89PNG\r\n\x1a\n"
-    meta = http.get(f"{prefix}/revisions/{rid}/slice-meta", params=query).json()
-    assert json.loads(image.headers["X-Slice-Meta"]) == meta
+    query = {"plane": "axial", "position_mm": -50, "structure_id": liver["id"]}
+    frame = http.get(f"{prefix}/revisions/{rid}/review-frame", params=query)
+    assert frame.status_code == 200
+    meta = json.loads(frame.headers["X-CT-Frame"])["meta"]
     assert np.asarray(meta["pixel_to_ras"]).shape == (4, 4)
     assert http.get(f"{prefix}/revisions/{rid}/probe", params=dict(x=37, y=5, z=-55)).json()["hu"] == 105
     job = http.post(
@@ -93,80 +91,6 @@ def test_demo_review_refine_undo_slices_and_slicer_roundtrip(client):
     assert http.get("/api/cases/00000000000000000000000000000000/jobs").status_code == 404
 
 
-def test_legacy_slice_image_and_metadata_share_render_and_invalidate_replaced_files(client, monkeypatch):
-    from concurrent.futures import ThreadPoolExecutor
-    from copy import deepcopy
-    from scan3d import imaging
-    from scan3d.store import identifier
-
-    http, service = client
-    case = http.post("/api/cases/demo").json()
-    current = service.store.revision(case["id"], case["active_revision_id"])
-    # This is an explicit legacy record, predating immutable image bindings.
-    # Its source stat signature still exercises decoded-image/PNG cache
-    # invalidation. Bound references reject changed pixels in test_image_assets.
-    revision = deepcopy(current)
-    revision["id"] = identifier()
-    revision.pop("reference_image_id", None)
-    revision.pop("image_asset", None)
-    for entry in revision["structures"]:
-        entry.pop("reference_image_id", None)
-    # Uncompressed input keeps exactly the same file length after replacing HU
-    # values, isolating ctime invalidation from changes to compressed length.
-    ct_path = Path(revision["ct_file"]).with_name("cache-test-reference.nii")
-    nib.save(nib.load(revision["ct_file"]), ct_path)
-    revision["ct_file"] = str(ct_path)
-    service.store.save("revisions", revision)
-    prefix = f"/api/cases/{case['id']}/revisions/{revision['id']}"
-    query = {"plane": "axial", "position_mm": -50, "structure_id": "synthetic:liver"}
-    original = imaging.slice_image
-    calls = []
-    started = threading.Event()
-
-    def render(*args, **kwargs):
-        calls.append(args)
-        started.set()
-        time.sleep(0.08)  # Force concurrent image/metadata cache misses.
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(imaging, "slice_image", render)
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        image = executor.submit(http.get, f"{prefix}/slice", params=query)
-        assert started.wait(2)
-        meta = executor.submit(http.get, f"{prefix}/slice-meta", params=query)
-        first, first_meta = image.result(), meta.result()
-    assert first.status_code == first_meta.status_code == 200
-    assert len(calls) == 1
-    assert json.loads(first.headers["X-Slice-Meta"]) == first_meta.json()
-
-    # Even when replacement preserves length and mtime, ctime identifies a new
-    # input. The reference CT, decoded mask and PNG caches must all refresh.
-    import os
-
-    stat = ct_path.stat()
-    ct = nib.load(ct_path)
-    changed = nib.Nifti1Image(np.asarray(ct.dataobj) + 200, ct.affine, ct.header.copy())
-    replacement = ct_path.with_name("replacement.nii")
-    nib.save(changed, replacement)
-    replacement.replace(ct_path)
-    os.utime(ct_path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
-    assert ct_path.stat().st_size == stat.st_size
-    second = http.get(f"{prefix}/slice", params=query)
-    assert second.status_code == 200
-    assert len(calls) == 2
-    assert second.content != first.content
-    structure = next(s for s in revision["structures"] if s["id"] == "synthetic:liver")
-    mask_path = Path(structure["mask_file"])
-    mask = nib.load(mask_path)
-    replacement = mask_path.with_name("replacement-mask.nii.gz")
-    nib.save(nib.Nifti1Image(np.zeros(mask.shape, np.uint8), mask.affine, mask.header.copy()), replacement)
-    replacement.replace(mask_path)
-    third = http.get(f"{prefix}/slice", params=query)
-    assert third.status_code == 200
-    assert len(calls) == 3
-    assert third.content != second.content
-
-
 def test_invalid_operations_and_cross_origin_fail_before_job(client):
     http, service = client
     case = http.post("/api/cases/demo").json()
@@ -178,6 +102,14 @@ def test_invalid_operations_and_cross_origin_fail_before_job(client):
     assert http.post("/api/cases/demo", headers={"origin": "https://unrelated.example"}).status_code == 403
     assert http.get("/api/cases", headers={"host": "unrelated.example"}).status_code == 400
     assert http.get("/api/health", headers={"host": "review.example:8443"}).status_code == 200
+
+
+def test_png_slice_routes_are_retired(client):
+    http, _ = client
+    case = http.post("/api/cases/demo").json()
+    prefix = f"/api/cases/{case['id']}/revisions/{case['active_revision_id']}"
+    for endpoint in ("slice", "slice-meta"):
+        assert http.get(f"{prefix}/{endpoint}").status_code == 404
 
 
 def test_zip_traversal_and_symlinks_rejected(tmp_path):

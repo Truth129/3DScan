@@ -2,11 +2,9 @@
 
 import gzip
 import json
-from io import BytesIO
 
 import nibabel as nib
 import numpy as np
-from PIL import Image
 import pytest
 from fastapi.testclient import TestClient
 
@@ -31,7 +29,7 @@ def source(tmp_path):
 
 @pytest.mark.parametrize("axis", [0, 1, 2])
 @pytest.mark.parametrize("requested_index", [0, 4, -1])
-def test_native_transform_keeps_one_exact_voxel_axis_and_png_hu_parity(source, axis, requested_index):
+def test_native_transform_keeps_one_exact_voxel_axis_and_hu(source, axis, requested_index):
     path, values = source
     image, affine = imaging._image(path)
     index = image.shape[axis] - 1 if requested_index == -1 else requested_index
@@ -47,10 +45,7 @@ def test_native_transform_keeps_one_exact_voxel_axis_and_png_hu_parity(source, a
     expected = imaging._reslice(values.astype(np.float32), mapping, hu.shape, 1, -1024)
     np.testing.assert_array_equal(hu, expected)
     assert np.any(hu != -1024), "A valid native boundary plane became blank"
-    png = imaging.slice_image(path, None, "axial", 0, 400, 40, native_axis=axis, native_index=index)
-    assert png["meta"] == frame["meta"]
-    rgb = np.asarray(Image.open(BytesIO(png["image"])))
-    np.testing.assert_array_equal(rgb[..., 0], np.rint(np.clip((hu + 160) / 400, 0, 1) * 255).astype(np.uint8))
+    assert {key: frame["meta"][key] for key in meta} == meta
 
 
 @pytest.mark.parametrize("axis,index", [(None, 2), (0, None), (3, 2), (True, 2), (0, -1), (0, 100), (0, 1.5)])
@@ -67,12 +62,9 @@ def test_native_http_geometry_and_frame_cache_are_isolated(tmp_path):
         prefix = f"/api/cases/{case['id']}/revisions/{case['active_revision_id']}"
         for axis in range(3):
             query = {"native_axis": axis, "native_index": 20}
-            png = client.get(prefix + "/slice", params=query)
-            meta = client.get(prefix + "/slice-meta", params=query)
             frame = client.get(prefix + "/review-frame", params=query)
-            assert png.status_code == meta.status_code == frame.status_code == 200
-            assert json.loads(png.headers["X-Slice-Meta"]) == meta.json() == json.loads(frame.headers["X-CT-Frame"])["meta"]
-            assert meta.json()["native"] == {"axis": axis, "index": 20}
+            assert frame.status_code == 200
+            assert json.loads(frame.headers["X-CT-Frame"])["meta"]["native"] == {"axis": axis, "index": 20}
         for query in ({"native_axis": 0}, {"native_index": 2}, {"native_axis": 4, "native_index": 2}):
             assert client.get(prefix + "/review-frame", params=query).status_code == 400
 

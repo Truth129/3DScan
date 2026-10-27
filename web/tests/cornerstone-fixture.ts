@@ -1,4 +1,5 @@
 import { createApp, h, nextTick, reactive } from 'vue';
+import type * as Core from '@cornerstonejs/core';
 import CornerstoneCTView from '../src/components/CornerstoneCTView.vue';
 import { cornerstoneFrameCacheStats } from '../src/lib/cornerstone-runtime';
 import { inverseAffine, resliceVolume, transformPoint, type ResidentVolume, type VolumeDescriptor } from '../src/lib/ct-reslice';
@@ -77,6 +78,7 @@ window.fetch = (input, init) => {
   return nativeFetch(input, init);
 };
 const session = {
+  onOverlayChange: () => () => {},
   requestSlice: async (plane: Plane, position: number, ids: string[], compare: boolean, native?: { axis: 0 | 1 | 2; index: number }) => {
     sliceRequests++;
     return resliceVolume(
@@ -152,7 +154,7 @@ const app = createApp({
                   state.window = width;
                   state.level = center;
                 },
-                onFallback: (reason: string) => failures.push(reason),
+                onError: (reason: string) => failures.push(reason),
               }),
             )
           : [],
@@ -197,6 +199,7 @@ function stats() {
       width: canvas.width,
       height: canvas.height,
       renderer: host.dataset.renderer,
+      rendererId: host.dataset.rendererId,
       display: JSON.parse(host.dataset.pixelToRas!),
       diagnostics: views[plane]!.diagnostics(),
     };
@@ -230,6 +233,36 @@ async function cleanup() {
     cornerstoneFrameCacheStats().images === 0 && (core.getRenderingEngines() ?? []).filter(engine => engine.id.startsWith('scan3d-cornerstone-')).length === 0;
   return checks.cleanup_releases_images_and_engines;
 }
+async function failViewport(plane: Plane) {
+  const core = await import('@cornerstonejs/core');
+  const host = document.querySelector<HTMLElement>(`[aria-label="${plane} Cornerstone CT viewport"]`)!;
+  if (!host.dataset.rendererId) throw new Error('Cornerstone viewport has no scoped renderer identity');
+  const renderingEngineId = host.dataset.rendererId;
+  core.eventTarget.dispatchEvent(new CustomEvent(core.Enums.Events.WEBGL_CONTEXT_LOST, { detail: { renderingEngineId } }));
+  await nextTick();
+  await frames();
+  return {
+    renderingEngineId,
+    images: cornerstoneFrameCacheStats().images,
+    engines: (core.getRenderingEngines() ?? []).filter(engine => engine.id.startsWith('scan3d-cornerstone-')).length,
+    patientRequests,
+    sliceRequests,
+  };
+}
+async function failCachedFrame() {
+  const core = await import('@cornerstonejs/core');
+  const host = document.querySelector<HTMLElement>('[aria-label="axial Cornerstone CT viewport"]')!;
+  const id = host.dataset.rendererId!;
+  const viewport = core.getRenderingEngine(id)!.getViewport(id) as Core.StackViewport;
+  viewport.setStack = async () => {
+    throw new Error('Synthetic frame upload failure');
+  };
+  const before = sliceRequests;
+  state.point = transformPoint(affine, [20, 20, 16]);
+  await nextTick();
+  await frames();
+  return { reusedCachedFrame: sliceRequests === before, images: cornerstoneFrameCacheStats().images, patientRequests };
+}
 Object.assign(window, {
   fixture: {
     ready,
@@ -237,6 +270,8 @@ Object.assign(window, {
     stats,
     verify,
     cleanup,
+    failViewport,
+    failCachedFrame,
     state,
     gestures,
     failures,

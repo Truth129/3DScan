@@ -3577,14 +3577,3 @@ h3 {
 .review-workspace > .review-rail > :not(.ct-slices) {
   flex-shrink: 0;
 }
-.ct-viewer-error {
-  padding: 8px 14px;
-  font-size: 10px;
-  line-height: 1.5;
-  color: #d3b798;
-  background: #24211f;
-}
-.ct-viewer-error .text-button {
-  font-size: 10px;
-  margin-left: 5px;
-}

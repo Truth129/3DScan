@@ -161,12 +161,12 @@ export class LocalCTSession {
     this.base = base.replace(/\/$/, '');
     this.options = options;
     this.quality = options.quality ?? 'preview';
-    if (typeof Worker === 'undefined') throw new LocalCTUnsupportedError('This browser cannot run local CT slicing; server previews remain available.');
+    if (typeof Worker === 'undefined') throw new LocalCTUnsupportedError('This browser cannot run local CT slicing. Check browser support and retry.');
     if (new Uint8Array(new Uint16Array([1]).buffer)[0] !== 1) throw new LocalCTUnsupportedError('This browser uses an unsupported CT byte order.');
     try {
       this.worker = new Worker(new URL('./ct-worker.ts', import.meta.url), { type: 'module' });
     } catch {
-      throw new LocalCTUnsupportedError('This browser cannot start the local CT worker; server previews remain available.');
+      throw new LocalCTUnsupportedError('This browser cannot start the local CT worker. Check browser support and retry.');
     }
     this.worker.onmessage = event => {
       const { id, result, error, allocation } = event.data;
@@ -176,7 +176,7 @@ export class LocalCTSession {
       if (error)
         pending.reject(
           allocation
-            ? new LocalCTUnsupportedError('The browser could not allocate this CT volume; server previews remain available.')
+            ? new LocalCTUnsupportedError('The browser could not allocate this CT volume. Close other tabs and retry.')
             : error.startsWith('Superseded')
               ? new LocalCTSupersededError()
               : new Error(error),
@@ -185,7 +185,7 @@ export class LocalCTSession {
     };
     this.worker.onerror = event => {
       event.preventDefault();
-      this.fail(new LocalCTUnsupportedError('Local CT slicing could not start in this browser; server previews remain available.'));
+      this.fail(new LocalCTUnsupportedError('Local CT slicing could not start in this browser. Check browser support and retry.'));
     };
     this.descriptorPromise = this.initialize(this.base, ++this.baseVersion);
     this.ready = this.descriptorPromise.then(() => this.ctPromise!);
@@ -490,7 +490,7 @@ export class LocalCTSession {
     const budget = this.options.maxCTBytes ?? localCTBudget(memory);
     if (descriptor.byte_length > budget)
       throw new LocalCTUnsupportedError(
-        `This CT needs ${Math.ceil(descriptor.byte_length / 1024 ** 2)} MiB, above this device’s ${Math.floor(budget / 1024 ** 2)} MiB local CT budget; server previews remain available.`,
+        `This CT needs ${Math.ceil(descriptor.byte_length / 1024 ** 2)} MiB, above this device’s ${Math.floor(budget / 1024 ** 2)} MiB local CT budget.`,
       );
     this.ctController.abort();
     this.ctController = new AbortController();

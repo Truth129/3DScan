@@ -1,7 +1,6 @@
 """Real static MR import, preparation and reference isolation without inference."""
 
 from copy import deepcopy
-from io import BytesIO
 import hashlib
 import json
 from pathlib import Path
@@ -10,7 +9,6 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 import nibabel as nib
 import numpy as np
-from PIL import Image
 import pydicom
 import pytest
 
@@ -307,32 +305,6 @@ def test_mr_saved_output_restoration_keeps_existing_corrections_and_reference(mr
         expected = corrected_values if item["id"] == "total_mr:liver" else masks["spleen"]
         np.testing.assert_array_equal(nib.load(item["mask_file"]).dataobj, expected)
     assert corrected_path.read_bytes() == original_bytes
-
-
-def test_mr_slice_default_window_uses_saved_signal_policy(mr_rig):
-    rig = mr_rig
-    case, revision = prepare_mr(rig)
-    prefix = f"/api/cases/{case['id']}/revisions/{revision['id']}"
-    policy = revision["image_asset"]["presentation"]
-    query = {"native_axis": 2, "native_index": 2}
-    implicit = rig.http.get(prefix + "/slice", params=query)
-    explicit = rig.http.get(prefix + "/slice", params={**query, "window": policy["default_window"], "level": policy["default_level"]})
-    assert implicit.status_code == explicit.status_code == 200
-    assert implicit.content == explicit.content
-
-
-def test_mr_slice_png_honors_monochrome1_display_inversion(mr_rig):
-    rig = mr_rig
-    case2, revision2 = prepare_mr(rig)
-    source1 = write_mr_series(rig.tmp_path / "source-m1", photometric="MONOCHROME1")
-    case1, revision1 = prepare_mr(rig, import_mr(rig, source1))
-    planes = []
-    for case, revision in ((case1, revision1), (case2, revision2)):
-        prefix = f"/api/cases/{case['id']}/revisions/{revision['id']}"
-        response = rig.http.get(prefix + "/slice", params={"native_axis": 2, "native_index": 2, "window": 249.5, "level": 125.25})
-        assert response.status_code == 200, response.text
-        planes.append(np.asarray(Image.open(BytesIO(response.content)), dtype=np.uint16))
-    np.testing.assert_array_equal(planes[0] + planes[1], np.full(planes[0].shape, 255, dtype=np.uint16))
 
 
 def test_ct_only_deployment_keeps_prepared_mr_but_refuses_new_mr_work(mr_rig):

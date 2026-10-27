@@ -9,10 +9,8 @@ import threading
 import uuid
 
 from fastapi.testclient import TestClient
-from io import BytesIO
 import nibabel as nib
 import numpy as np
-from PIL import Image
 import pytest
 from scipy import ndimage as ndi
 
@@ -246,8 +244,8 @@ def test_preview_large_hu_falls_back_to_float32_without_clipping(tmp_path):
 
 
 @pytest.mark.parametrize("plane,axis", [("axial", 2), ("coronal", 1), ("sagittal", 0)])
-def test_raw_settled_frame_matches_png_geometry_hu_and_comparison(source, tmp_path, plane, axis):
-    ct, mask_path, _, old = source
+def test_raw_settled_frame_preserves_geometry_hu_and_comparison(source, tmp_path, plane, axis):
+    ct, mask_path, values, old = source
     changed = old.copy()
     changed[2] = 0
     changed[6, 3:8, 5:29] = 1
@@ -265,14 +263,20 @@ def test_raw_settled_frame_matches_png_geometry_hu_and_comparison(source, tmp_pa
     current = np.frombuffer(raw, dtype=np.uint8, count=count, offset=frame["current_offset"]).reshape(shape).astype(bool)
     parent = np.frombuffer(raw, dtype=np.uint8, count=count, offset=frame["parent_offset"]).reshape(shape).astype(bool)
     assert len(raw) == count * 6
-    png = imaging.slice_image(ct, current_path, plane, position, 400, -700, mask_path)
-    assert meta == png["meta"]
-    grayscale = np.rint(np.clip((hu - (-700 - 400 / 2)) / 400, 0, 1) * 255).astype(np.uint8)
-    expected = np.repeat(grayscale[..., None], 3, axis=2).astype(np.float32)
-    for selected, color, alpha in ((current, [56, 189, 248], 0.22), (parent & ~current, [244, 63, 94], 0.45), (current & ~parent, [34, 197, 94], 0.45)):
-        expected[selected] = expected[selected] * (1 - alpha) + np.asarray(color) * alpha
-        expected[selected & ~ndi.binary_erosion(selected)] = color
-    np.testing.assert_array_equal(np.rint(expected).astype(np.uint8), np.asarray(Image.open(BytesIO(png["image"]))))
+    mapping = np.linalg.inv(nib.load(ct).affine) @ np.asarray(meta["pixel_to_ras"])
+    assert meta["pixel_to_ras"][axis][3] == pytest.approx(position)
+    for actual, volume in ((hu, values.astype(np.float32)), (current, changed), (parent, old)):
+        expected = ndi.affine_transform(
+            volume,
+            mapping[:3, [1, 0]],
+            mapping[:3, 3],
+            output_shape=shape,
+            order=1 if actual is hu else 0,
+            mode="constant",
+            cval=-1024 if actual is hu else 0,
+            prefilter=False,
+        )
+        np.testing.assert_allclose(actual, expected, rtol=0, atol=6.2e-5)
     with pytest.raises(ValueError, match="outside"):
         review_volume.review_frame(ct, None, plane, -999999)
 

@@ -1,8 +1,6 @@
 from contextlib import asynccontextmanager
 from collections import OrderedDict
-from functools import lru_cache
 import json
-import math
 from pathlib import Path
 import re
 import threading
@@ -52,12 +50,12 @@ class SelectiveGZip:
     """Compress JSON and viewer assets for remote clients; leave downloads alone.
 
     Pre-gzipped CT chunks and review frames declare Content-Encoding and pass
-    through unchanged. PNG slices and Slicer ZIPs are already compressed, and the
-    HTML export keeps its Content-Length so browsers can show download progress.
+    through unchanged. Slicer ZIPs are already compressed, and HTML exports keep
+    Content-Length so browsers can show download progress.
     Level 5 is within 0.5% of level 9's size on the viewer bundles at half the CPU.
     """
 
-    _skip = re.compile(r"/(?:slice|slicer\.zip|export\.html)$")
+    _skip = re.compile(r"/(?:slicer\.zip|export\.html)$")
 
     def __init__(self, app):
         self.app = app
@@ -931,233 +929,12 @@ def create_app(settings: Settings | None = None):
             },
         )
 
-    # Legacy clients can request the image and its metadata concurrently.
-    # functools.lru_cache alone permits both misses to perform the same render;
-    # bounded striped locks let identical requests share one result without
-    # serializing the three anatomical views or retaining a lock per position.
-    slice_locks = tuple(threading.Lock() for _ in range(64))
-
     def slice_file_key(filename):
         if not filename:
             return None
         path = Path(filename).resolve()
         stat = path.stat()
         return (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-
-    @lru_cache(maxsize=48)
-    def cached_slice(
-        ct,
-        mask,
-        parent_mask,
-        plane,
-        position,
-        window,
-        level,
-        overlays=None,
-        native_axis=None,
-        native_index=None,
-        background_value=None,
-        invert=False,
-        overlay_opacity=None,
-    ):
-        from . import imaging
-
-        arguments = (Path(ct[0]), Path(mask[0]) if mask else None, plane, position, window, level, Path(parent_mask[0]) if parent_mask else None)
-        native = {"native_axis": native_axis, "native_index": native_index} if native_axis is not None or native_index is not None else {}
-        if background_value is not None:
-            from .modalities import get_modality_adapter
-
-            if background_value != get_modality_adapter("CT").presentation()["background_value"]:
-                native["background_value"] = background_value
-        if invert:
-            native["invert"] = True
-        if overlay_opacity is not None:
-            native["overlay_opacity"] = overlay_opacity
-        if overlays is None:
-            return imaging.slice_image(*arguments, **native)
-        return imaging.slice_image(
-            *arguments,
-            overlays=tuple(
-                (structure_id, Path(current[0]), Path(previous[0]) if previous else None, color) for structure_id, current, previous, color in overlays
-            ),
-            **native,
-        )
-
-    def slice_data(
-        ct, mask, parent_mask, plane, position, window, level, native_axis=None, native_index=None, background_value=None, invert=False, overlay_opacity=None
-    ):
-        key = (
-            slice_file_key(ct),
-            slice_file_key(mask),
-            slice_file_key(parent_mask),
-            plane,
-            position,
-            window,
-            level,
-            None,
-            native_axis,
-            native_index,
-            background_value,
-            invert,
-            overlay_opacity,
-        )
-        with slice_locks[hash(key) % len(slice_locks)]:
-            return cached_slice(*key)
-
-    def get_slice(
-        case_id,
-        revision_id,
-        plane,
-        position_mm,
-        window,
-        level,
-        structure_id,
-        compare,
-        structure_ids=None,
-        native_axis=None,
-        native_index=None,
-        structure_colors=None,
-        overlay_opacity=0.4,
-    ):
-        if plane not in ("axial", "coronal", "sagittal"):
-            raise ValueError("Unknown anatomical plane")
-        revision = ct_revision(case_id, revision_id)
-        asset = service.store.resolve_reference(revision)
-        window = asset["presentation"]["default_window"] if window is None else window
-        level = asset["presentation"]["default_level"] if level is None else level
-        if not all(math.isfinite(v) for v in (position_mm, window, level)) or window <= 0:
-            raise ValueError("Window and positions must be finite, with a positive window")
-        background_value = asset["presentation"]["background_value"]
-        invert = asset["presentation"]["photometric_interpretation"] == "MONOCHROME1"
-        selected = selected_slice_masks(case_id, revision, structure_id, structure_ids, compare)
-        # Colors affect the derived PNG only. Keep the saved masks/palette and
-        # the exact scalar/binary frame transport independent from presentation.
-        if structure_colors is not None:
-            if len(structure_colors) > 128 or len(structure_colors) != len(selected):
-                raise ValueError("Provide one display color for each selected structure")
-            if any(not re.fullmatch(r"#[0-9a-fA-F]{6}", color) for color in structure_colors):
-                raise ValueError("Structure display colors must use #RRGGBB format")
-            colors = {current["id"]: color.lower() for (current, _), color in zip(selected, structure_colors)}
-        else:
-            colors = {}
-        structure, previous = selected[0] if selected else (None, None)
-        if structure_ids is not None or structure_colors is not None:
-            from .imaging import presentation_color
-
-            overlays = tuple(
-                (
-                    current["id"],
-                    slice_file_key(current["mask_file"]),
-                    slice_file_key(old["mask_file"]) if old else None,
-                    colors.get(current["id"], presentation_color(current)),
-                )
-                for current, old in selected
-            )
-            key = (
-                slice_file_key(revision["ct_file"]),
-                None,
-                None,
-                plane,
-                position_mm,
-                window,
-                level,
-                overlays,
-                native_axis,
-                native_index,
-                background_value,
-                invert,
-                overlay_opacity,
-            )
-            with slice_locks[hash(key) % len(slice_locks)]:
-                return cached_slice(*key)
-        return slice_data(
-            revision["ct_file"],
-            structure["mask_file"] if structure else None,
-            previous["mask_file"] if previous else None,
-            plane,
-            position_mm,
-            window,
-            level,
-            native_axis,
-            native_index,
-            background_value,
-            invert,
-            overlay_opacity,
-        )
-
-    @app.get("/api/cases/{case_id}/revisions/{revision_id}/slice")
-    def slice_png(
-        case_id: str,
-        revision_id: str,
-        plane: str = "axial",
-        position_mm: float = 0,
-        window: float | None = None,
-        level: float | None = None,
-        structure_id: str | None = None,
-        compare: bool = False,
-        structure_ids: list[str] | None = Query(None),
-        native_axis: int | None = None,
-        native_index: int | None = None,
-        structure_colors: list[str] | None = Query(None),
-        overlay_opacity: float = Query(0.4, ge=0, le=1),
-    ):
-        result = get_slice(
-            case_id,
-            revision_id,
-            plane,
-            position_mm,
-            window,
-            level,
-            structure_id,
-            compare,
-            structure_ids,
-            native_axis,
-            native_index,
-            structure_colors,
-            overlay_opacity,
-        )
-        return Response(
-            result["image"],
-            media_type="image/png",
-            headers={
-                # The bitmap and its coordinate transform must describe the same
-                # requested frame, including during rapid crosshair changes.
-                "X-Slice-Meta": json.dumps(result["meta"], separators=(",", ":"), allow_nan=False),
-                "Cache-Control": "private, no-store",
-            },
-        )
-
-    @app.get("/api/cases/{case_id}/revisions/{revision_id}/slice-meta")
-    def slice_meta(
-        case_id: str,
-        revision_id: str,
-        plane: str = "axial",
-        position_mm: float = 0,
-        window: float | None = None,
-        level: float | None = None,
-        structure_id: str | None = None,
-        compare: bool = False,
-        structure_ids: list[str] | None = Query(None),
-        native_axis: int | None = None,
-        native_index: int | None = None,
-        structure_colors: list[str] | None = Query(None),
-        overlay_opacity: float = Query(0.4, ge=0, le=1),
-    ):
-        return get_slice(
-            case_id,
-            revision_id,
-            plane,
-            position_mm,
-            window,
-            level,
-            structure_id,
-            compare,
-            structure_ids,
-            native_axis,
-            native_index,
-            structure_colors,
-            overlay_opacity,
-        )["meta"]
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/probe")
     def probe(case_id: str, revision_id: str, x: float, y: float, z: float):

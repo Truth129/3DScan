@@ -42,7 +42,7 @@ def test_encoded_data_and_downloads_are_not_compressed_again(http):
     # One gzip layer, decoded by the client to exactly the raw native slab.
     assert chunk.headers["content-encoding"] == "gzip"
     assert len(chunk.content) == descriptor["chunks"][0]["byte_length"]
-    for url in (f"{prefix}/slice?plane=axial&position_mm=0", f"{prefix}/slicer.zip", f"{prefix}/export.html"):
+    for url in (f"{prefix}/slicer.zip", f"{prefix}/export.html"):
         response = http.get(url)
         assert response.status_code == 200, (url, response.text[:200])
         assert "content-encoding" not in response.headers, url

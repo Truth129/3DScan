@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   assertReferenceImage,
   imageContext,
@@ -9,7 +9,6 @@ import {
   type ImagePresentation,
 } from '../src/lib/image-domain';
 import { allocateVolume, resliceVolume, sampleLinear, type VolumeDescriptor } from '../src/lib/ct-reslice';
-import { CTRenderer, type CTFrame } from '../src/lib/ct-renderer';
 
 const affine = [
   [-2, 0, 0, 10],
@@ -132,45 +131,5 @@ describe('modality-neutral image metadata with legacy CT compatibility', () => {
       reference_image_id: 'd'.repeat(32),
     });
     expect(() => resliceVolume(image, 'axial', 32, mask)).toThrow('different reference image');
-  });
-
-  it('applies monochrome inversion in the CPU display without altering source pixels', () => {
-    const pixels = new Uint8ClampedArray(8),
-      putImageData = vi.fn();
-    const context = { createImageData: () => ({ data: pixels, width: 2, height: 1 }), putImageData };
-    const canvas = {
-      dataset: {},
-      width: 2,
-      height: 1,
-      getContext: (name: string) => (name === '2d' ? context : null),
-      addEventListener() {},
-      removeEventListener() {},
-    } as unknown as HTMLCanvasElement;
-    const frame: CTFrame = {
-      meta: {
-        width: 2,
-        height: 1,
-        plane: 'axial',
-        position_mm: 0,
-        extent_mm: [2, 1],
-        pixel_to_ras: [
-          [1, 0, 0, 0],
-          [0, 1, 0, 0],
-          [0, 0, 1, 0],
-          [0, 0, 0, 1],
-        ],
-      },
-      hu: new Float32Array([0, 100]),
-      current: new Uint8Array(2),
-      ...imageContext(asset()),
-    };
-    frame.presentation = { ...signalPresentation, photometric_interpretation: 'MONOCHROME1' };
-    const renderer = new CTRenderer(canvas);
-    renderer.setFrame(frame);
-    renderer.draw(100, 50, [NaN, NaN, NaN]);
-    expect([...pixels]).toEqual([255, 255, 255, 255, 0, 0, 0, 255]);
-    expect([...frame.hu]).toEqual([0, 100]);
-    expect(putImageData).toHaveBeenCalledOnce();
-    renderer.dispose();
   });
 });

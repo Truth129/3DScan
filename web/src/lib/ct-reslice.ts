@@ -170,7 +170,7 @@ export function transformPoint(matrix: number[][], point: Point): Point {
   return matrix.slice(0, 3).map(row => row[0] * point[0] + row[1] * point[1] + row[2] * point[2] + row[3]) as Point;
 }
 
-/** Patient-plane bounds and pixel centres match imaging.slice_image. Only
+/** Patient-plane bounds and pixel centres match imaging.slice_geometry. Only
  * overview rasters have a display-size cap; full rasters retain native sampling. */
 export function sliceMetadata(volume: VolumeDescriptor, plane: Plane, position: number): SliceMeta {
   const axes = { axial: [2, 0, 1], coronal: [1, 0, 2], sagittal: [0, 1, 2] }[plane];

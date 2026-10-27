@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from itertools import product
 from pathlib import Path
 from collections import OrderedDict
@@ -11,7 +10,6 @@ import threading
 
 import nibabel as nib
 import numpy as np
-from PIL import Image
 from scipy import ndimage as ndi
 
 
@@ -340,7 +338,7 @@ def _validate_slice_pixels(width, height):
 
 
 def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, native_index=None):
-    """Pixel-centre geometry shared by PNG and exact-HU frame delivery.
+    """Pixel-centre geometry for exact scalar and binary-mask frame delivery.
 
     Native editing planes keep one voxel axis fixed even on oblique/reflected
     scans. They never turn an anatomical MPR rectangle into a native-axis box.
@@ -405,132 +403,3 @@ def slice_geometry(shape, affine, plane, position_mm, *, native_axis=None, nativ
         "plane": plane,
         "extent_mm": [float(extent[horizontal]), float(extent[vertical])],
     }, np.linalg.inv(affine) @ pixel_to_ras
-
-
-def slice_image(
-    ct_path: Path,
-    mask_path_or_none: Path | None,
-    plane: str,
-    position_mm: float,
-    window: float,
-    level: float,
-    compare_mask_path: Path | None = None,
-    *,
-    overlays=None,
-    native_axis=None,
-    native_index=None,
-    background_value=None,
-    invert=False,
-    overlay_opacity=None,
-) -> dict:
-    """Reslice patient planes or exact native editing planes on the source grid."""
-    image, affine = _image(ct_path)
-    if not all(math.isfinite(float(x)) for x in (window, level)) or window <= 0:
-        raise ValueError("Slice level must be finite; window must be positive")
-    if overlay_opacity is not None and (not math.isfinite(overlay_opacity) or not 0 <= overlay_opacity <= 1):
-        raise ValueError("Slice overlay opacity must be finite and between zero and one")
-    meta, voxel_from_pixel = slice_geometry(image.shape, affine, plane, position_mm, native_axis=native_axis, native_index=native_index)
-    width, height = meta["width"], meta["height"]
-    values = _ct_array(ct_path, image)
-    if background_value is None:
-        from .modalities import get_modality_adapter
-
-        background_value = get_modality_adapter("CT").presentation()["background_value"]
-    if not math.isfinite(background_value):
-        raise ValueError("Image background must be finite")
-    intensity = _reslice(values, voxel_from_pixel, (height, width), order=1, cval=background_value)
-    grayscale = np.rint(np.clip((intensity - (level - window / 2)) / window, 0, 1) * 255).astype(np.uint8)
-    if invert:
-        grayscale = 255 - grayscale
-    rgb = np.repeat(grayscale[..., None], 3, axis=2).astype(np.float32)
-
-    def sample_mask(path):
-        mask = _slice_mask(path, image, affine)
-        return _reslice(mask, voxel_from_pixel, (height, width), order=0, cval=0)
-
-    def overlay(selected, color, alpha=0.22):
-        nonlocal rgb
-        contour = selected & ~ndi.binary_erosion(selected)
-        interior = selected & ~contour
-        fill = alpha if overlay_opacity is None else min(1.0, overlay_opacity * alpha / 0.22)
-        edge = 1.0 if overlay_opacity is None else min(1.0, overlay_opacity * 3)
-        rgb[interior] = rgb[interior] * (1 - fill) + np.asarray(color) * fill
-        rgb[contour] = rgb[contour] * (1 - edge) + np.asarray(color) * edge
-
-    if overlays is None:
-        current = sample_mask(mask_path_or_none) if mask_path_or_none else None
-        if current is not None:
-            overlay(current, (56, 189, 248))
-        if compare_mask_path:
-            if current is None:
-                raise ValueError("A current mask is required for comparison")
-            previous = sample_mask(compare_mask_path)
-            overlay(previous & ~current, (244, 63, 94), 0.45)
-            overlay(current & ~previous, (34, 197, 94), 0.45)
-    else:
-        # Each structure keeps its own binary layer, including overlapping
-        # structures. Selected order is also the deterministic paint order.
-        for structure_id, current_path, previous_path, color in overlays:
-            current = sample_mask(current_path)
-            overlay(current, tuple(int(color[i : i + 2], 16) for i in (1, 3, 5)))
-            if previous_path:
-                previous = sample_mask(previous_path)
-                overlay(previous & ~current, (244, 63, 94), 0.45)
-                overlay(current & ~previous, (34, 197, 94), 0.45)
-    buffer = BytesIO()
-    # Level 3 is lossless and closely matches level 6's size, with less work on
-    # the interactive path (measured 1.6% larger and 25% faster on sagittal CT).
-    Image.fromarray(np.rint(rgb).astype(np.uint8)).save(buffer, format="PNG", compress_level=3)
-    meta["overlay_colors"] = {"current": "#38bdf8", "added": "#22c55e", "removed": "#f43f5e"}
-    if overlays is not None:
-        meta["overlays"] = [{"id": layer[0], "color": layer[3]} for layer in overlays]
-    return {"image": buffer.getvalue(), "meta": meta}
-
-
-def presentation_color(structure):
-    """Match web/src/lib/appearance.ts for server-rendered CT overlays."""
-    colors = {
-        "lung_upper_lobe_right": "#f29919",
-        "lung_middle_lobe_right": "#33b34d",
-        "lung_lower_lobe_right": "#1a80e6",
-        "lung_upper_lobe_left": "#f27fbf",
-        "lung_lower_lobe_left": "#7f66e6",
-        "heart": "#d95772",
-        "liver": "#cc6619",
-        "spleen": "#8019e6",
-        "kidney_left": "#d86a6a",
-        "kidney_right": "#d86a6a",
-        "kidney_cyst_left": "#edbc85",
-        "kidney_cyst_right": "#edbc85",
-        "pancreas": "#f29919",
-        "gallbladder": "#80cc19",
-        "stomach": "#f27fbf",
-        "small_bowel": "#c39ad9",
-        "duodenum": "#d9a3c6",
-        "colon": "#9c83cc",
-        "urinary_bladder": "#e6c86a",
-        "adrenal_gland_left": "#d9aa59",
-        "adrenal_gland_right": "#d9aa59",
-        "autochthon_left": "#a47782",
-        "autochthon_right": "#a47782",
-        "iliopsoas_left": "#b55c73",
-        "iliopsoas_right": "#b55c73",
-        "prostate": "#d9909d",
-        "spinal_cord": "#dfcfa5",
-        "esophagus": "#c881aa",
-        "thyroid_gland": "#bd77bf",
-    }
-    name = structure["id"].rsplit(":", 1)[-1].lower()
-    group = structure.get("group", "").lower()
-    if group in {"arteries", "veins", "bones"}:
-        return {"arteries": "#ed2222", "veins": "#224ce6", "bones": "#d8d2c5"}[group]
-    if group == "airways":
-        return "#cccccc" if "wall" in name else "#eeeeee"
-    color = colors.get(name, structure.get("color", "#38bdf8"))
-    if not isinstance(color, str) or len(color) != 7 or color[0] != "#":
-        raise ValueError("Structure overlay requires a six-digit hex color")
-    try:
-        int(color[1:], 16)
-    except ValueError as exc:
-        raise ValueError("Structure overlay requires a six-digit hex color") from exc
-    return color

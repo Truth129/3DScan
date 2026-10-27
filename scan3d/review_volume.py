@@ -447,8 +447,8 @@ def chunk_path(cache_dir, descriptor, key, index):
 def review_frame(ct_path, mask_path, plane, position_mm, parent_mask_path=None, *, overlays=None, native_axis=None, native_index=None, background_value=None):
     """Exact reference-grid HU and binary overlays for a settled patient plane.
 
-    This is the same pixel-centre geometry and interpolation used by the PNG
-    endpoint. The browser owns window/level, colors and presentation thereafter.
+    Pixel centres retain the reference-grid geometry and interpolation. The
+    browser owns window/level, colors and presentation thereafter.
     """
     ct_path = Path(ct_path)
     image, affine = imaging._image(ct_path)

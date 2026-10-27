@@ -361,7 +361,7 @@ def test_bound_reference_api_rejects_changed_source_pixels_instead_of_reusing_ca
     image = nib.load(path)
     values = np.asarray(image.dataobj, dtype=np.int16).copy() + 1
     nib.save(nib.Nifti1Image(values, image.affine, image.header.copy()), path)
-    for endpoint in ("image-volume", "ct-volume", "review-frame", "slice"):
+    for endpoint in ("image-volume", "ct-volume", "review-frame"):
         response = rig.http.get(prefix + "/" + endpoint)
         assert response.status_code == 400, (endpoint, response.text)
         assert "reference" in response.json()["detail"].lower()
