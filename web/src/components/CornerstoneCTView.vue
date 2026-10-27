@@ -10,6 +10,7 @@ import { colorCTOverlays, ctFrameBytes, type CTOverlaySelection } from '../lib/c
 import type { CTFrame } from '../lib/ct-renderer';
 import { cornerstoneOverlayPixels } from '../lib/cornerstone-frame';
 import { CornerstoneFrameViewport } from '../lib/cornerstone-runtime';
+import { orthogonalizeCornerstoneFrame } from '../lib/cornerstone-stack-frame';
 
 const props = withDefaults(
   defineProps<{
@@ -116,16 +117,17 @@ function refreshCamera() {
   host.dataset.quality = info.quality;
   host.dataset.overlayIds = JSON.stringify(frame.overlays?.map(item => item.id) ?? overlayIds.value);
   host.dataset.frameBytes = String(ctFrameBytes(frame));
+  const footprint = frame.sourceMeta ?? frame.meta;
   const corners = [
     [-0.5, -0.5],
-    [frame.meta.width - 0.5, -0.5],
-    [frame.meta.width - 0.5, frame.meta.height - 0.5],
-    [-0.5, frame.meta.height - 0.5],
+    [footprint.width - 0.5, -0.5],
+    [footprint.width - 0.5, footprint.height - 0.5],
+    [-0.5, footprint.height - 0.5],
   ];
   annotationClip.value = `polygon(${corners
     .map(([x, y]) =>
       viewer!
-        .rasToCanvas(pixelToRas(frame.meta.pixel_to_ras, x, y))
+        .rasToCanvas(pixelToRas(footprint.pixel_to_ras, x, y))
         .map(value => `${value}px`)
         .join(' '),
     )
@@ -206,7 +208,7 @@ async function present(value: CTFrame, resolution: 'preview' | 'full', requestCo
   if (!viewer || disposed || requestContext !== context) return;
   const instance = viewer;
   try {
-    const colored = colorCTOverlays(value, props.overlays, props.overlayOpacity);
+    const colored = colorCTOverlays(orthogonalizeCornerstoneFrame(value), props.overlays, props.overlayOpacity);
     delivery.set(colored, { context: requestContext, quality: resolution });
     const nextGrid = `${props.caseId}:${referenceGridKey(props.geometry)}:${props.plane}:${!!props.nativeReview}`;
     const reset = nextGrid !== grid;
@@ -291,14 +293,16 @@ function click(event: MouseEvent) {
   if (pointerStart && Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 4) return;
   const rect = element.value.getBoundingClientRect(),
     ras = viewer.canvasToRas([event.clientX - rect.left, event.clientY - rect.top]);
-  const [x, y] = rasToPixel(viewer.frame.meta.pixel_to_ras, ras);
-  if (x >= -0.5 && y >= -0.5 && x < viewer.frame.meta.width - 0.5 && y < viewer.frame.meta.height - 0.5) emit('point', ras);
+  const footprint = viewer.frame.sourceMeta ?? viewer.frame.meta;
+  const [x, y] = rasToPixel(footprint.pixel_to_ras, ras);
+  if (x >= -0.5 && y >= -0.5 && x < footprint.width - 0.5 && y < footprint.height - 0.5) emit('point', ras);
 }
 function gesture(prompt: InteractivePrompt) {
   if (!canMark.value || !viewer?.frame) return;
   if (!prompt.kind || prompt.kind === 'point') {
-    const [x, y] = rasToPixel(viewer.frame.meta.pixel_to_ras, prompt.ras);
-    if (x < -0.5 || y < -0.5 || x >= viewer.frame.meta.width - 0.5 || y >= viewer.frame.meta.height - 0.5) return;
+    const footprint = viewer.frame.sourceMeta ?? viewer.frame.meta;
+    const [x, y] = rasToPixel(footprint.pixel_to_ras, prompt.ras);
+    if (x < -0.5 || y < -0.5 || x >= footprint.width - 0.5 || y >= footprint.height - 0.5) return;
   }
   emit('gesture', prompt);
 }

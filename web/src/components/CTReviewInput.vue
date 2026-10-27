@@ -86,13 +86,11 @@ function box(points: number[][]) {
   return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), width: Math.abs(a[0] - b[0]), height: Math.abs(a[1] - b[1]) };
 }
 const mmPerPixel = computed(() => Math.hypot(...props.meta.pixel_to_ras.slice(0, 3).map(row => row[0])));
-watch(
-  () => [reviewInputContext(props.geometry, props.meta), props.tool, props.disabled],
-  () => {
-    stroke.value = [];
-    pointer = -1;
-  },
-);
+// A render can replace metadata without changing the physical drawing grid.
+watch([() => reviewInputContext(props.geometry, props.meta), () => props.tool, () => props.disabled], () => {
+  stroke.value = [];
+  pointer = -1;
+});
 </script>
 
 <template>

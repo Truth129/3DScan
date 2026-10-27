@@ -29,7 +29,7 @@ flowchart LR
     direction TB
     UI["Vue 3 / TypeScript workspace<br/>Cases, series, panels, tasks and review controls"]
     RAM["Shared source cache in client RAM<br/>Preview then native volume; local reslice worker"]
-    CT["Cornerstone3D<br/>Linked slices, overlays, crosshairs and windowing"]
+    CT["Cornerstone3D<br/>Native volume MPR, slabs and labelmaps<br/>Worker stacks for preview / shear / memory limits"]
     WEBGL["Three.js / WebGL2 on the client GPU<br/>Segmentation surfaces, CT planes and volume rendering"]
     UI --> CT
     UI --> WEBGL
@@ -79,15 +79,41 @@ flowchart LR
   WEBGL --> PNG["Browser PNG export"]
 ```
 
-The workstation parses DICOM; Cornerstone receives prepared image frames rather
-than raw DICOM in this pipeline. Cornerstone is the only 2D slice renderer;
-worker reslicing and exact scalar/binary `/review-frame` transport remain. The
-custom slice renderer and server PNG endpoints are removed. A failed viewport
-shows an error with Retry, which releases its engine, tools and images before
-rebuilding from the App-owned resident CT session. Other planes keep their
-viewports and cameras. A source-worker failure has its own source-load Retry. The browser GPU renders the remote viewer;
-the workstation ROCm GPU runs model inference. Warm navigation, windowing and
-camera changes use resident client data.
+The workstation parses DICOM; Cornerstone receives prepared reference-grid
+voxels, never raw DICOM. After full preload, one Cornerstone ImageVolume and
+RenderingEngine serve three orthographic viewports. Native i-fastest slices
+arrive through bounded slabs from the existing worker. Identity-scaled integer
+samples remain integer; other source scalars are scaled once to float32. Slice
+origins and all affine direction signs are preserved, including reflected grids.
+
+Crosshairs support translation and oblique rotation. MIP/MinIP affect only the
+source CT actor; independent binary labelmaps show the centre plane. Native
+review resets orientation to exact source-index planes and disables rotation
+and slabs while drawing. Camera projections supply patient RAS gesture positions;
+only a proven integer native plane can authorize axis/index/u/v drawings.
+
+Preview, sheared and over-budget sources retain Cornerstone worker-resliced
+stacks and exact scalar/binary `/review-frame` transport. A sheared native frame
+gets an orthogonal display raster within the same patient plane, with its original
+footprint and native index retained for inverse-affine gesture mapping. No
+resampled display grid becomes a source mask or measurement grid.
+
+A shared reservation budget charges the worker source once per immutable identity
+and each visible renderer's CPU/GPU copies separately. The default is 2 GiB on
+desktop and 256 MiB on explicitly low-memory devices; float32 source-copy and GPU
+estimates are conservative. Mask staging includes current and replacement copies.
+Hidden 2D/3D views abort uploads and release their owned GPU resources and
+reservations, retaining the App-owned worker for reuse. These are allocation
+estimates, not measurements of driver VRAM. A volume that cannot fit uses the
+existing Cornerstone stack path with an explanation and Retry.
+
+Source download, renderer and overlay errors have distinct Retry paths. An MPR
+context failure releases the shared engine, labelmaps, tools and image cache
+before rebuilding from the resident CT. Candidate changes replace mask display
+copies while retaining the source volume and camera. The Three.js scene still
+owns 3D volume/surface composition, picking and portable export. Warm navigation,
+windowing and camera changes use resident client data. The client browser GPU
+handles viewing; the workstation ROCm GPU handles model inference.
 
 Native reference images and masks remain authoritative for editing and
 measurements. GLB meshes and the bounded 3D mask union are derived presentation
@@ -167,5 +193,5 @@ reusable after cancellation or restart.
 - [nnInteractive engine](../scan3d/interactive.py) and its [supervised worker process](../scan3d/interactive_worker.py).
 - [DICOM preparation](../scan3d/dicom.py), [inference](../scan3d/segmentation.py), [native operations and measurements](../scan3d/imaging.py), [CPU surfaces](../scan3d/surfaces.py).
 - [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display union](../scan3d/volume_mask_union.py).
-- [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone adapter](../web/src/lib/cornerstone-runtime.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).
+- [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone stack adapter](../web/src/lib/cornerstone-runtime.ts), [native MPR](../web/src/lib/cornerstone-mpr.ts), [shared memory budget](../web/src/lib/volume-memory-budget.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).
 - [Portable export](../scan3d/portable_export.py), [embedded offline data](../web/src/lib/portable-viewer.ts), [MRI expansion boundaries](./EXPANSION_FOUNDATION.md).

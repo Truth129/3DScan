@@ -10,7 +10,7 @@ import type {
   SliceMeta,
   Structure,
 } from '../types';
-import { pixelToRas, planeAxis, rasToPixel } from './geometry';
+import { pixelToRas, rasToPixel } from './geometry';
 import { inverseAffine, transformPoint } from './ct-reslice';
 
 /** Existing saved reviews predate direct editing and retain their AI semantics. */
@@ -82,13 +82,17 @@ export function pendingReviewTargets(reviews: readonly InteractiveReview[], revi
 
 /** Mark only prompts lying in the displayed patient plane; pixel centres match CT picking. */
 export function visibleReviewPrompts(prompts: readonly InteractivePrompt[], meta: SliceMeta, toleranceMm: number, geometry?: Geometry) {
-  const axis = planeAxis(meta.plane);
+  const [u, v] = [0, 1].map(column => meta.pixel_to_ras.slice(0, 3).map(row => row[column]));
+  const normal = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const length = Math.hypot(...normal),
+    origin = pixelToRas(meta.pixel_to_ras, 0, 0);
+  if (length < 1e-8) return [];
   return prompts
     .filter((prompt): prompt is InteractivePoint => !prompt.kind || prompt.kind === 'point')
     .filter(prompt =>
       meta.native && geometry
         ? Math.abs(transformPoint(inverseAffine(geometry.affine_ras), prompt.ras)[meta.native.axis] - meta.native.index) < 0.51
-        : Math.abs(prompt.ras[axis] - meta.position_mm) <= toleranceMm,
+        : Math.abs(prompt.ras.reduce((sum, value, axis) => sum + (value - origin[axis]) * normal[axis], 0)) / length <= toleranceMm,
     )
     .map(prompt => {
       const [x, y] = rasToPixel(meta.pixel_to_ras, prompt.ras);

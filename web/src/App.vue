@@ -14,7 +14,7 @@ import {
 import WorkspacePanels from './components/WorkspacePanels.vue';
 import { readWorkspacePanels, saveWorkspacePanels, setWorkspacePanel, canHideWorkspacePanel, type WorkspacePanelId } from './lib/workspace-panels';
 import ModelViewport from './components/ModelViewport.vue';
-import CTSlice from './components/CTSlice.vue';
+import CTReviewRail from './components/CTReviewRail.vue';
 import CTOverlayPicker from './components/CTOverlayPicker.vue';
 import ImportDialog from './components/ImportDialog.vue';
 import RefinementPanel from './components/RefinementPanel.vue';
@@ -1782,37 +1782,33 @@ onBeforeUnmount(() => {
               · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
             ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
           </div>
-          <div class="ct-slices">
-            <CTSlice
-              :overlay-opacity="overlayOpacity"
-              v-for="plane in ['axial', 'coronal', 'sagittal'] as const"
-              :key="plane"
-              :modality="sourceLabel"
-              :case-id="activeCase.id"
-              :revision-id="ctRevisionId"
-              :geometry="revision.geometry"
-              :plane="plane"
-              :point="point"
-              :window="displayWindow"
-              :level="displayLevel"
-              :structure="selected"
-              :overlays="ctOverlayStructures"
-              :compare="compare"
-              :local-session="localCT"
-              :local-ready="localCTReady"
-              :full-resolution="localCTFull"
-              :review-tool="workspaceMode === 'review' && interactiveTool !== 'scissors' ? interactiveTool : 'navigate'"
-              :review-prompts="workspaceMode === 'review' ? interactivePrompts : []"
-              :review-disabled="interactiveDisabled"
-              :review-include="interactiveInclude"
-              :review-radius="interactiveRadius"
-              :native-review="workspaceMode === 'review' && interactiveNative"
-              @point="setPoint"
-              @prompt="interactivePanel?.addPrompt($event)"
-              @gesture="interactivePanel?.addGesture($event)"
-              @window-level="cornerstoneWindowLevel"
-            />
-          </div>
+          <CTReviewRail
+            :overlay-opacity="overlayOpacity"
+            :modality="sourceLabel"
+            :case-id="activeCase.id"
+            :revision-id="ctRevisionId"
+            :geometry="revision.geometry"
+            :point="point"
+            :window="displayWindow"
+            :level="displayLevel"
+            :structure="selected"
+            :overlays="ctOverlayStructures"
+            :compare="compare"
+            :local-session="localCT"
+            :active="reviewPanelVisible && !prepareOpen"
+            :local-ready="localCTReady"
+            :full-resolution="localCTFull"
+            :review-tool="workspaceMode === 'review' && interactiveTool !== 'scissors' ? interactiveTool : 'navigate'"
+            :review-prompts="workspaceMode === 'review' ? interactivePrompts : []"
+            :review-disabled="interactiveDisabled"
+            :review-include="interactiveInclude"
+            :review-radius="interactiveRadius"
+            :native-review="workspaceMode === 'review' && interactiveNative"
+            @point="setPoint"
+            @prompt="interactivePanel?.addPrompt($event)"
+            @gesture="interactivePanel?.addGesture($event)"
+            @window-level="cornerstoneWindowLevel"
+          />
           <div class="probe-readout">
             <span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span
             ><strong

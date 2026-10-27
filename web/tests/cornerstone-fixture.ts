@@ -8,12 +8,13 @@ import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point } from 
 import '../src/style.css';
 
 const planes: Plane[] = ['axial', 'coronal', 'sagittal'];
+const sheared = new URLSearchParams(location.search).get('shear') === '1';
 const angle = Math.PI / 6,
   c = Math.cos(angle),
   s = Math.sin(angle);
 const affine = [
-  [-0.8 * c, -1.3 * s, 0, 31],
-  [-0.8 * s, 1.3 * c, 0, -52],
+  [-0.8 * c, -1.3 * s, sheared ? 0.6 : 0, 31],
+  [-0.8 * s, 1.3 * c, sheared ? 0.3 : 0, -52],
   [0, 0, 2.1, 87],
   [0, 0, 0, 1],
 ];
@@ -25,7 +26,7 @@ const corners = [0, 1].flatMap(a =>
 const geometry: Geometry = {
   shape,
   affine_ras: affine,
-  spacing: [0.8, 1.3, 2.1],
+  spacing: [0, 1, 2].map(column => Math.hypot(...affine.slice(0, 3).map(row => row[column]))),
   center_ras: transformPoint(affine, [23.5, 19.5, 15.5]),
   bounds_ras: [
     corners[0].map((_, axis) => Math.min(...corners.map(p => p[axis]))) as Point,
@@ -212,6 +213,10 @@ async function verify() {
   checks.one_bounded_frame_per_viewport =
     viewStats.every(view => view.diagnostics.cacheEntries === 1 && view.diagnostics.framePixels > 0) && cornerstoneFrameCacheStats().images === 3;
   checks.no_second_CT_download = patientRequests === 0;
+  checks.sheared_planes_use_orthogonal_display_reslices =
+    !sheared ||
+    (viewStats.find(view => view.plane === 'coronal')!.diagnostics.framePixels > shape[0] * shape[2] &&
+      viewStats.find(view => view.plane === 'sagittal')!.diagnostics.framePixels > shape[1] * shape[2]);
   checks.multiple_colored_overlay_bitmaps = [...document.querySelectorAll<HTMLCanvasElement>('canvas.cornerstone-overlay')].every(canvas => {
     const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
     let red = false,
@@ -222,7 +227,7 @@ async function verify() {
     }
     return red && blue;
   });
-  return { checks, views: viewStats, patientRequests, sliceRequests, gestures, failures, window: state.window, level: state.level };
+  return { checks, views: viewStats, sheared, patientRequests, sliceRequests, gestures, failures, window: state.window, level: state.level };
 }
 async function cleanup() {
   state.show = false;

@@ -12,6 +12,8 @@ export interface CTOverlay {
 /** Top-left, row-major samples on the exact plane described by meta. */
 export interface CTFrame extends ImageContext {
   meta: SliceMeta;
+  /** Original footprint when only the displayed pixels were orthogonalized. */
+  sourceMeta?: SliceMeta;
   hu: Float32Array;
   current: Uint8Array;
   parent?: Uint8Array;
@@ -31,6 +33,7 @@ export function ctOverlayAppearance(opacity: number | undefined, layers = 1) {
 export function sameCTFrameSamples(left: CTFrame, right: CTFrame): boolean {
   if (
     left.meta !== right.meta ||
+    left.sourceMeta !== right.sourceMeta ||
     left.hu !== right.hu ||
     left.current !== right.current ||
     left.parent !== right.parent ||

@@ -15,7 +15,8 @@ import type {
 } from '../types';
 import { AnatomyScene, type OrientationAxis, type SurfaceProgress } from '../lib/scene';
 import { colorCTOverlays, ctOverlayColor, type CTOverlaySelection } from '../lib/ct-overlays';
-import type { GPUOverlaySourceProvider, RenderCTSession } from '../lib/gpu-volume-data';
+import type { GPUOverlaySourceProvider, GPUOverlaySources, RenderCTSession } from '../lib/gpu-volume-data';
+import { sharedVolumeMemoryBudget, volumeMemoryRequest, type VolumeMemoryLease, type VolumeMemoryRequest } from '../lib/volume-memory-budget';
 import { nativeSliceMetadata } from '../lib/ct-reslice';
 import { api, revisionUrl } from '../lib/api';
 import { moveNativeSlice, nativeSliceFor } from '../lib/interactive-review';
@@ -167,6 +168,7 @@ const planeLoading = ref(false),
 const gpuFamilyReady = ref(''),
   gpuPreparing = ref(false),
   gpuFallback = ref('');
+const gpuMemoryBytes = ref(0);
 const showSegmentation = ref(props.initialSnapshot?.layers.segmentation ?? true),
   volumeOptionsOpen = ref(false);
 const segmentOpacities = computed(() => props.structures.map(item => props.display[item.id]?.opacity ?? 0.5));
@@ -329,6 +331,7 @@ const coloredPlaneFrame = computed(() => (currentPlane.value ? colorCTOverlays(c
 const reviewReady = computed(
   () =>
     !!props.reviewActive &&
+    props.viewportActive !== false &&
     !!target.value &&
     !props.reviewDisabled &&
     (props.reviewTool === 'scissors'
@@ -391,6 +394,7 @@ let exactPlaneTimer = 0;
 let gpuController: AbortController | undefined,
   gpuSession: RenderCTSession | undefined,
   gpuPendingFamily = '';
+let gpuMemoryLease: VolumeMemoryLease | undefined, gpuMemoryRequest: VolumeMemoryRequest | undefined;
 let gpuBaseTimer = 0;
 let gpuBaseRetryFamily = '',
   gpuBaseRetries = 0;
@@ -499,6 +503,34 @@ function syncReview() {
     level: props.level ?? 40,
   });
 }
+function releaseGPUMemory() {
+  gpuMemoryLease?.release();
+  gpuMemoryLease = undefined;
+  gpuMemoryRequest = undefined;
+  gpuMemoryBytes.value = 0;
+}
+function releaseGPUVolume() {
+  scene?.clearGPUCT();
+  releaseGPUMemory();
+}
+function reserveGPUMemory(request: VolumeMemoryRequest) {
+  const lease = sharedVolumeMemoryBudget.reserve(`three:${viewportId}`, request);
+  gpuMemoryLease?.release();
+  gpuMemoryLease = lease;
+  gpuMemoryRequest = request;
+  gpuMemoryBytes.value = request.cpuBytes + request.gpuBytes + (request.overlayBytes ?? 0);
+}
+function reserveGPUMasks(...sources: (GPUOverlaySources | undefined)[]) {
+  if (!gpuMemoryRequest) throw new Error('The GPU volume has no memory reservation');
+  const unique = new Map<string, number>();
+  for (const source of sources)
+    for (const layer of source?.overlays ?? [])
+      for (const mask of [layer.current, layer.parent]) if (mask) unique.set(mask.descriptor.key, mask.descriptor.byte_length);
+  const bytes = [...unique.values()].reduce((sum, value) => sum + value, 0);
+  // Worker crops and the GPU atlas coexist. Padding, layout and palette storage
+  // fit under 1 MiB; upload slabs are included in the source reservation.
+  reserveGPUMemory({ ...gpuMemoryRequest, overlayBytes: bytes ? bytes * 2 + 1024 ** 2 : 0 });
+}
 /** Upload immutable data once; native navigation below changes metadata only. */
 async function prepareGPUPlane() {
   clearTimeout(gpuBaseTimer);
@@ -521,7 +553,7 @@ async function prepareGPUPlane() {
     maskError.value = '';
     atlasFamilyReady.value = '';
     volumeMaskSourceIds.value = [];
-    scene?.clearGPUCT();
+    releaseGPUVolume();
     gpuSession = session;
     gpuBaseRetryFamily = '';
     gpuBaseRetries = 0;
@@ -536,7 +568,7 @@ async function prepareGPUPlane() {
       gpuController?.abort();
       gpuPendingFamily = '';
       gpuPreparing.value = false;
-      scene?.clearGPUCT();
+      releaseGPUVolume();
       gpuFamilyReady.value = '';
       volumeFamilyReady.value = '';
       maskFamilyReady.value = '';
@@ -554,6 +586,7 @@ async function prepareGPUPlane() {
   if (volumeMaskSourceIds.value.length && maskFamilyReady.value !== maskFamily) {
     // Drop a disabled/stale union immediately, before any replacement fetch.
     scene.clearGPUOverlays();
+    if (gpuMemoryRequest) reserveGPUMasks();
     volumeMaskSourceIds.value = [];
     gpuFamilyReady.value = '';
     maskFamilyReady.value = '';
@@ -561,6 +594,7 @@ async function prepareGPUPlane() {
   }
   if (!wantPlane && !wantMask && atlasFamilyReady.value) {
     scene.clearGPUOverlays();
+    if (gpuMemoryRequest) reserveGPUMasks();
     gpuFamilyReady.value = '';
     maskFamilyReady.value = '';
     atlasFamilyReady.value = '';
@@ -611,6 +645,7 @@ async function prepareGPUPlane() {
     if (volumeFamilyReady.value !== rawFamily || !scene.gpuCTReady) {
       const source = await session.getGPUVolume(controller.signal);
       if (!current()) return;
+      reserveGPUMemory(volumeMemoryRequest(source.descriptor, 'three'));
       await scene.prepareGPUCT(source, controller.signal);
       if (!current()) return;
       volumeFamilyReady.value = rawFamily;
@@ -618,6 +653,7 @@ async function prepareGPUPlane() {
     }
     if (!wantPlane && !wantMask) {
       scene.clearGPUOverlays();
+      reserveGPUMasks();
       gpuFamilyReady.value = '';
       maskFamilyReady.value = '';
       atlasFamilyReady.value = '';
@@ -646,6 +682,7 @@ async function prepareGPUPlane() {
     if (wantMask) {
       // The small display union can be shown before optional native colored
       // plane labels finish their independent WAN download.
+      reserveGPUMasks(extraMasks);
       await scene.prepareGPUOverlays({ overlays: [] }, [], controller.signal, extraMasks);
       if (!current()) return;
       volumeMaskSourceIds.value = extraMasks!.overlays.map(layer => layer.id);
@@ -654,6 +691,7 @@ async function prepareGPUPlane() {
     }
     const planeResult = await planePromise;
     if (!current()) return;
+    reserveGPUMasks(planeResult.masks, extraMasks);
     const planeFits = await scene.prepareGPUOverlays(
       planeResult.masks,
       (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })),
@@ -690,6 +728,8 @@ async function prepareGPUPlane() {
     atlasFamilyReady.value = '';
     volumeMaskSourceIds.value = [];
     scene.clearGPUOverlays();
+    if (scene.gpuCTReady && gpuMemoryRequest) reserveGPUMasks();
+    else releaseGPUMemory();
     gpuFallback.value = reason instanceof Error ? reason.message : 'GPU volume unavailable; using local slices.';
     if (wantMask) maskError.value = `Volume mask unavailable: ${gpuFallback.value} The masked volume stays hidden. Choose fewer segments or retry.`;
     if (needsVolume.value && (volumeFamilyReady.value !== rawFamily || !scene.gpuCTReady)) {
@@ -983,6 +1023,7 @@ onMounted(() => {
     );
     scene.onGPUCTInvalidated = reason => {
       gpuController?.abort();
+      releaseGPUMemory();
       gpuFamilyReady.value = '';
       volumeFamilyReady.value = '';
       maskFamilyReady.value = '';
@@ -1021,6 +1062,7 @@ onBeforeUnmount(() => {
   loadId++;
   planeLoadId++;
   gpuController?.abort();
+  releaseGPUVolume();
   maskSources.dispose();
   clearTimeout(gpuBaseTimer);
   cancelAnimationFrame(requestFrame);
@@ -1127,8 +1169,13 @@ watch(
   () => props.viewportActive,
   active => {
     if (active !== false) scene?.setPoint(props.point);
-    else void setExpanded(false, false);
+    else {
+      gpuController?.abort();
+      releaseGPUVolume();
+      void setExpanded(false, false);
+    }
     syncReview();
+    void prepareGPUPlane();
   },
 );
 watch(
@@ -1308,6 +1355,7 @@ defineExpose({
     :data-volume-window="renderVolumeSettings.signal_window.window"
     :data-volume-level="renderVolumeSettings.signal_window.level"
     :data-volume-invert="renderVolumeSettings.signal_window.invert"
+    :data-volume-memory-bytes="gpuMemoryBytes"
     :style="planeLayout ? { '--review-scene-top': `${reviewSceneTop}px` } : undefined"
     :data-ct-plane-visible="needsPlane"
     :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"

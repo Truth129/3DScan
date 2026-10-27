@@ -342,12 +342,23 @@ Use **Expand ↗** in the top-right corner of the 3D view to fill the screen.
 volume mask and anatomy controls stay in place. This also works in review and
 the portable offline viewer.
 
-**Cornerstone3D is the only 2D CT viewer.** It reuses the resident CT worker
-through a custom image loader. WebGL is required: rendering failures show an
-error and **Retry**, which rebuilds the affected viewport without downloading
-the CT again. The custom slice renderer and server PNG routes are removed. The current bridge
-provides GPU slice viewing and review integration; direct browser DICOM loading
-and a full Cornerstone volume/MPR migration remain later stages. See
+**Cornerstone3D is the only 2D CT viewer.** Once the full CT is cached, one
+native Cornerstone volume supplies all three MPR views without another CT
+download. Rotatable crosshairs link the planes. **Projection** selects MPR,
+MIP or MinIP, with a slab thickness in millimetres; overlays show the centre
+slice during slab projection and drawing is paused. **Fill**, **Outline**,
+segment colours and the existing overlay picker control independent labels.
+
+Native review locks the planes to the source grid for point, box, scribble and
+lasso corrections. Preview, sheared and over-budget scans use Cornerstone stack
+views from the shared worker. Sheared native planes are orthogonalized for
+display only; gestures still map to original source voxels. WebGL errors show
+**Retry**, which rebuilds rendering from the resident CT session.
+
+The 2D and Three.js CT layers share a memory budget. Hidden views release their
+volume resources; the worker keeps the source for local reuse. If native MPR
+cannot fit, frame navigation remains available. The Three.js 3D scene and its
+portable export continue using the existing rendering pipeline. See
 [the Cornerstone plan](docs/CORNERSTONE_PLAN.md) and
 [the new-segment workflow](docs/NNINTERACTIVE_PLAN.md).
 

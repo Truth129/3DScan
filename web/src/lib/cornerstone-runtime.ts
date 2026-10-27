@@ -15,7 +15,7 @@ export function cornerstoneFrameCacheStats() {
   return { images: records.size, huBytes: [...records.values()].reduce((bytes, record) => bytes + record.frame.hu.byteLength, 0) };
 }
 
-async function libraries(): Promise<Libraries> {
+export async function cornerstoneLibraries(): Promise<Libraries> {
   if (!initialization)
     initialization = (async () => {
       // Neither package is downloaded or evaluated until the CT viewer first opens.
@@ -143,7 +143,7 @@ export class CornerstoneFrameViewport {
   }
 
   static async create(element: HTMLDivElement, callbacks: CornerstoneCallbacks = {}) {
-    return new CornerstoneFrameViewport(element, await libraries(), callbacks);
+    return new CornerstoneFrameViewport(element, await cornerstoneLibraries(), callbacks);
   }
 
   get canvas() {

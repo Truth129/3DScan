@@ -83,6 +83,34 @@ describe('interactive CT review geometry and generations', () => {
     const ras = pixelToRas(meta.pixel_to_ras, 9, 14);
     expect(visibleReviewPrompts([{ id: 'a', ras, include: false }], meta, 0.5)[0]).toMatchObject({ x: 9.5, y: 14.5 });
   });
+  it('uses physical distance to a rotated MPR plane when projecting point prompts', () => {
+    const c = Math.SQRT1_2;
+    const meta: SliceMeta = {
+      plane: 'axial',
+      width: 100,
+      height: 80,
+      position_mm: 30,
+      extent_mm: [100, 80],
+      pixel_to_ras: [
+        [c, 0, -c, 10],
+        [0, 1, 0, 20],
+        [c, 0, c, 30],
+        [0, 0, 0, 1],
+      ],
+    };
+    const ras = pixelToRas(meta.pixel_to_ras, 12, 22);
+    const markers = visibleReviewPrompts(
+      [
+        { id: 'on', ras, include: true },
+        { id: 'off', ras: [ras[0] + 3, ras[1], ras[2]], include: false },
+      ],
+      meta,
+      0.5,
+    );
+    expect(markers.map(marker => marker.id)).toEqual(['on']);
+    expect(markers[0].x).toBeCloseTo(12.5, 10);
+    expect(markers[0].y).toBeCloseTo(22.5, 10);
+  });
   it('keeps oblique/reflected native annotations on the exact source plane', () => {
     const affine = [
       [0, -2, 0.2, 80],

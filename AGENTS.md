@@ -116,7 +116,8 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 
 ## State on 27 October 2026
 
-- **Branch:** `expansion` is pushed, and CI is green on Python 3.14 and the web job.
+- **Branch:** `expansion`; the Cornerstone phase 1/2 changes are local and unpushed.
+  The earlier CI baseline is green on Python 3.14 and the web job.
 - **Live release:** `ct-hardening-20261027` (commit `971b05c`, CT-only).
 - **Library:** reset to empty at the user's request. The previous library is at
   `.runtime/archive/data-20261027T143742Z`, waiting for the user to delete it.
@@ -138,10 +139,11 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 
 ## Next steps
 
-1. **Cornerstone refactor**, phase 2 (native volume MPR). Phase 1 is complete
-   in the checkout: Cornerstone-only slices, explicit Retry and no PNG routes.
-   Production remains the frozen CT release. Details and design constraints are
-   in `docs/CORNERSTONE_PLAN.md`.
+1. **Cornerstone refactor**, phases 1 and 2 are implemented in the checkout:
+   Cornerstone-only slices, native volume MPR, slabs/crosshairs/labelmaps, shared
+   memory budgeting and exact sheared-stack review. Native GPU qualification
+   requires user approval; patient review is user-only. Production remains the
+   frozen CT release. See `docs/CORNERSTONE_PLAN.md` before further viewer work.
 2. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SEG/SR export, which adds a dependency to the pinned runtime
