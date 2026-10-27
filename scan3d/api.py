@@ -313,7 +313,8 @@ def create_app(settings: Settings | None = None):
     @app.get("/api/health")
     def health():
         from .doctor import diagnose
-        return {"status": "ok", "worker": bool(service.thread and service.thread.is_alive()),
+        lanes = {lane: thread.is_alive() for lane, thread in service.threads.items()}
+        return {"status": "ok", "worker": bool(lanes) and all(lanes.values()), "lanes": lanes,
                 "gpu": diagnose(live=False), "version": __version__}
 
     @app.get("/api/cases")

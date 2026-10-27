@@ -101,7 +101,7 @@ def status() -> dict:
     """Lightweight availability, with no torch import, GPU probe, or local paths.
 
     File presence is checked here; checkpoint integrity and the explicitly
-    selected R9700 are verified by the GPU worker before any prediction.
+    selected R9700 are verified by the worker process before any prediction.
     """
     versions = {}
     for name in ("nnInteractive", "nninteractive-client"):
@@ -188,7 +188,12 @@ def _summary(before: np.ndarray, after: np.ndarray, affine: np.ndarray) -> dict:
 
 
 class InteractiveRuntime:
-    """Owned by the single GPU worker; keep one loaded model and CT between prompts."""
+    """Keep one loaded model and CT between prompts, on one thread.
+
+    The service runs this engine inside the supervised worker process from
+    `interactive_worker`, never in the API process. Validation scripts may
+    still run it directly in their own process.
+    """
 
     def __init__(self):
         self._session = None

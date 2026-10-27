@@ -387,13 +387,20 @@ Source hashes record the exact processing code and downloaded model checkpoints.
 ## Architecture and validation
 
 - FastAPI + SQLite persists case, job, revision and assisted-review draft records. A filesystem lock
-  enforces one worker across API and CLI processes; jobs interrupted by restart
-  remain retryable and completed conversion/inference stages are reused.
-- Assisted review shares that queue with TotalSegmentator and keeps one model
-  and CT warm for successive Apply batches. Undo replays from the saved original
-  mask using recorded batch boundaries when needed. Warm interactive GPU state is released before TotalSegmentator
-  starts. Draft generations and active-revision checks prevent stale results
-  from replacing another correction; accepted revisions record point history,
+  enforces one worker set across API and CLI processes. Its GPU lane runs
+  TotalSegmentator and nnInteractive one job at a time. Its CPU lane runs
+  preparation, direct edits, saves, refinement, Slicer imports and include-all,
+  which therefore do not wait behind a segmentation. Each lane takes review work
+  before queued batch work. Jobs interrupted by restart remain retryable, and completed
+  conversion/inference stages are reused.
+- Assisted review keeps one model and CT warm for successive Apply batches in a
+  supervised worker process; the API process never imports torch. A crash or
+  hang fails only that job, and the next Apply starts a fresh worker. Cancelled
+  inference stops cooperatively, or the worker is killed after 10 s. Undo
+  replays from the saved original mask using recorded batch boundaries when
+  needed. The worker exits, returning its VRAM, before TotalSegmentator starts.
+  Draft generations and active-revision checks prevent stale results from
+  replacing another correction; accepted revisions record point history,
   model/checkpoint identity, device, timings and exact voxel/volume changes.
 - nibabel/SimpleITK and full affine transforms preserve patient geometry. Meshes
   use glTF metres; API coordinates and measurements use millimetres/millilitres.

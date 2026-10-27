@@ -15,6 +15,30 @@ class ReviewConflict(ValueError):
     """The reviewer must reload state before retrying a stale mutation."""
 
 
+LANES = ("gpu", "cpu")
+# A reviewer is waiting on these; every other kind is queued batch work.
+INTERACTIVE_KINDS = frozenset({"review_predict", "review_accept"})
+
+
+def job_lane(job):
+    """TotalSegmentator and nnInteractive inference share the one GPU lane.
+
+    Direct paint/erase/scissors, relationship-only Apply, acceptance, image
+    preparation, refinement, Slicer import and include-all never touch the
+    GPU, so they run on the CPU lane rather than behind minutes of inference.
+    """
+    # Claims classify every queued row; a malformed one fails in its job, not here.
+    payload = job.get("payload") or {}
+    inference = job["kind"] == "review_predict" and not (
+        payload.get("relationship_only") or payload.get("method") == "direct")
+    return "gpu" if job["kind"] == "segment" or inference else "cpu"
+
+
+def job_priority(job):
+    """Interactive review work runs before queued batch work in each lane."""
+    return 0 if job["kind"] in INTERACTIVE_KINDS else 1
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -477,13 +501,28 @@ class Store:
                    revision_id=None, created_at=now(), payload=payload, cancel_requested=False)
         return self.save("jobs", job)
 
-    def claim(self):
+    def claim(self, lane=None):
+        """Start a lane's most urgent job; queue order breaks priority ties.
+
+        Without a lane, synchronous callers claim across both lanes. An idle
+        lane only reads; the write lock is taken when there is a job to claim.
+        """
+        if lane is not None and lane not in LANES:
+            raise ValueError("Unknown worker lane")
+
+        def next_job(con):
+            queued = [json.loads(row["data"]) for row in
+                      con.execute("SELECT data FROM jobs WHERE status='queued' ORDER BY rowid")]
+            return min((job for job in queued if lane is None or job_lane(job) == lane),
+                       key=job_priority, default=None)
+
         with self.connection() as con:
-            con.execute("BEGIN IMMEDIATE")
-            row = con.execute("SELECT data FROM jobs WHERE status='queued' ORDER BY rowid LIMIT 1").fetchone()
-            if not row:
+            if next_job(con) is None:
                 return None
-            job = json.loads(row["data"])
+            con.execute("BEGIN IMMEDIATE")
+            job = next_job(con)
+            if job is None:
+                return None
             job.update(status="running", stage="Starting", started_at=now())
             con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job["id"]))
             return job

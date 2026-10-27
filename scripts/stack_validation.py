@@ -392,6 +392,104 @@ def interactive(args):
             write_json(output / "report.json", report)
 
 
+def interactive_worker(args):
+    """The supervised child on the R9700: cold, warm, cancel, kill, recovery and release.
+
+    This harness process stays torch-free, like the API process. Cancellation
+    and the kill act on the first per-point message, while that point's
+    inference runs on the GPU.
+    """
+    output = new_output(args.output)
+    report = {"status": "running", "provenance": provenance(), "harness_pid": os.getpid(), "steps": []}
+    write_json(output / "report.json", report)
+    worker = None
+    try:
+        import signal
+        import numpy as np
+        from scan3d import imaging
+        from scan3d.interactive_worker import InteractiveWorker
+        from scan3d.segmentation import _Resources
+        ct, baseline = args.ct.resolve(), args.mask.resolve()
+        hashes = [sha256(ct), sha256(baseline)]
+        image, affine = imaging._image(ct)
+        mask, _, _ = imaging._binary(baseline, image, affine)
+        seeds = seed_points(mask, affine)
+        del mask
+        prompts = [{"id": "worker-seed-" + str(i), "kind": "point", "include": True,
+                    "ras": (affine @ np.r_[seed, 1])[:3].tolist()} for i, seed in enumerate(seeds)]
+        vram = _Resources(track_r9700=True).vram_path
+        worker = InteractiveWorker(args.engine)
+
+        def step(name, selected, session, action=None):
+            messages, acted = [], []
+
+            def progress(message):
+                messages.append(message)
+                print(message, flush=True)
+                if action and not acted and message.startswith("Refining"):
+                    acted.append(time.perf_counter())
+                    if action == "kill":
+                        os.kill(worker.pid, signal.SIGKILL)
+
+            entry = {"name": name, "pid_before": worker.pid}
+            started = time.perf_counter()
+            try:
+                entry["provenance"] = worker.predict(ct, baseline, selected, output / (name + ".nii.gz"), progress,
+                                                     lambda: action == "cancel" and bool(acted), session)
+                entry["outcome"] = "completed"
+            except Exception as exc:
+                entry.update(outcome=type(exc).__name__, error=str(exc))
+            entry.update(wall_seconds=time.perf_counter() - started, pid_after=worker.pid, progress=messages,
+                         seconds_after_action=time.perf_counter() - acted[0] if acted else None,
+                         vram_used_bytes=int(vram.read_text()) if vram else None)
+            report["steps"].append(entry)
+            write_json(output / "report.json", report)
+            return entry
+
+        with gpu_lock():
+            report["idle_vram_used_bytes"] = int(vram.read_text()) if vram else None
+            cold = step("cold", prompts[:1], "worker-validation")
+            warm = step("warm", prompts, "worker-validation")
+            cancelled = step("cancel", prompts, "worker-validation-cancel", "cancel")
+            killed = step("kill", prompts, "worker-validation-kill", "kill")
+            recovered = step("recover", prompts[:1], "worker-validation")
+            pid, started = worker.pid, time.perf_counter()
+            worker.release()
+            report["release"] = {"pid": pid, "seconds": time.perf_counter() - started,
+                                 "vram_used_bytes": int(vram.read_text()) if vram else None,
+                                 "child_exited": pid is not None and not Path(f"/proc/{pid}").exists()}
+        provenance_of = lambda entry: entry.get("provenance") or {}
+        report["checks"] = checks = {
+            "cold_load_in_child": cold["outcome"] == "completed" and cold["pid_after"] not in (None, os.getpid()),
+            "warm_reuses_child_and_prefix": (warm["outcome"] == "completed" and warm["pid_after"] == cold["pid_after"]
+                                             and provenance_of(warm).get("reused_prompt_prefix") is True
+                                             and provenance_of(warm).get("predictions_this_request") == 1),
+            "cancel_is_cooperative": (cancelled["outcome"] == "SegmentationCancelled"
+                                      and cancelled["pid_after"] == cold["pid_after"]),
+            "kill_fails_only_its_request": (killed["outcome"] == "RuntimeError" and "SIGKILL" in killed["error"]
+                                            and killed["pid_after"] is None),
+            "fresh_child_after_kill": (recovered["outcome"] == "completed"
+                                       and recovered["pid_after"] not in (None, cold["pid_after"])),
+            "release_stops_child": report["release"]["child_exited"],
+            "harness_never_imported_torch": "torch" not in sys.modules,
+            "sources_unchanged": hashes == [sha256(ct), sha256(baseline)],
+        }
+        failed = [name for name, passed in checks.items() if not passed]
+        if failed:
+            raise RuntimeError("Supervised worker checks failed: " + ", ".join(failed))
+        report["status"] = "passed"
+    except BaseException as exc:
+        report.update(status="failed", error=str(exc))
+        raise
+    finally:
+        try:
+            if worker is not None:
+                worker.release()
+        finally:
+            report.update(loaded_libraries())
+            write_json(output / "report.json", report)
+
+
 def postprocess(args):
     output = new_output(args.output)
     report = {"status": "running", "provenance": provenance(), "builds": []}
@@ -474,6 +572,11 @@ def main(argv=None):
     for flag in ("ct", "mask", "output"):
         p.add_argument("--" + flag, type=Path, required=True)
     p.set_defaults(run=interactive)
+    p = commands.add_parser("interactive-worker")
+    for flag in ("ct", "mask", "output"):
+        p.add_argument("--" + flag, type=Path, required=True)
+    p.add_argument("--engine", default="scan3d.interactive:InteractiveRuntime", help=argparse.SUPPRESS)
+    p.set_defaults(run=interactive_worker)
     p = commands.add_parser("postprocess")
     for flag in ("ct", "segment", "output"):
         p.add_argument("--" + flag, type=Path, required=True)

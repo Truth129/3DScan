@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1480" viewBox="0 0 1460 1480" role="img" aria-labelledby="title description">
 <title id="title">3DScan system architecture</title>
-<desc id="description">Remote browser uses Cornerstone3D and Three.js with client RAM and GPU caches. Private HTTPS connects it to FastAPI on the workstation. One SQLite-backed worker prepares images, runs optional segmentation and corrections, and builds native-mask measurements and surfaces. ROCm inference uses the workstation GPU. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG. Live deployment is CT-only; static MRI is implemented on the expansion branch.</desc>
+<desc id="description">Remote browser uses Cornerstone3D and Three.js with client RAM and GPU caches. Private HTTPS connects it to FastAPI on the workstation. One locked SQLite-backed worker set runs a GPU lane for segmentation and nnInteractive corrections, one job at a time, and a CPU lane that prepares images, applies direct edits, saves corrections and builds native-mask measurements and surfaces. ROCm inference uses the workstation GPU from child processes. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG. Live deployment is CT-only; static MRI is implemented on the expansion branch.</desc>
 <defs><marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L11 6L1 11Z" fill="#9bb7db"/></marker></defs>
 <style>text{font-family:Inter,"DejaVu Sans",Arial,sans-serif}.title{fill:#edf2fc;font-weight:650;font-size:34px}.subtitle{fill:#a5b2c9;font-size:17px}.lane{font-size:14px;font-weight:650;letter-spacing:1.5px;fill:#93a8c9}.card-title{fill:#f0f4fc;font-size:20px;font-weight:650}.body{fill:#b8c4d8;font-size:16px}.edge-label{fill:#a7bddb;font-size:13px}.small{fill:#b8c4d8;font-size:14px}.edge{fill:none;stroke:#9bb7db;stroke-width:2;stroke-linejoin:round;marker-end:url(#arrow)}.both{marker-start:url(#arrow)}</style>
 <rect width="1460" height="1480" fill="#0c111a"/>
@@ -10,7 +10,7 @@
 <rect x="40" y="140" width="1380" height="260" rx="15" fill="#101824" stroke="#29364b"/>
 <text x="64" y="170" class="lane">REMOTE DESKTOP BROWSER  ·  CLIENT RAM + CLIENT GPU</text>
 <rect x="40" y="460" width="1380" height="430" rx="15" fill="#101824" stroke="#29364b"/>
-<text x="64" y="490" class="lane">WORKSTATION  ·  FASTAPI + SINGLE WORKER + ROCm INFERENCE</text>
+<text x="64" y="490" class="lane">WORKSTATION  ·  FASTAPI + GPU AND CPU WORKER LANES + ROCm INFERENCE</text>
 <rect x="40" y="980" width="1380" height="170" rx="15" fill="#101824" stroke="#29364b"/>
 <text x="64" y="1010" class="lane">DURABLE STATE  ·  SQLITE + FILESYSTEM</text>
 <rect x="40" y="1210" width="1380" height="145" rx="15" fill="#101824" stroke="#29364b"/>
@@ -75,16 +75,16 @@
 <text x="89" y="617" class="body">Local service behind private access</text>
 <rect x="535" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
 <rect x="535" y="527" width="4" height="96" rx="2" fill="#7194c4"/>
-<text x="554" y="546" class="card-title">One queued background worker</text>
-<text x="554" y="573" class="body">SQLite job queue + one process lock</text>
-<text x="554" y="595" class="body">Progress, cancellation and recovery</text>
-<text x="554" y="617" class="body">Open, segment, refine and review jobs</text>
+<text x="554" y="546" class="card-title">Two worker lanes, one lock</text>
+<text x="554" y="573" class="body">GPU lane: segment + nnInteractive</text>
+<text x="554" y="595" class="body">CPU lane: open, edits, saves, refine</text>
+<text x="554" y="617" class="body">Progress, cancellation and recovery</text>
 <rect x="1000" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
 <rect x="1000" y="527" width="4" height="96" rx="2" fill="#c7a16d"/>
 <text x="1019" y="546" class="card-title">ROCm inference · R9700</text>
 <text x="1019" y="573" class="body">TotalSegmentator + nnU-Net</text>
-<text x="1019" y="595" class="body">Optional nnInteractive corrections</text>
-<text x="1019" y="617" class="body">PyTorch runs on the workstation GPU</text>
+<text x="1019" y="595" class="body">nnInteractive in a supervised process</text>
+<text x="1019" y="617" class="body">PyTorch runs only in child processes</text>
 <rect x="70" y="700" width="390" height="145" rx="10" fill="#172131" stroke="#3b4a62"/>
 <rect x="70" y="712" width="4" height="121" rx="2" fill="#7194c4"/>
 <text x="89" y="731" class="card-title">1. Validate and prepare source</text>
