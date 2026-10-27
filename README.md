@@ -261,6 +261,22 @@ explains its noncommercial license terms.
    editing and three-view CT review remain in the local app. Save or discard a
    correction draft before exporting. Export labels use pseudonymous case IDs.
 
+**Model agreement** at the top of **Revision history** shows how far the
+accepted masks moved from the model. Each structure is compared with its saved
+TotalSegmentator output, traced through the revision history; a later run that
+replaced a structure becomes its new original. **Dice** is voxel overlap (1 is
+identical), **HD95** is the larger 95th-percentile distance between the two
+surfaces in millimetres, exact on oblique and sheared scans, and **ΔV** is the
+accepted volume minus the original. **All cases ↗** pools the active revision of
+each case marked Reviewed or Corrected, by task and structure: how often the
+model was accepted unchanged, mean and median Dice and mean |ΔV|. Synthetic demo
+cases compare with their phantom, are labelled and form a separate pool.
+These numbers measure reviewer edits, not ground truth: an uncorrected mask can
+still be wrong. Review status covers a whole revision, so a structure nobody
+inspected counts as accepted. HD95 ignores the farthest 5% of the surface, so a
+small local fix can show 0 mm while Dice is below 1; the voxel counts show it.
+Reviewer-added segments have no model original and are not compared.
+
 nnInteractive uses a pretrained model for interactive inference; it does not
 train or fine-tune model weights. The initial segmentation is loaded unchanged
 until Apply requests a prediction. AutoZoom is enabled by default. **Start empty**

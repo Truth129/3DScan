@@ -551,6 +551,21 @@ def create_app(settings: Settings | None = None):
         result = reference_values(selected, service.settings.data_dir / "cinematic-cache")
         return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/agreement")
+    def revision_agreement_report(case_id: str, revision_id: str):
+        from .agreement import revision_agreement
+        # Agreement measures what a reviewer accepted. A candidate alias is an
+        # unsaved proposal, never an accepted revision.
+        if revision_id.startswith("review-"):
+            raise NotFound("Save the correction before measuring agreement")
+        return JSONResponse(revision_agreement(service, case_id, revision_id),
+                            headers={"Cache-Control": "private, no-store"})
+
+    @app.get("/api/agreement")
+    def agreement_summary():
+        from .agreement import aggregate_agreement
+        return JSONResponse(aggregate_agreement(service), headers={"Cache-Control": "private, no-store"})
+
     @app.post("/api/cases/{case_id}/refinements")
     def refine(case_id: str, body: Refine):
         parent = service.store.revision(case_id, body.revision_id)
