@@ -58,7 +58,7 @@ select = [
 "tests/**" = ["F401", "F811"]
 
 [tool.ruff.format]
-# For the future one-time reformat commit; `ruff format` has not been run on this code.
+# Applied in the one-time reformat commit (see .git-blame-ignore-revs); CI and pre-commit enforce it.
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"

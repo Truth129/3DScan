@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint --max-warnings=0 .",
+    "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build": "vue-tsc --noEmit && vite build && vite build --config vite.offline.config.ts",
     "test": "vitest run",

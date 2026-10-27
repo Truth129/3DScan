@@ -1,6 +1,7 @@
-// Layout for web/, matching the current style (single quotes, bare arrow parameters) at the
-// same width as ruff. Not applied yet: the one-time reformat lands as its own commit, listed
-// in .git-blame-ignore-revs. Until then `npm run format:check` reports nearly every file.
+// Layout for web/ (single quotes, bare arrow parameters) at the same width as ruff. Applied in
+// the one-time reformat commit listed in .git-blame-ignore-revs; CI and pre-commit enforce it.
+// Vue drops whitespace between elements once Prettier breaks it onto a new line, so markup
+// that relies on a space between inline elements keeps it behind <!-- prettier-ignore -->.
 /** @type {import('prettier').Config} */
 export default {
   printWidth: 160,

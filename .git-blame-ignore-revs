@@ -4,3 +4,6 @@
 #
 # Reserved for the planned one-time reformat (`ruff format`, then Prettier in web/), which
 # lands as its own commit so it doesn't bury other work. Add its full SHA below once merged.
+
+# Reformat Python with ruff and web code with Prettier
+0a1ad92edbea34b379863925f45a1afb01d4c77c

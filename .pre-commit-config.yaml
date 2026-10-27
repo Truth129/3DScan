@@ -1,19 +1,15 @@
-# Lint staged files on commit after a one-time `pre-commit install` (per clone; not done for
-# you), or check everything with `pre-commit run --all-files`. The web hooks use
+# Lint and format staged files on commit after a one-time `pre-commit install` (per clone; not
+# done for you), or check everything with `pre-commit run --all-files`. The web hooks use
 # web/node_modules, so run `npm ci` in web/ first.
 #
-# Formatting is not enforced yet. Until the one-time reformat commit, ruff-format and
-# prettier run only on request, check-only, so ordinary commits are never rewritten:
-#   pre-commit run --hook-stage manual --all-files
-# The reformat commit removes `stages: [manual]` from both hooks.
+# The formatters fix files in place: re-add the changed files and commit again. CI runs the
+# same checks (`ruff format --check`, `npm run format:check`).
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.0 # keep in step with the `lint` extra in pyproject.toml
     hooks:
       - id: ruff-check
       - id: ruff-format
-        args: [--check]
-        stages: [manual]
 
   - repo: local
     hooks:
@@ -23,8 +19,7 @@ repos:
         entry: bash -c 'cd web && exec ./node_modules/.bin/eslint --max-warnings=0 --no-warn-ignored "${@#web/}"' --
         files: ^web/.+\.(js|ts|vue)$
       - id: prettier
-        name: prettier --check (web)
+        name: prettier (web)
         language: system
-        entry: bash -c 'cd web && exec ./node_modules/.bin/prettier --check --ignore-unknown "${@#web/}"' --
+        entry: bash -c 'cd web && exec ./node_modules/.bin/prettier --write --ignore-unknown "${@#web/}"' --
         files: ^web/
-        stages: [manual]

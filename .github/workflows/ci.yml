@@ -43,6 +43,8 @@ jobs:
           python -m pip install --no-deps "$(grep -m1 '^TotalSegmentator==' requirements/rocm10-py314.in)"
       - name: Lint
         run: ruff check --output-format=github
+      - name: Format
+        run: ruff format --check
       - name: Test
         run: pytest -ra
 
@@ -64,6 +66,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npm run format:check
       - run: npx vue-tsc --noEmit
       - run: npx vitest run
       - run: npx vite build
