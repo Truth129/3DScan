@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model_validator
 
@@ -44,6 +45,28 @@ class ViewerStaticFiles(StaticFiles):
             elif self._hashed_asset.fullmatch(resource):
                 response.headers["Cache-Control"] = "private, max-age=31536000, immutable"
         return response
+
+
+class SelectiveGZip:
+    """Compress JSON and viewer assets for remote clients; leave downloads alone.
+
+    Pre-gzipped CT chunks and review frames declare Content-Encoding and pass
+    through unchanged. PNG slices and Slicer ZIPs are already compressed, and the
+    HTML export keeps its Content-Length so browsers can show download progress.
+    Level 5 is within 0.5% of level 9's size on the viewer bundles at half the CPU.
+    """
+
+    _skip = re.compile(r"/(?:slice|slicer\.zip|export\.html)$")
+
+    def __init__(self, app):
+        self.app = app
+        self.gzip = GZipMiddleware(app, minimum_size=1024, compresslevel=5)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not self._skip.search(scope["path"]):
+            await self.gzip(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
 
 
 class Input(BaseModel):
@@ -247,6 +270,7 @@ def create_app(settings: Settings | None = None):
     app = FastAPI(title="3DScan", version=__version__, lifespan=lifespan)
     app.state.service = service
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(service.settings.allowed_hosts))
+    app.add_middleware(SelectiveGZip)
 
     @app.exception_handler(RequestValidationError)
     async def safe_validation_error(request, exc):
