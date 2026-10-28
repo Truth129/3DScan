@@ -15,7 +15,8 @@ Tailscale receiving deferred until a later configuration change.
 | Destination AE title | `SCAN3D` |
 | Allowed Mac address | `10.20.0.107` |
 | Mac calling AE title | `OsiriX-Mac` (case-sensitive) |
-| Private Orthanc API | `http://127.0.0.1:8044` |
+| Orthanc API / Explorer on workstation | `http://127.0.0.1:8044` |
+| Orthanc Explorer from the Mac | `http://10.20.0.3:8044/app/explorer.html` |
 
 In OsiriX add that destination under its DICOM locations and verify it, then
 select a series and use **DICOM Send**. Open the usual 3DScan app on this
@@ -23,9 +24,12 @@ workstation, choose **Import → Orthanc archive**, search, select the source
 series and choose **Import selected series**. Then choose acquisition labels
 and **Open CT**. Import and opening run on the CPU without starting segmentation.
 
-The API stays on loopback; `8044` is not the DICOM sending port. The main app's
-current browser addresses are loopback `http://127.0.0.1:9010` and its existing
-private HTTPS tailnet address. A new LAN browser endpoint is not enabled here.
+Port `8044` serves Orthanc's API and Explorer; `4243` receives DICOM. The user
+enabled authenticated remote HTTP access and confirmed Explorer works from the
+Mac. Its current HTTP bind is only `["0.0.0.0"]`, with `RemoteAccessAllowed` and
+`AuthenticationEnabled` both true. Do not also bind `127.0.0.1`: it overlaps
+the wildcard and causes startup failure. The main 3DScan app's browser addresses
+remain loopback `http://127.0.0.1:9010` and its existing private HTTPS tailnet URL.
 
 ## Receiver activation
 
@@ -51,8 +55,10 @@ OsiriX.
 
 Orthanc 1.13 has no DICOM interface-binding option. The user explicitly approved
 the existing any-address UFW TCP 4243 rule (IPv4/IPv6). Orthanc's sender AE/IP
-allowlist remains restricted to the Mac above. No other firewall rules were
-changed by the integration. The authenticated HTTP API remains loopback-only.
+allowlist remains restricted to the Mac above. The user later enabled an
+any-address UFW 8044 rule and remote HTTP access for Explorer. The preparation
+helper still defaults to loopback-only HTTP for a new receiver; it refuses to
+overwrite the user's changed configuration.
 
 If either machine's IP changes, review the destination and sender allowlist.
 Accepting the Mac through Tailscale also needs an explicit sender update.
