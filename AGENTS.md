@@ -256,9 +256,17 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    pixels with bounded per-mask memory and preserves old exports. Both lanes,
    CT-only policy and unchanged frontend/private HTTPS index pass; counts remain
    4 cases/22 revisions/41 jobs/10 reviews/4 image assets. Orthanc PID436143 is
-   unchanged. Activation triggered no DICOM send. Actual OsiriX display still
-   needs confirmation after an explicit fresh export. Audit/guarded rollback:
+   unchanged. Activation triggered no DICOM send. The user confirms all eight
+   segments now display in OsiriX; exact clinical alignment/editing remains
+   user qualification. Audit/guarded rollback:
    `.runtime/dicom-seg-combined-20261028T192927Z/`.
+   OsiriX Query/Retrieve is empty because its existing modality has
+   `AllowFind:false` and `AllowMove:false` in both file and live settings.
+   A guarded two-field update for that same Mac AE/IP is prepared, pending
+   approval; global permissions stay restricted. No service restart is needed.
+   Isolated synthetic C-FIND/C-MOVE, unknown-AE refusal and persisted restart
+   qualification pass; no host archive or Mac was contacted for the test.
+   Audit: `.runtime/orthanc-query-retrieve-20261028T193732Z/`.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification

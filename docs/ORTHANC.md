@@ -3,10 +3,9 @@
 The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is
-implemented and active. The per-frame compatibility update enables discovery,
-but OsiriX shows only one of eight masks from separate SEG objects. A combined
-multi-segment object update is now active after an approved idle app restart.
-Its actual OsiriX display still needs confirmation. The target is **OsiriX MD 14.3.0** on the local network, with
+implemented and active. The combined multi-segment object update is active after
+an approved idle app restart, and the user confirms all eight selected segments
+now display. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -106,6 +105,30 @@ overwriting previous source bytes. Restart recovery marks interrupted transfers
 retryable. Opening the CT preserves archive/content/manifest digests in its image
 source identity.
 
+## Querying Orthanc from OsiriX
+
+The receiver was initially configured for C-ECHO/C-STORE only. Configuration
+and live REST inspection confirm that the existing `osirix` modality has
+`AllowFind:false` and `AllowMove:false`. Therefore a reachable node can send
+images successfully while its C-FIND search is refused and appears empty in
+OsiriX. Sending from Orthanc or 3DScan is a separate operation.
+
+A two-field update is prepared, pending explicit approval: enable `AllowFind`
+and `AllowMove` only for the existing Mac AE/IP. Global always-allow flags,
+worklist, C-GET and storage commitment remain disabled. Save the change in the
+private configuration and hot-apply the full modality definition with local
+authenticated `PUT /modalities/osirix`; file-based REST updates alone disappear
+on restart. This needs no Orthanc or 3DScan restart. Audit/guarded rollback:
+`.runtime/orthanc-query-retrieve-20261028T193732Z/`.
+
+In OsiriX Query/Retrieve use the same node as DICOM Send: host `10.20.0.3`,
+port `4243`, called AE `SCAN3D`, and calling/listener AE `OsiriX-Mac`.
+Choose C-MOVE retrieval; Orthanc already knows the Mac's listener port `11112`.
+Port `8044` is the HTTP Explorer, not the DICOM query port. Clear restrictive
+date/name filters when checking a newly enabled query. See the official
+[Orthanc permissions guide](https://orthanc.uclouvain.be/book/faq/security.html)
+and [OsiriX PACS guide](https://osirixviewer.com/resources/pacs/).
+
 ## Export saved masks through Orthanc
 
 In a saved segmentation's toolbar choose **DICOM SEG…**, select the nonempty
@@ -176,6 +199,9 @@ needs confirmation after an explicit fresh export. Encoding version 3 is now
 active after an approved idle app restart; both lanes and aggregate counts pass.
 Orthanc and frontend assets are unchanged. Audit and prior backend snapshot:
 `.runtime/dicom-seg-combined-20261028T192927Z/`.
+The user subsequently confirms all eight segments now show in OsiriX. This
+qualifies basic multi-segment discovery/display; exact clinical alignment and
+editing/resave remain separate user qualification.
 
 The user approved activation, which installed the qualified packages/frontend
 and `osirix` allowlist and restarted idle 3DScan. Both lanes are healthy; all 19

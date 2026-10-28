@@ -262,7 +262,8 @@ requires an original classic CT imported through the configured archive.
 Synthetic API-to-Orthanc-to-OsiriX transport and prototype basic ROI display
 pass. The per-frame update enabled discovery, but the user reports only one
 of eight masks showing from separate SEG objects. The combined-instance update
-matches the prototype's multi-segment packaging; its display remains unconfirmed.
+matches the prototype's multi-segment packaging, and the user confirms all eight
+segments now display in OsiriX MD 14.3.0.
 Exact clinical alignment/editing remains user qualification. highdicom
 0.28.2 and pyjpegls 1.5.1 are pinned in the deployment lock. The integrated feature
 is qualified and active; [the runbook](ORTHANC.md) records runtime details.

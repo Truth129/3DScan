@@ -74,7 +74,8 @@ Segment identification uses the per-frame layout of the accepted prototype.
 All selected masks are packaged as separate named segments in one SEG instance,
 preserving overlaps without assembling a multi-mask volume in memory.
 After encoder updates, an explicit export creates fresh files; earlier exports
-remain retained. OsiriX display of this compatibility update needs confirmation.
+remain retained. The user confirms all eight selected segments now display in
+OsiriX MD 14.3.0. Exact clinical alignment and editing/resave remain user qualification.
 The integration is qualified and active; see the runbook for runtime details.
 
 ### Back up the case library
