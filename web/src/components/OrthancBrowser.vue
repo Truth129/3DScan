@@ -40,7 +40,19 @@ const previousJob = ref(readPreviousJob());
 const selected = computed(() => series.value.find(item => item.id === selectedId.value));
 const locked = computed(() => props.busy || importLoading.value || cancelLoading.value);
 const pending = computed(() => !!importJob.value && ['queued', 'running'].includes(importJob.value.status));
-const canImport = computed(() => !!selected.value && !orthancImportBlockReason(selected.value) && !locked.value && !pending.value);
+const canImport = computed(
+  () =>
+    !!status.value?.connected &&
+    !statusLoading.value &&
+    !connectionError.value &&
+    !searchLoading.value &&
+    !seriesLoading.value &&
+    !seriesError.value &&
+    !!selected.value &&
+    !orthancImportBlockReason(selected.value) &&
+    !locked.value &&
+    !pending.value,
+);
 let statusController: AbortController | undefined,
   searchController: AbortController | undefined,
   seriesController: AbortController | undefined,
@@ -81,6 +93,12 @@ function clearSeries() {
 async function connect() {
   if (locked.value) return;
   statusController?.abort();
+  searchController?.abort();
+  searchVersion++;
+  searchLoading.value = false;
+  searchError.value = '';
+  page.value = undefined;
+  clearSeries();
   const current = new AbortController(),
     version = ++statusVersion;
   statusController = current;
