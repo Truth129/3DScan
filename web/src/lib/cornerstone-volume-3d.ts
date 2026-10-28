@@ -473,8 +473,14 @@ export class CornerstoneVolume3D {
       resolve = yes;
       reject = no;
     });
-    const timer = setTimeout(() => this.fail(new Error('The experimental CT viewer did not present a frame.')), 15000);
-    this.pending = { promise, resolve, reject, timer };
+    // Cornerstone presents from requestAnimationFrame, which browsers pause for
+    // hidden tabs and collapsed panels. Only a visible, sized view can time out.
+    const expire = () => {
+      if (this.disposed || this.pending?.promise !== promise) return;
+      if (globalThis.document?.hidden || this.element.clientWidth <= 0 || this.element.clientHeight <= 0) this.pending.timer = setTimeout(expire, 15000);
+      else this.fail(new Error('The experimental CT viewer did not present a frame.'));
+    };
+    this.pending = { promise, resolve, reject, timer: setTimeout(expire, 15000) };
     try {
       this.engine.renderViewport(this.id);
     } catch (reason) {

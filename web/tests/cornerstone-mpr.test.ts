@@ -256,6 +256,19 @@ describe('shared native Cornerstone MPR ownership', () => {
     expect(engine.getViewports()).toHaveLength(1);
   });
 
+  it('closes a shared source whose engine lost its context so the next viewer gets a fresh engine', async () => {
+    const owner = await CornerstoneMPR.createSource(source(), { maxBytes: 1024 * 1024 });
+    const other = await CornerstoneMPR.createSource(source(), { maxBytes: 1024 * 1024 });
+    const lost = (id: string) => fake.core.eventTarget.dispatchEvent(Object.assign(new Event('lost'), { detail: { renderingEngineId: id } }));
+    lost('unrelated-engine');
+    lost(owner.id);
+    expect(owner.isDisposed).toBe(false); // Borrowers handle the event first.
+    await Promise.resolve();
+    expect(owner.isDisposed).toBe(true);
+    expect(other.isDisposed).toBe(false);
+    other.dispose();
+  });
+
   it('does not detach replacement MPR when an older attachment finishes after cancellation', async () => {
     const owner = await CornerstoneMPR.createSource(source(), { maxBytes: 1024 * 1024 });
     owners.push(owner);

@@ -219,6 +219,15 @@ export class CornerstoneMPR {
       cacheReservations.set(instance.id, options.maxBytes);
       cacheLimit(instance.libs.core);
       instance.engine = new instance.libs.core.RenderingEngine(instance.id);
+      // A lost shared context cannot be reused: Retry in any borrower would
+      // reattach to the dead engine. Close the source after borrowers have seen
+      // the event, so the next acquisition builds a fresh engine.
+      const { core } = instance.libs;
+      const lost = (event: Event) => {
+        if ((event as CustomEvent<{ renderingEngineId?: string }>).detail?.renderingEngineId === instance.id) queueMicrotask(() => instance.dispose());
+      };
+      core.eventTarget.addEventListener(core.Enums.Events.WEBGL_CONTEXT_LOST, lost);
+      instance.sourceListeners.push(() => core.eventTarget.removeEventListener(core.Enums.Events.WEBGL_CONTEXT_LOST, lost));
       if (options.signal) {
         const cancel = () => instance.dispose();
         options.signal.addEventListener('abort', cancel, { once: true });

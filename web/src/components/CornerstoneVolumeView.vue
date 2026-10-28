@@ -147,6 +147,9 @@ async function initialize() {
         viewer = undefined;
         ready.value = false;
         emit('ready', false);
+        // The shared source closed underneath this view (source change or a
+        // lost context). Reattach instead of showing "Preparing" forever.
+        if (!disposed && props.session && !props.session.isDisposed) queueMicrotask(() => void initialize());
       },
       onBeforeDispose: disposeFeatures,
     });
