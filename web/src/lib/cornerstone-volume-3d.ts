@@ -124,6 +124,9 @@ export class CornerstoneVolume3D {
   private listeners: (() => void)[] = [];
   private clipping: { plane: ReturnType<typeof vtkPlane.newInstance>; normal: Point; origin: Point }[] = [];
   private applyingCamera = false;
+  private ownedCamera?: CornerstoneVolumeCameraRAS;
+  private cameraUpdateQueued = false;
+  private cameraResetPending = false;
   private detachingFeatures = false;
   private ready = false;
   private volumeVisible = true;
@@ -337,12 +340,30 @@ export class CornerstoneVolume3D {
     const camera = () => {
       if (this.disposed) return;
       this.restoreCrop();
-      if (this.ready && !this.applyingCamera) this.options.onCamera?.(this.camera);
+      if (this.ready && !this.applyingCamera) this.queueCameraUpdate();
     };
+    const reset = this.nativeRenderer.onEvent(event => {
+      if (!event || typeof event !== 'object' || !('type' in event) || event.type !== 'ResetCameraEvent' || !this.ready || this.applyingCamera || this.disposed)
+        return;
+      // Shared-engine resize and Trackball's resize observer reset the fit,
+      // then reapply relative zoom/pan. That loses our physical scale and the
+      // clipping interval omitted by Core.getCamera(). Wait until the public
+      // reset sequence finishes before restoring the last intentional camera.
+      this.cameraResetPending = true;
+      this.queueCameraUpdate();
+    });
+    this.listeners.push(() => reset.unsubscribe());
     const rendered = (event: Event) => {
       if ((event as CustomEvent<{ viewportId: string }>).detail.viewportId !== this.id || this.disposed) return;
       this.frames++;
       try {
+        if (this.flushCameraUpdate()) {
+          // Usually the reset's microtask runs before this frame. If a custom
+          // engine delivered a frame synchronously, present the restored pose
+          // before resolving anyone waiting for a completed native render.
+          this.engine.renderViewport(this.id);
+          return;
+        }
         this.settleFrame();
         if (this.ready) this.options.onCamera?.(this.camera);
       } catch (reason) {
@@ -366,6 +387,34 @@ export class CornerstoneVolume3D {
     });
   }
 
+  private queueCameraUpdate() {
+    if (this.cameraUpdateQueued) return;
+    this.cameraUpdateQueued = true;
+    queueMicrotask(() => {
+      if (this.disposed) return;
+      try {
+        this.flushCameraUpdate();
+      } catch (reason) {
+        this.fail(reason);
+      }
+    });
+  }
+
+  private flushCameraUpdate(): boolean {
+    if (!this.cameraUpdateQueued || this.disposed) return false;
+    this.cameraUpdateQueued = false;
+    const restore = this.cameraResetPending && this.ownedCamera;
+    this.cameraResetPending = false;
+    if (restore) {
+      this.setCamera(restore);
+      this.requestRender();
+      return true;
+    }
+    this.ownedCamera = this.camera;
+    this.options.onCamera?.(this.ownedCamera);
+    return false;
+  }
+
   private installTools() {
     const { tools } = this.libs;
     for (const tool of [tools.TrackballRotateTool, tools.PanTool, tools.ZoomTool]) tools.addTool(tool);
@@ -380,6 +429,24 @@ export class CornerstoneVolume3D {
       bindings: [{ mouseButton: tools.Enums.MouseBindings.Auxiliary }, { mouseButton: tools.Enums.MouseBindings.Secondary }],
     });
     this.group.setToolActive(tools.ZoomTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Wheel }] });
+  }
+
+  /** Keep the public tool group in charge of navigation while review owns left drag. */
+  setReviewInteraction(marking: boolean) {
+    this.assertAlive();
+    const { tools } = this.libs;
+    if (!this.group) return;
+    this.stopRotation();
+    this.group.setToolDisabled(tools.TrackballRotateTool.toolName);
+    this.group.setToolDisabled(tools.PanTool.toolName);
+    this.group.setToolActive(tools.TrackballRotateTool.toolName, {
+      bindings: [{ mouseButton: marking ? tools.Enums.MouseBindings.Secondary : tools.Enums.MouseBindings.Primary }],
+    });
+    this.group.setToolActive(tools.PanTool.toolName, {
+      bindings: marking
+        ? [{ mouseButton: tools.Enums.MouseBindings.Auxiliary }]
+        : [{ mouseButton: tools.Enums.MouseBindings.Auxiliary }, { mouseButton: tools.Enums.MouseBindings.Secondary }],
+    });
   }
 
   private stopRotation() {
@@ -443,6 +510,9 @@ export class CornerstoneVolume3D {
   setCamera(camera: CornerstoneVolumeCameraRAS) {
     this.assertAlive();
     const converted = volumeCameraLPS(camera);
+    this.cameraResetPending = false;
+    this.cameraUpdateQueued = false;
+    this.ownedCamera = structuredClone(camera);
     this.applyingCamera = true;
     try {
       this.viewport!.setCamera(converted);

@@ -91,6 +91,7 @@ function setup() {
   }
   const mprActor = actor();
   const viewports = new Map<string, any>(['axial', 'coronal', 'sagittal'].map(id => [id, { id, getActor: () => ({ actor: mprActor }) }]));
+  const rendererEvents = new Set<(event: { type: string }) => void>();
   let viewport: any;
   const engine = {
     id: 'mpr-owner',
@@ -114,6 +115,10 @@ function setup() {
           element.dispatchEvent(event('camera', {}));
         },
         getRenderer: () => ({
+          onEvent(callback: (event: { type: string }) => void) {
+            rendererEvents.add(callback);
+            return { unsubscribe: () => rendererEvents.delete(callback) };
+          },
           getActiveCamera: () => ({
             setClippingRange: (near: number, far: number) => {
               clipping = [near, far];
@@ -196,6 +201,7 @@ function setup() {
     group,
     rotationCleanup,
     context,
+    rendererEvents,
   };
 }
 beforeEach(() => {
@@ -228,10 +234,44 @@ describe('physical shared CT volume', () => {
     // before VolumeViewport3D refits it to the visible actors' bounds.
     adapter.nativeRenderer.getActiveCamera().setClippingRange(-1e6, 1e6);
     fixture.element.dispatchEvent(event('camera', {}));
+    await Promise.resolve();
     expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining({ nearMM: -1e6, farMM: 1e6 }));
     await adapter.render();
     expect(onError).not.toHaveBeenCalled();
     expect(adapter.isDisposed).toBe(false);
+  });
+
+  it('retains the physical camera through shared-engine and tool resize resets without blocking real navigation', async () => {
+    const fixture = setup(),
+      onCamera = vi.fn(),
+      onError = vi.fn(),
+      adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera, onCamera, onError });
+    adapters.push(adapter);
+    onCamera.mockClear();
+    const transient = { ...camera, focalPointRAS: [4, 5, 6] as Point, positionRAS: [74, -115, 96] as Point, parallelScaleMM: 126, nearMM: 3, farMM: 215 };
+    // Core resets each shared 3D viewport even when only an MPR canvas changed.
+    // Its tool observer then reapplies a relative presentation at the new fit.
+    adapter.nativeViewport.setCamera(volumeCameraLPS(transient));
+    for (const listener of fixture.rendererEvents) listener({ type: 'ResetCameraEvent' });
+    adapter.nativeViewport.setCamera(volumeCameraLPS({ ...transient, parallelScaleMM: 140 }));
+    adapter.nativeRenderer.getActiveCamera().setClippingRange(3, 215);
+    expect(onCamera).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(adapter.camera).toEqual(camera);
+    expect(onCamera).toHaveBeenLastCalledWith(camera);
+    expect(fixture.engine.getViewports()).toHaveLength(4);
+    expect(fixture.texture.delete).not.toHaveBeenCalled();
+    onCamera.mockClear();
+    // Normal public setCamera during orbit/pan/zoom has no ResetCameraEvent.
+    // Accept its final clipping range, after VolumeViewport3D finishes refitting.
+    adapter.nativeViewport.setCamera(volumeCameraLPS(transient));
+    adapter.nativeRenderer.getActiveCamera().setClippingRange(4, 216);
+    await Promise.resolve();
+    expect(adapter.camera).toEqual({ ...transient, nearMM: 4, farMM: 216 });
+    expect(onCamera).toHaveBeenLastCalledWith({ ...transient, nearMM: 4, farMM: 216 });
+    expect(onError).not.toHaveBeenCalled();
+    adapter.dispose();
+    expect(fixture.rendererEvents.size).toBe(0);
   });
 
   it('renders independently with zero MPR viewports and detaches native features while the renderer is alive', async () => {
