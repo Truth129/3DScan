@@ -330,7 +330,7 @@ reusable after cancellation or restart.
 - [Job lanes, dispatch and revision building](../scan3d/service.py), [SQLite, claims and activation](../scan3d/store.py).
 - [nnInteractive engine](../scan3d/interactive.py) and its [supervised worker process](../scan3d/interactive_worker.py).
 - [DICOM preparation](../scan3d/dicom.py), [inference](../scan3d/segmentation.py), [native operations and measurements](../scan3d/imaging.py).
-- [Read-only Orthanc REST transport](../scan3d/orthanc.py), [validated immutable archive records](../scan3d/orthanc_models.py), [snapshot import and recovery](../scan3d/orthanc_imports.py), [receiver operation](ORTHANC.md).
+- [Read-only Orthanc REST transport](../scan3d/orthanc.py), [validated immutable archive records](../scan3d/orthanc_models.py), [snapshot import and recovery](../scan3d/orthanc_imports.py), [source-bound DICOM SEG encoding](../scan3d/dicom_seg.py) and [delivery](../scan3d/orthanc_exports.py), [receiver operation](ORTHANC.md).
 - [CPU contouring and surface caches](../scan3d/surfaces.py), [GLB encoding and decoding](../scan3d/surface_glb.py), [bounded hashing, archive extraction and atomic artifact publication](../scan3d/fileio.py).
 - [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display union](../scan3d/volume_mask_union.py).
 - [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone stack adapter](../web/src/lib/cornerstone-runtime.ts), [native MPR](../web/src/lib/cornerstone-mpr.ts), [shared memory budget](../web/src/lib/volume-memory-budget.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).
