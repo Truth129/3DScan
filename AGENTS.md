@@ -224,11 +224,13 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    Orthanc PID436143/configuration are unchanged, and journal priorities show
    no warnings/errors. No GPU or patient records were used for qualification.
    Audit/guarded rollback: `.runtime/dicom-seg-integration-20261028T150235Z/`.
-   A source-grid rounding fix is now prepared: real synthetic dcm2niix stacks
+   A source-grid rounding fix is now active: real synthetic dcm2niix stacks
    reproduce false export refusals from accumulated spacing rounding. All 1,077
    backend tests pass; integer mask gathering and strict voxel/mm limits remain.
-   Backend activation is pending fresh approval for an idle app restart; see
-   the newest validation record. Orthanc and frontend need no changes.
+   With explicit approval, idle 3DScan restarted (PID543504); both lanes and
+   CT-only policy pass, with aggregate library counts unchanged. Orthanc
+   PID436143 and frontend are unchanged. See the newest validation record and
+   `.runtime/dicom-seg-grid-fix-20261028T184308Z/`.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification
