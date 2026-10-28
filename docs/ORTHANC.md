@@ -3,7 +3,9 @@
 The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is
-implemented, qualified and active. The target is **OsiriX MD 14.3.0** on the local network, with
+implemented and active, but the user reports that OsiriX cannot discover masks
+in the first per-structure encoding. A per-frame compatibility update is staged
+and still needs actual viewer display confirmation. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -142,6 +144,18 @@ success it creates another delivery attempt of the same SOP instances, useful
 if the receiver deleted the results. Unknown or incomplete delivery is shown
 honestly; explicit retry checks a known Orthanc job and never regenerates SEG
 identities. Nothing resumes or sends automatically at application startup.
+
+The compatibility encoder writes `SegmentIdentificationSequence` on each frame,
+matching the accepted two-mask prototype. highdicom's shared-only placement for
+single-segment files is valid DICOM but differs from that prototype; OsiriX's
+exact rejection mechanism is not confirmed. The macro is moved, never duplicated
+between shared and per-frame groups, following
+[DICOM functional-group rules](https://dicom.nema.org/medical/dicom/current/output/chtml/part03/sect_C.7.6.16.html).
+Encoding version 2 generates new SOPs only on an explicit export, leaving prior
+files and delivery receipts intact. After activation, refresh the app and use
+**Send to osirix** to create the updated files. **Send again** reuses files
+already sent with the current encoding. Successful C-STORE proves transport;
+it does not establish OsiriX mask discovery or clinical alignment.
 
 The user approved activation, which installed the qualified packages/frontend
 and `osirix` allowlist and restarted idle 3DScan. Both lanes are healthy; all 19

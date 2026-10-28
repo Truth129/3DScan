@@ -102,9 +102,39 @@ describe('saved mask export scope', () => {
     expect(successfulDicomSegDelivery([delivered], ['heart', 'lung'], 'other')).toBe(false);
     expect(successfulDicomSegDelivery([{ ...delivered, status: 'failed' }, delivered], ['heart', 'lung'], 'osirix')).toBe(false);
   });
+  it('does not treat a previous encoding as a successful delivery of the current files', () => {
+    const delivered = job('completed', {
+      result: {
+        dicom_seg: { export_id: 'seg-a', archived: true, sent: true, segments_count: 1, instance_count: 1, structure_ids: ['heart'], destination_id: 'osirix' },
+      },
+    });
+    expect(successfulDicomSegDelivery([delivered], ['heart'], 'osirix', 2)).toBe(false);
+    const current = { ...delivered, result: { dicom_seg: { ...delivered.result!.dicom_seg!, encoding_version: 2 } } };
+    expect(successfulDicomSegDelivery([current, delivered], ['heart'], 'osirix', 2)).toBe(true);
+    expect(successfulDicomSegDelivery([{ ...current, status: 'failed' }, current, delivered], ['heart'], 'osirix', 2)).toBe(false);
+  });
 });
 
 describe('explicit DICOM SEG export lifecycle', () => {
+  it('requires an explicit fresh export after an encoding update and retains the previous delivery history', async () => {
+    const delivered = job('completed', {
+      result: {
+        dicom_seg: { export_id: 'seg-a', archived: true, sent: true, segments_count: 1, instance_count: 1, structure_ids: ['heart'], destination_id: 'osirix' },
+      },
+    });
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ encoding_version: 2, exports: [delivered] }));
+    const create = vi.spyOn(api, 'exportDicomSeg').mockResolvedValue(job('completed')),
+      { scope, state } = fixture();
+    await state.load();
+    expect(state.job.value?.id).toBe(delivered.id);
+    expect(state.alreadySent(['heart'], 'osirix')).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+    await state.start(['heart'], 'osirix', true);
+    expect(create).not.toHaveBeenCalled();
+    await state.start(['heart'], 'osirix');
+    expect(create).toHaveBeenCalledExactlyOnceWith('case-a', 'revision-a', { structure_ids: ['heart'], destination: 'osirix' }, expect.any(AbortSignal));
+    scope.stop();
+  });
   it('performs no request during setup and submits only an explicit valid selection/destination', async () => {
     const lookup = vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability()),
       create = vi.spyOn(api, 'exportDicomSeg').mockResolvedValue(job('completed'));

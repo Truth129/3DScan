@@ -23,7 +23,8 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     records.splice(index < 0 ? records.length : index, 0, current);
     return records;
   });
-  const alreadySent = (structureIds: string[], destination: string) => successfulDicomSegDelivery(history.value, structureIds, destination);
+  const alreadySent = (structureIds: string[], destination: string) =>
+    successfulDicomSegDelivery(history.value, structureIds, destination, availability.value?.encoding_version);
   const sourceKey = computed(() => JSON.stringify([options.source().caseId, options.source().revisionId]));
   const storageKey = () => `scan3d-dicom-seg:${sourceKey.value}`;
   let disposed = false,

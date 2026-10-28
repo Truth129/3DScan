@@ -24,6 +24,7 @@ from .store import identifier, now, public_job
 
 log = logging.getLogger(__name__)
 DELIVERY_WAIT_SECONDS = 120
+EXPORT_ENCODING_VERSION = 2
 
 
 class ExportUnavailable(ValueError):
@@ -65,6 +66,7 @@ class _Artifact:
     frame_of_reference_uid: DicomUID
     created_at: str
     files: Annotated[tuple[_File, ...], Field(min_length=1, max_length=1000)]
+    encoding_version: Positive = 1
 
 
 _ARTIFACT = TypeAdapter(_Artifact)
@@ -190,8 +192,8 @@ class OrthancExports:
                 destinations = client.destinations(self.service.settings.orthanc_export_destinations)
         except (ExportUnavailable, OrthancError, NotFound) as exc:
             reason = str(exc) if isinstance(exc, ExportUnavailable) else "The configured Orthanc archive is unavailable. Retry its connection."
-            return {"available": False, "reason": reason, "destinations": [], "exports": exports}
-        return {"available": True, "destinations": destinations, "exports": exports}
+            return {"available": False, "reason": reason, "destinations": [], "exports": exports, "encoding_version": EXPORT_ENCODING_VERSION}
+        return {"available": True, "destinations": destinations, "exports": exports, "encoding_version": EXPORT_ENCODING_VERSION}
 
     def start(self, case_id, revision_id, structure_ids=None, destination=None, *, resend=False):
         inputs = self._inputs(case_id, revision_id, structure_ids)
@@ -214,7 +216,9 @@ class OrthancExports:
         }
         selection = {**identity, "structures": [{key: value for key, value in item.items() if key != "mask_stamp"} for item in identity["structures"]]}
         selection_key = hashlib.sha256(json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        artifact_key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        input_key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        encoding = {**identity, "encoding_version": EXPORT_ENCODING_VERSION}
+        artifact_key = hashlib.sha256(json.dumps(encoding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         export_key = hashlib.sha256((artifact_key + ":" + (destination or "")).encode()).hexdigest()
         with self.service.store.connection() as con:
             con.execute("BEGIN IMMEDIATE")
@@ -222,7 +226,13 @@ class OrthancExports:
                 "SELECT data FROM jobs WHERE case_id=? AND json_extract(data,'$.kind')='orthanc_export' ORDER BY rowid DESC", (case_id,)
             ).fetchall()
             previous = [json.loads(row["data"]) for row in rows]
-            if any(job["payload"].get("selection_key") == selection_key and job["payload"]["artifact_key"] != artifact_key for job in previous):
+            # Encoding upgrades create fresh SOPs, but cannot make a changed
+            # saved mask look like the same immutable input. Legacy artifacts
+            # used their input hash directly as the artifact key.
+            if any(
+                job["payload"].get("selection_key") == selection_key and job["payload"].get("input_key", job["payload"]["artifact_key"]) != input_key
+                for job in previous
+            ):
                 raise ExportUnavailable("Saved masks changed since this revision's earlier export. Save a new revision before exporting those masks.")
             matching = next((job for job in previous if job["payload"]["export_key"] == export_key), None)
             if matching and matching["status"] in {"queued", "running"}:
@@ -242,6 +252,8 @@ class OrthancExports:
             )
             payload = {
                 **identity,
+                "encoding_version": EXPORT_ENCODING_VERSION,
+                "input_key": input_key,
                 "artifact_key": artifact_key,
                 "selection_key": selection_key,
                 "export_key": export_key,
@@ -275,6 +287,7 @@ class OrthancExports:
             )
             summary = {
                 "export_id": payload["export_id"],
+                "encoding_version": EXPORT_ENCODING_VERSION,
                 "archived": False,
                 "sent": False,
                 "segments_count": len(inputs.structures),
@@ -289,6 +302,8 @@ class OrthancExports:
 
     def _check_inputs(self, job):
         payload = job["payload"]
+        if payload.get("encoding_version", 1) != EXPORT_ENCODING_VERSION:
+            raise ExportUnavailable("The DICOM SEG encoder was updated. Refresh export status and start a new export from the saved revision.")
         inputs = self._inputs(job["case_id"], job["revision_id"], [item["id"] for item in payload["structures"]])
         if (
             inputs.reference["id"] != payload["reference_image_id"]
@@ -346,6 +361,7 @@ class OrthancExports:
                 study_instance_uid=result.study_instance_uid,
                 frame_of_reference_uid=result.frame_of_reference_uid,
                 created_at=now(),
+                encoding_version=job["payload"]["encoding_version"],
                 files=tuple(
                     _File(
                         item.structure_id,
@@ -368,6 +384,7 @@ class OrthancExports:
         if (
             artifact.export_id != job["payload"]["export_id"]
             or artifact.artifact_key != job["payload"]["artifact_key"]
+            or artifact.encoding_version != job["payload"]["encoding_version"]
             or artifact.case_id != job["case_id"]
             or artifact.revision_id != job["revision_id"]
             or artifact.reference_image_id != inputs.reference["id"]
@@ -447,6 +464,7 @@ class OrthancExports:
         uploaded = receipt.uploaded
         result = {
             "export_id": artifact.export_id,
+            "encoding_version": artifact.encoding_version,
             "archived": all(item.structure_id in uploaded for item in artifact.files),
             "sent": bool(destination and destination in receipt.destinations and receipt.destinations[destination].state == "success"),
             "segments_count": len(artifact.files),

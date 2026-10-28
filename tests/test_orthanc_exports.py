@@ -212,7 +212,12 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
     before = rig.service.store.list("revisions", rig.case["id"])
     available = rig.http.get(rig.endpoint)
     assert available.headers["cache-control"] == "no-store"
-    assert available.json() == {"available": True, "destinations": [{"id": "osirix", "name": "OsiriX", "aet": "SYNTHETIC_OSIRIX"}], "exports": []}
+    assert available.json() == {
+        "available": True,
+        "destinations": [{"id": "osirix", "name": "OsiriX", "aet": "SYNTHETIC_OSIRIX"}],
+        "exports": [],
+        "encoding_version": 2,
+    }
     job = start(rig)
     assert job["kind"] == "orthanc_export" and job["revision_id"] == rig.revision["id"]
     assert "payload" not in job
@@ -221,6 +226,7 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
     result = finished["result"]["dicom_seg"]
     assert result == {
         "export_id": finished["payload"]["export_id"],
+        "encoding_version": 2,
         "archived": True,
         "sent": False,
         "segments_count": 2,
@@ -253,6 +259,89 @@ def test_configured_send_deduplicates_jobs_and_reuses_archive_artifact(rig):
     assert finished["result"]["dicom_seg"]["export_id"] == archived["result"]["dicom_seg"]["export_id"]
     assert len(rig.calls) == 1 and len(rig.archive.sends) == 1
     assert start(rig, destination="osirix", structures=["test:1"])["id"] == finished["id"]
+
+
+def legacy_export(rig):
+    """Persist the exact pre-versioning job/manifest shape before upgrade tests."""
+    finished = execute(rig, start(rig, destination="osirix"))
+    payload, result = finished["payload"], finished["result"]
+    directory, manifest = artifact(rig, finished)
+    payload["artifact_key"] = payload.pop("input_key")
+    payload.pop("encoding_version")
+    payload["export_key"] = hashlib.sha256((payload["artifact_key"] + ":osirix").encode()).hexdigest()
+    manifest["artifact_key"] = payload["artifact_key"]
+    manifest.pop("encoding_version")
+    (directory / "export.json").write_text(json.dumps(manifest))
+    payload["artifact_manifest_sha256"] = hashlib.sha256((directory / "export.json").read_bytes()).hexdigest()
+    receipt = json.loads((directory / "delivery.json").read_text())
+    receipt["manifest_sha256"] = payload["artifact_manifest_sha256"]
+    (directory / "delivery.json").write_text(json.dumps(receipt))
+    result["dicom_seg"].pop("encoding_version")
+    return rig.service.store.update_job(finished["id"], payload=payload, result=result)
+
+
+def test_encoding_upgrade_requires_explicit_export_and_preserves_legacy_sops_and_receipts(rig):
+    old = legacy_export(rig)
+    old_directory, old_manifest = artifact(rig, old)
+    old_bytes = {path.relative_to(old_directory): path.read_bytes() for path in old_directory.rglob("*") if path.is_file()}
+    available = rig.http.get(rig.endpoint).json()
+    assert available["encoding_version"] == 2
+    assert available["exports"][0]["id"] == old["id"]
+    assert "encoding_version" not in available["exports"][0]["result"]["dicom_seg"]
+    rig.service.store.recover()
+    rig.service.orthanc_exports.recover()
+    assert len(rig.calls) == len(rig.archive.sends) == 1
+    assert rig.http.post(rig.endpoint, json={"destination": "osirix", "resend": True}).status_code == 400
+    fresh = start(rig, destination="osirix")
+    assert fresh["result"]["dicom_seg"]["encoding_version"] == 2
+    assert fresh["result"]["dicom_seg"]["export_id"] != old["payload"]["export_id"]
+    assert len(rig.calls) == len(rig.archive.sends) == 1
+    finished = execute(rig, fresh)
+    _, new_manifest = artifact(rig, finished)
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 2
+    assert new_manifest["encoding_version"] == 2
+    assert {item["sop_instance_uid"] for item in old_manifest["files"]}.isdisjoint(item["sop_instance_uid"] for item in new_manifest["files"])
+    assert old_bytes == {path.relative_to(old_directory): path.read_bytes() for path in old_directory.rglob("*") if path.is_file()}
+    assert len(rig.calls) == len(rig.archive.sends) == 2
+    assert start(rig, destination="osirix")["id"] == finished["id"]
+    again = execute(rig, start(rig, destination="osirix", resend=True))
+    assert again["result"]["dicom_seg"] == finished["result"]["dicom_seg"]
+    assert len(rig.calls) == 2 and rig.archive.sends[-1][1:] == rig.archive.sends[-2][1:]
+
+
+def test_encoding_upgrade_does_not_hide_a_changed_saved_mask(rig):
+    legacy_export(rig)
+    mask_path = Path(rig.revision["structures"][0]["mask_file"])
+    image = nib.load(mask_path)
+    values = np.asanyarray(image.dataobj).copy()
+    values[0, 0, 0] = 1
+    nib.save(nib.Nifti1Image(values, image.affine), mask_path)
+    response = rig.http.post(rig.endpoint, json={"destination": "osirix"})
+    assert response.status_code == 400 and "Saved masks changed" in response.json()["detail"]
+    assert len(rig.calls) == len(rig.archive.sends) == 1
+
+
+def test_newer_encoding_profile_reuses_input_identity_without_reusing_sops(rig, monkeypatch):
+    import scan3d.orthanc_exports as exports
+
+    old = execute(rig, start(rig))
+    monkeypatch.setattr(exports, "EXPORT_ENCODING_VERSION", 3)
+    finished = execute(rig, start(rig))
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 3
+    assert finished["payload"]["input_key"] == old["payload"]["input_key"]
+    assert finished["payload"]["artifact_key"] != old["payload"]["artifact_key"]
+    assert finished["payload"]["export_id"] != old["payload"]["export_id"]
+    assert len(rig.calls) == 2 and not rig.archive.sends
+
+
+def test_queued_old_encoding_is_blocked_before_encoding_upload_or_delivery(rig):
+    queued = start(rig, destination="osirix")
+    payload = rig.service.store.get("jobs", queued["id"])["payload"]
+    payload.pop("encoding_version")
+    rig.service.store.update_job(queued["id"], payload=payload)
+    failed = execute(rig, queued)
+    assert failed["status"] == "failed" and "encoder was updated" in failed["error"]
+    assert not rig.calls and not rig.archive.uploads and not rig.archive.sends
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,7 @@ export interface DicomSegDestination {
   aet?: string;
 }
 export interface DicomSegExportResult {
+  encoding_version?: number;
   export_id: string;
   archived: boolean;
   sent: boolean;
@@ -19,6 +20,7 @@ export interface DicomSegExportJob extends Job {
   result?: { dicom_seg?: DicomSegExportResult };
 }
 export interface DicomSegAvailability {
+  encoding_version?: number;
   available: boolean;
   reason?: string;
   destinations: DicomSegDestination[];
@@ -60,11 +62,15 @@ export const matchesDicomSegExport = (job: Job, caseId: string, revisionId: stri
   job.kind === 'orthanc_export' && job.case_id === caseId && job.revision_id === revisionId;
 
 /** A new delivery needs a separate click, scoped to the exact earlier selection. */
-export function successfulDicomSegDelivery(jobs: DicomSegExportJob[], structureIds: string[], destination: string): boolean {
+export function successfulDicomSegDelivery(jobs: DicomSegExportJob[], structureIds: string[], destination: string, encodingVersion?: number): boolean {
   const selected = [...new Set(structureIds)].sort();
   const latest = jobs.find(job => {
     const result = job.result?.dicom_seg;
-    return result?.destination_id === destination && JSON.stringify([...result.structure_ids].sort()) === JSON.stringify(selected);
+    return (
+      result?.destination_id === destination &&
+      (encodingVersion === undefined || (result.encoding_version ?? 1) === encodingVersion) &&
+      JSON.stringify([...result.structure_ids].sort()) === JSON.stringify(selected)
+    );
   });
   return latest?.status === 'completed' && latest.result?.dicom_seg?.sent === true;
 }

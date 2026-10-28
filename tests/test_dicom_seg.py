@@ -59,7 +59,8 @@ def independent_pixels(path, images):
         source = group.DerivationImageSequence[0].SourceImageSequence[0]
         index = sources[str(source.ReferencedSOPInstanceUID)]
         assert source.SpatialLocationsPreserved == "YES"
-        identification = getattr(group, "SegmentIdentificationSequence", shared.SegmentIdentificationSequence)
+        assert "SegmentIdentificationSequence" not in shared
+        identification = group.SegmentIdentificationSequence
         assert int(identification[0].ReferencedSegmentNumber) == 1
         assert np.allclose(group.PlanePositionSequence[0].ImagePositionPatient, images[index].ImagePositionPatient, rtol=0, atol=1e-6)
         assert np.allclose(shared.PlaneOrientationSequence[0].ImageOrientationPatient, images[index].ImageOrientationPatient, rtol=0, atol=1e-6)
@@ -96,6 +97,39 @@ def test_exact_independent_masks_preserve_overlap_and_source_geometry(fixture):
     assert {path: hash_file(path) for path in before} == before
     with pytest.raises(FrozenInstanceError):
         result.revision_id = "changed"
+
+
+@pytest.mark.parametrize("occupied_slice", [None, 5])
+def test_per_frame_segment_discovery_and_highdicom_readback_preserve_exact_masks(fixture, occupied_slice):
+    import highdicom as hd
+
+    truth = fixture["truth"].copy()
+    if occupied_slice is not None:
+        truth[np.arange(len(truth)) != occupied_slice] = False
+        for segment in fixture["segments"]:
+            image = nib.load(segment.mask_path)
+            values = np.asanyarray(image.dataobj).copy()
+            # The fixture's native order is reversed-column, source-slice, row.
+            values[:, np.arange(values.shape[1]) != occupied_slice, :] = 0
+            nib.save(nib.Nifti1Image(values, image.affine), segment.mask_path)
+    result = export(fixture)
+    source_ids = [str(image.SOPInstanceUID) for image in fixture["images"]]
+    for entry in result.files:
+        index = 1 if entry.structure_id == "block" else 0
+        expected = truth[..., index]
+        # This reader intentionally requires identification on every frame,
+        # matching the layout of the prototype accepted by OsiriX.
+        dataset, decoded = independent_pixels(entry.path, fixture["images"])
+        np.testing.assert_array_equal(decoded, expected)
+        assert int(dataset.NumberOfFrames) == int(np.count_nonzero(np.any(expected, axis=(1, 2))))
+        if occupied_slice is not None:
+            assert int(dataset.NumberOfFrames) == 1
+        else:
+            assert int(dataset.NumberOfFrames) > 1
+        restored = hd.seg.segread(entry.path)
+        native = restored.get_pixels_by_source_instance(source_ids, segment_numbers=[1], assert_missing_frames_are_empty=True)
+        np.testing.assert_array_equal(native[..., 0], expected)
+        assert len(restored.SegmentSequence) == 1
 
 
 @pytest.mark.parametrize("source_kind", ["refinement", "slicer_correction", "interactive", "direct_edit", "include_all_outputs"])

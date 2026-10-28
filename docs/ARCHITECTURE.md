@@ -236,6 +236,8 @@ one binary SEG instance in a shared new series, bounding memory independently of
 overlaps. Only CT headers are read; source CT pixel arrays are not assembled.
 UTF-8 metadata preserves source names and segment labels, and corrected masks
 are described as semiautomatic 3DScan outputs rather than untouched model output.
+Segment identification is stored per frame, matching the accepted synthetic
+OsiriX prototype; the same functional group is removed from shared metadata.
 
 An immutable export manifest pins SEG/mask/reference hashes and SOP identities
 before upload. Orthanc retains and sends the same files, with read-back hashing
@@ -246,11 +248,17 @@ reuses exact SOP bytes. Startup never sends or resumes an export automatically.
 Polling stops after 120 seconds with an unconfirmed outcome if the remote job
 has not finished. Explicit **Send again** starts a new delivery attempt only
 after known success, while ordinary duplicate requests reuse the prior job.
+Encoding versions namespace artifacts separately from frozen input identities.
+A new encoder profile requires an explicit fresh export with new SOPs; older
+artifacts and delivery receipts stay intact, and version changes cannot bypass
+mask mutation checks. The UI offers resend only for the current encoding.
 Export never changes or activates a segmentation revision. The first adapter
 requires an original classic CT imported through the configured archive.
 
-Synthetic API-to-Orthanc-to-OsiriX transport and user-confirmed basic ROI display
-pass; exact clinical alignment/editing remains user qualification. highdicom
+Synthetic API-to-Orthanc-to-OsiriX transport and prototype basic ROI display
+pass. The user reports that the first per-structure encoding is not discovered
+by OsiriX; its per-frame compatibility update still needs display confirmation.
+Exact clinical alignment/editing remains user qualification. highdicom
 0.28.2 and pyjpegls 1.5.1 are pinned in the deployment lock. The integrated feature
 is qualified and active; [the runbook](ORTHANC.md) records runtime details.
 

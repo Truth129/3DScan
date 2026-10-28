@@ -7,6 +7,7 @@ neither source CT pixels nor a dense multi-structure labelmap are assembled.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -281,6 +282,16 @@ def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind,
         content_label="SCAN3D_SEG",
         content_description="Exported voxel masks; clinical review status is unchanged",
     )
+    # Single-segment instances let highdicom share the identification macro.
+    # Keep segment discovery in the per-frame form of our accepted OsiriX
+    # prototype. Move it there without duplicating a functional
+    # group in both locations, which DICOM forbids.
+    shared = result.SharedFunctionalGroupsSequence[0]
+    if "SegmentIdentificationSequence" in shared:
+        identification = shared.SegmentIdentificationSequence
+        for frame in result.PerFrameFunctionalGroupsSequence:
+            frame.SegmentIdentificationSequence = deepcopy(identification)
+        del shared.SegmentIdentificationSequence
     # Source demographic encoding need not cover newly supplied segment labels.
     # Re-encode decoded source text and new labels together, without substitution.
     result.SpecificCharacterSet = "ISO_IR 192"
