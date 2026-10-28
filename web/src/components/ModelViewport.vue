@@ -2,7 +2,14 @@
 import { computed, nextTick, ref, shallowRef, onMounted, onBeforeUnmount, onErrorCaptured, useId, watch, type Component } from 'vue';
 import type { CornerstoneVolumeCameraRAS } from '../lib/cornerstone-volume-3d';
 import type { NativeReviewState } from '../lib/vtk-review-input';
-import { fitVolumeCameraBounds, fitVolumeCameraClipping, namedVolumeCamera, portableCameraFromVolume, volumeCameraFromPortable } from '../lib/volume-camera';
+import {
+  fitVolumeCameraBounds,
+  fitVolumeCameraClipping,
+  namedVolumeCamera,
+  portableCameraFromVolume,
+  sliceVolumeCamera,
+  volumeCameraFromPortable,
+} from '../lib/volume-camera';
 import type {
   CameraView,
   Geometry,
@@ -21,7 +28,7 @@ import { hasCornerstoneShear } from '../lib/cornerstone-volume';
 import { colorCTOverlays, ctOverlayColor, type CTOverlaySelection } from '../lib/ct-overlays';
 import type { GPUOverlaySourceProvider, GPUOverlaySources, RenderCTSession } from '../lib/gpu-volume-data';
 import { sharedVolumeMemoryBudget, volumeMemoryRequest, type VolumeMemoryLease, type VolumeMemoryRequest } from '../lib/volume-memory-budget';
-import { nativeSliceMetadata, transformPoint } from '../lib/ct-reslice';
+import { nativeSliceMetadata } from '../lib/ct-reslice';
 import { revisionUrl } from '../lib/api';
 import { moveNativeSlice, nativeSliceFor } from '../lib/interactive-review';
 import {
@@ -328,24 +335,15 @@ const volumeMessage = computed(
         : `Preparing ${modality.value} volume…`),
 );
 const volumeStackStatus = computed(() => {
-  if (vtkSelected.value) {
-    if (vtkError.value) return 'Unavailable';
-    if (volumeMask.value.enabled) {
-      if (!volumeMaskIds.value.length) return 'Choose mask segments';
-      if (volumeMaskIds.value.length > MAX_VOLUME_MASK_SEGMENTS) return 'Reduce mask selection';
-      if (effectiveMaskError.value) return 'Mask unavailable';
-      if (!volumeMaskReady.value) return 'Preparing mask…';
-    }
-    return vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
-  }
-  if (volumeError.value) return 'Unavailable';
+  if (vtkSelected.value ? vtkError.value : volumeError.value) return 'Unavailable';
   if (volumeMask.value.enabled) {
     if (!volumeMaskIds.value.length) return 'Choose mask segments';
     if (volumeMaskIds.value.length > MAX_VOLUME_MASK_SEGMENTS) return 'Reduce mask selection';
-    if (maskError.value) return 'Mask unavailable';
+    if (effectiveMaskError.value) return 'Mask unavailable';
   }
-  if (needsVolume.value && (!props.fullResolution || gpuPreparing.value)) return 'Preparing…';
+  if (!vtkSelected.value && needsVolume.value && (!props.fullResolution || gpuPreparing.value)) return 'Preparing…';
   if (volumeMask.value.enabled && !volumeMaskReady.value) return 'Preparing mask…';
+  if (vtkSelected.value) return vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
   return volumeReady.value ? 'Visible' : `Waiting for ${modality.value}`;
 });
 const gpuActive = computed(() => needsPlane.value && !!gpuFamilyReady.value && gpuFamilyReady.value === gpuFamily.value);
@@ -601,6 +599,12 @@ function syncReview() {
     level: props.level ?? 40,
   });
 }
+/** Forget which overlay atlases are resident; the CT texture itself is unaffected. */
+function clearOverlayFamilies() {
+  gpuFamilyReady.value = '';
+  maskFamilyReady.value = '';
+  atlasFamilyReady.value = '';
+}
 function releaseGPUMemory() {
   gpuMemoryLease?.release();
   gpuMemoryLease = undefined;
@@ -643,13 +647,11 @@ async function prepareGPUPlane() {
   if (gpuSession !== session) {
     gpuController?.abort();
     gpuPendingFamily = '';
-    gpuFamilyReady.value = '';
+    clearOverlayFamilies();
     gpuFallback.value = '';
     volumeFamilyReady.value = '';
     volumeError.value = '';
-    maskFamilyReady.value = '';
     maskError.value = '';
-    atlasFamilyReady.value = '';
     volumeMaskSourceIds.value = [];
     releaseGPUVolume();
     gpuSession = session;
@@ -667,10 +669,8 @@ async function prepareGPUPlane() {
       gpuPendingFamily = '';
       gpuPreparing.value = false;
       releaseGPUVolume();
-      gpuFamilyReady.value = '';
+      clearOverlayFamilies();
       volumeFamilyReady.value = '';
-      maskFamilyReady.value = '';
-      atlasFamilyReady.value = '';
       volumeMaskSourceIds.value = [];
       syncReview();
     }
@@ -686,16 +686,12 @@ async function prepareGPUPlane() {
     scene.clearGPUOverlays();
     if (gpuMemoryRequest) reserveGPUMasks();
     volumeMaskSourceIds.value = [];
-    gpuFamilyReady.value = '';
-    maskFamilyReady.value = '';
-    atlasFamilyReady.value = '';
+    clearOverlayFamilies();
   }
   if (!wantPlane && !wantMask && atlasFamilyReady.value) {
     scene.clearGPUOverlays();
     if (gpuMemoryRequest) reserveGPUMasks();
-    gpuFamilyReady.value = '';
-    maskFamilyReady.value = '';
-    atlasFamilyReady.value = '';
+    clearOverlayFamilies();
   }
   if (
     volumeFamilyReady.value === rawFamily &&
@@ -752,18 +748,14 @@ async function prepareGPUPlane() {
     if (!wantPlane && !wantMask) {
       scene.clearGPUOverlays();
       reserveGPUMasks();
-      gpuFamilyReady.value = '';
-      maskFamilyReady.value = '';
-      atlasFamilyReady.value = '';
+      clearOverlayFamilies();
       volumeMaskSourceIds.value = [];
       syncReview();
       return;
     }
     // GPU masks have an independent, bounded transport. Changing volume masking
     // must never change the CT worker's slice-overlay selection/version.
-    gpuFamilyReady.value = '';
-    maskFamilyReady.value = '';
-    atlasFamilyReady.value = '';
+    clearOverlayFamilies();
     maskError.value = '';
     syncReview();
     if (wantPlane) queueReviewPlane();
@@ -821,9 +813,7 @@ async function prepareGPUPlane() {
   } catch (reason) {
     if (!current()) return;
     controller.abort();
-    gpuFamilyReady.value = '';
-    maskFamilyReady.value = '';
-    atlasFamilyReady.value = '';
+    clearOverlayFamilies();
     volumeMaskSourceIds.value = [];
     scene.clearGPUOverlays();
     if (scene.gpuCTReady && gpuMemoryRequest) reserveGPUMasks();
@@ -1100,9 +1090,7 @@ function disposeThree() {
   hasModel.value = false;
   loading.value = false;
   volumeFamilyReady.value = '';
-  gpuFamilyReady.value = '';
-  maskFamilyReady.value = '';
-  atlasFamilyReady.value = '';
+  clearOverlayFamilies();
 }
 async function initializeThree() {
   if (scene || disposed) return;
@@ -1129,10 +1117,8 @@ async function initializeThree() {
     scene.onGPUCTInvalidated = reason => {
       gpuController?.abort();
       releaseGPUMemory();
-      gpuFamilyReady.value = '';
+      clearOverlayFamilies();
       volumeFamilyReady.value = '';
-      maskFamilyReady.value = '';
-      atlasFamilyReady.value = '';
       maskError.value = '';
       gpuPendingFamily = '';
       gpuPreparing.value = false;
@@ -1493,31 +1479,7 @@ function facePlane() {
   const state = vtkPlane.value,
     geometry = props.geometry,
     camera = vtkCamera.value;
-  if (!state || !geometry || !camera) return;
-  const axes = [0, 1, 2].filter(axis => axis !== state.axis),
-    voxel = geometry.shape.map(size => (size - 1) / 2) as Point;
-  voxel[state.axis] = state.index;
-  const focal = transformPoint(geometry.affine_ras, voxel);
-  const normal = geometry.affine_ras.slice(0, 3).map(row => row[state.axis]),
-    up = geometry.affine_ras.slice(0, 3).map(row => row[axes[1]]);
-  const length = Math.hypot(...normal),
-    upLength = Math.hypot(...up),
-    distance = Math.hypot(...camera.positionRAS.map((value, axis) => value - camera.focalPointRAS[axis]));
-  vtkCamera.value = fitVolumeCameraClipping(
-    {
-      ...camera,
-      focalPointRAS: focal,
-      positionRAS: focal.map((value, axis) => value + (normal[axis] / length) * distance) as Point,
-      viewUpRAS: up.map(value => -value / upLength) as Point,
-      parallelScaleMM:
-        0.575 *
-        Math.max(
-          (geometry.shape[axes[0]] * Math.hypot(...geometry.affine_ras.slice(0, 3).map(row => row[axes[0]]))) / nativeAspect(),
-          geometry.shape[axes[1]] * upLength,
-        ),
-    },
-    geometry.bounds_ras,
-  );
+  if (state && geometry && camera) vtkCamera.value = sliceVolumeCamera(camera, geometry, state.axis, state.index, nativeAspect());
 }
 async function screenshot() {
   if (!vtkSelected.value) return scene?.screenshot(props.label);

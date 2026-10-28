@@ -13,18 +13,6 @@ from .domain import CardiacPhase, StudyProfile
 PROFILE_IDS = tuple(profile.value for profile in StudyProfile)
 CARDIAC_PHASE_IDS = tuple(phase.value for phase in CardiacPhase)
 CARDIAC_PROFILES = frozenset({StudyProfile.CARDIAC, StudyProfile.CORCTA})
-CONTRAST_PHASE_LABELS = {
-    "noncontrast": "Non-contrast / unenhanced",
-    "coronary_arterial": "Coronary arterial (CorCTA)",
-    "arterial": "Arterial",
-    "pulmonary_arterial": "Pulmonary arterial",
-    "portal_venous": "Portal venous",
-    "venous": "Venous",
-    "delayed": "Delayed",
-    "equilibrium": "Equilibrium",
-    "unknown": "Unknown",
-    "other": "Other",
-}
 
 
 def acquisition_labels(

@@ -11,7 +11,8 @@ import pytest
 
 from scan3d import dicom, segmentation
 from scan3d.acquisition import CARDIAC_PHASE_IDS, PROFILE_IDS, acquisition_labels
-from scan3d.api import Process, create_app
+from scan3d.api import create_app
+from scan3d.api_models import Process
 from scan3d.config import Settings
 from scan3d.segmentation_options import normalize_options
 

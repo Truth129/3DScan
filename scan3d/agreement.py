@@ -26,6 +26,7 @@ from scipy import ndimage as ndi
 from scipy.spatial import cKDTree
 
 from . import imaging, review_volume
+from .fileio import atomic_json
 from .store import safe_id
 
 log = logging.getLogger(__name__)
@@ -366,8 +367,6 @@ def _agreement(service, case, revision):
 
 def _compute(service, revision, pending, excluded):
     """Decode changed pairs once; concurrent requests share one bounded lane."""
-    from .service import atomic_json
-
     results = {}
     image, affine = imaging._image(Path(revision["ct_file"]))
     with (service.settings.data_dir / "agreement.lock").open("a") as lock:

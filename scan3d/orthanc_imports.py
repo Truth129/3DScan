@@ -10,9 +10,9 @@ import pydicom
 
 from .config import MODALITIES
 from .errors import NotFound
+from .fileio import atomic_json
 from .orthanc import OrthancClient, OrthancChanged, OrthancError
 from .orthanc_models import DownloadedFile, DownloadManifest, SeriesSnapshot, SourceManifest, content_digest, json_record, parse_snapshot, parse_source
-from .service import atomic_json
 from .store import identifier, now
 
 

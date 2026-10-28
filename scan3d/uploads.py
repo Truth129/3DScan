@@ -18,7 +18,7 @@ import time
 import zipfile
 
 from .errors import NotFound
-from .service import atomic_json, extract_zip, safe_relative
+from .fileio import atomic_json, extract_zip, safe_relative
 from .store import identifier, now, safe_id
 
 MAX_PARTS = 256

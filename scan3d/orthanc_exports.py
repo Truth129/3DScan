@@ -16,10 +16,10 @@ from typing import Annotated, Literal
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from .errors import NotFound
+from .fileio import atomic_json
 from .image_assets import reference_image
 from .orthanc import OrthancError
 from .orthanc_models import DicomUID, Digest, OrthancID, Positive, SourceManifest, json_record, parse_source
-from .service import atomic_json
 from .store import identifier, now, public_job
 
 log = logging.getLogger(__name__)

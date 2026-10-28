@@ -8,6 +8,7 @@ import re
 import sqlite3
 
 from .errors import NotFound
+from .fileio import atomic_json
 from .identifiers import identifier
 from .relationships import INDEPENDENT, relationship_dirty
 
@@ -479,49 +480,35 @@ class Store:
                     con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
         return review
 
-    def record_detailed_export(self, case_id, revision_id, report, seconds):
+    @contextmanager
+    def _revision_update(self, case_id, revision_id):
+        """Edit a revision record and its revision.json inside one write transaction."""
         with self.connection() as con:
             con.execute("BEGIN IMMEDIATE")
             row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
             if row is None:
                 raise NotFound("Revision not found")
             revision = json.loads(row["data"])
-            revision.setdefault("mesh_statistics", {})["detailed"] = report
-            revision.setdefault("processing_timings", {})["detailed_export_seconds"] = seconds
+            yield revision
             con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
-            from .service import atomic_json
-
             atomic_json(Path(revision["directory"]) / "revision.json", revision)
 
+    def record_detailed_export(self, case_id, revision_id, report, seconds):
+        with self._revision_update(case_id, revision_id) as revision:
+            revision.setdefault("mesh_statistics", {})["detailed"] = report
+            revision.setdefault("processing_timings", {})["detailed_export_seconds"] = seconds
+
     def set_review_status(self, case_id, revision_id, status):
-        with self.connection() as con:
-            con.execute("BEGIN IMMEDIATE")
-            row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
-            if row is None:
-                raise NotFound("Revision not found")
-            revision = json.loads(row["data"])
+        with self._revision_update(case_id, revision_id) as revision:
             if not revision["structures"]:
                 raise ValueError("This CT has no segmentation to review")
             revision["review_status"] = status
-            con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
-            from .service import atomic_json
-
-            atomic_json(Path(revision["directory"]) / "revision.json", revision)
         return revision
 
     def attach_surface_assets(self, case_id, revision_id, assets):
-        with self.connection() as con:
-            con.execute("BEGIN IMMEDIATE")
-            row = con.execute("SELECT data FROM revisions WHERE id=? AND case_id=?", (revision_id, case_id)).fetchone()
-            if row is None:
-                raise NotFound("Revision not found")
-            revision = json.loads(row["data"])
+        with self._revision_update(case_id, revision_id) as revision:
             revision["surface_assets"] = [{k: asset[k] for k in ("id", "key", "triangles")} for asset in assets]
             revision["model_manifest_url"] = f"/api/cases/{case_id}/revisions/{revision_id}/model-manifest"
-            con.execute("UPDATE revisions SET data=? WHERE id=?", (json.dumps(revision, allow_nan=False), revision_id))
-            from .service import atomic_json
-
-            atomic_json(Path(revision["directory"]) / "revision.json", revision)
         return revision
 
     def enqueue(self, case_id, kind, payload):

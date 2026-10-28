@@ -1,0 +1,145 @@
+"""Case, job and revision records, and the actions that create new revisions."""
+
+import uuid
+
+from fastapi import File, Form, UploadFile
+from fastapi.responses import JSONResponse
+
+from .api_models import Activate, DicomSegExport, Process, Refine, Review, Segment
+from .errors import NotFound
+from .store import public_case, public_job, public_revision
+
+
+def add_routes(app, service):
+    @app.get("/api/cases")
+    def cases():
+        return [public_case(case, service.settings) for case in service.store.list("cases")]
+
+    @app.get("/api/cases/{case_id}")
+    def case(case_id: str):
+        return public_case(service.store.get("cases", case_id), service.settings)
+
+    @app.post("/api/cases/{case_id}/process")
+    def process(case_id: str, body: Process):
+        return public_job(service.process(case_id, body.series_uid, body.profile, body.phase, cardiac_phase=body.cardiac_phase, rr_percent=body.rr_percent))
+
+    @app.get("/api/cases/{case_id}/images")
+    def image_assets(case_id: str):
+        from .image_assets import public_image_asset
+
+        service.store.get("cases", case_id)
+        return [public_image_asset(asset) for asset in service.store.image_assets(case_id)]
+
+    @app.get("/api/cases/{case_id}/images/{image_id}")
+    def image_asset(case_id: str, image_id: str):
+        from .image_assets import public_image_asset
+
+        return public_image_asset(service.store.image_asset(case_id, image_id))
+
+    @app.post("/api/cases/{case_id}/segment")
+    def segment(case_id: str, body: Segment):
+        return public_job(service.segment_case(case_id, **body.model_dump()))
+
+    @app.get("/api/jobs/{job_id}")
+    def job(job_id: str):
+        return public_job(service.store.get("jobs", job_id))
+
+    @app.get("/api/jobs/{job_id}/measurements")
+    def measurements(job_id: str):
+        record = service.store.get("jobs", job_id)
+        structures = record.get("measurements", [])
+        return {"structures": structures, "completed": len(structures), "total": record.get("progress", {}).get("total", 0)}
+
+    @app.get("/api/cases/{case_id}/jobs")
+    def case_jobs(case_id: str):
+        service.store.get("cases", case_id)
+        return [public_job(record) for record in service.store.list("jobs", case_id)]
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel(job_id: str):
+        job = service.store.get("jobs", job_id)
+        if job["kind"] == "orthanc_import":
+            return public_job(service.orthanc.cancel(job_id))
+        if job["kind"] == "orthanc_export":
+            return public_job(service.orthanc_exports.cancel(job_id))
+        if job["status"] in ("queued", "running"):
+            changes = dict(cancel_requested=True)
+            if job["status"] == "queued":
+                changes.update(status="cancelled", stage="Cancelled")
+            job = service.store.update_job(job_id, **changes)
+        return public_job(job)
+
+    @app.get("/api/cases/{case_id}/revisions")
+    def revisions(case_id: str):
+        service.store.get("cases", case_id)
+        return [public_revision(r) for r in service.store.list("revisions", case_id)]
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}")
+    def revision(case_id: str, revision_id: str):
+        result = public_revision(service.ct_revision(case_id, revision_id))
+        return JSONResponse(result, headers={"Cache-Control": "private, no-store"}) if revision_id.startswith("review-") else result
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
+    def dicom_seg_availability(case_id: str, revision_id: str):
+        return service.orthanc_exports.availability(case_id, revision_id)
+
+    @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
+    def dicom_seg_export(case_id: str, revision_id: str, body: DicomSegExport):
+        return public_job(service.orthanc_exports.start(case_id, revision_id, body.structure_ids, body.destination, resend=body.resend))
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/cinematic-reference")
+    def cinematic_reference(case_id: str, revision_id: str):
+        from .cinematic import reference_values
+
+        # Statistics apply to an immutable saved revision, never an unsaved
+        # candidate. Ownership is checked before cached statistics are read.
+        if revision_id.startswith("review-"):
+            raise NotFound("Save the segmentation before measuring cinematic references")
+        selected = service.store.revision(case_id, revision_id)
+        result = reference_values(selected, service.settings.data_dir / "cinematic-cache")
+        return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/agreement")
+    def revision_agreement_report(case_id: str, revision_id: str):
+        from .agreement import revision_agreement
+
+        # Agreement measures what a reviewer accepted. A candidate alias is an
+        # unsaved proposal, never an accepted revision.
+        if revision_id.startswith("review-"):
+            raise NotFound("Save the correction before measuring agreement")
+        return JSONResponse(revision_agreement(service, case_id, revision_id), headers={"Cache-Control": "private, no-store"})
+
+    @app.get("/api/agreement")
+    def agreement_summary():
+        from .agreement import aggregate_agreement
+
+        return JSONResponse(aggregate_agreement(service), headers={"Cache-Control": "private, no-store"})
+
+    @app.post("/api/cases/{case_id}/refinements")
+    def refine(case_id: str, body: Refine):
+        parent = service.store.revision(case_id, body.revision_id)
+        if body.structure_id not in {s["id"] for s in parent["structures"]}:
+            raise ValueError("Structure does not belong to the selected revision")
+        return public_job(service.store.enqueue(case_id, "refine", body.model_dump()))
+
+    @app.post("/api/cases/{case_id}/activate")
+    def activate(case_id: str, body: Activate):
+        return public_case(service.store.activate(case_id, body.revision_id), service.settings)
+
+    @app.patch("/api/cases/{case_id}/revisions/{revision_id}")
+    def review(case_id: str, revision_id: str, body: Review):
+        return public_revision(service.store.set_review_status(case_id, revision_id, body.review_status))
+
+    @app.post("/api/cases/{case_id}/corrections")
+    def corrections(case_id: str, revision_id: str = Form(...), segmentation: UploadFile = File(...)):
+        service.store.revision(case_id, revision_id)
+        path = service.store.case_dir(case_id) / "uploads" / f"{uuid.uuid4().hex}.seg.nrrd"
+        path.parent.mkdir(exist_ok=True)
+        total = 0
+        with path.open("wb") as out:
+            while chunk := segmentation.file.read(1024 * 1024):
+                total += len(chunk)
+                if total > service.settings.upload_limit:
+                    raise ValueError("Correction exceeds import limit")
+                out.write(chunk)
+        return public_job(service.store.enqueue(case_id, "correction", {"revision_id": revision_id, "seg_file": str(path)}))

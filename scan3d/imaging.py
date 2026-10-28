@@ -12,6 +12,8 @@ import nibabel as nib
 import numpy as np
 from scipy import ndimage as ndi
 
+from .fileio import atomic_destination
+
 
 _CT_CACHE = OrderedDict()
 _CT_CACHE_LOCK = threading.RLock()
@@ -147,7 +149,6 @@ def _foreground_bounds(mask):
 
 def _save_mask(mask, reference, output_path: Path):
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     header = reference.header.copy()
     header.set_data_dtype(np.uint8)
     header.set_slope_inter(1, 0)
@@ -155,13 +156,8 @@ def _save_mask(mask, reference, output_path: Path):
     image.set_qform(reference.get_qform(), int(reference.header["qform_code"]))
     image.set_sform(reference.get_sform(), int(reference.header["sform_code"]))
     # Nibabel chooses compression from the extension, including temporary files.
-    suffix = ".nii.gz" if str(output_path).endswith(".gz") else ".nii"
-    temporary = output_path.with_name(output_path.name + ".writing" + suffix)
-    try:
+    with atomic_destination(output_path, ".writing.nii.gz" if str(output_path).endswith(".gz") else ".writing.nii") as temporary:
         nib.save(image, str(temporary))
-        temporary.replace(output_path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def geometry(ct_path: Path) -> dict:

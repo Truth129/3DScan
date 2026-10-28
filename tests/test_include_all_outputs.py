@@ -10,7 +10,8 @@ import pytest
 
 from scan3d import segmentation
 from scan3d.config import Settings
-from scan3d.service import Service, atomic_json
+from scan3d.fileio import atomic_json
+from scan3d.service import Service
 from scan3d.store import identifier
 
 
