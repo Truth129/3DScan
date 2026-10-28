@@ -116,7 +116,7 @@ def main() -> int:
                 TOTALSEG_HOME_DIR=str(output / "totalsegmentator"),
                 XDG_CACHE_HOME=str(output / "cache"),
                 PYTHONNOUSERSITE="1",
-                PYTHONPATH=str(ROOT),
+                PYTHONPATH=os.pathsep.join((str(ROOT), str(ROOT / "web/tests"))),
                 PATH=str(Path(sys.executable).parent) + os.pathsep + str(ROOT / ".tools/bin") + os.pathsep + os.environ.get("PATH", ""),
             )
             for name, command in (
