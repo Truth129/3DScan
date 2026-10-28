@@ -132,6 +132,16 @@ date/name filters when checking a newly enabled query. See the official
 [Orthanc permissions guide](https://orthanc.uclouvain.be/book/faq/security.html)
 and [OsiriX PACS guide](https://osirixviewer.com/resources/pacs/).
 
+The current permissions are in `.runtime/orthanc-incoming/orthanc.json` under
+`DicomModalities.osirix`: `AllowStore:true`, `AllowFind:true`, `AllowMove:true`,
+`AllowGet:false`. The approved change enabled Find/Move; Store was already true.
+Top-level `DicomAlwaysAllow*` flags remain false, so permissions come from the
+configured peer. C-MOVE sends results to the Mac's separate listener; C-GET
+retrieves over the request association and would require `AllowGet:true` for
+this peer if that mode is selected in OsiriX. The Mac's actual selected mode
+has not been independently inspected. File changes and live REST updates must
+both be applied when changing these permissions without restarting Orthanc.
+
 ## Export saved masks through Orthanc
 
 In a saved segmentation's toolbar choose **DICOM SEG…**, select the nonempty
@@ -159,6 +169,38 @@ cause remains unconfirmed. OsiriX documents
 [editing fields in its database window](https://pixmeo.zendesk.com/hc/en-us/articles/6049508617244-How-to-edit-DICOM-fields-directly-in-the-database-window)
 for local label correction. No encoder/profile change or resend was made for
 this report.
+
+### OsiriX DICOM verification warnings
+
+`99SCAN3D` is a valid private coding scheme: DICOM private designators start
+with `99` and contain alphanumeric characters. The current SEG defines:
+
+| Code | Meaning | Use |
+| --- | --- | --- |
+| `REGION` | Image region | Segmented property category and type |
+| `SEGMENTATION` | Image segmentation | Algorithm family |
+
+Each segment uses these codes independently, so an unknown-scheme warning can
+repeat three times per segment. These are local generic definitions, not claims
+of standard anatomical terminology. SEG's baseline context-group bindings permit
+private codes. `CodingSchemeIdentificationSequence` is optional (Type 3), although
+recommended for local schemes; adding it would not itself make a validator know
+the private vocabulary. The
+[validator documentation](https://www.dclunie.com/dicom3tools/dciodvfy.html)
+explicitly acknowledges legitimate private schemes can produce "Unrecognized
+defined term" warnings. See [DICOM coding scheme rules](https://dicom.nema.org/medical/dicom/current/output/chtml/part16/chapter_8.html).
+
+The reported `99CT_VIA` underscore is a separate private-designator syntax
+problem in inherited coded study metadata. Changing a namespace changes code
+identity, so do not silently rename it or invent a standard replacement.
+The reported retired person-name form is also inherited: the validator permits
+informal names while recommending caret-separated components. Preserve the
+source physician-name value rather than guessing component boundaries. No
+patient text should be copied into synthetic fixtures, reports or validator logs.
+
+These messages concern metadata; they do not themselves establish a pixel or
+geometry problem, and they are not a complete conformance verdict. No export
+profile or runtime change was made solely to suppress the reported warnings.
 
 An archive-only action stores SEG beside the original study in Orthanc. Sending
 asks that same Orthanc to perform C-STORE. The app does not make a direct DICOM

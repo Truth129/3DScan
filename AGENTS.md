@@ -280,6 +280,16 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    runtime change was needed. The MD database label population cause remains
    unconfirmed; do not presume missing source metadata or regenerate
    unchanged export files as a fix.
+   OsiriX verifier warnings were reviewed against primary DICOM/validator docs:
+   `99SCAN3D` is legal private terminology (meanings in ORTHANC.md); repeated
+   unknown-term warnings do not require relabeling it as a standard scheme.
+   Inherited `99CT_VIA` has an invalid underscore; do not silently rename its
+   namespace. The inherited retired PN-form warning is advisory; preserve the
+   physician name. No source clinical text was retained in evidence and no
+   runtime/profile change was made for these warnings. Current per-Mac Store/
+   Find/Move are true, Get false; top-level always-allow flags remain false.
+   The C-MOVE workflow was recommended, but the Mac's selected retrieval mode
+   is unconfirmed. C-GET would need peer-specific AllowGet if selected.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification
