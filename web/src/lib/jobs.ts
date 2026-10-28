@@ -4,7 +4,8 @@ interface JobReader {
   job(id: string): Promise<Job>;
   jobs(caseId: string): Promise<Job[]>;
 }
-const active = (job: Job, caseId: string) => job.case_id === caseId && job.kind !== 'review_predict' && ['queued', 'running'].includes(job.status);
+const active = (job: Job, caseId: string) =>
+  job.case_id === caseId && !['review_predict', 'orthanc_export'].includes(job.kind) && ['queued', 'running'].includes(job.status);
 
 /** Resume a browser-known job, or discover work started through CLI or another device. */
 export async function recoverCaseJob(caseId: string, storedId: string | null, reader: JobReader): Promise<Job | undefined> {

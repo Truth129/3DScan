@@ -22,6 +22,7 @@ import AgreementPanel from './components/AgreementPanel.vue';
 import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
 import SegmentationControls from './components/SegmentationControls.vue';
 import ExportViewerDialog from './components/ExportViewerDialog.vue';
+import DicomSegExport from './components/DicomSegExport.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
@@ -42,6 +43,7 @@ import {
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
 import { recoverCaseJob } from './lib/jobs';
+import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import { LocalCTSession, type LocalCTProgress } from './lib/ct-volume';
 import { preloadCTSource } from './lib/ct-preload';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
@@ -384,21 +386,19 @@ watch(
 );
 const ctBase = computed(() => (activeCase.value && ctRevisionId.value ? revisionUrl(activeCase.value.id, ctRevisionId.value) : ''));
 const synthetic = computed(() => activeCase.value?.synthetic || revision.value?.synthetic || /synthetic|demo/i.test(revision.value?.source || ''));
-const exportDisabledReason = computed(() => {
-  if (vtkPreview.value) return 'Switch the 3D renderer to Three.js (legacy) for HTML export. PNG is available in Cornerstone3D.';
-  if (busy.value) return 'Wait for the current operation to finish before exporting.';
-  if (before.value || compare.value) return 'Return to the current revision and turn off comparison before exporting.';
-  const draft = interactiveDraft.value;
-  if (
-    draft &&
-    draft.case_id === activeCase.value?.id &&
-    draft.revision_id === revision.value?.id &&
-    !['accepted', 'discarded'].includes(draft.status) &&
-    (draft.prompts.length || draft.candidate || draft.new_structure || draft.relationship_dirty)
-  )
-    return 'Save or discard the correction draft before exporting the saved revision.';
-  return '';
-});
+const savedExportDisabledReason = computed(() =>
+  savedRevisionExportBlockReason({
+    caseId: activeCase.value?.id,
+    revision: revision.value,
+    busy: busy.value,
+    comparison: before.value || compare.value || (!!revision.value && ctRevisionId.value !== revision.value.id),
+    draft: interactiveDraft.value,
+    pendingPrompts: workspaceMode.value === 'review' && !!interactivePrompts.value.length,
+  }),
+);
+const exportDisabledReason = computed(() =>
+  vtkPreview.value ? 'Switch the 3D renderer to Three.js (legacy) for HTML export. PNG is available in Cornerstone3D.' : savedExportDisabledReason.value,
+);
 const workerText = computed(() => {
   const gpu = health.value.gpu;
   if (typeof gpu === 'string') return gpu;
@@ -612,6 +612,7 @@ function poll() {
         return;
       }
       localStorage.removeItem(`scan3d-job:${next.case_id}`);
+      if (next.kind === 'orthanc_export') return;
       await refreshCases();
       if (!alive || generation !== caseGeneration || job.value?.id !== id) return;
       if (next.status === 'completed') {
@@ -1250,7 +1251,13 @@ onBeforeUnmount(() => {
           ><button v-if="!synthetic" class="button secondary compact" :disabled="busy" :aria-expanded="segmentationOpen" @click="openSegmentation">
             Segment {{ sourceLabel }}…</button
           ><button v-if="!ctOnly" class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button
-          ><button
+          ><DicomSegExport
+            v-if="!ctOnly"
+            :key="`${activeCase.id}:${revision.id}`"
+            :case-id="activeCase.id"
+            :revision="revision"
+            :disabled-reason="savedExportDisabledReason"
+          /><button
             class="button primary compact export-viewer-button"
             :disabled="!!exportDisabledReason"
             :title="exportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'"

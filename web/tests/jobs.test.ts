@@ -38,10 +38,11 @@ describe('case job recovery', () => {
       expect(await recoverCaseJob('ct', 'stale', reader)).toEqual(pending);
     }
   });
-  it('leaves interactive predictions to their draft poller without treating them as revision jobs', async () => {
+  it('leaves interactive predictions and archive exports to their own pollers without treating them as revision jobs', async () => {
     const prediction = { ...job('prediction', 'ct', 'running'), kind: 'review_predict' };
+    const exporting = { ...job('export', 'ct', 'running'), kind: 'orthanc_export' };
     const acceptance = { ...job('acceptance', 'ct', 'queued'), kind: 'review_accept' };
-    const reader = { job: vi.fn().mockResolvedValue(prediction), jobs: vi.fn().mockResolvedValue([prediction, acceptance]) };
+    const reader = { job: vi.fn().mockResolvedValue(exporting), jobs: vi.fn().mockResolvedValue([prediction, exporting, acceptance]) };
     expect(await recoverCaseJob('ct', 'prediction', reader)).toEqual(acceptance);
   });
   it('tolerates an older API without case jobs while retaining real server errors', async () => {

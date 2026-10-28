@@ -20,6 +20,7 @@ import { presentRevision, presentStructures } from './appearance';
 import type { AgreementAggregate, RevisionAgreement } from './agreement';
 import type { ImageAsset } from './image-domain';
 import type { OrthancImportRequest, OrthancSeriesPage, OrthancStatus, OrthancStudyPage, OrthancStudyQuery } from './orthanc';
+import type { DicomSegAvailability, DicomSegExportJob, DicomSegExportRequest } from './dicom-seg';
 
 export class ApiError extends Error {
   constructor(
@@ -61,6 +62,9 @@ export const api = {
     request<OrthancStudyPage>('/api/orthanc/studies/query', { ...json('POST', query), signal }),
   orthancSeries: (id: string, signal?: AbortSignal) => request<OrthancSeriesPage>(`/api/orthanc/studies/${encodeURIComponent(id)}/series`, { signal }),
   importOrthanc: (data: OrthancImportRequest, signal?: AbortSignal) => request<Job>('/api/orthanc/imports', { ...json('POST', data), signal }),
+  dicomSegAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomSegAvailability>(`${revisionUrl(id, rid)}/dicom-seg`, { signal }),
+  exportDicomSeg: (id: string, rid: string, data: DicomSegExportRequest, signal?: AbortSignal) =>
+    request<DicomSegExportJob>(`${revisionUrl(id, rid)}/dicom-seg`, { ...json('POST', data), signal }),
   case: (id: string, signal?: AbortSignal) => request<Case>(caseUrl(id), { signal }),
   images: (id: string) => request<ImageAsset[]>(`${caseUrl(id)}/images`),
   image: (id: string, imageId: string) => request<ImageAsset>(`${caseUrl(id)}/images/${encodeURIComponent(imageId)}`),
