@@ -83,6 +83,19 @@ describe('saved mask export scope', () => {
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: { ...result, sent: true, destination: 'OsiriX' } } }))).toContain('sent to OsiriX');
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: { ...result, archived: false } } }))).toContain('not been confirmed');
   });
+  it('reports eight independent masks inside one delivered DICOM instance', () => {
+    const result = {
+      encoding_version: 3,
+      export_id: 'combined-seg',
+      archived: true,
+      sent: true,
+      segments_count: 8,
+      instance_count: 1,
+      structure_ids: Array.from({ length: 8 }, (_, index) => `mask-${index + 1}`),
+      destination: 'OsiriX',
+    };
+    expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: result } }))).toBe('8 masks sent to OsiriX · 1 DICOM instance.');
+  });
   it('offers Send again only for the newest successful exact mask selection and destination', () => {
     const delivered = job('completed', {
       result: {

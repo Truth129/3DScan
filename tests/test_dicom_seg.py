@@ -47,7 +47,7 @@ def export(fixture, **kwargs):
     )
 
 
-def independent_pixels(path, images):
+def independent_pixels(path, images, segment_number=1):
     seg = pydicom.dcmread(path)
     sources = {str(image.SOPInstanceUID): index for index, image in enumerate(images)}
     result = np.zeros((len(images), seg.Rows, seg.Columns), dtype=bool)
@@ -61,11 +61,13 @@ def independent_pixels(path, images):
         assert source.SpatialLocationsPreserved == "YES"
         assert "SegmentIdentificationSequence" not in shared
         identification = group.SegmentIdentificationSequence
-        assert int(identification[0].ReferencedSegmentNumber) == 1
+        number = int(identification[0].ReferencedSegmentNumber)
+        assert 1 <= number <= len(seg.SegmentSequence)
         assert np.allclose(group.PlanePositionSequence[0].ImagePositionPatient, images[index].ImagePositionPatient, rtol=0, atol=1e-6)
         assert np.allclose(shared.PlaneOrientationSequence[0].ImageOrientationPatient, images[index].ImageOrientationPatient, rtol=0, atol=1e-6)
         assert np.allclose(shared.PixelMeasuresSequence[0].PixelSpacing, images[index].PixelSpacing, rtol=0, atol=1e-6)
-        result[index] = frame
+        if number == segment_number:
+            result[index] = frame
     return seg, result
 
 
@@ -74,10 +76,12 @@ def test_exact_independent_masks_preserve_overlap_and_source_geometry(fixture):
     progress = []
     result = export(fixture, progress=lambda *args: progress.append(args))
     assert progress == [(0, 2), (1, 2), (2, 2)]
-    assert [file.structure_id for file in result.files] == ["block", "ring"]
+    assert len(result.files) == 1
+    instance = result.files[0]
+    assert [item.structure_id for item in instance.segments] == ["block", "ring"]
     outputs = {}
-    for entry in result.files:
-        seg, pixels = independent_pixels(entry.path, fixture["images"])
+    for entry in instance.segments:
+        seg, pixels = independent_pixels(instance.path, fixture["images"], entry.segment_number)
         index = 1 if entry.structure_id == "block" else 0
         assert np.array_equal(pixels, fixture["truth"][..., index])
         assert seg.SeriesInstanceUID == result.series_instance_uid
@@ -86,13 +90,13 @@ def test_exact_independent_masks_preserve_overlap_and_source_geometry(fixture):
         assert seg.FrameOfReferenceUID == result.frame_of_reference_uid == fixture["images"][0].FrameOfReferenceUID
         assert seg.SegmentSequence[0].SegmentAlgorithmType == "AUTOMATIC"
         assert seg.SegmentSequence[0].SegmentAlgorithmName == "TotalSegmentator"
-        assert int(seg.NumberOfFrames) < len(fixture["images"])
-        assert entry.sha256 == hash_file(entry.path) and entry.size == entry.path.stat().st_size
+        assert int(seg.NumberOfFrames) < len(fixture["images"]) * len(instance.segments)
+        assert instance.sha256 == hash_file(instance.path) and instance.size == instance.path.stat().st_size
         assert entry.voxel_count == int(pixels.sum())
-        assert entry.path.stat().st_mode & 0o777 == 0o600
+        assert instance.path.stat().st_mode & 0o777 == 0o600
         outputs[entry.structure_id] = pixels
     assert np.count_nonzero(outputs["ring"] & outputs["block"]) == 529
-    assert len({entry.sop_instance_uid for entry in result.files}) == 2
+    assert len({entry.sop_instance_uid for entry in result.files}) == 1
     assert result.reference_sha256 == before[fixture["reference"]]
     assert {path: hash_file(path) for path in before} == before
     with pytest.raises(FrozenInstanceError):
@@ -114,22 +118,23 @@ def test_per_frame_segment_discovery_and_highdicom_readback_preserve_exact_masks
             nib.save(nib.Nifti1Image(values, image.affine), segment.mask_path)
     result = export(fixture)
     source_ids = [str(image.SOPInstanceUID) for image in fixture["images"]]
-    for entry in result.files:
+    instance = result.files[0]
+    for entry in instance.segments:
         index = 1 if entry.structure_id == "block" else 0
         expected = truth[..., index]
         # This reader intentionally requires identification on every frame,
         # matching the layout of the prototype accepted by OsiriX.
-        dataset, decoded = independent_pixels(entry.path, fixture["images"])
+        dataset, decoded = independent_pixels(instance.path, fixture["images"], entry.segment_number)
         np.testing.assert_array_equal(decoded, expected)
-        assert int(dataset.NumberOfFrames) == int(np.count_nonzero(np.any(expected, axis=(1, 2))))
+        assert int(dataset.NumberOfFrames) == int(np.count_nonzero(np.any(truth, axis=(1, 2))))
         if occupied_slice is not None:
-            assert int(dataset.NumberOfFrames) == 1
+            assert int(dataset.NumberOfFrames) == 2
         else:
             assert int(dataset.NumberOfFrames) > 1
-        restored = hd.seg.segread(entry.path)
-        native = restored.get_pixels_by_source_instance(source_ids, segment_numbers=[1], assert_missing_frames_are_empty=True)
+        restored = hd.seg.segread(instance.path)
+        native = restored.get_pixels_by_source_instance(source_ids, segment_numbers=[entry.segment_number], assert_missing_frames_are_empty=True)
         np.testing.assert_array_equal(native[..., 0], expected)
-        assert len(restored.SegmentSequence) == 1
+        assert len(restored.SegmentSequence) == 2
 
 
 @pytest.mark.parametrize("source_kind", ["refinement", "slicer_correction", "interactive", "direct_edit", "include_all_outputs"])
@@ -162,7 +167,88 @@ def test_masks_are_processed_one_at_a_time(fixture, monkeypatch):
     monkeypatch.setattr(dicom_seg.imaging, "_binary", binary)
     monkeypatch.setattr(dicom_seg, "_encode", encode)
     result = export(fixture)
-    assert len(result.files) == 2 and previous_mask[0]() is None and previous_projection[0]() is None
+    assert len(result.files) == 1 and len(result.files[0].segments) == 2 and previous_mask[0]() is None and previous_projection[0]() is None
+
+
+def test_eight_segments_share_one_instance_with_continuous_odd_sized_frame_bits(tmp_path):
+    import highdicom as hd
+
+    images, _, _ = source_fixture()
+    values = np.arange(len(images) * 9, dtype=np.int16).reshape(len(images), 3, 3)
+    truth = np.zeros((*values.shape, 8), dtype=bool)
+    for number in range(8):
+        planes = [4] if number == 7 else [number, (number + 2) % 12, (number + 5) % 12]
+        for offset, plane in enumerate(planes):
+            truth[plane, (number + offset) % 3, (2 * number + offset) % 3, number] = True
+            truth[plane, 1, 1, number] = True
+    assert np.any(truth.sum(axis=-1) > 1)
+    paths = []
+    for index, image in enumerate(images):
+        image.Rows = image.Columns = 3
+        image.PixelData = values[index].astype("<i2").tobytes()
+        path = tmp_path / f"source-{index:02d}.dcm"
+        image.save_as(path, enforce_file_format=True)
+        paths.append(path)
+    native_values, masks, affine = native_grid(images, values, truth)
+    reference = tmp_path / "reference.nii.gz"
+    nib.save(nib.Nifti1Image(native_values, affine), reference)
+    segments = []
+    for index in range(8):
+        path = tmp_path / f"mask-{index}.nii.gz"
+        nib.save(nib.Nifti1Image(masks[..., index].astype(np.uint8), affine), path)
+        segments.append(dicom_seg.SegmentInput(f"segment-{index}", f"Synthetic mask {index}", "#40a0ff", path))
+    result = dicom_seg.export_segmentation(paths[::-1], reference, segments[::-1], tmp_path / "export", revision_id="eight-segments", source_kind="direct_edit")
+    assert len(result.files) == 1 and len(result.files[0].segments) == 8
+    instance = result.files[0]
+    dataset = pydicom.dcmread(instance.path)
+    assert len(dataset.SegmentSequence) == 8 and int(dataset.NumberOfFrames) == 22
+    assert dataset.SegmentsOverlap == "UNDEFINED"
+    assert [int(item.SegmentNumber) for item in dataset.SegmentSequence] == list(range(1, 9))
+    source_ids = [str(image.SOPInstanceUID) for image in images]
+    source_indices = {uid: index for index, uid in enumerate(source_ids)}
+    ranks, expected_frames, dimension_values = {}, [], set()
+    for frame in dataset.PerFrameFunctionalGroupsSequence:
+        number = int(frame.SegmentIdentificationSequence[0].ReferencedSegmentNumber)
+        source = str(frame.DerivationImageSequence[0].SourceImageSequence[0].ReferencedSOPInstanceUID)
+        dimensions = tuple(int(value) for value in frame.FrameContentSequence[0].DimensionIndexValues)
+        assert dimensions[0] == number
+        assert source not in ranks or ranks[source] == dimensions[1]
+        ranks[source] = dimensions[1]
+        assert dimensions not in dimension_values
+        dimension_values.add(dimensions)
+        expected_frames.append(truth[source_indices[source], :, :, number - 1])
+    assert set(ranks.values()) == set(range(1, len(ranks) + 1))
+    assert {str(item.DimensionOrganizationUID) for item in dataset.DimensionIndexSequence} == {
+        str(dataset.DimensionOrganizationSequence[0].DimensionOrganizationUID)
+    }
+    packed = np.packbits(np.stack(expected_frames).reshape(-1), bitorder="little").tobytes()
+    expected_bytes = packed + (b"\x00" if len(packed) % 2 else b"")
+    assert dataset.PixelData == expected_bytes and len(expected_bytes) == 26
+    for entry in instance.segments:
+        _, actual = independent_pixels(instance.path, images, entry.segment_number)
+        np.testing.assert_array_equal(actual, truth[..., entry.segment_number - 1])
+        assert entry.voxel_count == int(actual.sum())
+        assert entry.mask_sha256 == hash_file(segments[entry.segment_number - 1].mask_path)
+    decoded = hd.seg.segread(instance.path).get_pixels_by_source_instance(source_ids, segment_numbers=list(range(1, 9)), assert_missing_frames_are_empty=True)
+    np.testing.assert_array_equal(decoded, truth)
+    assert list(instance.path.parent.iterdir()) == [instance.path]
+
+
+@pytest.mark.parametrize("limit", [100, 10_000])
+def test_packed_pixels_and_final_metadata_respect_the_instance_size_bound(fixture, monkeypatch, limit):
+    monkeypatch.setattr(dicom_seg, "_MAX_ENCODED_BYTES", limit)
+    with pytest.raises(dicom_seg.DicomSegError, match="file size"):
+        export(fixture)
+    assert not fixture["output"].exists()
+    assert not list(fixture["output"].parent.glob(".dicom-seg-*"))
+
+
+def test_encoded_frame_metadata_is_bounded_even_for_tiny_pixel_arrays(fixture, monkeypatch):
+    monkeypatch.setattr(dicom_seg, "_MAX_ENCODED_FRAMES", 1)
+    with pytest.raises(dicom_seg.DicomSegError, match="frame count"):
+        export(fixture)
+    assert not fixture["output"].exists()
+    assert not list(fixture["output"].parent.glob(".dicom-seg-*"))
 
 
 @pytest.mark.parametrize("order", list(permutations(range(3))))

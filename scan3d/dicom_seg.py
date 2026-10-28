@@ -1,8 +1,8 @@
 """Exact, overlap-preserving DICOM SEG export from revision-bound voxel masks.
 
-Each selected structure becomes one binary SEG instance in a shared new series.
-This bounds working memory independently of the number of selected structures;
-neither source CT pixels nor a dense multi-structure labelmap are assembled.
+Selected structures share one binary SEG instance. Masks are encoded one at a
+time and packed pixels are streamed through disk, without assembling source CT
+pixels or a dense multi-structure labelmap.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from importlib import metadata
+from io import BufferedReader
 from pathlib import Path
 import re
 import tempfile
@@ -29,6 +30,8 @@ _VOXEL_TOLERANCE = 1e-3
 _GRID_TOLERANCE_VOXELS = 0.05
 _GRID_TOLERANCE_MM = 0.05
 _MAX_VOXELS = 512 * 1024**2
+_MAX_ENCODED_BYTES = 512 * 1024**2
+_MAX_ENCODED_FRAMES = 100_000
 
 
 class DicomSegError(ValueError):
@@ -46,12 +49,18 @@ class SegmentInput:
 @dataclass(frozen=True, slots=True)
 class ExportedSegment:
     structure_id: str
+    segment_number: int
+    voxel_count: int
+    mask_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExportedInstance:
     path: Path
     sop_instance_uid: str
     sha256: str
     size: int
-    voxel_count: int
-    mask_sha256: str
+    segments: tuple[ExportedSegment, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +70,7 @@ class ExportResult:
     study_instance_uid: str
     frame_of_reference_uid: str
     reference_sha256: str
-    files: tuple[ExportedSegment, ...]
+    files: tuple[ExportedInstance, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,6 +307,108 @@ def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind,
     return result
 
 
+class _PackedPixels:
+    """Append exact bit counts, without padding between segments or frames."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.pending = np.empty(0, dtype=np.uint8)
+        self.bit_count = 0
+
+    def append(self, data, bit_count, cancelled):
+        self.bit_count += bit_count
+        if (self.bit_count + 7) // 8 > _MAX_ENCODED_BYTES:
+            raise DicomSegError("Selected masks exceed the bounded DICOM SEG file size; export fewer structures")
+        byte_count = (bit_count + 7) // 8
+        for offset in range(0, byte_count, 64 * 1024):
+            _check_cancelled(cancelled)
+            chunk = memoryview(data)[offset : min(offset + 64 * 1024, byte_count)]
+            useful_bits = min(len(chunk) * 8, bit_count - offset * 8)
+            if not len(self.pending) and useful_bits == len(chunk) * 8:
+                self.stream.write(chunk)
+                continue
+            bits = np.unpackbits(np.frombuffer(chunk, dtype=np.uint8), bitorder="little")[:useful_bits]
+            if len(self.pending):
+                bits = np.concatenate((self.pending, bits))
+            complete = len(bits) // 8 * 8
+            self.stream.write(np.packbits(bits[:complete], bitorder="little").tobytes())
+            self.pending = bits[complete:].copy()
+
+    def finish(self):
+        if len(self.pending):
+            self.stream.write(np.packbits(self.pending, bitorder="little").tobytes())
+        # Buffered OB writing uses the buffer's exact length in the element
+        # header; the value itself must already have DICOM's even-byte padding.
+        if self.stream.tell() % 2:
+            self.stream.write(b"\x00")
+        self.stream.flush()
+
+
+class _PixelReader(BufferedReader):
+    def __init__(self, raw, cancelled):
+        super().__init__(raw)
+        self.cancelled = cancelled
+        self.checked_bytes = 0
+
+    def read(self, size=-1):
+        if self.checked_bytes >= 1024**2:
+            _check_cancelled(self.cancelled)
+            self.checked_bytes = 0
+        value = super().read(size)
+        self.checked_bytes += len(value)
+        return value
+
+
+def _merge_segment(combined, part, segment_number, used_sources, cancelled):
+    frames = part.PerFrameFunctionalGroupsSequence
+    if len(combined.PerFrameFunctionalGroupsSequence) + len(frames) > _MAX_ENCODED_FRAMES:
+        raise DicomSegError("Selected masks exceed the bounded DICOM SEG frame count; export fewer structures")
+    description = part.SegmentSequence[0]
+    description.SegmentNumber = segment_number
+    combined.SegmentSequence.append(description)
+    for index, frame in enumerate(frames):
+        if index % 256 == 0:
+            _check_cancelled(cancelled)
+        frame.SegmentIdentificationSequence[0].ReferencedSegmentNumber = segment_number
+        source = str(frame.DerivationImageSequence[0].SourceImageSequence[0].ReferencedSOPInstanceUID)
+        used_sources.add(source)
+        frame.FrameContentSequence[0].DimensionIndexValues = [segment_number, 1]
+        combined.PerFrameFunctionalGroupsSequence.append(frame)
+
+
+def _combined_header(part):
+    # Keep pydicom metadata only: highdicom's instance-specific lookup caches
+    # belong to the temporary single-segment image and must not escape it.
+    combined = pydicom.Dataset()
+    for element in part:
+        if element.keyword not in {"PixelData", "SegmentSequence", "PerFrameFunctionalGroupsSequence"}:
+            combined.add(deepcopy(element))
+    combined.file_meta = deepcopy(part.file_meta)
+    combined.preamble = part.preamble
+    combined.SegmentSequence = []
+    combined.PerFrameFunctionalGroupsSequence = []
+    pointers = [int(item.DimensionIndexPointer) for item in combined.DimensionIndexSequence]
+    if pointers != [0x0062000B, 0x00200032]:
+        raise DicomSegError("DICOM SEG export requires qualification of this highdicom dimension layout")
+    return combined
+
+
+def _finish_dimensions(combined, stack, used_sources, cancelled):
+    # Omitted empty planes can give each temporary segment a different local
+    # rank. One output instance needs one gap-free rank for each used position.
+    used = [str(image.SOPInstanceUID) for image in stack.images if str(image.SOPInstanceUID) in used_sources]
+    rank = {uid: index for index, uid in enumerate(used, start=1)}
+    for index, frame in enumerate(combined.PerFrameFunctionalGroupsSequence):
+        if index % 256 == 0:
+            _check_cancelled(cancelled)
+        source = str(frame.DerivationImageSequence[0].SourceImageSequence[0].ReferencedSOPInstanceUID)
+        frame.FrameContentSequence[0].DimensionIndexValues[1] = rank[source]
+    combined.NumberOfFrames = len(combined.PerFrameFunctionalGroupsSequence)
+    # Independent binary masks retain overlap. Avoid claiming NO from the first
+    # temporary segment without allocating a second full-volume union to prove it.
+    combined.SegmentsOverlap = "UNDEFINED" if len(combined.SegmentSequence) > 1 else "NO"
+
+
 def _export_segmentation(source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled=None, progress=None) -> ExportResult:
     """Atomically publish a new series; never overwrite inputs or prior exports.
 
@@ -331,35 +442,49 @@ def _export_segmentation(source_paths, reference_path, segments, output_dir, *, 
     stamps.append((reference_path, reference_stamp))
     series_uid = generate_uid()
     output_dir.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    files = []
+    exported_segments = []
     if progress is not None:
         progress(0, len(segments))
     with tempfile.TemporaryDirectory(prefix=".dicom-seg-", dir=output_dir.parent) as temporary:
         staging = Path(temporary)
-        for index, segment in enumerate(segments, start=1):
-            _check_cancelled(cancelled)
-            mask_path = Path(segment.mask_path)
-            stamps.append((mask_path, _stamp(mask_path)))
-            mask_digest = hash_file(mask_path)
-            mask, _, _ = imaging._binary(mask_path, reference, affine)
-            count = int(np.count_nonzero(mask))
-            if not count:
-                raise DicomSegError("A selected structure has an empty mask; export only nonempty masks")
-            pixels = _project(mask, stack)
-            segmentation = _encode(stack, pixels, segment, series_uid=series_uid, instance_number=index, source_kind=source_kind, revision_id=revision_id)
-            _check_cancelled(cancelled)
-            name = f"segment-{index:04d}.dcm"
-            destination = staging / name
-            segmentation.save_as(destination, enforce_file_format=True)
-            destination.chmod(0o600)
-            files.append(
-                ExportedSegment(
-                    segment.id, output_dir / name, str(segmentation.SOPInstanceUID), hash_file(destination), destination.stat().st_size, count, mask_digest
-                )
-            )
-            del mask, pixels, segmentation
-            if progress is not None:
-                progress(index, len(segments))
+        spool = staging / ".packed-pixels"
+        combined, used_sources = None, set()
+        with spool.open("wb") as pixel_stream:
+            packed = _PackedPixels(pixel_stream)
+            for index, segment in enumerate(segments, start=1):
+                _check_cancelled(cancelled)
+                mask_path = Path(segment.mask_path)
+                stamps.append((mask_path, _stamp(mask_path)))
+                mask_digest = hash_file(mask_path)
+                mask, _, _ = imaging._binary(mask_path, reference, affine)
+                count = int(np.count_nonzero(mask))
+                if not count:
+                    raise DicomSegError("A selected structure has an empty mask; export only nonempty masks")
+                pixels = _project(mask, stack)
+                part = _encode(stack, pixels, segment, series_uid=series_uid, instance_number=1, source_kind=source_kind, revision_id=revision_id)
+                if combined is None:
+                    combined = _combined_header(part)
+                _merge_segment(combined, part, index, used_sources, cancelled)
+                packed.append(part.PixelData, int(part.NumberOfFrames) * int(part.Rows) * int(part.Columns), cancelled)
+                exported_segments.append(ExportedSegment(segment.id, index, count, mask_digest))
+                del mask, pixels, part
+                if progress is not None:
+                    progress(index, len(segments))
+            packed.finish()
+        _finish_dimensions(combined, stack, used_sources, cancelled)
+        _check_cancelled(cancelled)
+        name = "segment-0001.dcm"
+        destination = staging / name
+        with _PixelReader(spool.open("rb", buffering=0), cancelled) as pixel_stream:
+            combined.add_new(0x7FE00010, "OB", pixel_stream)
+            combined.save_as(destination, enforce_file_format=True)
+            del combined.PixelData
+        spool.unlink()
+        destination.chmod(0o600)
+        size = destination.stat().st_size
+        if size > _MAX_ENCODED_BYTES:
+            raise DicomSegError("Selected masks exceed the bounded DICOM SEG file size; export fewer structures")
+        instance = ExportedInstance(output_dir / name, str(combined.SOPInstanceUID), hash_file(destination), size, tuple(exported_segments))
         _check_cancelled(cancelled)
         if any(_stamp(path) != before for path, before in stamps):
             raise DicomSegError("An original CT, reference image or mask changed during DICOM SEG export")
@@ -372,7 +497,7 @@ def _export_segmentation(source_paths, reference_path, segments, output_dir, *, 
         str(stack.images[0].StudyInstanceUID),
         str(stack.images[0].FrameOfReferenceUID),
         reference_digest,
-        tuple(files),
+        (instance,),
     )
 
 

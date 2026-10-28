@@ -245,6 +245,17 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    during activation. Actual OsiriX display is still unconfirmed; refresh and
    explicitly export to generate the updated SOPs. Audit/guarded rollback:
    `.runtime/dicom-seg-per-frame-20261028T191145Z/`.
+   The user then reports only one of eight masks visible and explicitly allowed
+   a read-only check of that affected scan. Its export contains all eight
+   nonempty masks in separate SOPs, with matching frozen hashes/counts and
+   successful delivery receipts; no clinical identifiers/images were retained.
+   A combined single-instance, multi-segment encoder (version 3) is qualified
+   and staged: 1,096 backend / 505 web tests, eight browser gates, real-encoder
+   eight-mask API checks and independent packing checks pass. It streams packed
+   pixels with bounded per-mask memory and preserves old exports. Backend
+   activation needs fresh approval for an idle restart; frontend/Orthanc need
+   no changes. Actual OsiriX display still needs confirmation. Audit:
+   `.runtime/dicom-seg-combined-20261028T192927Z/`.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification

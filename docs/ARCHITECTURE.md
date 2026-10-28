@@ -231,9 +231,13 @@ that every original CT pixel matches an integer native voxel; no mask resampling
 is allowed. Every slice's four corners must agree within both 0.05 voxel per
 axis and 0.05 mm in patient space. These bounds accommodate accumulated
 converter/metadata rounding while retaining unambiguous integer addressing,
-exact dimensions and complete source coverage. Each nonempty structure becomes
-one binary SEG instance in a shared new series, bounding memory independently of structure count and preserving
-overlaps. Only CT headers are read; source CT pixel arrays are not assembled.
+exact dimensions and complete source coverage. All selected nonempty structures
+become independently numbered segments in one binary SEG instance. Each native
+mask and its source-plane projection are processed separately; packed bits stream
+through a temporary file into Pixel Data, avoiding a structures-by-volume array.
+Frame dimension indices are rebuilt consistently across all segments, including
+disjoint occupied slices and overlapping masks. Only CT headers are read;
+source CT pixel arrays are not assembled.
 UTF-8 metadata preserves source names and segment labels, and corrected masks
 are described as semiautomatic 3DScan outputs rather than untouched model output.
 Segment identification is stored per frame, matching the accepted synthetic
@@ -256,8 +260,9 @@ Export never changes or activates a segmentation revision. The first adapter
 requires an original classic CT imported through the configured archive.
 
 Synthetic API-to-Orthanc-to-OsiriX transport and prototype basic ROI display
-pass. The user reports that the first per-structure encoding is not discovered
-by OsiriX; its per-frame compatibility update still needs display confirmation.
+pass. The per-frame update enabled discovery, but the user reports only one
+of eight masks showing from separate SEG objects. The combined-instance update
+matches the prototype's multi-segment packaging; its display remains unconfirmed.
 Exact clinical alignment/editing remains user qualification. highdicom
 0.28.2 and pyjpegls 1.5.1 are pinned in the deployment lock. The integrated feature
 is qualified and active; [the runbook](ORTHANC.md) records runtime details.

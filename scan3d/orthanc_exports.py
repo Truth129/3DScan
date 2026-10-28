@@ -24,7 +24,7 @@ from .store import identifier, now, public_job
 
 log = logging.getLogger(__name__)
 DELIVERY_WAIT_SECONDS = 120
-EXPORT_ENCODING_VERSION = 2
+EXPORT_ENCODING_VERSION = 3
 
 
 class ExportUnavailable(ValueError):
@@ -32,7 +32,7 @@ class ExportUnavailable(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class _File:
+class _LegacyFile:
     __pydantic_config__ = ConfigDict(extra="forbid", revalidate_instances="always")
 
     structure_id: str
@@ -44,6 +44,29 @@ class _File:
     sha256: Digest
     size: Positive
     voxel_count: Positive
+
+
+@dataclass(frozen=True, slots=True)
+class _Segment:
+    __pydantic_config__ = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    structure_id: str
+    name: str
+    color: str
+    mask_sha256: Digest
+    voxel_count: Positive
+    segment_number: Annotated[int, Field(ge=1, le=1000)]
+
+
+@dataclass(frozen=True, slots=True)
+class _File:
+    __pydantic_config__ = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    path: Annotated[str, Field(pattern=r"^segment-[0-9]{4}\.dcm$")]
+    sop_instance_uid: DicomUID
+    sha256: Digest
+    size: Positive
+    segments: Annotated[tuple[_Segment, ...], Field(min_length=1, max_length=1000)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +88,7 @@ class _Artifact:
     study_instance_uid: DicomUID
     frame_of_reference_uid: DicomUID
     created_at: str
-    files: Annotated[tuple[_File, ...], Field(min_length=1, max_length=1000)]
+    files: Annotated[tuple[_File | _LegacyFile, ...], Field(min_length=1, max_length=1000)]
     encoding_version: Positive = 1
 
 
@@ -291,7 +314,7 @@ class OrthancExports:
                 "archived": False,
                 "sent": False,
                 "segments_count": len(inputs.structures),
-                "instance_count": len(inputs.structures),
+                "instance_count": 1,
                 "structure_ids": [item["id"] for item in inputs.structures],
             }
             if destination:
@@ -364,15 +387,21 @@ class OrthancExports:
                 encoding_version=job["payload"]["encoding_version"],
                 files=tuple(
                     _File(
-                        item.structure_id,
-                        metadata[item.structure_id]["name"],
-                        metadata[item.structure_id]["color"],
-                        item.mask_sha256,
                         item.path.name,
                         item.sop_instance_uid,
                         item.sha256,
                         item.size,
-                        item.voxel_count,
+                        tuple(
+                            _Segment(
+                                segment.structure_id,
+                                metadata[segment.structure_id]["name"],
+                                metadata[segment.structure_id]["color"],
+                                segment.mask_sha256,
+                                segment.voxel_count,
+                                segment.segment_number,
+                            )
+                            for segment in item.segments
+                        ),
                     )
                     for item in result.files
                 ),
@@ -381,6 +410,7 @@ class OrthancExports:
             artifact = _ARTIFACT.validate_python(artifact)
             atomic_json(manifest_path, _ARTIFACT.dump_python(artifact, mode="json"))
             self._check_inputs(job)
+        segments = tuple(segment for item in artifact.files if isinstance(item, _File) for segment in item.segments)
         if (
             artifact.export_id != job["payload"]["export_id"]
             or artifact.artifact_key != job["payload"]["artifact_key"]
@@ -396,20 +426,28 @@ class OrthancExports:
             or artifact.source_kind != inputs.revision["source"]
             or artifact.study_instance_uid != inputs.source.snapshot.study_uid
             or artifact.frame_of_reference_uid != inputs.source.frame_of_reference_uid
-            or [item.structure_id for item in artifact.files] != [item["id"] for item in inputs.structures]
+            or len(artifact.files) != 1
+            or any(not isinstance(item, _File) for item in artifact.files)
+            or [segment.structure_id for segment in segments] != [item["id"] for item in inputs.structures]
+            or [segment.segment_number for segment in segments] != list(range(1, len(segments) + 1))
             or len({item.sop_instance_uid for item in artifact.files}) != len(artifact.files)
+            or len({item.path for item in artifact.files}) != len(artifact.files)
         ):
             raise ExportUnavailable("The cached DICOM SEG export differs from its frozen source or saved revision.")
-        for output, selected in zip(artifact.files, inputs.structures):
+        for output in artifact.files:
             path = directory / "dicom" / output.path
             if (
                 path.is_symlink()
                 or not path.is_file()
                 or path.stat().st_size != output.size
                 or _hash(path, lambda: self.service.cancelled(job)) != output.sha256
-                or _hash(selected["mask_file"], lambda: self.service.cancelled(job)) != output.mask_sha256
-                or output.name != selected["name"]
-                or output.color != selected["color"]
+            ):
+                raise ExportUnavailable("The prepared DICOM SEG bytes changed. Delivery was blocked.")
+        for segment, selected in zip(segments, inputs.structures, strict=True):
+            if (
+                _hash(selected["mask_file"], lambda: self.service.cancelled(job)) != segment.mask_sha256
+                or segment.name != selected["name"]
+                or segment.color != selected["color"]
             ):
                 raise ExportUnavailable("The saved masks or prepared DICOM SEG bytes changed. Delivery was blocked.")
         self.service.check_cancel(job)
@@ -462,14 +500,15 @@ class OrthancExports:
 
     def _result(self, artifact, receipt, destination, display_name):
         uploaded = receipt.uploaded
+        segments = tuple(segment for item in artifact.files for segment in item.segments)
         result = {
             "export_id": artifact.export_id,
             "encoding_version": artifact.encoding_version,
-            "archived": all(item.structure_id in uploaded for item in artifact.files),
+            "archived": all(item.path in uploaded for item in artifact.files),
             "sent": bool(destination and destination in receipt.destinations and receipt.destinations[destination].state == "success"),
-            "segments_count": len(artifact.files),
+            "segments_count": len(segments),
             "instance_count": len(artifact.files),
-            "structure_ids": [item.structure_id for item in artifact.files],
+            "structure_ids": [segment.structure_id for segment in segments],
         }
         if destination:
             result["destination"] = display_name
@@ -505,7 +544,9 @@ class OrthancExports:
                 sending = previous_delivery is not None and previous_delivery.state != "failure"
             artifact = self._artifact(job, directory)
             if receipt:
-                if receipt.manifest_sha256 != job["payload"]["artifact_manifest_sha256"]:
+                if receipt.manifest_sha256 != job["payload"]["artifact_manifest_sha256"] or not set(receipt.uploaded).issubset(
+                    item.path for item in artifact.files
+                ):
                     raise ExportUnavailable("The delivery receipt does not belong to this DICOM SEG artifact.")
             else:
                 receipt = _Receipt(job["payload"]["artifact_manifest_sha256"], {}, {})
@@ -516,7 +557,7 @@ class OrthancExports:
                     # Reuploading identical SOP bytes is idempotent and verifies
                     # their readback before trusting a cached instance ID.
                     upload = client.upload_instance(directory / "dicom" / item.path, expected_sha256=item.sha256)
-                    receipt.uploaded[item.structure_id] = upload["id"]
+                    receipt.uploaded[item.path] = upload["id"]
                     save_receipt()
                 self.service.check_cancel(job)
                 if destination:
@@ -540,7 +581,7 @@ class OrthancExports:
                             sending = True
                             job["payload"]["delivery_state"] = "starting"
                             self.service.store.update_job(job["id"], payload=job["payload"])
-                            remote_id = client.start_store([receipt.uploaded[item.structure_id] for item in artifact.files], destination)
+                            remote_id = client.start_store([receipt.uploaded[item.path] for item in artifact.files], destination)
                             delivery = _Delivery("pending", remote_id, delivery.attempt_id)
                             receipt.destinations[destination] = delivery
                             save_receipt()

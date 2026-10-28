@@ -71,6 +71,8 @@ export adapter requires classic CT imported through the configured Orthanc.
 Export tolerates tightly bounded coordinate rounding while preserving exact
 mask bits and original DICOM frame geometry; incompatible grids are blocked.
 Segment identification uses the per-frame layout of the accepted prototype.
+All selected masks are packaged as separate named segments in one SEG instance,
+preserving overlaps without assembling a multi-mask volume in memory.
 After encoder updates, an explicit export creates fresh files; earlier exports
 remain retained. OsiriX display of this compatibility update needs confirmation.
 The integration is qualified and active; see the runbook for runtime details.

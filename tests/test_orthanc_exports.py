@@ -5,6 +5,7 @@ import copy
 from dataclasses import dataclass
 import hashlib
 import importlib
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
@@ -146,34 +147,36 @@ def rig(tmp_path, monkeypatch):
         assert not output_dir.exists()
         output_dir.mkdir(parents=True)
         calls.append(tuple(segments))
-        files = []
+        encoded_segments = []
+        sop_uid = f"2.25.{uuid.uuid4().int}"
+        chunks = [f"synthetic multi-segment SEG {sop_uid}"]
         for index, segment in enumerate(sorted(segments, key=lambda item: item.id), 1):
             if cancelled():
                 raise InterruptedError("Synthetic encoding cancelled")
             mask_digest = hashlib.sha256(segment.mask_path.read_bytes()).hexdigest()
-            sop_uid = f"2.25.{uuid.uuid4().int}"
-            data = f"synthetic SEG {segment.id} {mask_digest} {sop_uid}".encode()
-            path = output_dir / f"segment-{index:04d}.dcm"
-            path.write_bytes(data)
-            files.append(
+            chunks.append(f"{index} {segment.id} {mask_digest}")
+            encoded_segments.append(
                 SimpleNamespace(
                     structure_id=segment.id,
-                    path=path,
-                    sop_instance_uid=sop_uid,
-                    sha256=hashlib.sha256(data).hexdigest(),
-                    size=len(data),
-                    voxel_count=1,
+                    segment_number=index,
+                    voxel_count=int(np.asanyarray(nib.load(segment.mask_path).dataobj).sum()),
                     mask_sha256=mask_digest,
                 )
             )
             progress(index, len(segments))
+        data = "\n".join(chunks).encode()
+        path = output_dir / "segment-0001.dcm"
+        path.write_bytes(data)
+        instance = SimpleNamespace(
+            path=path, sop_instance_uid=sop_uid, sha256=hashlib.sha256(data).hexdigest(), size=len(data), segments=tuple(encoded_segments)
+        )
         return SimpleNamespace(
             revision_id=revision_id,
             series_instance_uid=f"2.25.{uuid.uuid4().int}",
             study_instance_uid=STUDY_UID,
             frame_of_reference_uid=FRAME_UID,
             reference_sha256=hashlib.sha256(reference_path.read_bytes()).hexdigest(),
-            files=tuple(files),
+            files=(instance,),
         )
 
     monkeypatch.setitem(sys.modules, "scan3d.dicom_seg", SimpleNamespace(SegmentInput=SegmentInput, export_segmentation=encode, DicomSegError=DicomSegError))
@@ -216,7 +219,7 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
         "available": True,
         "destinations": [{"id": "osirix", "name": "OsiriX", "aet": "SYNTHETIC_OSIRIX"}],
         "exports": [],
-        "encoding_version": 2,
+        "encoding_version": 3,
     }
     job = start(rig)
     assert job["kind"] == "orthanc_export" and job["revision_id"] == rig.revision["id"]
@@ -226,20 +229,21 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
     result = finished["result"]["dicom_seg"]
     assert result == {
         "export_id": finished["payload"]["export_id"],
-        "encoding_version": 2,
+        "encoding_version": 3,
         "archived": True,
         "sent": False,
         "segments_count": 2,
-        "instance_count": 2,
+        "instance_count": 1,
         "structure_ids": ["test:0", "test:1"],
     }
     directory, manifest = artifact(rig, job)
     assert manifest["revision_id"] == rig.revision["id"]
     assert manifest["source_manifest_sha256"] == rig.case["import_source"]["manifest_sha256"]
     assert manifest["source_snapshot"] == rig.case["import_source"]["snapshot"]
-    assert len({item["sop_instance_uid"] for item in manifest["files"]}) == 2
+    assert len({item["sop_instance_uid"] for item in manifest["files"]}) == 1
+    assert [segment["segment_number"] for segment in manifest["files"][0]["segments"]] == [1, 2]
     assert hashlib.sha256((directory / "export.json").read_bytes()).hexdigest() == finished["payload"]["artifact_manifest_sha256"]
-    assert len(rig.calls) == 1 and len(rig.archive.uploads) == 2 and not rig.archive.sends
+    assert len(rig.calls) == 1 and len(rig.archive.uploads) == 1 and not rig.archive.sends
     assert rig.service.store.list("revisions", rig.case["id"]) == before
     assert rig.service.store.get("cases", rig.case["id"])["active_revision_id"] == rig.base["id"]
     history = rig.http.get(rig.endpoint).json()["exports"]
@@ -261,45 +265,145 @@ def test_configured_send_deduplicates_jobs_and_reuses_archive_artifact(rig):
     assert start(rig, destination="osirix", structures=["test:1"])["id"] == finished["id"]
 
 
-def legacy_export(rig):
-    """Persist the exact pre-versioning job/manifest shape before upgrade tests."""
+def eight_mask_revision(rig):
+    template = rig.revision["structures"][0]
+    image = nib.load(template["mask_file"])
+    for index in range(2, 8):
+        mask_path = Path(template["mask_file"]).with_name(f"saved-mask-{index}.nii.gz")
+        values = np.zeros(image.shape, dtype=np.uint8)
+        values[index, 1:4, 1] = 1
+        nib.save(nib.Nifti1Image(values, image.affine), mask_path)
+        rig.revision["structures"].append(
+            {**template, "id": f"test:{index}", "name": f"Synthetic mask {index}", "mask_file": str(mask_path), "voxel_count": int(values.sum())}
+        )
+    rig.service.store.save("revisions", rig.revision)
+
+
+def test_eight_selected_masks_archive_and_send_as_one_instance(rig):
+    eight_mask_revision(rig)
+    queued = start(rig, destination="osirix")
+    assert queued["result"]["dicom_seg"]["segments_count"] == 8
+    assert queued["result"]["dicom_seg"]["instance_count"] == 1
+    finished = execute(rig, queued)
+    assert finished["status"] == "completed", finished["error"]
+    result = finished["result"]["dicom_seg"]
+    assert result["sent"] and result["archived"] and result["segments_count"] == 8 and result["instance_count"] == 1
+    assert result["structure_ids"] == [f"test:{index}" for index in range(8)]
+    directory, manifest = artifact(rig, finished)
+    assert len(manifest["files"]) == len(rig.archive.blobs) == len(rig.archive.uploads) == len(rig.archive.sends) == 1
+    assert [item["segment_number"] for item in manifest["files"][0]["segments"]] == list(range(1, 9))
+    receipt = json.loads((directory / "delivery.json").read_text())
+    assert list(receipt["uploaded"]) == [manifest["files"][0]["path"]]
+    assert len(rig.archive.sends[0][1]) == 1
+    assert len(rig.calls) == 1
+
+
+@pytest.mark.parametrize("problem", ["duplicate_segment_number", "missing_mask", "multiple_instances"])
+def test_incomplete_or_ambiguous_combined_encoding_never_uploads(rig, monkeypatch, problem):
+    module = sys.modules["scan3d.dicom_seg"]
+    encode = module.export_segmentation
+
+    def invalid(*args, **kwargs):
+        result = encode(*args, **kwargs)
+        if problem == "duplicate_segment_number":
+            result.files[0].segments[1].segment_number = 1
+        elif problem == "missing_mask":
+            result.files[0].segments = result.files[0].segments[:1]
+        else:
+            result.files = result.files * 2
+        return result
+
+    monkeypatch.setattr(module, "export_segmentation", invalid)
+    failed = execute(rig, start(rig, destination="osirix"))
+    assert failed["status"] == "failed" and "frozen source" in failed["error"]
+    assert not rig.archive.uploads and not rig.archive.sends
+
+
+def test_combined_receipt_rejects_foreign_instance_keys_before_upload_or_delivery(rig):
+    rig.archive.poll_error = OrthancError("Synthetic poll interruption")
+    first = execute(rig, start(rig, destination="osirix"))
+    directory, manifest = artifact(rig, first)
+    receipt_path = directory / "delivery.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["uploaded"]["unrelated-instance.dcm"] = oid(999)
+    receipt_path.write_text(json.dumps(receipt))
+    uploads, sends = len(rig.archive.uploads), len(rig.archive.sends)
+    failed = execute(rig, start(rig, destination="osirix"))
+    assert failed["status"] == "failed" and "receipt does not belong" in failed["error"]
+    assert len(rig.archive.uploads) == uploads and len(rig.archive.sends) == sends
+
+
+def legacy_export(rig, version=1):
+    """Build historical per-structure artifacts without using live legacy code."""
+    from scan3d.orthanc_exports import _ARTIFACT
+
     finished = execute(rig, start(rig, destination="osirix"))
     payload, result = finished["payload"], finished["result"]
     directory, manifest = artifact(rig, finished)
-    payload["artifact_key"] = payload.pop("input_key")
-    payload.pop("encoding_version")
+    identity = {key: payload[key] for key in ("revision_id", "reference_image_id", "source_manifest_sha256", "structures")}
+    if version == 1:
+        payload["artifact_key"] = payload.pop("input_key")
+        payload.pop("encoding_version")
+        manifest.pop("encoding_version")
+        result["dicom_seg"].pop("encoding_version")
+    else:
+        payload["artifact_key"] = hashlib.sha256(
+            json.dumps({**identity, "encoding_version": version}, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        payload["encoding_version"] = manifest["encoding_version"] = result["dicom_seg"]["encoding_version"] = version
     payload["export_key"] = hashlib.sha256((payload["artifact_key"] + ":osirix").encode()).hexdigest()
     manifest["artifact_key"] = payload["artifact_key"]
-    manifest.pop("encoding_version")
+    segments = manifest["files"][0]["segments"]
+    files, uploaded, resources = [], {}, []
+    rig.archive.blobs.clear()
+    rig.archive.uploads.clear()
+    for index, segment in enumerate(segments, 1):
+        sop_uid = f"2.25.{uuid.uuid4().int}"
+        data = f"synthetic legacy SEG {segment['structure_id']} {segment['mask_sha256']} {sop_uid}".encode()
+        path = directory / "dicom" / f"segment-{index:04d}.dcm"
+        path.write_bytes(data)
+        entry = {key: value for key, value in segment.items() if key != "segment_number"}
+        entry.update(path=path.name, sop_instance_uid=sop_uid, sha256=hashlib.sha256(data).hexdigest(), size=len(data))
+        files.append(entry)
+        resource = rig.archive.upload_instance(path, expected_sha256=entry["sha256"])["id"]
+        resources.append(resource)
+        uploaded[segment["structure_id"]] = resource
+    manifest["files"] = files
     (directory / "export.json").write_text(json.dumps(manifest))
     payload["artifact_manifest_sha256"] = hashlib.sha256((directory / "export.json").read_bytes()).hexdigest()
     receipt = json.loads((directory / "delivery.json").read_text())
-    receipt["manifest_sha256"] = payload["artifact_manifest_sha256"]
+    receipt.update(manifest_sha256=payload["artifact_manifest_sha256"], uploaded=uploaded)
     (directory / "delivery.json").write_text(json.dumps(receipt))
-    result["dicom_seg"].pop("encoding_version")
+    remote_id, _, destination = rig.archive.sends[0]
+    rig.archive.sends[0] = (remote_id, tuple(resources), destination)
+    result["dicom_seg"]["instance_count"] = len(files)
+    parsed = _ARTIFACT.validate_json((directory / "export.json").read_bytes())
+    assert parsed.encoding_version == version and len(parsed.files) == len(segments)
     return rig.service.store.update_job(finished["id"], payload=payload, result=result)
 
 
-def test_encoding_upgrade_requires_explicit_export_and_preserves_legacy_sops_and_receipts(rig):
-    old = legacy_export(rig)
+@pytest.mark.parametrize("version", [1, 2])
+def test_encoding_upgrade_requires_explicit_export_and_preserves_legacy_sops_and_receipts(rig, version):
+    old = legacy_export(rig, version)
     old_directory, old_manifest = artifact(rig, old)
     old_bytes = {path.relative_to(old_directory): path.read_bytes() for path in old_directory.rglob("*") if path.is_file()}
     available = rig.http.get(rig.endpoint).json()
-    assert available["encoding_version"] == 2
+    assert available["encoding_version"] == 3
     assert available["exports"][0]["id"] == old["id"]
-    assert "encoding_version" not in available["exports"][0]["result"]["dicom_seg"]
+    assert available["exports"][0]["result"]["dicom_seg"].get("encoding_version", 1) == version
     rig.service.store.recover()
     rig.service.orthanc_exports.recover()
     assert len(rig.calls) == len(rig.archive.sends) == 1
     assert rig.http.post(rig.endpoint, json={"destination": "osirix", "resend": True}).status_code == 400
     fresh = start(rig, destination="osirix")
-    assert fresh["result"]["dicom_seg"]["encoding_version"] == 2
+    assert fresh["result"]["dicom_seg"]["encoding_version"] == 3
     assert fresh["result"]["dicom_seg"]["export_id"] != old["payload"]["export_id"]
     assert len(rig.calls) == len(rig.archive.sends) == 1
     finished = execute(rig, fresh)
     _, new_manifest = artifact(rig, finished)
-    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 2
-    assert new_manifest["encoding_version"] == 2
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 3
+    assert new_manifest["encoding_version"] == 3
+    assert len(new_manifest["files"]) == finished["result"]["dicom_seg"]["instance_count"] == 1
     assert {item["sop_instance_uid"] for item in old_manifest["files"]}.isdisjoint(item["sop_instance_uid"] for item in new_manifest["files"])
     assert old_bytes == {path.relative_to(old_directory): path.read_bytes() for path in old_directory.rglob("*") if path.is_file()}
     assert len(rig.calls) == len(rig.archive.sends) == 2
@@ -309,8 +413,9 @@ def test_encoding_upgrade_requires_explicit_export_and_preserves_legacy_sops_and
     assert len(rig.calls) == 2 and rig.archive.sends[-1][1:] == rig.archive.sends[-2][1:]
 
 
-def test_encoding_upgrade_does_not_hide_a_changed_saved_mask(rig):
-    legacy_export(rig)
+@pytest.mark.parametrize("version", [1, 2])
+def test_encoding_upgrade_does_not_hide_a_changed_saved_mask(rig, version):
+    legacy_export(rig, version)
     mask_path = Path(rig.revision["structures"][0]["mask_file"])
     image = nib.load(mask_path)
     values = np.asanyarray(image.dataobj).copy()
@@ -325,19 +430,23 @@ def test_newer_encoding_profile_reuses_input_identity_without_reusing_sops(rig, 
     import scan3d.orthanc_exports as exports
 
     old = execute(rig, start(rig))
-    monkeypatch.setattr(exports, "EXPORT_ENCODING_VERSION", 3)
+    monkeypatch.setattr(exports, "EXPORT_ENCODING_VERSION", 4)
     finished = execute(rig, start(rig))
-    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 3
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 4
     assert finished["payload"]["input_key"] == old["payload"]["input_key"]
     assert finished["payload"]["artifact_key"] != old["payload"]["artifact_key"]
     assert finished["payload"]["export_id"] != old["payload"]["export_id"]
     assert len(rig.calls) == 2 and not rig.archive.sends
 
 
-def test_queued_old_encoding_is_blocked_before_encoding_upload_or_delivery(rig):
+@pytest.mark.parametrize("version", [1, 2])
+def test_queued_old_encoding_is_blocked_before_encoding_upload_or_delivery(rig, version):
     queued = start(rig, destination="osirix")
     payload = rig.service.store.get("jobs", queued["id"])["payload"]
-    payload.pop("encoding_version")
+    if version == 1:
+        payload.pop("encoding_version")
+    else:
+        payload["encoding_version"] = version
     rig.service.store.update_job(queued["id"], payload=payload)
     failed = execute(rig, queued)
     assert failed["status"] == "failed" and "encoder was updated" in failed["error"]
@@ -398,7 +507,7 @@ def test_partial_uncertain_upload_retry_reuses_exact_persisted_sop_bytes(rig):
     assert finished["result"]["dicom_seg"]["sent"] is True
     assert (directory / "export.json").read_bytes() == original
     assert artifact(rig, retry)[1]["files"] == manifest["files"]
-    assert len(rig.archive.blobs) == 2 and len(rig.archive.sends) == 1
+    assert len(rig.archive.blobs) == 1 and len(rig.archive.sends) == 1
 
 
 @pytest.mark.parametrize("changed", ["mask", "seg", "manifest"])
@@ -411,7 +520,7 @@ def test_retry_blocks_changed_frozen_inputs_or_artifacts(rig, changed):
     elif changed == "seg":
         (directory / "dicom" / manifest["files"][0]["path"]).write_bytes(b"changed SEG")
     else:
-        manifest["files"][0]["name"] = "changed name"
+        manifest["files"][0]["segments"][0]["name"] = "changed name"
         (directory / "export.json").write_text(json.dumps(manifest))
     uploads = len(rig.archive.uploads)
     if changed == "mask":
@@ -465,7 +574,7 @@ def test_queued_export_refuses_valid_mask_rewritten_in_place_before_first_encode
 
 def test_cancel_after_last_upload_never_sends_and_explicit_retry_reuses_artifact(rig):
     job = start(rig, destination="osirix")
-    rig.archive.on_upload = lambda: rig.service.store.update_job(job["id"], cancel_requested=True) if len(rig.archive.uploads) == 2 else None
+    rig.archive.on_upload = lambda: rig.service.store.update_job(job["id"], cancel_requested=True) if len(rig.archive.uploads) == 1 else None
     cancelled = execute(rig, job)
     assert cancelled["status"] == "cancelled" and not rig.archive.sends
     assert cancelled["result"]["dicom_seg"]["archived"] is True
@@ -514,7 +623,7 @@ def test_uncertain_send_requires_explicit_retry_with_same_sops_and_never_autores
     assert artifact(rig, finished)[1]["files"] == manifest["files"] and len(rig.calls) == 1
 
 
-@pytest.mark.parametrize("state,count,failed_count", [("Failure", 2, 1), ("Success", 1, 0), ("Success", 2, 1)])
+@pytest.mark.parametrize("state,count,failed_count", [("Failure", 1, 1), ("Success", 0, 0), ("Success", 2, 0), ("Success", 1, 1)])
 def test_delivery_requires_exact_successful_instance_count(rig, state, count, failed_count):
     rig.archive.remote_state, rig.archive.delivered_count, rig.archive.failed_count = state, count, failed_count
     failed = execute(rig, start(rig, destination="osirix"))
@@ -647,28 +756,54 @@ def test_manifest_publication_failure_retains_orphan_bytes_and_next_queued_expor
     assert len(rig.calls) == 2 and len(rig.archive.sends) == 1
 
 
-def test_manager_uses_actual_encoder_for_exact_saved_masks_and_source_references(rig, monkeypatch):
-    monkeypatch.delitem(sys.modules, "scan3d.dicom_seg")
-    importlib.import_module("scan3d.dicom_seg")
-    finished = execute(rig, start(rig, destination="osirix"))
+def test_manager_uses_actual_encoder_for_eight_exact_saved_masks_in_one_instance(rig, monkeypatch):
+    import scan3d
+
+    eight_mask_revision(rig)
+    with monkeypatch.context() as encoder_context:
+        # Import the real encoder for this job, then restore both registry and
+        # package attributes so neighboring fake-encoder fixtures stay isolated.
+        encoder_context.setattr(scan3d, "dicom_seg", None, raising=False)
+        encoder_context.delitem(sys.modules, "scan3d.dicom_seg")
+        importlib.import_module("scan3d.dicom_seg")
+        finished = execute(rig, start(rig, destination="osirix"))
     assert finished["status"] == "completed", finished["error"]
     directory, manifest = artifact(rig, finished)
-    assert len(manifest["files"]) == len(rig.archive.blobs) == 2
-    for item, selected in zip(manifest["files"], rig.revision["structures"]):
-        ds = pydicom.dcmread(directory / "dicom" / item["path"])
-        expected = np.asanyarray(nib.load(selected["mask_file"]).dataobj)[:, :, 1].T.astype(np.uint8)
-        assert np.array_equal(ds.pixel_array, expected)
-        assert ds.StudyInstanceUID == STUDY_UID and ds.FrameOfReferenceUID == FRAME_UID
-        assert ds.SeriesInstanceUID == manifest["series_instance_uid"] and ds.SOPInstanceUID == item["sop_instance_uid"]
-        assert ds.SegmentSequence[0].SegmentLabel == selected["name"]
-        assert ds.SegmentSequence[0].TrackingID == selected["id"]
-        refs = ds.ReferencedSeriesSequence[0]
-        assert refs.SeriesInstanceUID == SERIES_UID
-        assert {str(row.ReferencedSOPInstanceUID) for row in refs.ReferencedInstanceSequence} == {
-            row["sop_instance_uid"] for row in rig.archive.snapshot_doc["instances"]
-        }
-        assert ds.SegmentSequence[0].SegmentAlgorithmType == "AUTOMATIC"
-    assert not rig.calls and len(rig.archive.sends) == 1
+    assert len(manifest["files"]) == len(rig.archive.blobs) == len(rig.archive.uploads) == len(rig.archive.sends) == 1
+    item = manifest["files"][0]
+    blob = next(iter(rig.archive.blobs.values()))[1]
+    assert blob == (directory / "dicom" / item["path"]).read_bytes()
+    ds = pydicom.dcmread(BytesIO(blob))
+    assert len(ds.SegmentSequence) == len(item["segments"]) == 8
+    assert [int(segment.SegmentNumber) for segment in ds.SegmentSequence] == list(range(1, 9))
+    assert ds.StudyInstanceUID == STUDY_UID and ds.FrameOfReferenceUID == FRAME_UID
+    assert ds.SeriesInstanceUID == manifest["series_instance_uid"] and ds.SOPInstanceUID == item["sop_instance_uid"]
+    refs = ds.ReferencedSeriesSequence[0]
+    source_ids = [row["sop_instance_uid"] for row in rig.archive.snapshot_doc["instances"]]
+    assert refs.SeriesInstanceUID == SERIES_UID
+    assert {str(row.ReferencedSOPInstanceUID) for row in refs.ReferencedInstanceSequence} == set(source_ids)
+    frame_bits = np.unpackbits(np.frombuffer(ds.PixelData, dtype=np.uint8), bitorder="little")[: int(ds.NumberOfFrames) * int(ds.Rows) * int(ds.Columns)]
+    frames = frame_bits.reshape(int(ds.NumberOfFrames), int(ds.Rows), int(ds.Columns))
+    decoded = np.zeros((8, 3, 6, 8), dtype=np.uint8)
+    covered = set()
+    for frame, group in zip(frames, ds.PerFrameFunctionalGroupsSequence, strict=True):
+        number = int(group.SegmentIdentificationSequence[0].ReferencedSegmentNumber)
+        source = str(group.DerivationImageSequence[0].SourceImageSequence[0].ReferencedSOPInstanceUID)
+        plane = source_ids.index(source)
+        assert (number, plane) not in covered
+        covered.add((number, plane))
+        decoded[number - 1, plane] = frame
+    for index, selected in enumerate(rig.revision["structures"]):
+        expected = np.asanyarray(nib.load(selected["mask_file"]).dataobj).transpose(2, 1, 0)
+        np.testing.assert_array_equal(decoded[index], expected)
+        description = ds.SegmentSequence[index]
+        assert description.SegmentLabel == selected["name"] and description.TrackingID == selected["id"]
+        assert description.SegmentAlgorithmType == "AUTOMATIC"
+    result = finished["result"]["dicom_seg"]
+    assert result["sent"] and result["archived"] and result["segments_count"] == 8 and result["instance_count"] == 1
+    assert len(rig.archive.sends[0][1]) == 1 and not rig.calls
+    assert start(rig, destination="osirix")["id"] == finished["id"]
+    assert len(rig.archive.sends) == len(rig.archive.uploads) == 1
 
 
 @pytest.mark.parametrize("safe", [True, False])

@@ -3,9 +3,9 @@
 The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is
-implemented and active, but the user reports that OsiriX cannot discover masks
-in the first per-structure encoding. A per-frame compatibility update is active
-and still needs actual viewer display confirmation. The target is **OsiriX MD 14.3.0** on the local network, with
+implemented and active. The per-frame compatibility update enables discovery,
+but OsiriX shows only one of eight masks from separate SEG objects. A combined
+multi-segment object update is being qualified. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -109,7 +109,7 @@ source identity.
 
 In a saved segmentation's toolbar choose **DICOM SEG…**, select the nonempty
 masks, then **Archive in Orthanc** or choose a viewer and **Send to** it. This
-uses the current saved revision's masks, with independent objects preserving
+uses the current saved revision's masks, with independent segments preserving
 overlaps; source CT pixels are not sent again. The original patient/study/frame
 and source-image references are retained. CT must have been imported through
 the configured Orthanc; local-folder sources and MR are not supported by this
@@ -151,7 +151,8 @@ single-segment files is valid DICOM but differs from that prototype; OsiriX's
 exact rejection mechanism is not confirmed. The macro is moved, never duplicated
 between shared and per-frame groups, following
 [DICOM functional-group rules](https://dicom.nema.org/medical/dicom/current/output/chtml/part03/sect_C.7.6.16.html).
-Encoding version 2 generates new SOPs only on an explicit export, leaving prior
+Encoding version 3 places all selected masks in one SEG instance and generates
+new SOPs only on an explicit export, leaving prior
 files and delivery receipts intact. Refresh the app and use
 **Send to osirix** to create the updated files. **Send again** reuses files
 already sent with the current encoding. Successful C-STORE proves transport;
@@ -160,6 +161,17 @@ The compatibility update was activated with explicit approval; both worker
 lanes, the served frontend and aggregate library counts pass. Orthanc stayed
 running and no DICOM was sent during activation. Audit/guarded rollback:
 `.runtime/dicom-seg-per-frame-20261028T191145Z/`.
+
+The user subsequently confirms mask discovery but only one mask visible from
+an eight-mask export. With explicit read-only permission for that affected
+case, inspection confirms eight nonempty, distinct masks in eight valid objects,
+matching frozen hashes/counts and successful upload/delivery receipts. Each
+object has segment number 1 within one series. No clinical identifiers, images
+or masks were copied or retained as fixtures. OsiriX's internal handling is
+unconfirmed; one object containing all eight independently numbered segments
+matches the earlier accepted prototype. The combined encoder streams packed
+pixels and keeps the same per-mask memory bound; its actual display still
+needs confirmation after activation and an explicit fresh export.
 
 The user approved activation, which installed the qualified packages/frontend
 and `osirix` allowlist and restarted idle 3DScan. Both lanes are healthy; all 19
