@@ -1,7 +1,7 @@
 # Orthanc and OsiriX incoming studies
 
-The incoming connector is implemented and qualified with synthetic data. Main-app
-activation is staged; the LAN receiver is not yet running. Segmentation return
+The incoming connector is implemented, qualified with synthetic data and active
+in the main app. The incoming receiver is running. Segmentation return
 is deferred. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
@@ -49,25 +49,20 @@ is disabled and automatic result forwarding is not configured. A remote port is
 unused for incoming associations and does not configure sending results back to
 OsiriX.
 
-Orthanc 1.13 has no DICOM interface-binding option. Its wildcard DICOM listener
-therefore requires the existing host firewall and strict sender AE/IP checks.
-Before activation, apply this single rule in the workstation's terminal with
-administrator privileges (no other firewall rules are reset):
+Orthanc 1.13 has no DICOM interface-binding option. The user explicitly approved
+the existing any-address UFW TCP 4243 rule (IPv4/IPv6). Orthanc's sender AE/IP
+allowlist remains restricted to the Mac above. No other firewall rules were
+changed by the integration. The authenticated HTTP API remains loopback-only.
 
-```bash
-sudo ufw allow in on <interface> from 10.20.0.118 to 10.20.0.3 port 4243 proto tcp comment '3DScan OsiriX'
-```
-
-The host's UFW input default is DROP. Review the active policy when applying the
-rule. If either machine's IP changes, review the destination, sender allowlist
-and firewall rule. Tailscale access likewise needs an explicit update rather than
-a wildcard rule.
+If either machine's IP changes, review the destination and sender allowlist.
+Accepting the Mac through Tailscale also needs an explicit sender update.
 
 `deployment/scan3d-orthanc.service` is the receiver user-unit template. The main
-app needs its private `connection.env` as a systemd EnvironmentFile, the qualified
-frontend assets and an idle-service restart. Credentials are never sent to the
-browser or embedded in case/job responses. Service activation/restarts require
-the user's approval under `AGENTS.md`.
+app loads the private `connection.env` through its `orthanc.conf` systemd drop-in.
+The qualified frontend was installed with prior lazy chunks retained, and the
+idle app was restarted with approval. Credentials are never sent to the browser
+or embedded in case/job responses. Later service changes still require approval
+under `AGENTS.md`. Audit: `.runtime/orthanc-integration-20261028T075156Z/`.
 
 ## Import integrity and recovery
 

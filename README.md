@@ -58,10 +58,10 @@ search the archive, select one series and choose **Import selected series**.
 Then select its acquisition labels and choose **Open CT**. Both steps run on
 the CPU; receiving or opening a study never starts segmentation automatically.
 
-The connector is implemented, but the main app and receiver are **not yet
-activated**. Activation requires the Mac's address and sending AE title, an
-administrator-applied UFW rule and approval to restart the app. The separate
-synthetic archive remains available for development. See the
+The connector and incoming receiver are **active**. The destination address is
+`10.20.0.3`; the allowed sender is `10.20.0.118` with calling AE
+`OsiriX-mac`. The separate synthetic archive remains available for
+development. See the
 [Orthanc setup and transfer guide](docs/ORTHANC.md) for current status and
 connection settings. Sending segmentation results back to OsiriX is deferred.
 

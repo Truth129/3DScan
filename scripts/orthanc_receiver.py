@@ -1,7 +1,7 @@
-"""Prepare the separate incoming archive; activation requires a reviewed network rule.
+"""Prepare the separate incoming archive; activation needs reviewed network exposure.
 
 Orthanc 1.13 cannot bind its DICOM SCP to a selected interface. Its HTTP API
-stays loopback-only, while a host firewall must restrict TCP 4243 before start.
+stays loopback-only; review the host firewall and strict sender allowlist before start.
 """
 
 from __future__ import annotations
@@ -163,7 +163,7 @@ def prepare(directory: Path, remote_host: str, remote_aet: str) -> dict:
         "credentials_file": str(connection),
         "configuration": str(config),
         "unit": UNIT,
-        "activation_requires": "Restrict inbound TCP 4243 to the selected private interface and sender before starting the unit",
+        "activation_requires": "Review inbound TCP 4243 exposure and the configured sender allowlist before starting the unit",
     }
 
 

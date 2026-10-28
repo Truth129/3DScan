@@ -189,8 +189,12 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 2. **Orthanc incoming integration:** the adapter, CPU import/recovery/provenance and
    browser workflow are implemented. A separate private receiver targets OsiriX
    MD 14.3.0 at `10.20.0.118`, calling AE `OsiriX-mac`, sending to
-   `10.20.0.3:4243` / called AE `SCAN3D`. Main-app/receiver activation is staged,
-   pending the narrow UFW admin rule and explicit service-restart approval.
+   `10.20.0.3:4243` / called AE `SCAN3D`. Main-app/receiver activation is complete:
+   `scan3d-orthanc.service` is enabled, its authenticated API is loopback8044, and
+   the main app has its private EnvironmentFile drop-in. The user explicitly
+   approved the existing any-address UFW4243 rule; Orthanc still enforces the
+   exact sender IP/AE. App restart was approved and aggregate library counts
+   stayed unchanged. Audit: `.runtime/orthanc-integration-20261028T075156Z/`.
    Receiving through Tailscale and segmentation return are deferred. See
    `docs/ORTHANC.md` and the newest validation section before operating it.
 3. **Decisions waiting on the user:**

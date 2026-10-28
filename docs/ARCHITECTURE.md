@@ -12,8 +12,8 @@ is implemented and tested on `expansion`; X-ray, mammography, ultrasound, cathet
 angiography and cine ingestion still need their own adapters. Modality enum
 values alone do not enable those workflows.
 
-The incoming Orthanc adapter is implemented for selected-series import, with
-main-app/OsiriX receiver activation still pending. The broader clinic archive
+The incoming Orthanc adapter and OsiriX receiver are active for selected-series
+import. The broader clinic archive
 direction is recorded in [CLINIC_INTEGRATION.md](./CLINIC_INTEGRATION.md).
 See [Orthanc operation](ORTHANC.md) for activation and connection settings.
 
@@ -65,7 +65,7 @@ flowchart LR
   end
 
   UI <-->|"LAN / WAN · private Tailscale HTTPS"| API
-  OSIRIX["OsiriX MD 14.3.0"] -->|"DICOM Send · after activation"| ORTHANC[("Separate private Orthanc receiver<br/>AE SCAN3D · DICOM port 4243")]
+  OSIRIX["OsiriX MD 14.3.0"] -->|"DICOM Send"| ORTHANC[("Separate private Orthanc receiver<br/>AE SCAN3D · DICOM port 4243")]
   API -->|"REST browse and explicit selected-series copy"| ORTHANC
   API -->|"Scalar chunks and descriptors"| RAM
   API -->|"GLB meshes and mask slabs"| WEBGL
