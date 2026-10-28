@@ -286,12 +286,12 @@ reusable after cancellation or restart.
 
 ## Code map
 
-- [API and transport](../scan3d/api.py), [job lanes, dispatch and revision building](../scan3d/service.py), [SQLite, claims and activation](../scan3d/store.py).
-- [Orthanc transport](../scan3d/orthanc.py), [validated immutable archive records](../scan3d/orthanc_models.py), [CPU import and recovery](../scan3d/orthanc_imports.py).
+- [HTTP middleware and error mapping](../scan3d/api.py) with [request bodies](../scan3d/api_models.py) and routes for [health, catalogs and the license](../scan3d/api_system.py), [imports](../scan3d/api_imports.py), [case, job and revision records](../scan3d/api_cases.py), [correction sessions](../scan3d/api_reviews.py) and [viewer volumes, frames and exports](../scan3d/api_viewer.py).
+- [Job lanes, dispatch and revision building](../scan3d/service.py), [SQLite, claims and activation](../scan3d/store.py).
 - [nnInteractive engine](../scan3d/interactive.py) and its [supervised worker process](../scan3d/interactive_worker.py).
 - [DICOM preparation](../scan3d/dicom.py), [inference](../scan3d/segmentation.py), [native operations and measurements](../scan3d/imaging.py).
-- [Read-only Orthanc REST transport](../scan3d/orthanc.py), [snapshot import and recovery](../scan3d/orthanc_imports.py), [receiver operation](ORTHANC.md).
-- [CPU contouring and surface caches](../scan3d/surfaces.py), [GLB encoding and decoding](../scan3d/surface_glb.py), [bounded hashing and atomic artifact publication](../scan3d/fileio.py).
+- [Read-only Orthanc REST transport](../scan3d/orthanc.py), [validated immutable archive records](../scan3d/orthanc_models.py), [snapshot import and recovery](../scan3d/orthanc_imports.py), [receiver operation](ORTHANC.md).
+- [CPU contouring and surface caches](../scan3d/surfaces.py), [GLB encoding and decoding](../scan3d/surface_glb.py), [bounded hashing, archive extraction and atomic artifact publication](../scan3d/fileio.py).
 - [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display union](../scan3d/volume_mask_union.py).
 - [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone stack adapter](../web/src/lib/cornerstone-runtime.ts), [native MPR](../web/src/lib/cornerstone-mpr.ts), [shared memory budget](../web/src/lib/volume-memory-budget.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).
 - [Portable export](../scan3d/portable_export.py), [embedded offline data](../web/src/lib/portable-viewer.ts), [MRI expansion boundaries](./EXPANSION_FOUNDATION.md).

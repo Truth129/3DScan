@@ -244,6 +244,13 @@ class Service:
     def surface_cache(self):
         return self.settings.data_dir / "surface-cache"
 
+    def ct_revision(self, case_id, revision_id):
+        # A candidate is a read-only CT context, never an accepted revision or
+        # a new CT volume. Its immutable generation authorizes the mask paths.
+        if revision_id.startswith("review-"):
+            return self.reviews.candidate_revision(case_id, revision_id)
+        return self.store.revision(case_id, revision_id)
+
     def _analyze(self, ct, structure, geometry, on_decoded=None):
         """Reuse exact measurements only for identical mask bytes and CT grids."""
         from . import imaging, surfaces

@@ -12,7 +12,8 @@ import pytest
 from scipy import ndimage as ndi
 
 from scan3d import imaging, review_volume
-from scan3d.api import _FrameCache, create_app
+from scan3d.api import create_app
+from scan3d.api_viewer import _FrameCache
 from scan3d.config import Settings
 
 
