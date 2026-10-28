@@ -14,7 +14,6 @@ from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
 import gc
-import hashlib
 import os
 import sys
 import threading
@@ -22,6 +21,7 @@ import time
 
 import numpy as np
 
+from .fileio import hash_file
 from .imaging import _binary, _image, _save_mask, _voxel
 from .segmentation import SegmentationCancelled, _device_info
 
@@ -79,11 +79,7 @@ def _identity(path: Path) -> tuple:
 
 @lru_cache(maxsize=32)
 def _sha256(identity: tuple) -> str:
-    digest = hashlib.sha256()
-    with Path(identity[0]).open("rb") as handle:
-        for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return hash_file(identity[0])
 
 
 def _model_files(directory: Path) -> list[Path]:

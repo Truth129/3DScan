@@ -16,6 +16,7 @@ import shutil
 
 import numpy as np
 
+from .fileio import hash_file as _digest
 from . import __version__, imaging
 from .errors import NotFound
 from .interactive_prompts import normalize_options, normalize_prompts
@@ -68,14 +69,6 @@ def _erase_overlap(target, peer, check_cancel):
         for selected, other in chunks:
             check_cancel()
             other[selected] = False
-
-
-def _digest(path):
-    value = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
-            value.update(block)
-    return value.hexdigest()
 
 
 def _prompt_digest(prompts):

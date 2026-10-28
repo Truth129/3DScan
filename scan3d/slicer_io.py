@@ -14,6 +14,7 @@ import nrrd
 import numpy as np
 from scipy import ndimage as ndi
 
+from .fileio import hash_file as _reference_digest
 from .imaging import _binary, _foreground_bounds, _image, _save_mask, _world
 
 
@@ -22,14 +23,6 @@ def _color(value):
     if len(value) != 6:
         raise ValueError("Invalid segment color")
     return [int(value[i : i + 2], 16) / 255 for i in (0, 2, 4)]
-
-
-def _reference_digest(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def export_bundle(ct_path: Path, structures, output_zip: Path) -> Path:

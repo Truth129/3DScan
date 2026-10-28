@@ -15,6 +15,7 @@ import sys
 import time
 import uuid
 
+from .fileio import hash_file as _digest
 from .imaging import _binary_nonempty, _image
 from . import segmentation_options
 from .segmentation_options import normalize_options, resolved_task_config, task_capabilities
@@ -120,14 +121,6 @@ def _device_info(device):
         "hip": torch.version.hip,
         "cuda": torch.version.cuda,
     }
-
-
-def _digest(path):
-    sha = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-            sha.update(block)
-    return sha.hexdigest()
 
 
 @lru_cache(maxsize=256)

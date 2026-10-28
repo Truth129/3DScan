@@ -27,6 +27,7 @@ from scipy import ndimage as ndi
 
 from . import imaging
 from .errors import NotFound
+from .fileio import hash_file
 
 
 _IMPLEMENTATION = "native-review-slabs-v2"
@@ -54,13 +55,9 @@ def _file_digest(path):
             if signature in _DIGESTS:
                 _DIGESTS.move_to_end(signature)
                 return _DIGESTS[signature]
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(block)
+        result = hash_file(path)
         if _stat(path) != before:
             raise ValueError("Review volume input changed while reading; retry the request")
-        result = digest.hexdigest()
         with _DIGEST_LOCK:
             _DIGESTS[signature] = result
             while len(_DIGESTS) > 512:
