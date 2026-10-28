@@ -260,10 +260,13 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    segments now display in OsiriX; exact clinical alignment/editing remains
    user qualification. Audit/guarded rollback:
    `.runtime/dicom-seg-combined-20261028T192927Z/`.
-   OsiriX Query/Retrieve is empty because its existing modality has
-   `AllowFind:false` and `AllowMove:false` in both file and live settings.
-   A guarded two-field update for that same Mac AE/IP is prepared, pending
-   approval; global permissions stay restricted. No service restart is needed.
+   OsiriX Query/Retrieve was empty because `AllowFind` and `AllowMove` were
+   false in file and live settings. With explicit approval both flags are now
+   enabled for that same Mac AE/IP. Full live/file settings match; global/other
+   permissions and strict sender checks stay restricted. Orthanc PID436143 and
+   app PID584950 are unchanged; both lanes and CT-only health pass. No clinical
+   records were queried/retrieved or DICOM sent during activation. Mac retry is
+   pending; choose C-MOVE retrieval in OsiriX.
    Isolated synthetic C-FIND/C-MOVE, unknown-AE refusal and persisted restart
    qualification pass; no host archive or Mac was contacted for the test.
    Audit: `.runtime/orthanc-query-retrieve-20261028T193732Z/`.

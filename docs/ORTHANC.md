@@ -51,8 +51,9 @@ Prepare the private configuration without starting a listener:
 
 The helper reuses the checksum-pinned binary, creates private config/credentials,
 and refuses to overwrite differing existing settings. Sender AE titles preserve
-case. Only that Mac may echo/store to called AE `SCAN3D`; incoming query/retrieve
-is disabled and automatic result forwarding is not configured. A remote port is
+case. By default only that Mac may echo/store to called AE `SCAN3D`; incoming
+query/retrieve is disabled until explicitly enabled, as recorded below for the
+current receiver. Automatic result forwarding is not configured. A remote port is
 unused for incoming associations and does not configure sending results back to
 OsiriX.
 
@@ -107,18 +108,20 @@ source identity.
 
 ## Querying Orthanc from OsiriX
 
-The receiver was initially configured for C-ECHO/C-STORE only. Configuration
-and live REST inspection confirm that the existing `osirix` modality has
-`AllowFind:false` and `AllowMove:false`. Therefore a reachable node can send
-images successfully while its C-FIND search is refused and appears empty in
-OsiriX. Sending from Orthanc or 3DScan is a separate operation.
+The receiver was initially configured for C-ECHO/C-STORE only. When the issue
+was reported, configuration and live REST inspection confirmed that `osirix`
+had `AllowFind:false` and `AllowMove:false`. A reachable node could send images
+while its C-FIND search was refused and appeared empty in OsiriX. Sending from
+Orthanc or 3DScan is a separate operation.
 
-A two-field update is prepared, pending explicit approval: enable `AllowFind`
-and `AllowMove` only for the existing Mac AE/IP. Global always-allow flags,
+With explicit approval, `AllowFind` and `AllowMove` are now enabled only for
+the existing Mac AE/IP. Global always-allow flags,
 worklist, C-GET and storage commitment remain disabled. Save the change in the
 private configuration and hot-apply the full modality definition with local
 authenticated `PUT /modalities/osirix`; file-based REST updates alone disappear
-on restart. This needs no Orthanc or 3DScan restart. Audit/guarded rollback:
+on restart. Both live and saved definitions match; Orthanc PID436143 and app
+PID584950 remain unchanged and healthy. No patient records were searched or
+retrieved to apply this change. Audit/guarded rollback:
 `.runtime/orthanc-query-retrieve-20261028T193732Z/`.
 
 In OsiriX Query/Retrieve use the same node as DICOM Send: host `10.20.0.3`,

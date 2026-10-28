@@ -57,6 +57,8 @@ AE title **SCAN3D** and port **4243**. In 3DScan choose **Import → Orthanc**,
 search the archive, select one series and choose **Import selected series**.
 Then select its acquisition labels and choose **Open CT**. Both steps run on
 the CPU; receiving or opening a study never starts segmentation automatically.
+The configured Mac can also query Orthanc directly from OsiriX Query/Retrieve
+and retrieve studies with C-MOVE using that same DICOM destination.
 
 The connector and incoming receiver are **active**. The destination address is
 `10.20.0.3`; the allowed sender is `10.20.0.107` with calling AE

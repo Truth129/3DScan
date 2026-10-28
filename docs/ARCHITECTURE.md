@@ -208,6 +208,11 @@ study/series summaries. Browser searches send identity fields in POST bodies;
 all connector responses use `no-store`. The client never receives archive
 credentials or parses the original DICOM.
 
+The existing OsiriX Mac also has explicitly approved DICOM C-FIND/C-MOVE
+permissions on Orthanc, separate from 3DScan's REST adapter and outgoing sends.
+Strict calling/called AE and source-IP checks remain enforced. This enables
+direct OsiriX Query/Retrieve without routing searches through 3DScan.
+
 Explicit import queues a CPU job for one immutable series snapshot. Known
 incomplete/receiving series are blocked; unknown declared counts retain a visible
 warning. Bounded downloads check snapshot membership before/after transfer, then
