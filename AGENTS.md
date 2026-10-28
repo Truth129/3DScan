@@ -275,9 +275,10 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    exported `(0008,1030)` already exactly matches the common nonempty original
    CT Study Description. No clinical text/identifiers were retained. All 49
    encoder tests now explicitly cover description inheritance and Unicode.
-   No encoder/profile/runtime change was needed; awaiting the user's check of
-   that tag in the received SEG's OsiriX Meta-Data view. The MD import/display
-   cause is unconfirmed; do not presume missing source metadata or regenerate
+   The user confirms that tag is also correct in the received SEG's OsiriX
+   Meta-Data view, despite "Unknown" in the database column. No encoder/profile/
+   runtime change was needed. The MD database label population cause remains
+   unconfirmed; do not presume missing source metadata or regenerate
    unchanged export files as a fix.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user

@@ -152,10 +152,13 @@ Study Description `(0008,1030)` is inherited from the original CT study metadata
 by highdicom and retained in the combined object, including decoded non-Latin
 text in the UTF-8 export. A read-only check of the user's reported "Unknown"
 column confirms the affected export already contains the exact nonempty source
-description. Check that raw tag in the received SEG's OsiriX Meta-Data view
-before attributing a database label to missing export metadata. Its MD 14.3
-import/display behaviour remains under investigation; no profile change or
-automatic resend was made for this report.
+description. The user also confirms the correct raw tag in the received SEG's
+OsiriX Meta-Data view despite "Unknown" in the database column. Inheritance is
+working; the remaining issue is database label population. Its exact MD 14.3
+cause remains unconfirmed. OsiriX documents
+[editing fields in its database window](https://pixmeo.zendesk.com/hc/en-us/articles/6049508617244-How-to-edit-DICOM-fields-directly-in-the-database-window)
+for local label correction. No encoder/profile change or resend was made for
+this report.
 
 An archive-only action stores SEG beside the original study in Orthanc. Sending
 asks that same Orthanc to perform C-STORE. The app does not make a direct DICOM
