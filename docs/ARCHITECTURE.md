@@ -12,10 +12,10 @@ is implemented and tested on `expansion`; X-ray, mammography, ultrasound, cathet
 angiography and cine ingestion still need their own adapters. Modality enum
 values alone do not enable those workflows.
 
-Future clinic integration must account for the user's planned Orthanc-based
-replacement of an existing imaging workflow. The proposed boundaries and open
-questions are recorded in [CLINIC_INTEGRATION.md](./CLINIC_INTEGRATION.md);
-they are separate from the implemented system shown below.
+The incoming Orthanc adapter is implemented for selected-series import, with
+main-app/OsiriX receiver activation still pending. The broader clinic archive
+direction is recorded in [CLINIC_INTEGRATION.md](./CLINIC_INTEGRATION.md).
+See [Orthanc operation](ORTHANC.md) for activation and connection settings.
 
 ![3DScan system architecture](./diagrams/architecture.svg)
 
@@ -65,6 +65,8 @@ flowchart LR
   end
 
   UI <-->|"LAN / WAN · private Tailscale HTTPS"| API
+  OSIRIX["OsiriX MD 14.3.0"] -->|"DICOM Send · after activation"| ORTHANC[("Separate private Orthanc receiver<br/>AE SCAN3D · DICOM port 4243")]
+  API -->|"REST browse and explicit selected-series copy"| ORTHANC
   API -->|"Scalar chunks and descriptors"| RAM
   API -->|"GLB meshes and mask slabs"| WEBGL
   API <--> DB
@@ -187,11 +189,38 @@ Native reference images and masks remain authoritative for editing and
 measurements. GLB meshes and the bounded 3D mask union are derived presentation
 artifacts. Their simplification never changes mask-derived volumes.
 
+## Incoming Orthanc boundary
+
+Orthanc owns its archive/index independently of 3DScan's case records. The
+backend keeps archive credentials, performs REST searches and returns bounded
+study/series summaries. Browser searches send identity fields in POST bodies;
+all connector responses use `no-store`. The client never receives archive
+credentials or parses the original DICOM.
+
+Explicit import queues a CPU job for one immutable series snapshot. Known
+incomplete/receiving series are blocked; unknown declared counts retain a visible
+warning. Bounded downloads check snapshot membership before/after transfer, then
+independently verify content hashes and DICOM identities before indexing and
+publication. Repeated snapshots deduplicate to one job/case. Failed/cancelled
+attempts remain retryable, and startup reconciles interrupted imports without
+starting a transfer automatically. Source bytes moved before a failed commit
+remain unreferenced and are never overwritten by a retry.
+
+Private source manifests retain original instance references and hashes. Public
+source digests accompany the prepared immutable image asset. Import does not
+convert or segment; a separate **Open CT** action prepares the reference image
+on the CPU lane. The receiver's Mac/IP/AE allowlist, administrator-applied UFW
+rule and main-app restart approval remain prerequisites for activation. The
+separate synthetic development archive is already available. Segmentation
+return to OsiriX is deferred; [the runbook](ORTHANC.md) records current status.
+
 ## Scan and correction lifecycle
 
 ```mermaid
 flowchart TD
   INPUT["DICOM folder or ZIP"] --> IMPORT["Copy originals and index series"]
+  ARCHIVE["Select an Orthanc series snapshot"] --> COPY["CPU archive import<br/>Verify source identity and publish originals"]
+  COPY --> SELECT
   IMPORT --> SELECT["Select one reconstruction / phase"]
   SELECT --> OPEN["Queue Open scan"]
   OPEN --> CONVERT["Validate and convert to reference grid"]
@@ -234,7 +263,7 @@ flowchart LR
   JOBS -->|"claim: review work first"| CPULANE
   GPULANE -->|"segment"| TS["TotalSegmentator subprocess"]
   GPULANE <-->|"JSON lines on a socket pair<br/>predict / cancel / shutdown<br/>ready / progress / result / error"| CHILD["nnInteractive worker process<br/>warm model and CT on the R9700<br/>imports torch; the API process never does"]
-  CPULANE --> CPUWORK["Preparation, direct edits, relationship-only Apply,<br/>saves, refinement, Slicer import, include-all"]
+  CPULANE --> CPUWORK["Archive import, preparation, direct edits, relationship-only Apply,<br/>saves, refinement, Slicer import, include-all"]
 ```
 
 Queued processing runs on two background threads backed by SQLite and one
@@ -258,8 +287,10 @@ reusable after cancellation or restart.
 ## Code map
 
 - [API and transport](../scan3d/api.py), [job lanes, dispatch and revision building](../scan3d/service.py), [SQLite, claims and activation](../scan3d/store.py).
+- [Orthanc transport](../scan3d/orthanc.py), [validated immutable archive records](../scan3d/orthanc_models.py), [CPU import and recovery](../scan3d/orthanc_imports.py).
 - [nnInteractive engine](../scan3d/interactive.py) and its [supervised worker process](../scan3d/interactive_worker.py).
 - [DICOM preparation](../scan3d/dicom.py), [inference](../scan3d/segmentation.py), [native operations and measurements](../scan3d/imaging.py).
+- [Read-only Orthanc REST transport](../scan3d/orthanc.py), [snapshot import and recovery](../scan3d/orthanc_imports.py), [receiver operation](ORTHANC.md).
 - [CPU contouring and surface caches](../scan3d/surfaces.py), [GLB encoding and decoding](../scan3d/surface_glb.py), [bounded hashing and atomic artifact publication](../scan3d/fileio.py).
 - [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display union](../scan3d/volume_mask_union.py).
 - [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone stack adapter](../web/src/lib/cornerstone-runtime.ts), [native MPR](../web/src/lib/cornerstone-mpr.ts), [shared memory budget](../web/src/lib/volume-memory-budget.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).

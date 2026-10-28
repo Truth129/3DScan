@@ -49,6 +49,22 @@ For a foreground server, stop the user service first, then run
 `scripts/run-production.sh`. Both use `data/`; do not run two workers against
 that directory.
 
+### Receive studies from OsiriX
+
+The incoming workflow targets **OsiriX MD 14.3.0 → Orthanc → 3DScan**. Once
+activated, add the private receiver as an OsiriX DICOM Send destination with
+AE title **SCAN3D** and port **4243**. In 3DScan choose **Import → Orthanc**,
+search the archive, select one series and choose **Import selected series**.
+Then select its acquisition labels and choose **Open CT**. Both steps run on
+the CPU; receiving or opening a study never starts segmentation automatically.
+
+The connector is implemented, but the main app and receiver are **not yet
+activated**. Activation requires the Mac's address and sending AE title, an
+administrator-applied UFW rule and approval to restart the app. The separate
+synthetic archive remains available for development. See the
+[Orthanc setup and transfer guide](docs/ORTHANC.md) for current status and
+connection settings. Sending segmentation results back to OsiriX is deferred.
+
 ### Back up the case library
 
 ```bash
@@ -155,7 +171,8 @@ explains its noncommercial license terms.
 
 ## Review a case
 
-1. Import a DICOM folder or ZIP, or create the clearly labelled synthetic demo.
+1. Import a DICOM folder or ZIP, select a series from a configured Orthanc
+   archive, or create the clearly labelled synthetic demo.
    Browser imports upload in bounded batches with a progress bar, so folders of
    any size up to the import limit work. Interrupted batches are resent
    automatically, **Cancel upload** discards the staged files, and the case
@@ -453,7 +470,7 @@ Source hashes record the exact processing code and downloaded model checkpoints.
 - FastAPI + SQLite persists case, job, revision and assisted-review draft records. A filesystem lock
   enforces one worker set across API and CLI processes. Its GPU lane runs
   TotalSegmentator and nnInteractive one job at a time. Its CPU lane runs
-  preparation, direct edits, saves, refinement, Slicer imports and include-all,
+  archive import, preparation, direct edits, saves, refinement, Slicer imports and include-all,
   which therefore do not wait behind a segmentation. Each lane takes review work
   before queued batch work. Jobs interrupted by restart remain retryable, and completed
   conversion/inference stages are reused.
@@ -466,7 +483,7 @@ Source hashes record the exact processing code and downloaded model checkpoints.
   Draft generations and active-revision checks prevent stale results from
   replacing another correction; accepted revisions record point history,
   model/checkpoint identity, device, timings and exact voxel/volume changes.
-- nibabel/SimpleITK and full affine transforms preserve patient geometry. Meshes
+- nibabel and full affine transforms preserve patient geometry. Meshes
   use glTF metres; API coordinates and measurements use millimetres/millilitres.
   Display meshes are quantized (KHR_mesh_quantization, within 0.03 mm) to halve
   transfer size; detailed exports remain float32. Masks stay authoritative.

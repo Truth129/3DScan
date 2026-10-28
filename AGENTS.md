@@ -22,6 +22,10 @@ Read before changing anything:
 - **`data/` is the live case library and holds patient scans.** Never read case contents,
   copy them into the repository, tests, logs or reports, or point experiments at it. Use a
   temporary data directory (`Settings(<tmp>/data, ...)` or `SCAN3D_DATA_DIR`).
+- **`.runtime/orthanc-incoming/` is the incoming archive**, and may hold patient DICOM
+  and its index after OsiriX sends studies. Apply the same protection as `data/`;
+  never seed it, inspect clinical contents for experiments or remove it as a cache.
+  `.runtime/orthanc-dev/` is the separate synthetic-only fixture server.
 - **The live service now uses this development checkout**, at the user's explicit
   request on 28 October 2026. `scan3d.service` is a systemd user unit on
   `127.0.0.1:9010`, published on the tailnet at
@@ -182,12 +186,19 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    largest-part upload scratch and disables unused picking maps. The 2 GiB cap
    is unchanged. Masking/memory qualification used synthetic data only.
    See the newest `docs/VALIDATION.md` section for evidence and browser-startup notes.
-2. **Decisions waiting on the user:**
+2. **Orthanc incoming integration:** the adapter, CPU import/recovery/provenance and
+   browser workflow are implemented. A separate private receiver targets OsiriX
+   MD 14.3.0 at `10.20.0.118`, calling AE `OsiriX-mac`, sending to
+   `10.20.0.3:4243` / called AE `SCAN3D`. Main-app/receiver activation is staged,
+   pending the narrow UFW admin rule and explicit service-restart approval.
+   Receiving through Tailscale and segmentation return are deferred. See
+   `docs/ORTHANC.md` and the newest validation section before operating it.
+3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SEG/SR export, which adds a dependency to the pinned runtime
    - per-structure review status for the agreement metrics
    - frontend restructuring: stores, a router, typed API models
-3. **Smaller follow-ups:**
+4. **Smaller follow-ups:**
    - precompress GLBs instead of gzipping per request
    - warm the agreement cache when a revision is committed
    - age review priority so segmentations cannot starve
