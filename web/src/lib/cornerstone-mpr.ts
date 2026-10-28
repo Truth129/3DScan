@@ -6,7 +6,7 @@ import { ctOverlayColor, type CTOverlaySelection } from './ct-overlays';
 import { inverseAffine, transformPoint, type VolumeDescriptor } from './ct-reslice';
 import { imagePresentation, assertReferenceImage } from './image-domain';
 import { rasToLps, lpsToRas } from './cornerstone-frame';
-import { cornerstoneLibraries } from './cornerstone-runtime';
+import { cornerstoneLibraries, destroyRenderingEngine } from './cornerstone-runtime';
 import { nativeSliceFor } from './interactive-review';
 import { cornerstoneVolumeGeometry, cornerstoneVolumeSlices, nativeCameraOrientation, cornerstoneMPRDisplayMeta } from './cornerstone-volume';
 
@@ -1064,7 +1064,7 @@ export class CornerstoneMPR {
     this.controller.abort();
     this.detachMPR();
     for (const remove of this.sourceListeners.splice(0)) remove();
-    this.engine?.destroy();
+    destroyRenderingEngine(this.engine);
     if (this.sourceVolume) this.releaseVolume(this.sourceVolume);
     this.sourceVolume = undefined;
     for (const volume of [...this.staged]) this.releaseVolume(volume);

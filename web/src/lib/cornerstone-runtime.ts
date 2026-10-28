@@ -15,6 +15,27 @@ export function cornerstoneFrameCacheStats() {
   return { images: records.size, huBytes: [...records.values()].reduce((bytes, record) => bytes + record.frame.hu.byteLength, 0) };
 }
 
+type RenderWindowLike = { getOpenGLRenderWindow?(): { getContext?(): WebGLRenderingContext | WebGL2RenderingContext | null } | undefined };
+/** Destroy an engine and free its WebGL contexts now. Cornerstone and vtk.js only
+ * delete their objects; the contexts otherwise stay live until garbage collection,
+ * and once the browser limit is reached it silently drops the oldest live context,
+ * which can be the 3D review scene. */
+export function destroyRenderingEngine(engine: Core.RenderingEngine | undefined) {
+  if (!engine || engine.hasBeenDestroyed) return;
+  const internal = engine as unknown as { contextPool?: { getAllContexts(): RenderWindowLike[] }; offscreenMultiRenderWindow?: RenderWindowLike };
+  const contexts = new Set<WebGLRenderingContext | WebGL2RenderingContext>();
+  for (const window of [...(internal.contextPool?.getAllContexts() ?? []), internal.offscreenMultiRenderWindow]) {
+    try {
+      const gl = window?.getOpenGLRenderWindow?.()?.getContext?.();
+      if (gl) contexts.add(gl);
+    } catch {
+      // A partially constructed engine has no context to release.
+    }
+  }
+  engine.destroy();
+  for (const gl of contexts) if (!gl.isContextLost()) gl.getExtension('WEBGL_lose_context')?.loseContext();
+}
+
 export async function cornerstoneLibraries(): Promise<Libraries> {
   if (!initialization)
     initialization = (async () => {
@@ -323,7 +344,7 @@ export class CornerstoneFrameViewport {
     if (this.voiChanged) this.element.removeEventListener(this.libs.core.Enums.Events.VOI_MODIFIED, this.voiChanged);
     if (this.contextLost) this.libs.core.eventTarget.removeEventListener(this.libs.core.Enums.Events.WEBGL_CONTEXT_LOST, this.contextLost);
     this.libs.tools.ToolGroupManager.destroyToolGroup(this.id);
-    this.engine?.destroy();
+    destroyRenderingEngine(this.engine);
     for (const key of [...records.keys()]) if (key.startsWith(`scan3d-frame:${this.id}:`)) this.releaseImage(key);
     this.currentFrame = undefined;
     delete this.element.dataset.renderer;

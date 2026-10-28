@@ -1096,6 +1096,43 @@ async function load() {
     }
   }
 }
+// A browser that drops a context for its context limit never restores it, which
+// left the review scene blank until reload. Rebuild on a fresh context instead.
+const CONTEXT_RESTORE_WAIT_MS = 2000;
+let contextRebuildTimer = 0,
+  contextRebuilds: number[] = [];
+function watchLegacyContext(owner: AnatomyScene) {
+  const canvas = owner.renderer.domElement;
+  canvas.addEventListener('webglcontextlost', () => {
+    clearTimeout(contextRebuildTimer);
+    contextRebuildTimer = window.setTimeout(() => {
+      if (disposed || scene !== owner || !owner.renderer.getContext().isContextLost()) return;
+      const now = Date.now();
+      contextRebuilds = contextRebuilds.filter(time => now - time < 60_000);
+      if (contextRebuilds.length >= 3) return; // Keep the visible error rather than loop.
+      contextRebuilds.push(now);
+      disposeThree();
+      initializeThree();
+    }, CONTEXT_RESTORE_WAIT_MS);
+  });
+  canvas.addEventListener('webglcontextrestored', () => clearTimeout(contextRebuildTimer));
+}
+function disposeThree() {
+  legacyInitialization++;
+  clearTimeout(contextRebuildTimer);
+  controller?.abort();
+  loadId++;
+  gpuController?.abort();
+  releaseGPUVolume();
+  scene?.dispose();
+  scene = undefined;
+  hasModel.value = false;
+  loading.value = false;
+  volumeFamilyReady.value = '';
+  gpuFamilyReady.value = '';
+  maskFamilyReady.value = '';
+  atlasFamilyReady.value = '';
+}
 async function initializeThree() {
   if (scene || disposed) return;
   const id = ++legacyInitialization;
@@ -1141,6 +1178,7 @@ async function initializeThree() {
       fallbackToCTPlane();
       syncReview();
     };
+    watchLegacyContext(scene);
     if (ctOnly.value && !props.initialSnapshot && !props.reviewActive && ctVolumeAvailable.value) setVolumeEnabled(true);
     load();
     syncReview();
@@ -1173,6 +1211,7 @@ onBeforeUnmount(() => {
   clearTimeout(gpuBaseTimer);
   cancelAnimationFrame(requestFrame);
   clearTimeout(exactPlaneTimer);
+  clearTimeout(contextRebuildTimer);
   reviewControlsObserver?.disconnect();
   reviewFrames.dispose();
   controller?.abort();
@@ -1500,20 +1539,8 @@ watch(vtkSelected, active => {
   vtkReady.value = false;
   vtkError.value = '';
   if (active) {
-    legacyInitialization++;
     // The primary scene owns its source; the legacy context is not kept idle.
-    controller?.abort();
-    loadId++;
-    gpuController?.abort();
-    releaseGPUVolume();
-    scene?.dispose();
-    scene = undefined;
-    hasModel.value = false;
-    loading.value = false;
-    volumeFamilyReady.value = '';
-    gpuFamilyReady.value = '';
-    maskFamilyReady.value = '';
-    atlasFamilyReady.value = '';
+    disposeThree();
   } else {
     if (vtkCamera.value) pendingVolumeCamera = vtkCamera.value;
     initializeThree();

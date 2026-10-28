@@ -167,7 +167,10 @@ const fake = vi.hoisted(() => {
     },
   };
 });
-vi.mock('../src/lib/cornerstone-runtime', () => ({ cornerstoneLibraries: async () => ({ core: fake.core, tools: fake.tools }) }));
+vi.mock('../src/lib/cornerstone-runtime', () => ({
+  cornerstoneLibraries: async () => ({ core: fake.core, tools: fake.tools }),
+  destroyRenderingEngine: (engine?: { destroy(): void }) => engine?.destroy(),
+}));
 import { CornerstoneMPR, cornerstoneMPRCacheStats, cornerstoneOverlayMemoryBytes } from '../src/lib/cornerstone-mpr';
 
 function hosts() {
