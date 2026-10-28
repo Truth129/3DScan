@@ -1,5 +1,6 @@
-import type { CameraView, Point } from '../types';
+import type { CameraView, Geometry, Point } from '../types';
 import type { CornerstoneVolumeCameraRAS } from './cornerstone-volume-3d';
+import { transformPoint } from './ct-reslice';
 import type { PortableCamera } from './portable-viewer';
 
 // AnatomyScene directions converted from its (-R,S,A) scene axes to patient RAS.
@@ -154,5 +155,35 @@ export function fitVolumeCameraBounds(camera: CornerstoneVolumeCameraRAS, bounds
       parallelScaleMM: Math.max(1, halfHeight * 1.15),
     },
     bounds,
+  );
+}
+
+/** Face one native slice from the current distance, fitting its in-plane extent to the pane. */
+export function sliceVolumeCamera(
+  camera: CornerstoneVolumeCameraRAS,
+  geometry: Pick<Geometry, 'shape' | 'affine_ras' | 'bounds_ras'>,
+  axis: 0 | 1 | 2,
+  index: number,
+  aspect = 1,
+): CornerstoneVolumeCameraRAS {
+  const [across, up] = [0, 1, 2].filter(other => other !== axis),
+    voxel = geometry.shape.map(size => (size - 1) / 2) as Point;
+  voxel[axis] = index;
+  const focal = transformPoint(geometry.affine_ras, voxel),
+    column = (index: number) => geometry.affine_ras.slice(0, 3).map(row => row[index]);
+  const normal = column(axis),
+    upward = column(up);
+  const length = Math.hypot(...normal),
+    upLength = Math.hypot(...upward),
+    distance = Math.hypot(...camera.positionRAS.map((value, i) => value - camera.focalPointRAS[i]));
+  return fitVolumeCameraClipping(
+    {
+      ...camera,
+      focalPointRAS: focal,
+      positionRAS: focal.map((value, i) => value + (normal[i] / length) * distance) as Point,
+      viewUpRAS: upward.map(value => -value / upLength) as Point,
+      parallelScaleMM: 0.575 * Math.max((geometry.shape[across] * Math.hypot(...column(across))) / aspect, geometry.shape[up] * upLength),
+    },
+    geometry.bounds_ras,
   );
 }

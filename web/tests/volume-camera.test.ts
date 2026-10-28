@@ -6,6 +6,7 @@ import {
   fitVolumeCameraClipping,
   namedVolumeCamera,
   portableCameraFromVolume,
+  sliceVolumeCamera,
   volumeCameraFromPortable,
 } from '../src/lib/volume-camera';
 
@@ -168,5 +169,33 @@ describe('physical volume camera handoff', () => {
     expect(namedVolumeCamera(camera, name).focalPointRAS).toEqual(camera.focalPointRAS);
     expect(camera).toEqual(before);
     expect(result.focalPointRAS).not.toBe(center);
+  });
+});
+
+describe('native slice facing', () => {
+  it('looks along a sheared slice normal from the current distance and fits the slice to the pane', () => {
+    const geometry = {
+      shape: [80, 60, 40],
+      affine_ras: [
+        [2, 0, 0.5, -80],
+        [0, 3, 0, -90],
+        [0, 0, 4, -70],
+        [0, 0, 0, 1],
+      ],
+      bounds_ras: [
+        [-80, -90, -70],
+        [98, 87, 86],
+      ] as [Point, Point],
+    };
+    const camera = volumeCameraFromPortable(portable, 180, 1, 20_000),
+      distance = Math.hypot(...camera.positionRAS.map((value, axis) => value - camera.focalPointRAS[axis]));
+    const faced = sliceVolumeCamera(camera, geometry, 2, 10, 2);
+    expect(faced.focalPointRAS).toEqual([4, -1.5, -30]);
+    const normal = faced.positionRAS.map((value, axis) => value - faced.focalPointRAS[axis]);
+    expect(Math.hypot(...normal)).toBeCloseTo(distance, 9);
+    normal.forEach((value, axis) => expect(value / distance).toBeCloseTo([0.5, 0, 4][axis] / Math.hypot(0.5, 4), 12));
+    expect(faced.viewUpRAS).toEqual([-0, -1, -0]);
+    expect(faced.parallelScaleMM).toBeCloseTo(0.575 * Math.max((80 * 2) / 2, 60 * 3), 12);
+    expect(faced.nearMM).toBeLessThan(faced.farMM);
   });
 });
