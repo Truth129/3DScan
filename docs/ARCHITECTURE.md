@@ -249,7 +249,7 @@ requires an original classic CT imported through the configured archive.
 Synthetic API-to-Orthanc-to-OsiriX transport and user-confirmed basic ROI display
 pass; exact clinical alignment/editing remains user qualification. highdicom
 0.28.2 and pyjpegls 1.5.1 are pinned in the deployment lock. The integrated feature
-is qualified and staged; [the runbook](ORTHANC.md) records activation status.
+is qualified and active; [the runbook](ORTHANC.md) records runtime details.
 
 ## Scan and correction lifecycle
 

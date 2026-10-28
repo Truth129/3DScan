@@ -68,7 +68,7 @@ masks and choose **Archive in Orthanc** or **Send to** a configured viewer.
 **Send again** deliberately resends the same instances after a successful send;
 reopening the panel or resuming status never sends automatically. This first
 export adapter requires classic CT imported through the configured Orthanc.
-The integration is qualified and staged; see the runbook for activation status.
+The integration is qualified and active; see the runbook for runtime details.
 
 ### Back up the case library
 

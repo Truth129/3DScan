@@ -216,11 +216,14 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    explicit same-SOP resend and restart-safe delivery receipts. The UI is native
    renderer independent. 1,071 backend and 495 web tests, both scratch builds,
    six compiled browser gates and real synthetic API→Orthanc→OsiriX delivery pass.
-   highdicom 0.28.2 / pyjpegls 1.5.1 are hash-pinned; prepared wheels and frontend
-   await an approved idle main-app activation. No GPU or patient library was
-   used for qualification. Audit: `.runtime/dicom-seg-integration-20261028T150235Z/`.
-   Existing Orthanc modality `osirix` can be enabled through the app allowlist;
-   receiver restart/configuration changes are unnecessary.
+   highdicom 0.28.2 / pyjpegls 1.5.1 are hash-pinned and installed with explicit
+   activation approval. The app now enables existing Orthanc modality `osirix`;
+   frontend assets are live and idle 3DScan restarted (PID516779). Both lanes,
+   CT-only policy, all 19 assets/private HTTPS index and prior GPU proof pass;
+   aggregate counts remain 4 cases/18 revisions/25 jobs/6 reviews/4 image assets.
+   Orthanc PID436143/configuration are unchanged, and journal priorities show
+   no warnings/errors. No GPU or patient records were used for qualification.
+   Audit/guarded rollback: `.runtime/dicom-seg-integration-20261028T150235Z/`.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification

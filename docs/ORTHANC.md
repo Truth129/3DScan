@@ -3,7 +3,7 @@
 The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is
-implemented, qualified and staged for activation. The target is **OsiriX MD 14.3.0** on the local network, with
+implemented, qualified and active. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -137,10 +137,13 @@ if the receiver deleted the results. Unknown or incomplete delivery is shown
 honestly; explicit retry checks a known Orthanc job and never regenerates SEG
 identities. Nothing resumes or sends automatically at application startup.
 
-The integration is staged in `.runtime/dicom-seg-integration-20261028T150235Z/`.
-Qualified packages/frontend and the `osirix` allowlist need installation with
-an approved idle main-app restart. The Orthanc receiver needs no restart or
-configuration change. RTSTRUCT and editing/resave fidelity remain separate work.
+The user approved activation, which installed the qualified packages/frontend
+and `osirix` allowlist and restarted idle 3DScan. Both lanes are healthy; all 19
+new assets and the private HTTPS index match the build, with aggregate library
+counts unchanged. Orthanc stayed running with its configuration unchanged.
+Audit and guarded rollback: `.runtime/dicom-seg-integration-20261028T150235Z/`.
+Later restart/rollback still requires approval under AGENTS.md. RTSTRUCT and
+editing/resave fidelity remain separate work.
 
 ## Synthetic segmentation return qualification
 
