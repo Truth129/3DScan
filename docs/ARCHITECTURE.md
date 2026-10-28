@@ -32,7 +32,7 @@ flowchart LR
     UI["Vue 3 / TypeScript workspace<br/>Cases, series, panels, tasks and review controls"]
     RAM["Shared source cache in client RAM<br/>Preview then native volume; local reslice worker"]
     CT["Cornerstone3D / vtk.js<br/>Shared CT volume, MPR, slabs and labelmaps<br/>Worker stacks for preview / shear / memory limits"]
-    WEBGL["Client GPU<br/>Native VTK CT planes and segmentation surfaces<br/>Three.js for legacy review and offline export"]
+    WEBGL["Client GPU<br/>Native VTK CT planes and segmentation surfaces<br/>Native correction gestures and exact mask planes<br/>Three.js for shear/MR and offline export"]
     UI --> CT
     UI --> WEBGL
     RAM --> CT
@@ -158,14 +158,30 @@ largest-part upload scratch allowance; unused hardware-selection maps are
 disabled. Retained and staged revisions remain charged together until commit.
 The 2 GiB desktop / 256 MiB low-memory caps are unchanged.
 
-Three.js loads on demand for the legacy renderer, corrections, sheared grids,
-MRI and portable HTML. Native 3D does not implement surface marking, scissors
-or markers. Correction entry shows the legacy target
-surface and preserves the earlier layer choices on return. HTML export requires
-the legacy renderer; the offline entry contains no Cornerstone runtime. Camera
-state remains patient RAS, including parallel scale and finite ordered clipping
-ranges that may cross zero. VTK scattering differs from Three's reference shader;
-the migration does not establish Slicer rendering equivalence.
+Full orthogonal CT corrections remain in the same native 3D viewport. CPU cell
+picking is restricted to the visible locked target actor and uses the actual
+Cornerstone camera/viewport transform. Plane drawings consume the existing exact
+native HU/binary-mask frames, painted into one bounded RGBA plane with full-affine
+LPS geometry. Candidate and parent comparison retain their immutable mask context.
+Frame cache/transport, retained and staged plane pixels join the shared budget;
+there is no second full CT or full-grid mask allocation.
+
+Point, brush, box, scribble/lasso and full-depth scissors use the existing prompt
+contracts. Cornerstone's tool group handles right-drag rotation, middle-drag pan
+and wheel zoom while marking owns the left button. Camera, viewport, native slice,
+source, target, tool and disabled changes cancel active gestures. New planes and
+surfaces authorize input only after rendering; pending/failed replacements never
+authorize old geometry. SVG prompt markers follow the physical projection and
+join PNG capture. Apply/Save, authoritative mask operations and exact revision
+history remain on the workstation.
+
+Three.js loads on demand for legacy mode, sheared grids, MRI and portable HTML.
+HTML export requires the legacy renderer; the offline entry contains no
+Cornerstone runtime. Review entry hides CT and shows segmentation, restoring the
+earlier layer choices on exit without replacing the native source or camera.
+Camera state remains patient RAS, including parallel scale and finite ordered
+clipping ranges that may cross zero. VTK scattering differs from Three's reference
+shader; the migration does not establish Slicer rendering equivalence.
 
 Native reference images and masks remain authoritative for editing and
 measurements. GLB meshes and the bounded 3D mask union are derived presentation

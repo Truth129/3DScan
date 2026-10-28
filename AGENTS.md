@@ -164,13 +164,16 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    The live CT 3D view now defaults to **Cornerstone3D/vtk.js**, with session-owned
    source sharing independent of MPR panel visibility, native CT plane and enabled
    quantized surfaces. CT-visible surfaces are solid. Three.js loads lazily for
-   legacy review, shear/MR and portable HTML; native picking/marking, scissors,
-   and markers remain unported. Native masking now supports inside/outside, explicit
+   legacy mode, shear/MR and portable HTML. Orthogonal CT review now stays native,
+   including target picking, exact native-plane drawing, scissors, markers and
+   PNG composition; candidate/save/undo contracts are unchanged. Native masking now supports inside/outside, explicit
    segment selection and physical display margin with one <=8 MiB crop texture,
    retaining source/MPR independence and hiding CT for empty/pending/error masks.
    The pinned streaming-mapper bridge uses actor-local factories and needs
-   qualification on Core/vtk dependency upgrades. 440 web tests, software
-   and approved R9700 browser gates pass. The user authorized one read-only actual
+   qualification on Core/vtk dependency upgrades. 463 web tests, all three native
+   reviewer suites on software/approved R9700, 22 shared-component gates, 12 App
+   gates and standalone offline qualification pass. Shared/Trackball resizes
+   retain the intentional physical camera through the public reset event. The user authorized one read-only actual
    CT check; it passed without retaining clinical artifacts. This does not grant
    broader patient-data access. Large combined MPR/all-surface views can exceed
    the conservative memory budget; closing MPR or hiding surfaces frees capacity.

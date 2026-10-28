@@ -99,8 +99,8 @@ card(
     [
         "Cornerstone3D / vtk.js ray casting",
         "Shared CT, surfaces + native CT plane",
-        "Three.js: legacy review + offline HTML",
-        "Warm navigation avoids image requests",
+        "Native marks, scissors + mask overlays",
+        "Three.js: shear/MR + offline HTML",
     ],
 )
 card(

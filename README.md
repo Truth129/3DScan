@@ -391,11 +391,17 @@ shared 2 GiB desktop budget includes current/staged resources; completed CT
 upload staging is released and mesh uploads share one bounded scratch allowance.
 Views that still exceed it show an error; hiding surfaces or CT review frees capacity.
 
-Use **Three.js (legacy)** for HTML export. Tilted
-scans, MRI and corrections use that existing renderer automatically. Native 3D
-does not yet implement surface picking/marking, scissors or markers; entering
-corrections shows the target in the legacy renderer. The native plane currently
-shows scalar CT without segmentation coloring. This port changes display, not
+Orthogonal CT corrections now use the same Cornerstone3D/vtk.js view for surface
+points, native-plane brush/box/scribble/lasso, full-depth scissors and prompt
+markers. Right drag rotates while marking; middle drag pans and the wheel zooms.
+Plane drawings show the exact selected/candidate masks and parent comparison.
+Input waits for the current geometry to render; changing the camera, slice or
+editing context cancels an unfinished stroke. PNG includes review marks.
+
+Use **Three.js (legacy)** for HTML export. Tilted scans and MRI retain that
+existing renderer automatically. The ordinary linked native plane shows scalar
+CT; correction mode adds exact segmentation coloring.
+This port changes display, not
 source masks, measurements, revision history or inference. Native scattering has
 a different appearance from the earlier renderer and requires its own visual
 comparison before claiming Slicer equivalence.
