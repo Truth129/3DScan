@@ -2,8 +2,11 @@
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { uploadImport, type ImportProgress } from '../lib/import-upload';
 import type { Case } from '../types';
+import OrthancBrowser from './OrthancBrowser.vue';
 const props = defineProps<{ busy: boolean; mrEnabled?: boolean }>();
 const emit = defineEmits<{ close: []; imported: [result: Case]; demo: [] }>();
+const source = ref<'files' | 'orthanc'>('files'),
+  orthancBusy = ref(false);
 const files = ref<File[]>([]),
   label = ref(''),
   folder = ref<HTMLInputElement>(),
@@ -11,7 +14,7 @@ const files = ref<File[]>([]),
   dragging = ref(false);
 const progress = ref<ImportProgress>(),
   message = ref<{ text: string; error: boolean }>();
-const locked = computed(() => props.busy || !!progress.value);
+const locked = computed(() => props.busy || !!progress.value || orthancBusy.value);
 let controller: AbortController | undefined;
 const megabytes = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
 const fileCount = (count: number) => `${count.toLocaleString()} ${count === 1 ? 'file' : 'files'}`;
@@ -48,6 +51,11 @@ function drop(event: DragEvent) {
 }
 function close() {
   if (!locked.value) emit('close');
+}
+function archiveActivity(value: boolean) {
+  orthancBusy.value = value;
+  if (value) window.addEventListener('beforeunload', keepPage);
+  else if (!progress.value) window.removeEventListener('beforeunload', keepPage);
 }
 function cancel() {
   controller?.abort();
@@ -99,64 +107,107 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="dialog-backdrop" @click.self="close" @keydown.esc="close">
-    <section class="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title">
+    <section class="import-dialog" :class="{ 'orthanc-import': source === 'orthanc' }" role="dialog" aria-modal="true" aria-labelledby="import-title">
       <header><span class="eyebrow">NEW CASE</span><button class="icon-button" aria-label="Close import" :disabled="locked" @click="close">×</button></header>
       <h2 id="import-title">Start with an imaging study.</h2>
-      <p class="muted">Import a DICOM folder or ZIP archive. Choose a CT reconstruction{{ mrEnabled ? ' or static 3D MR sequence' : '' }} before processing.</p>
+      <p class="muted">
+        Import DICOM files or choose a series from Orthanc. Select a CT reconstruction{{ mrEnabled ? ' or static 3D MR sequence' : '' }} before processing.
+      </p>
+      <div class="import-source-tabs" role="group" aria-label="Import source">
+        <button
+          class="button secondary"
+          :class="{ selected: source === 'files' }"
+          :aria-pressed="source === 'files'"
+          :disabled="locked"
+          @click="source = 'files'"
+        >
+          Folder / ZIP
+        </button>
+        <button
+          class="button secondary"
+          :class="{ selected: source === 'orthanc' }"
+          :aria-pressed="source === 'orthanc'"
+          :disabled="locked"
+          @click="source = 'orthanc'"
+        >
+          Orthanc archive
+        </button>
+      </div>
       <label class="field"
         >Case label <span class="optional">optional · pseudonymous</span
         ><input v-model="label" placeholder="e.g. Chest–abdomen 01" :disabled="locked" autofocus
       /></label>
-      <div class="drop-zone" :class="{ dragging }" @dragover.prevent="dragging = !locked" @dragleave.prevent="dragging = false" @drop.prevent="drop">
-        <svg viewBox="0 0 40 40" fill="none">
-          <path d="M7 12h10l4 4h12v17H7V12Z" />
-          <path d="M20 26V18m0 0-4 4m4-4 4 4" />
-        </svg>
-        <strong>{{ files.length ? `${fileCount(files.length)} selected` : 'Your source images belong here' }}</strong>
-        <span>{{ files.length ? `${size} MB · ready to import` : 'Drop a ZIP or DICOM files, or browse a folder' }}</span>
-        <div class="button-row">
-          <button class="button" :disabled="locked" @click="folder?.click()">Choose folder</button
-          ><button class="button secondary" :disabled="locked" @click="archive?.click()">Choose ZIP / files</button>
+      <OrthancBrowser v-if="source === 'orthanc'" :label="label" :busy="busy || !!progress" @busy="archiveActivity" @imported="emit('imported', $event)" />
+      <template v-else>
+        <div class="drop-zone" :class="{ dragging }" @dragover.prevent="dragging = !locked" @dragleave.prevent="dragging = false" @drop.prevent="drop">
+          <svg viewBox="0 0 40 40" fill="none">
+            <path d="M7 12h10l4 4h12v17H7V12Z" />
+            <path d="M20 26V18m0 0-4 4m4-4 4 4" />
+          </svg>
+          <strong>{{ files.length ? `${fileCount(files.length)} selected` : 'Your source images belong here' }}</strong>
+          <span>{{ files.length ? `${size} MB · ready to import` : 'Drop a ZIP or DICOM files, or browse a folder' }}</span>
+          <div class="button-row">
+            <button class="button" :disabled="locked" @click="folder?.click()">Choose folder</button
+            ><button class="button secondary" :disabled="locked" @click="archive?.click()">Choose ZIP / files</button>
+          </div>
+          <input ref="folder" type="file" webkitdirectory multiple hidden @change="select" /><input
+            ref="archive"
+            type="file"
+            accept=".zip,.dcm,.dicom,application/dicom,application/zip"
+            multiple
+            hidden
+            @change="select"
+          />
         </div>
-        <input ref="folder" type="file" webkitdirectory multiple hidden @change="select" /><input
-          ref="archive"
-          type="file"
-          accept=".zip,.dcm,.dicom,application/dicom,application/zip"
-          multiple
-          hidden
-          @change="select"
-        />
-      </div>
-      <div v-if="progress" class="import-progress">
-        <div class="import-progress-heading">
-          <strong role="status">{{ progressTitle }}</strong
-          ><span v-if="progress.phase !== 'indexing'" aria-hidden="true">{{ percent }}%</span>
+        <div v-if="progress" class="import-progress">
+          <div class="import-progress-heading">
+            <strong role="status">{{ progressTitle }}</strong
+            ><span v-if="progress.phase !== 'indexing'" aria-hidden="true">{{ percent }}%</span>
+          </div>
+          <progress v-if="progress.phase === 'indexing'" aria-label="Checking DICOM series"></progress>
+          <progress v-else :value="percent" max="100" aria-label="Upload progress" :aria-valuetext="`${percent}% · ${progressDetail}`"></progress>
+          <span class="import-progress-detail">{{ progressDetail }}</span>
         </div>
-        <progress v-if="progress.phase === 'indexing'" aria-label="Checking DICOM series"></progress>
-        <progress v-else :value="percent" max="100" aria-label="Upload progress" :aria-valuetext="`${percent}% · ${progressDetail}`"></progress>
-        <span class="import-progress-detail">{{ progressDetail }}</span>
-      </div>
-      <div v-else class="local-note">
-        <span>⌁</span>
-        <div>
-          <strong>Processed on this workstation</strong>
-          <p>Source images, segmentation and corrections stay in your local case library.</p>
+        <div v-else class="local-note">
+          <span>⌁</span>
+          <div>
+            <strong>Processed on this workstation</strong>
+            <p>Source images, segmentation and corrections stay in your local case library.</p>
+          </div>
         </div>
-      </div>
-      <p v-if="message" class="import-message" :class="{ error: message.error }" :role="message.error ? 'alert' : 'status'">{{ message.text }}</p>
-      <footer>
-        <button v-if="progress && progress.phase !== 'indexing'" class="text-button" @click="cancel">Cancel upload</button>
-        <button v-else class="text-button" :disabled="locked" @click="emit('demo')">Explore synthetic demo ↗</button>
-        <button class="button primary" :disabled="!files.length || locked" @click="start">
-          <span v-if="locked" class="spinner"></span
-          >{{ progress ? (progress.phase === 'indexing' ? 'Checking series…' : 'Uploading…') : busy ? 'Importing…' : 'Import scan →' }}
-        </button>
-      </footer>
+        <p v-if="message" class="import-message" :class="{ error: message.error }" :role="message.error ? 'alert' : 'status'">{{ message.text }}</p>
+        <footer>
+          <button v-if="progress && progress.phase !== 'indexing'" class="text-button" @click="cancel">Cancel upload</button>
+          <button v-else class="text-button" :disabled="locked" @click="emit('demo')">Explore synthetic demo ↗</button>
+          <button class="button primary" :disabled="!files.length || locked" @click="start">
+            <span v-if="locked" class="spinner"></span
+            >{{ progress ? (progress.phase === 'indexing' ? 'Checking series…' : 'Uploading…') : busy ? 'Importing…' : 'Import scan →' }}
+          </button>
+        </footer>
+      </template>
     </section>
   </div>
 </template>
 
 <style scoped>
+.import-dialog.orthanc-import {
+  width: 850px;
+}
+.import-source-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 18px 0;
+}
+.import-source-tabs .button {
+  flex: 1;
+  font-size: 12px;
+}
+.import-source-tabs .selected {
+  border-color: var(--accent);
+  color: var(--white);
+  background: var(--surface-active);
+}
+
 .import-progress {
   display: grid;
   gap: 9px;

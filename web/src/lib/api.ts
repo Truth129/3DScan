@@ -19,6 +19,7 @@ import type {
 import { presentRevision, presentStructures } from './appearance';
 import type { AgreementAggregate, RevisionAgreement } from './agreement';
 import type { ImageAsset } from './image-domain';
+import type { OrthancImportRequest, OrthancSeriesPage, OrthancStatus, OrthancStudyPage, OrthancStudyQuery } from './orthanc';
 
 export class ApiError extends Error {
   constructor(
@@ -55,7 +56,12 @@ export interface CinematicReference {
 }
 export const api = {
   cases: () => request<Case[]>('/api/cases'),
-  case: (id: string) => request<Case>(caseUrl(id)),
+  orthancStatus: (signal?: AbortSignal) => request<OrthancStatus>('/api/orthanc/status', { signal }),
+  orthancStudies: (query: OrthancStudyQuery, signal?: AbortSignal) =>
+    request<OrthancStudyPage>('/api/orthanc/studies/query', { ...json('POST', query), signal }),
+  orthancSeries: (id: string, signal?: AbortSignal) => request<OrthancSeriesPage>(`/api/orthanc/studies/${encodeURIComponent(id)}/series`, { signal }),
+  importOrthanc: (data: OrthancImportRequest, signal?: AbortSignal) => request<Job>('/api/orthanc/imports', { ...json('POST', data), signal }),
+  case: (id: string, signal?: AbortSignal) => request<Case>(caseUrl(id), { signal }),
   images: (id: string) => request<ImageAsset[]>(`${caseUrl(id)}/images`),
   image: (id: string, imageId: string) => request<ImageAsset>(`${caseUrl(id)}/images/${encodeURIComponent(imageId)}`),
   health: () => request<Record<string, unknown>>('/api/health'),
@@ -67,7 +73,7 @@ export const api = {
   saveTotalSegmentatorLicense: (license_key: string) => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', json('PUT', { license_key })),
   removeTotalSegmentatorLicense: () => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', { method: 'DELETE' }),
   segment: (id: string, data: SegmentationSettings & { revision_id: string }) => request<Job>(`${caseUrl(id)}/segment`, json('POST', data)),
-  job: (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`),
+  job: (id: string, signal?: AbortSignal) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`, { signal }),
   measurements: async (id: string) => {
     const result = await request<JobMeasurements>(`/api/jobs/${encodeURIComponent(id)}/measurements`);
     return { ...result, structures: presentStructures(result.structures) };
