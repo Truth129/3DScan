@@ -63,8 +63,9 @@ The connector and incoming receiver are **active**. The destination address is
 `OsiriX-Mac`. The separate synthetic archive remains available for
 development. See the
 [Orthanc setup and transfer guide](docs/ORTHANC.md) for current status and
-connection settings. A synthetic binary DICOM SEG return test passes transport;
-OsiriX overlay qualification and general segmentation export remain pending.
+connection settings. A synthetic binary DICOM SEG return test passes transport,
+and the user confirms ROI display in OsiriX. General segmentation export is the
+next implementation step.
 
 ### Back up the case library
 

@@ -204,8 +204,11 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    Receiving through Tailscale is deferred. The user requested segmentation
    return qualification: listener `osirix-mac.local:11112`, AE
    `OsiriX-Mac`. Twelve synthetic CTs plus one two-mask binary SEG passed
-   C-STORE from the separate 8043 archive; actual overlay/alignment confirmation
-   and general revision export remain pending. Test-only highdicom 0.28.2 was
+   C-STORE from the separate 8043 archive. After an accidental deletion/resend,
+   the user confirms SEG appears as usable ROIs, with different database
+   presentation from native OsiriX ROIs. Basic receive/display compatibility
+   passes; exact alignment, editing/resave and general revision export remain
+   unqualified. Test-only highdicom 0.28.2 was
    isolated; production dependencies/services are unchanged. Audit:
    `.runtime/validation/osirix-seg-return-20261028T133800Z/`. See
    `docs/ORTHANC.md` and the newest validation section before operating it.

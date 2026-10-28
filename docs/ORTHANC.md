@@ -2,8 +2,8 @@
 
 The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
-passes transport; overlay qualification and general revision export remain
-pending. The target is **OsiriX MD 14.3.0** on the local network, with
+passes transport and user-confirmed basic ROI display; general revision export
+remains pending. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -134,9 +134,11 @@ SEG to OsiriX with calling AE `SCAN3D`. Both C-STORE jobs succeeded with zero
 failed instances; the temporary outbound profile was removed. Patient:
 `SYNTHETIC^SEGRETURN`, ID `SCAN3D-SEG-6610cfe7`. Expected display: a red
 **Synthetic ring** with a hole and a cyan **Synthetic block** overlapping its
-right side. User confirmation of usable overlays/alignment remains pending;
-storage success does not establish display or edit support. General case export
-and RTSTRUCT fallback remain separate work. Audit and synthetic fixtures:
+right side. After an accidental deletion, all 13 instances were resent
+successfully. The user confirms the SEG appears as usable ROIs, while its
+database presentation differs from native OsiriX ROIs. This establishes basic
+receive/display compatibility; exact alignment, editing/resave, general case
+export and RTSTRUCT fallback remain separate work. Audit and synthetic fixtures:
 `.runtime/validation/osirix-seg-return-20261028T133800Z/`.
 
 ## Synthetic development archive

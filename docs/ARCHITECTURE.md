@@ -224,8 +224,9 @@ rule and main-app restart approval remain prerequisites for activation. The
 separate synthetic development archive is already available. The standalone
 SEG qualification maps native mask voxels to original DICOM pixels using the
 full RAS/LPS affine, retains overlapping masks and checks per-frame source
-references independently. Its synthetic C-STORE passes; user overlay review and
-general revision export remain pending. The highdicom dependency is isolated
+references independently. Synthetic C-STORE passes, and the user confirms basic
+ROI display in OsiriX; exact alignment/editing and general revision export remain
+unqualified. The highdicom dependency is isolated
 from the production runtime; [the runbook](ORTHANC.md) records current status.
 
 ## Scan and correction lifecycle
