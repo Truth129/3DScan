@@ -113,6 +113,12 @@ and source-image references are retained. CT must have been imported through
 the configured Orthanc; local-folder sources and MR are not supported by this
 first export adapter. Unsaved correction and comparison states block export.
 
+Export checks every source slice against the saved mask grid, including all
+four corners. Converter/metadata rounding is allowed only within both 0.05
+voxel per axis and 0.05 mm in patient space. Masks are gathered by integer
+indices without interpolation, and the original DICOM positions remain in the
+SEG. Larger discrepancies stop export before anything is uploaded or sent.
+
 An archive-only action stores SEG beside the original study in Orthanc. Sending
 asks that same Orthanc to perform C-STORE. The app does not make a direct DICOM
 connection to OsiriX. Existing modality `osirix` already has the confirmed Mac

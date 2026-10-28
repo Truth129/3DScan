@@ -1,7 +1,10 @@
 """Exact source-grid export, overlap, provenance and bounded-memory gates."""
 
 from dataclasses import FrozenInstanceError
+import copy
 from itertools import permutations
+from pathlib import Path
+import shutil
 import weakref
 
 import nibabel as nib
@@ -10,7 +13,7 @@ import pydicom
 import pytest
 
 from osirix_seg_smoke import native_grid, source_fixture
-from scan3d import dicom_seg
+from scan3d import dicom, dicom_seg
 from scan3d.fileio import hash_file
 
 
@@ -166,6 +169,116 @@ def test_constant_gantry_shear_uses_full_affine_without_resampling(fixture):
     result = export(fixture)
     _, pixels = independent_pixels(result.files[0].path, fixture["images"])
     assert np.array_equal(pixels, fixture["truth"][..., 0])
+
+
+@pytest.mark.parametrize(
+    "slice_count,spacing,position_decimals,origin_z",
+    [(12, 0.3333, 3, -20), (256, 0.6, 6, -300), (500, 0.5, None, -1200)],
+)
+def test_real_converter_rounding_preserves_every_ct_sample_and_seg_bit(tmp_path, monkeypatch, slice_count, spacing, position_decimals, origin_z):
+    bundled = Path(__file__).resolve().parents[1] / ".tools/bin/dcm2niix"
+    executable = str(bundled) if bundled.is_file() else shutil.which("dcm2niix")
+    if executable is None:
+        pytest.skip("Native dcm2niix is not installed")
+    monkeypatch.setenv("SCAN3D_DCM2NIIX", executable)
+    template = source_fixture()[0][0]
+    direction = np.round(np.asarray(template.ImageOrientationPatient, dtype=float), 6)
+    normal = np.cross(direction[:3], direction[3:])
+    values = np.arange(slice_count * 8 * 8, dtype=np.int16).reshape(slice_count, 8, 8)
+    paths, images = [], []
+    for index, pixels in enumerate(values):
+        image = copy.deepcopy(template)
+        image.SOPInstanceUID = image.file_meta.MediaStorageSOPInstanceUID = pydicom.uid.generate_uid()
+        image.Rows = image.Columns = 8
+        image.InstanceNumber, image.ImagesInAcquisition = index + 1, slice_count
+        image.ImageOrientationPatient = [pydicom.valuerep.format_number_as_ds(float(value)) for value in direction]
+        position = np.array([44, -70, origin_z]) + index * spacing * normal
+        image.ImagePositionPatient = [
+            pydicom.valuerep.format_number_as_ds(float(value)) if position_decimals is None else f"{value:.{position_decimals}f}" for value in position
+        ]
+        image.SliceThickness = image.SpacingBetweenSlices = str(spacing)
+        image.PixelData = pixels.astype("<i2").tobytes()
+        path = tmp_path / f"source-{index:04d}.dcm"
+        image.save_as(path, enforce_file_format=True)
+        paths.append(path)
+        images.append(image)
+    before = {path: hash_file(path) for path in paths}
+    reference_path = dicom.convert_series(paths, tmp_path / "converted")
+    reference = nib.load(reference_path)
+    native_values = np.asanyarray(reference.dataobj)
+    mask_path = tmp_path / "mask.nii.gz"
+    nib.save(nib.Nifti1Image((native_values % 11 < 2).astype(np.uint8), reference.affine), mask_path)
+
+    # Prove correspondence independently at every source pixel, including the
+    # accumulated spacing error that the earlier 0.001-voxel gate rejected.
+    inverse = np.linalg.inv(reference.affine)
+    row, column = np.indices((8, 8))
+    seen = np.zeros(reference.shape, dtype=np.uint8)
+    max_error = 0.0
+    for index, image in enumerate(images):
+        lps = (
+            np.asarray(image.ImagePositionPatient, dtype=float)
+            + column[..., None] * float(image.PixelSpacing[1]) * direction[:3]
+            + row[..., None] * float(image.PixelSpacing[0]) * direction[3:]
+        )
+        coordinates = (lps * [-1, -1, 1]) @ inverse[:3, :3].T + inverse[:3, 3]
+        integer = np.rint(coordinates).astype(int)
+        max_error = max(max_error, float(np.abs(coordinates - integer).max()))
+        indices = tuple(integer.transpose(2, 0, 1))
+        np.testing.assert_array_equal(native_values[indices], values[index])
+        seen[indices] += 1
+    assert 1e-3 < max_error < 0.05
+    assert np.all(seen == 1)
+    result = dicom_seg.export_segmentation(
+        paths[::-1],
+        reference_path,
+        [dicom_seg.SegmentInput("rounding", "Synthetic rounding mask", "#ff4040", mask_path)],
+        tmp_path / "export",
+        revision_id="synthetic-rounded-source",
+        source_kind="direct_edit",
+    )
+    _, decoded = independent_pixels(result.files[0].path, images)
+    np.testing.assert_array_equal(decoded, values % 11 < 2)
+    assert {path: hash_file(path) for path in paths} == before
+
+
+@pytest.mark.parametrize("scale,axis,offset", [(1.0, 1, 0.04), (0.1, 0, 0.06)])
+def test_reference_rounding_limits_apply_in_both_voxels_and_millimetres(fixture, scale, axis, offset):
+    # Thick slices isolate the physical limit; a finely spaced source isolates
+    # the voxel limit. Both reference and mask move so mask validation cannot
+    # conceal a missing source/reference geometry check.
+    for path in fixture["paths"]:
+        image = pydicom.dcmread(path)
+        for field in ("ImagePositionPatient", "PixelSpacing"):
+            setattr(image, field, [pydicom.valuerep.format_number_as_ds(float(value) * scale) for value in getattr(image, field)])
+        image.SliceThickness = pydicom.valuerep.format_number_as_ds(float(image.SliceThickness) * scale)
+        image.save_as(path, enforce_file_format=True)
+    for path in [fixture["reference"], *(segment.mask_path for segment in fixture["segments"])]:
+        image = nib.load(path)
+        affine = image.affine.copy()
+        affine[:3] *= scale
+        displacement = offset * affine[:3, axis]
+        affine[:3, 3] += displacement
+        nib.save(nib.Nifti1Image(np.asanyarray(image.dataobj), affine), path)
+    assert (offset < 0.05) != (np.linalg.norm(displacement) < 0.05)
+    with pytest.raises(dicom_seg.DicomSegError, match="origins"):
+        export(fixture)
+    assert not fixture["output"].exists()
+
+
+def test_rounding_tolerance_cannot_hide_far_corner_spacing_drift(fixture):
+    for path in [fixture["reference"], *(segment.mask_path for segment in fixture["segments"])]:
+        image = nib.load(path)
+        affine = image.affine.copy()
+        delta = 0.0009 * affine[:3, 0]
+        affine[:3, 0] += delta
+        # Keep every DICOM plane origin at its original integer native voxel;
+        # only checking origins would miss the opposite corner's larger drift.
+        affine[:3, 3] -= (image.shape[0] - 1) * delta
+        nib.save(nib.Nifti1Image(np.asanyarray(image.dataobj), affine), path)
+    with pytest.raises(dicom_seg.DicomSegError, match="pixels"):
+        export(fixture)
+    assert not fixture["output"].exists()
 
 
 @pytest.mark.parametrize("problem", ["patient", "frame", "source_class", "orientation", "spacing", "duplicate", "missing", "irregular"])

@@ -228,8 +228,11 @@ Saved-revision SEG export runs on the CPU lane. The adapter binds the original
 Orthanc source manifest/archive, immutable reference image, selected masks and
 enqueue-time file identities before encoding. Full RAS/LPS affine checks prove
 that every original CT pixel matches an integer native voxel; no mask resampling
-is allowed. Each nonempty structure becomes one binary SEG instance in a shared
-new series, bounding memory independently of structure count and preserving
+is allowed. Every slice's four corners must agree within both 0.05 voxel per
+axis and 0.05 mm in patient space. These bounds accommodate accumulated
+converter/metadata rounding while retaining unambiguous integer addressing,
+exact dimensions and complete source coverage. Each nonempty structure becomes
+one binary SEG instance in a shared new series, bounding memory independently of structure count and preserving
 overlaps. Only CT headers are read; source CT pixel arrays are not assembled.
 UTF-8 metadata preserves source names and segment labels, and corrected masks
 are described as semiautomatic 3DScan outputs rather than untouched model output.

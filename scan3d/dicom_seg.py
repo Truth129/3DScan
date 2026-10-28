@@ -25,6 +25,8 @@ from .fileio import hash_file
 
 
 _VOXEL_TOLERANCE = 1e-3
+_GRID_TOLERANCE_VOXELS = 0.05
+_GRID_TOLERANCE_MM = 0.05
 _MAX_VOXELS = 512 * 1024**2
 
 
@@ -98,6 +100,15 @@ def _axis(vector):
     if len(axes) != 1 or abs(integer[axes[0]]) != 1 or not np.allclose(vector, integer, rtol=0, atol=_VOXEL_TOLERANCE):
         raise DicomSegError("Original CT pixels do not match the saved reference grid; masks cannot be resampled for export")
     return int(axes[0]), int(integer[axes[0]])
+
+
+def _matches_grid(actual, expected, affine):
+    # dcm2niix's float32 spacing estimate can accumulate small origin errors
+    # across long stacks, especially far from the patient-coordinate origin.
+    # Require both subvoxel and physical bounds at every plane corner: accepting
+    # metadata rounding must never permit a different integer voxel assignment.
+    delta = actual - expected
+    return np.max(np.abs(delta)) <= _GRID_TOLERANCE_VOXELS and np.linalg.norm(affine[:3, :3] @ delta) <= _GRID_TOLERANCE_MM
 
 
 def _source_stack(source_paths, reference, affine, cancelled):
@@ -179,8 +190,8 @@ def _source_stack(source_paths, reference, affine, cancelled):
         expected = integer.copy()
         expected[row_axis] = rows - 1 if row_sign < 0 else 0
         expected[column_axis] = columns - 1 if column_sign < 0 else 0
-        if not np.allclose(origin, expected, rtol=0, atol=_VOXEL_TOLERANCE) or not 0 <= integer[slice_axis] < shape[slice_axis]:
-            raise DicomSegError("Original CT origins do not match the complete saved reference grid")
+        if not _matches_grid(origin, expected, affine) or not 0 <= integer[slice_axis] < shape[slice_axis]:
+            raise DicomSegError("Original CT origins do not match the complete saved reference grid within 0.05 voxel and 0.05 mm")
         # A linear map matching all four corners proves every pixel centre in
         # the plane, without retaining a full-volume coordinate/index array.
         for row, column in ((0, 0), (rows - 1, 0), (0, columns - 1), (rows - 1, columns - 1)):
@@ -188,7 +199,7 @@ def _source_stack(source_paths, reference, affine, cancelled):
             target = expected.copy()
             target[row_axis] += row * row_sign
             target[column_axis] += column * column_sign
-            if not np.allclose(actual, target, rtol=0, atol=_VOXEL_TOLERANCE):
+            if not _matches_grid(actual, target, affine):
                 raise DicomSegError("Original CT pixels do not match integer reference voxels; masks cannot be resampled for export")
         indices.append(int(integer[slice_axis]))
         # Missing type-2 demographic fields mean unknown, not fabricated values.
