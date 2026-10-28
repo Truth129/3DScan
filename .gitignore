@@ -8,6 +8,8 @@ test_data/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
+*.tsbuildinfo
 # Vitest started from the repository root caches here.
 /node_modules/
 web/node_modules/

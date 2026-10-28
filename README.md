@@ -348,7 +348,8 @@ linked CT position and window/level while retaining normal orbit. The native
 plane shows scalar CT; the legacy plane also supports overlays and anatomy
 picking. Local overview frames appear during full CT preload in the legacy
 renderer; once cached, moving the plane needs no workstation slice requests.
-Review uses the legacy plane and requires exact full detail before accepting marks.
+Review requires exact full detail before accepting marks; orthogonal CT uses the
+native plane, while sheared scans and MRI use the legacy renderer.
 
 Use **Expand ↗** in the top-right corner of the 3D view to fill the screen.
 **Restore ↙** or **Escape** returns to the workspace. The camera, loaded CT,
@@ -469,30 +470,14 @@ Source hashes record the exact processing code and downloaded model checkpoints.
   use glTF metres; API coordinates and measurements use millimetres/millilitres.
   Display meshes are quantized (KHR_mesh_quantization, within 0.03 mm) to halve
   transfer size; detailed exports remain float32. Masks stay authoritative.
-- Three.js owns one 3D scene with on-demand rendering. CT review starts with a
-  small local navigation preview and selected overlay preloaded on case open.
-  The full CT caches automatically in the background for fully local,
-  full-resolution slicing and HU inspection. Until it is ready, navigation stays
-  local and exact detail follows after movement stops. Downloads can be cancelled
-  or retried. WebGL handles window/level locally.
-  The optional CT plane in the 3D view uploads the full native CT and selected
-  masks to the client GPU once; moving its slider then changes shader parameters
-  without extracting or uploading slice pixels. This shares the anatomy renderer
-  and the existing CT download. Clients outside its texture or memory limits use
-  the existing local slice path, with a visible status.
-  **CT volume** uses that same GPU texture for direct volume rendering, with
-  all 31 default Slicer appearances, intensity, opacity and native-axis cropping.
-  Enable **CT plane** alongside it to show the windowed CT slice at its correct
-  depth inside the volume, including its selected overlays. Both share the same
-  resident CT texture. **Mask to segmentation** clips the volume inside or outside
-  a union of chosen segments; use the selected/visible shortcuts or pick segments
-  individually. CT planes and slice review stay unchanged. The **Rendering stack**
-  combines visible segmentation surfaces with CT at their physical depths, with
-  independent layer visibility and opacity. Auto quality settles after movement. Volume
-  display does not alter masks, measurements or source CT and starts no inference.
-  The [volume-rendering contract](docs/CT_VOLUME_RENDERING.md) describes resource
-  limits, coordinates, lifecycle and the redistributed preset license.
-  Segmentation, corrections and mesh generation remain on the workstation.
+- Cornerstone3D/vtk.js shares the CT source, GPU texture and context between
+  native MPR and 3D. A local worker supplies preview and exact slice navigation;
+  warm navigation and windowing need no workstation requests. Three.js remains
+  available for sheared scans, MRI and portable HTML. The
+  [architecture](docs/ARCHITECTURE.md) and
+  [volume-rendering contract](docs/CT_VOLUME_RENDERING.md) describe ownership,
+  budgets and renderer differences. Segmentation, corrections and mesh generation
+  remain on the workstation.
 - Mask preparation shares one decode between measurements/QC and surface
   extraction, with memory-aware CPU concurrency (up to four structures by
   default). Content-addressed per-structure surfaces and measurements are reused.

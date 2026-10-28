@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Source for experimental commands only. The live service uses env.sh.
+# Isolated development paths. The live service uses production-env.sh.
 SCAN3D_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 export SCAN3D_ROOT
 export SCAN3D_EXPERIMENT_ROOT="$SCAN3D_ROOT/.runtime/stack-upgrade"

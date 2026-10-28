@@ -19,9 +19,9 @@ they are separate from the implemented system shown below.
 
 ![3DScan system architecture](./diagrams/architecture.svg)
 
-The editable Mermaid flows are below. The standalone overview is also available
-as [SVG](./diagrams/architecture.svg) and [PNG](./diagrams/architecture.png);
-its layout source is [render_architecture.py](./diagrams/render_architecture.py).
+The editable Mermaid flows are below. The standalone overview is available
+as [SVG](./diagrams/architecture.svg); its layout source is
+[render_architecture.py](./diagrams/render_architecture.py).
 
 ## System boundaries
 

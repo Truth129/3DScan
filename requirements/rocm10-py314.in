@@ -1,5 +1,5 @@
-# Experimental Python 3.14 runtime. Production requirements remain unchanged.
-# Only these primary imaging pins change for Python 3.14 binary wheel support:
+# Qualified Python 3.14 runtime, used by production and isolated development.
+# Primary imaging changes from the retained Python 3.12 baseline:
 # NumPy 2.2.6 -> 2.3.5; SciPy 1.15.3 -> 1.16.3; VTK 9.5.2 -> 9.6.2.
 -r rocm10-py314-gpu.in
 numpy==2.3.5

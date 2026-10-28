@@ -1,4 +1,4 @@
-# Experimental AMD Core SDK runtime; never sync this into the production .venv.
+# Qualified AMD Core SDK runtime for .venv-rocm10-py314; never sync into legacy .venv.
 # Source: AMD ROCm AI Ecosystem PyTorch installation, R9700 / gfx1201.
 # Resolve with the AMD index before PyPI, and keep the device extras.
 torch[device-gfx1201]==2.14.0+rocm10.1.0
