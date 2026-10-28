@@ -54,8 +54,6 @@ export function cornerstoneVolumeGeometry(
     ].some(([a, b]) => Math.abs(dot(axesRAS[a], axesRAS[b])) > 1e-5),
   };
 }
-export const deriveMPRGeometry = cornerstoneVolumeGeometry;
-
 /** Camera pixel x/y follow the two remaining native axes, matching worker
  * native slices; the normal comes from the displayed plane, not native handedness. */
 export function nativeCameraOrientation(geometry: Pick<Geometry, 'shape' | 'affine_ras'>, axis: NativeAxis) {

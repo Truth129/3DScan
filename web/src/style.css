@@ -874,28 +874,6 @@ h3 {
   color: var(--muted);
   padding: 0 4px;
 }
-.orientation-tag {
-  position: absolute;
-  font: 10px var(--mono);
-  color: var(--muted);
-  pointer-events: none;
-}
-.orientation-tag.top {
-  top: 40px;
-  left: 50%;
-}
-.orientation-tag.left {
-  top: 45%;
-  left: 17px;
-}
-.orientation-tag.right {
-  top: 45%;
-  right: 17px;
-}
-.orientation-tag.bottom {
-  bottom: 82px;
-  left: 50%;
-}
 .camera-strip {
   position: absolute;
   bottom: 63px;
@@ -1419,10 +1397,6 @@ h3 {
   width: 8px;
   height: 8px;
 }
-.tiny-loading {
-  font-size: 9px;
-  color: var(--accent);
-}
 .probe-readout {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
@@ -1639,11 +1613,6 @@ h3 {
 }
 .series-option .warning {
   font-size: 10px;
-}
-.prepare-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
 }
 .processing-note {
   display: flex;
@@ -2037,9 +2006,6 @@ h3 {
   }
   .case-actions {
     margin-left: 0;
-  }
-  .case-actions .slicer-action {
-    display: none;
   }
   .case-actions a {
     font-size: 10px;
@@ -2507,9 +2473,6 @@ h3 {
   .viewport-hint {
     font-size: 7px;
   }
-  .orientation-tag {
-    font-size: 9px;
-  }
   .selection-content {
     padding: 18px 15px;
     gap: 16px;
@@ -2693,16 +2656,6 @@ h3 {
   }
   .series-option .pill {
     font-size: 8px;
-  }
-  .prepare-fields {
-    gap: 10px;
-  }
-  .prepare-fields .field {
-    font-size: 10px;
-  }
-  .prepare-fields select {
-    font-size: 10px;
-    padding: 10px 6px;
   }
   .series-list {
     margin: 22px 0;

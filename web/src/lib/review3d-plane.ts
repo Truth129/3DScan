@@ -101,7 +101,7 @@ export class Review3DPlane {
   private validatedHU = new WeakSet<Float32Array>();
   private maxTextureSize: number;
   private maxLayers: number;
-  constructor(private renderer: THREE.WebGLRenderer) {
+  constructor(renderer: THREE.WebGLRenderer) {
     const gl = renderer.getContext() as WebGL2RenderingContext;
     this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     this.maxLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS);

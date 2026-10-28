@@ -411,6 +411,7 @@ const gpuMeta = computed(() => {
   const descriptor = props.localSession?.descriptor,
     request = planeRequest.value;
   if (gpuActive.value && descriptor && request) return nativeSliceMetadata(descriptor, request.plane, request.native);
+  return undefined;
 });
 const currentPlane = computed(() => (planeFrameFamily.value === desiredPlaneFamily.value ? planeFrame.value : undefined));
 const exactPlaneReady = computed(

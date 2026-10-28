@@ -62,8 +62,6 @@ export interface CTVolumePreset {
   specular: number;
   specularPower: number;
 }
-/** Legacy default range retained for callers; the renderer uses preset.transferRange. */
-export const CT_TRANSFER_RANGE = [-4096, 8192] as const;
 export const DEFAULT_VOLUME_SETTINGS: Readonly<CTVolumeSettings> = {
   preset: 'angiography',
   signal_window: { ...DEFAULT_SIGNAL_WINDOW },

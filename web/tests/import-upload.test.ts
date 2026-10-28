@@ -53,7 +53,7 @@ describe('import upload batches', () => {
 
   it('uploads every batch, resends an interrupted one and reports progress through indexing', async () => {
     let failures = 1;
-    const { transport, calls, starts, manifests } = rig(async (body, progress) => {
+    const { transport, calls, starts, manifests } = rig(async (_body, progress) => {
       if (failures-- > 0) throw new TypeError('The upload connection was interrupted');
       progress(0.5);
       progress(1);

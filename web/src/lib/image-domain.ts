@@ -1,7 +1,5 @@
 import type { Geometry } from '../types';
 
-/** Data representations are independent of modality. Only volume3d is wired today. */
-export type ImageKind = 'image2d' | 'stack' | 'cine' | 'volume3d';
 export type ImageCapability = 'mpr' | 'volume_rendering' | 'segmentation' | 'voxel_measurements';
 export interface ImageSource {
   series_uid?: string | null;

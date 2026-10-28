@@ -45,9 +45,6 @@ export class LocalCTOverlayError extends Error {
     this.name = 'LocalCTOverlayError';
   }
 }
-export function isLocalCTUnsupported(error: unknown): error is LocalCTUnsupportedError {
-  return error instanceof LocalCTUnsupportedError;
-}
 export function localCTBudget(deviceMemory?: number): number {
   return (deviceMemory !== undefined && deviceMemory <= 2 ? 128 : 512) * 1024 ** 2;
 }

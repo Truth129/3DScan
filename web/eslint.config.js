@@ -54,10 +54,5 @@ export default defineConfig([
     files: ['src/lib/display-appearance.ts'],
     rules: { 'no-control-regex': 'off' },
   },
-  {
-    // gpuMeta is undefined while the GPU plane is inactive; drop this once it returns explicitly.
-    files: ['src/components/ModelViewport.vue'],
-    rules: { 'vue/return-in-computed-property': 'off' },
-  },
   prettier,
 ]);
