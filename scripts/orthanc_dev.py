@@ -153,14 +153,14 @@ def process_record(directory: Path) -> dict | None:
     return record
 
 
-def system(directory: Path) -> dict:
+def system(directory: Path, url: str = URL) -> dict:
     config = json.loads((directory / "orthanc.json").read_text())
     username, password = next(iter(config["RegisteredUsers"].items()))
     token = base64.b64encode(f"{username}:{password}".encode()).decode()
-    request = Request(URL + "/system", headers={"Authorization": f"Basic {token}"})
+    request = Request(url + "/system", headers={"Authorization": f"Basic {token}"})
     with urlopen(request, timeout=2) as response:
         value = json.load(response)
-    return {"url": URL, "version": value["Version"], "name": value["Name"], "credentials_file": str(directory / "connection.env")}
+    return {"url": url, "version": value["Version"], "name": value["Name"], "credentials_file": str(directory / "connection.env")}
 
 
 def unit_state(directory: Path) -> dict[str, str]:

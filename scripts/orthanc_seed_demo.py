@@ -18,6 +18,9 @@ RUNTIME = ROOT / ".runtime" / "orthanc-dev"
 UID_ROOT = "1.2.826.0.1.3680043.10.543.20261028"
 STUDY_UID = UID_ROOT + ".1"
 FRAME_UID = UID_ROOT + ".9"
+FIXTURE_GENERATION = 3
+COMPLETE_SERIES_UID = f"{UID_ROOT}.{FIXTURE_GENERATION}.1.3"
+SEED_DIRECTORY = "native-ct-v3"
 URL = "http://127.0.0.1:8043"
 
 
@@ -27,7 +30,7 @@ def dicom_bytes(series_number: int, index: int, *, complete: bool = True) -> byt
 
     file_meta = FileMetaDataset()
     file_meta.MediaStorageSOPClassUID = CTImageStorage
-    file_meta.MediaStorageSOPInstanceUID = f"{UID_ROOT}.{series_number + 1}.{index + 1}"
+    file_meta.MediaStorageSOPInstanceUID = f"{UID_ROOT}.{FIXTURE_GENERATION}.{series_number + 1}.{index + 1}"
     file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
     file_meta.ImplementationClassUID = "1.2.826.0.1.3680043.10.543.1"
     ds = FileDataset(None, {}, file_meta=file_meta, preamble=b"\0" * 128)
@@ -35,14 +38,14 @@ def dicom_bytes(series_number: int, index: int, *, complete: bool = True) -> byt
     ds.SOPClassUID = CTImageStorage
     ds.SOPInstanceUID = file_meta.MediaStorageSOPInstanceUID
     ds.StudyInstanceUID = STUDY_UID
-    ds.SeriesInstanceUID = f"{UID_ROOT}.1.{series_number}"
+    ds.SeriesInstanceUID = f"{UID_ROOT}.{FIXTURE_GENERATION}.1.{series_number}"
     ds.FrameOfReferenceUID = FRAME_UID
     ds.PatientName = "SYNTHETIC^Orthanc"
     ds.PatientID = "SCAN3D-ORTHANC-DEMO"
     ds.StudyID = "ORTHANC-DEMO"
     ds.AccessionNumber = "SYNTHETIC"
     ds.StudyDescription = "Synthetic Orthanc integration"
-    ds.SeriesDescription = "Synthetic CT complete (12 of12)" if complete else "Synthetic CT incomplete (3 of12)"
+    ds.SeriesDescription = "Synthetic CT complete v3 (12 of12)" if complete else "Synthetic CT incomplete v3 (3 of12)"
     ds.Modality = "CT"
     ds.SeriesNumber = series_number
     ds.AcquisitionNumber = 1
@@ -69,8 +72,10 @@ def dicom_bytes(series_number: int, index: int, *, complete: bool = True) -> byt
     ds.WindowWidth = 400
     for date in ["StudyDate", "SeriesDate", "AcquisitionDate", "ContentDate"]:
         setattr(ds, date, "20261028")
-    for timestamp in ["StudyTime", "SeriesTime", "AcquisitionTime", "ContentTime"]:
-        setattr(ds, timestamp, f"0900{index:02d}")
+    # Study/series times describe the shared acquisition, not each slice. Varying
+    # them makes dcm2niix correctly split the source into separate volumes.
+    ds.StudyTime = ds.SeriesTime = "090000"
+    ds.AcquisitionTime = ds.ContentTime = f"0900{index:02d}"
     y, x = np.mgrid[:64, :64]
     pixels = np.full((64, 64), -1000, dtype="<i2")
     body = ((x - 32) / 26) ** 2 + ((y - 32) / 25) ** 2 < 1
@@ -101,7 +106,7 @@ def main() -> None:
     system = request("/system")
     if system["Name"] != "3DScan synthetic development archive" or system["Version"] != "1.13.0":
         raise RuntimeError("Refusing to seed a server other than the configured synthetic development archive.")
-    output = RUNTIME / "synthetic" / "declared-counts-v2"
+    output = RUNTIME / "synthetic" / SEED_DIRECTORY
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
     manifest = {"synthetic_only": True, "study_uid": STUDY_UID, "frame_of_reference_uid": FRAME_UID, "series": []}
     for number, count in [(3, 12), (4, 3)]:
