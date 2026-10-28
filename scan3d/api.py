@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import re
 import threading
-from typing import Literal
+from typing import Annotated, Literal
 import uuid
 import zipfile
 
@@ -106,6 +106,12 @@ class OrthancImport(Input):
     series_id: str = Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{8}){4}$")
     snapshot: str = Field(pattern=r"^[0-9a-f]{64}$")
     label: str | None = Field(None, max_length=128)
+
+
+class DicomSegExport(Input):
+    structure_ids: list[Annotated[str, Field(strict=True, min_length=1, max_length=200)]] | None = Field(None, min_length=1, max_length=1000)
+    destination: str | None = Field(None, strict=True, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    resend: bool = Field(False, strict=True)
 
 
 class Process(Input):
@@ -329,7 +335,7 @@ def create_app(settings: Settings | None = None):
     @app.middleware("http")
     async def same_origin(request: Request, call_next):
         # Local filesystem endpoints must not be callable by an unrelated browser origin.
-        private = request.url.path == "/api/totalsegmentator/license" or request.url.path.startswith("/api/orthanc/")
+        private = request.url.path == "/api/totalsegmentator/license" or request.url.path.startswith("/api/orthanc/") or request.url.path.endswith("/dicom-seg")
         origin = request.headers.get("origin")
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
             from urllib.parse import urlsplit
@@ -619,6 +625,8 @@ def create_app(settings: Settings | None = None):
         job = service.store.get("jobs", job_id)
         if job["kind"] == "orthanc_import":
             return public_job(service.orthanc.cancel(job_id))
+        if job["kind"] == "orthanc_export":
+            return public_job(service.orthanc_exports.cancel(job_id))
         if job["status"] in ("queued", "running"):
             changes = dict(cancel_requested=True)
             if job["status"] == "queued":
@@ -635,6 +643,14 @@ def create_app(settings: Settings | None = None):
     def revision(case_id: str, revision_id: str):
         result = public_revision(ct_revision(case_id, revision_id))
         return JSONResponse(result, headers={"Cache-Control": "private, no-store"}) if revision_id.startswith("review-") else result
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
+    def dicom_seg_availability(case_id: str, revision_id: str):
+        return service.orthanc_exports.availability(case_id, revision_id)
+
+    @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
+    def dicom_seg_export(case_id: str, revision_id: str, body: DicomSegExport):
+        return public_job(service.orthanc_exports.start(case_id, revision_id, body.structure_ids, body.destination, resend=body.resend))
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/cinematic-reference")
     def cinematic_reference(case_id: str, revision_id: str):

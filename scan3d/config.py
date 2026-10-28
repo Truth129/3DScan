@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parent.parent
 # Modalities with an installed image adapter (modalities._ADAPTERS). A deployment
@@ -20,12 +21,16 @@ class Settings:
     orthanc_url: str = field(default="", repr=False)
     orthanc_username: str = field(default="", repr=False)
     orthanc_password: str = field(default="", repr=False)
+    orthanc_export_destinations: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls):
         modalities = tuple(dict.fromkeys(part.strip().upper() for part in os.environ.get("SCAN3D_MODALITIES", ",".join(MODALITIES)).split(",") if part.strip()))
         if not modalities or set(modalities) - set(MODALITIES):
             raise ValueError(f"SCAN3D_MODALITIES must list one or more of: {', '.join(MODALITIES)}")
+        destinations = tuple(dict.fromkeys(part.strip() for part in os.environ.get("SCAN3D_ORTHANC_EXPORT_DESTINATIONS", "").split(",") if part.strip()))
+        if any(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", part) is None for part in destinations):
+            raise ValueError("SCAN3D_ORTHANC_EXPORT_DESTINATIONS must list configured Orthanc modality identifiers")
         return cls(
             Path(os.environ.get("SCAN3D_DATA_DIR", ROOT / "data")).resolve(),
             tuple(Path(p).expanduser().resolve() for p in os.environ.get("SCAN3D_IMPORT_ROOTS", str(ROOT)).split(os.pathsep) if p),
@@ -35,6 +40,7 @@ class Settings:
             orthanc_url=os.environ.get("SCAN3D_ORTHANC_URL", "").strip(),
             orthanc_username=os.environ.get("SCAN3D_ORTHANC_USERNAME", ""),
             orthanc_password=os.environ.get("SCAN3D_ORTHANC_PASSWORD", ""),
+            orthanc_export_destinations=destinations,
         )
 
     def modality_unavailable(self, modality) -> str | None:
