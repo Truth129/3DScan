@@ -66,6 +66,14 @@ receiver with authenticated `PUT /modalities/osirix`, without a service restart.
 This API replaces the whole sender definition; preserve all operation flags.
 REST updates alone are lost on restart with the default file-based modality
 configuration. Audit: `.runtime/orthanc-sender-correction-20261028T125441Z/`.
+The user subsequently confirmed that OsiriX → SCAN3D sending works.
+
+`osirix-mac.local` resolves on this workstation, but Orthanc requires a
+literal IP for incoming validation while `DicomCheckModalityHost` is enabled.
+Use a router DHCP reservation to retain the LAN address; a later Tailscale
+configuration can use the Mac's stable tailnet IP. Simply substituting the
+hostname in this incoming allowlist would reject associations. See the
+[Orthanc DICOM guide](https://orthanc.uclouvain.be/book/dicom-guide.html#configuring-orthanc).
 
 `deployment/scan3d-orthanc.service` is the receiver user-unit template. The main
 app loads the private `connection.env` through its `orthanc.conf` systemd drop-in.
