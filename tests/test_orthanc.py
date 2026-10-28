@@ -327,3 +327,157 @@ def test_invalid_identifiers_urls_and_queries_never_make_a_request(archive):
         with pytest.raises(ValueError):
             OrthancClient(url)
     assert upstream.calls == []
+
+
+TRANSFER_JOB = "12345678-1234-1234-1234-123456789abc"
+
+
+class ExportArchive(Archive):
+    def __init__(self):
+        super().__init__()
+        self.destination_rows = {"osirix": {"AET": "OsiriX-Mac", "Host": "private-host.local", "Port": 11112}, "unlisted": {"AET": "OTHER"}}
+        self.upload_status = "Success"
+        self.retained = None
+        self.store_failure = None
+        self.store_response = {"ID": TRANSFER_JOB}
+        self.job_document = {"State": "Success", "Content": {"InstancesCount": 2, "FailedInstancesCount": 0}}
+        self.upload_stream = None
+
+    def request(self, method, url, **kwargs):
+        route = urlsplit(url).path.removeprefix("/orthanc")
+        if route == "/modalities":
+            assert method == "GET" and kwargs["params"] == {"expand": "true"}
+            value = self.destination_rows
+        elif route == "/instances":
+            assert method == "POST" and kwargs["headers"]["Content-Type"] == "application/dicom"
+            self.upload_stream = kwargs["data"]
+            data = self.upload_stream.read()
+            if self.retained is None:
+                self.retained = data
+            self.files[A] = self.retained
+            value = {"ID": A, "Status": self.upload_status}
+        elif route == "/modalities/osirix/store":
+            self.calls.append((method, url, kwargs))
+            if self.store_failure:
+                raise self.store_failure
+            response = Response(json.dumps(self.store_response).encode())
+            self.responses.append(response)
+            return response
+        elif route == f"/jobs/{TRANSFER_JOB}":
+            value = self.job_document
+        else:
+            return super().request(method, url, **kwargs)
+        self.calls.append((method, url, kwargs))
+        response = Response(json.dumps(value).encode())
+        self.responses.append(response)
+        return response
+
+
+@pytest.fixture
+def export_archive():
+    upstream = ExportArchive()
+    return OrthancClient("https://archive.example.test/orthanc", "user", "password", session=upstream), upstream
+
+
+def test_export_destinations_are_server_allowlisted_and_hide_network_details(export_archive):
+    client, upstream = export_archive
+    assert client.destinations(()) == [] and upstream.calls == []
+    assert client.destinations(("osirix", "missing", "osirix")) == [{"id": "osirix", "name": "osirix", "aet": "OsiriX-Mac"}]
+    for bad in ("../instances", "osirix?x=y", "https://elsewhere.test", ""):
+        before = len(upstream.calls)
+        with pytest.raises(ValueError, match="destination"):
+            client.destinations((bad,))
+        assert len(upstream.calls) == before
+    assert all(response.closed for response in upstream.responses)
+
+
+@pytest.mark.parametrize("status", ["Success", "AlreadyStored"])
+def test_seg_upload_streams_file_and_verifies_exact_retained_bytes(export_archive, tmp_path, status):
+    client, upstream = export_archive
+    source = tmp_path / "synthetic-seg.dcm"
+    source.write_bytes(b"synthetic segmentation bits")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    upstream.upload_status = status
+    result = client.upload_instance(source, expected_sha256=digest)
+    assert result == {"id": A, "status": status, "sha256": digest, "size": source.stat().st_size}
+    assert upstream.upload_stream.closed
+    assert upstream.calls[0][2]["data"] is upstream.upload_stream
+    assert upstream.calls[1][0] == "GET" and upstream.calls[1][1].endswith(f"/instances/{A}/file")
+    assert all(response.closed for response in upstream.responses)
+
+
+def test_seg_upload_rejects_same_sop_with_different_archive_content(export_archive, tmp_path):
+    client, upstream = export_archive
+    source = tmp_path / "synthetic-seg.dcm"
+    source.write_bytes(b"expected bits")
+    upstream.upload_status, upstream.retained = "AlreadyStored", b"different bits"
+    with pytest.raises(OrthancError, match="archive copy differs"):
+        client.upload_instance(source)
+    assert not any(url.endswith("/store") for _, url, _ in upstream.calls)
+    assert all(response.closed for response in upstream.responses)
+
+
+def test_seg_upload_limits_and_digest_are_checked_before_network(export_archive, tmp_path):
+    client, upstream = export_archive
+    source = tmp_path / "synthetic-seg.dcm"
+    source.write_bytes(b"synthetic")
+    with pytest.raises(ValueError, match="upload limit"):
+        client.upload_instance(source, max_bytes=1)
+    with pytest.raises(ValueError, match="changed"):
+        client.upload_instance(source, expected_sha256="0" * 64)
+    linked = tmp_path / "linked.dcm"
+    linked.symlink_to(source)
+    with pytest.raises(ValueError, match="unavailable"):
+        client.upload_instance(linked)
+    assert upstream.calls == []
+
+
+def test_store_submits_exact_instance_ids_and_polls_only_that_job(export_archive):
+    client, upstream = export_archive
+    assert client.start_store([A, B, A], "osirix") == TRANSFER_JOB
+    assert upstream.calls[-1][2]["json"] == {"Resources": [A, B], "Synchronous": False, "StorageCommitment": False}
+    assert client.store_job(TRANSFER_JOB) == {"id": TRANSFER_JOB, "state": "Success", "instances_count": 2, "failed_instances_count": 0}
+    upstream.job_document = {"State": "Running", "Content": {}}
+    assert client.store_job(TRANSFER_JOB)["instances_count"] is None
+    assert all(response.closed for response in upstream.responses)
+
+
+@pytest.mark.parametrize("failure", [requests.Timeout("private credentials"), requests.ConnectionError("private patient")])
+def test_uncertain_store_start_never_blindly_retries_or_leaks_upstream_text(export_archive, failure):
+    from scan3d.orthanc import OrthancDeliveryUnknown
+
+    client, upstream = export_archive
+    upstream.store_failure = failure
+    with pytest.raises(OrthancDeliveryUnknown, match="whether the send started") as caught:
+        client.start_store([A], "osirix")
+    assert "private" not in str(caught.value) and len(upstream.calls) == 1
+
+
+def test_invalid_store_response_retains_delivery_uncertainty(export_archive):
+    from scan3d.orthanc import OrthancDeliveryUnknown
+
+    client, upstream = export_archive
+    upstream.store_response = {"ID": "../other-job"}
+    with pytest.raises(OrthancDeliveryUnknown):
+        client.start_store([A], "osirix")
+    assert len(upstream.calls) == 1
+    before = len(upstream.calls)
+    for invalid in ("../other-job", A):
+        with pytest.raises(ValueError):
+            client.store_job(invalid)
+    with pytest.raises(ValueError):
+        client.start_store([A], "../osirix")
+    with pytest.raises(ValueError):
+        client.start_store([], "osirix")
+    assert len(upstream.calls) == before
+
+
+def test_transfer_failure_uses_safe_error_and_rejects_invalid_counts(export_archive):
+    client, upstream = export_archive
+    upstream.job_document = {"State": "Failure", "ErrorDescription": "secret patient path", "Content": {"InstancesCount": 2, "FailedInstancesCount": 1}}
+    result = client.store_job(TRANSFER_JOB)
+    assert result["state"] == "Failure" and "secret" not in result["error"]
+    for count in (True, -1, "2", None):
+        upstream.job_document["Content"]["InstancesCount"] = count
+        with pytest.raises(OrthancError, match="counts"):
+            client.store_job(TRANSFER_JOB)

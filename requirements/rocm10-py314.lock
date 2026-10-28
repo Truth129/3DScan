@@ -1228,6 +1228,11 @@ hf-xet==1.7.0 \
     #   -c requirements/rocm10-py314-baseline.constraints
     #   huggingface-hub
     # from https://pypi.org/simple
+highdicom==0.28.2 \
+    --hash=sha256:15d51e7ccb0b1e5f7e3b40c7191f9996ec4af926bd306a7ad56bee33f46ce9ad \
+    --hash=sha256:8864c7632e2c28c44ffaa3fe302d58cc68112b3b18a2b34e96e47252427cf6e4
+    # via -r requirements/rocm10-py314.in
+    # from https://pypi.org/simple
 hpack==4.2.0 \
     --hash=sha256:0895cfa3b5531fc65fe439c05eb65144f123bf7a394fcaa56aa423548d8e45c0 \
     --hash=sha256:858ac0b02280fa582b5080d68db0899c62a80375e0e5413a74970c5e518b6986
@@ -2422,6 +2427,7 @@ numpy==2.3.5 \
     #   dynamic-network-architectures
     #   fury
     #   h5py
+    #   highdicom
     #   imagecodecs
     #   imageio
     #   matplotlib
@@ -2431,6 +2437,7 @@ numpy==2.3.5 \
     #   nnunetv2
     #   numexpr
     #   pandas
+    #   pyjpegls
     #   pynrrd
     #   scikit-image
     #   scikit-learn
@@ -2456,6 +2463,7 @@ packaging==26.3 \
     #   -c requirements/rocm10-py314-baseline.constraints
     #   dipy
     #   fury
+    #   highdicom
     #   huggingface-hub
     #   lazy-loader
     #   marshmallow
@@ -2642,6 +2650,7 @@ pillow==11.3.0 \
     #   -r requirements/rocm10-py314.in
     #   batchgenerators
     #   fury
+    #   highdicom
     #   imageio
     #   matplotlib
     #   scikit-image
@@ -3011,6 +3020,7 @@ pydicom==3.0.1 \
     #   -c requirements/rocm10-py314-baseline.constraints
     #   -r requirements/rocm10-py314.in
     #   dicom2nifti
+    #   highdicom
     # from https://pypi.org/simple
 pygltflib==1.16.5 \
     --hash=sha256:1f15740d5a7aaf71a5083e285af6b361184958e255659132f4ba8fe4f3d21ea9 \
@@ -3027,6 +3037,37 @@ pygments==2.21.0 \
     #   -c requirements/rocm10-py314-baseline.constraints
     #   pytest
     #   rich
+    # from https://pypi.org/simple
+pyjpegls==1.5.1 \
+    --hash=sha256:0080024c9e9e6be7bb0276ea54510488c28c8c9f2c0841049c64ab8b66d899f2 \
+    --hash=sha256:0eadf1c7adc934361dad2d0a9e22b14271b22067063568c85e71e4e752be0521 \
+    --hash=sha256:14b870392e6796ea0e2fac226e97ac730a634549923c475d173bc9c291f02658 \
+    --hash=sha256:14d7cf5e61ffdb9343a888dde5e3f9b7e527cc805c31c7f48a1e2cdb73d9d9fa \
+    --hash=sha256:261c6dc80fe1071631b1c42b877ecb8d9cf9c5d5c8189a18eaa96349ab42fde3 \
+    --hash=sha256:29bbb8be9193cc88d8bb442d9459da31119dcf76c07b10f44e0926d48620c33b \
+    --hash=sha256:2efb0cd87f4fea1b4a58649b92dc64d7290424e08374f4ef7bc19caf99370584 \
+    --hash=sha256:3fa5009833bb5234698d8d77b3e693810a8ef740eadceebb5650164618f4b2c1 \
+    --hash=sha256:45630167eb37990701854f882455f4611c24902a2de1d27635076c3fed4a04a7 \
+    --hash=sha256:496ae75dc1b06a5e3fb6893593665fa40093e18a162de518ee0609c77cb7d4fe \
+    --hash=sha256:51579d55f38ce96e593f14168fb2df062b5101e55ffd7ec59e0d8b926d9a3122 \
+    --hash=sha256:5812655f1fbb93bd2666ff05616bf3c7eae2474c6c4f8bf8afb6d5e5c0d6e9cf \
+    --hash=sha256:5e8c7257bfd1700d563c4fdc60a8794519e00da21798221d964271bc5a027a49 \
+    --hash=sha256:747919893b160ff61f67dfb69593f9653c2597bb5b481baa2a7a315ea26c588e \
+    --hash=sha256:80531a7a6c57ac85ee4e0f39c98097d4e8cac28a7fb897f26ad1571f85f0b512 \
+    --hash=sha256:8ec9eb9f7bd5332f86b3c9749f17aa8429a7965acfa7f2ab568eb11b70631472 \
+    --hash=sha256:a3cd66a6435c6cc27ab287997f966304b17b55a371beb11ed267e0874133668a \
+    --hash=sha256:a5430dcd735bc4c0c1eb478510d73a5178a4743cbad1d72113926accdd738921 \
+    --hash=sha256:acbe5ba2dde9b97bb98571a17a949bfbba7c9e40e78dfb79c08ecc568db50cee \
+    --hash=sha256:bba892f411091a0de0736f39ac8da11e667a929fbc1e474657f1291d5e303d37 \
+    --hash=sha256:c3e6355a4bc9d3da46f7d4377793576b261bf60df297cea7167b3556adb98eb7 \
+    --hash=sha256:d0fe09dfb7f75ce78e3b1e0519912a42f1827d68bbc3609652f4f8743c956025 \
+    --hash=sha256:dfecd3ea08ff2df367eb90791e3ff5288ccc0293fc13e99adc5542629a97a493 \
+    --hash=sha256:e206e4ade507f6a3066a134d04a68b7c2570a2365f18e43ee2b01a08f3efcd30 \
+    --hash=sha256:ef8c9a18b7c2b512a9b665cf3407b8403938263fced4933a997a558c24e2750d \
+    --hash=sha256:fb56f056868561a1e49995bcbbe7ba8c38d56838d5c975ef5a0ff887d9189230
+    # via
+    #   -r requirements/rocm10-py314.in
+    #   highdicom
     # from https://pypi.org/simple
 pynrrd==1.1.3 \
     --hash=sha256:21f7e370045e7ef8a86841965b2ff3a18937efbb4e2078e346168463f8f34b7e \
@@ -3617,6 +3658,7 @@ typing-extensions==4.16.0 \
     #   -c requirements/rocm10-py314-baseline.constraints
     #   anyio
     #   fastapi
+    #   highdicom
     #   huggingface-hub
     #   pydantic
     #   pydantic-core

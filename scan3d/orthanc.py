@@ -1,4 +1,4 @@
-"""Read-only Orthanc transport with immutable, bounded series snapshots.
+"""Bounded Orthanc transport for immutable imports and explicit result exports.
 
 Orthanc stability means an inactivity interval, not proof that an acquisition is
 complete. A selected snapshot is checked again after transfer; accepted source
@@ -16,10 +16,13 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 
 from .errors import NotFound
+from .fileio import hash_file
 from .orthanc_models import ArchiveInstance, DownloadedFile, DownloadManifest, SeriesSnapshot, content_digest, parse_snapshot, snapshot_fingerprint
 
 _ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{8}){4}\Z")
 _UID = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
+_MODALITY = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
+_JOB = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
 _QUERY_TAGS = {"PatientID", "PatientName", "AccessionNumber", "StudyDate"}
 _STUDY_TAGS = ["PatientID", "PatientName", "AccessionNumber", "StudyDate", "StudyDescription", "StudyInstanceUID", "ModalitiesInStudy"]
 _INSTANCE_TAGS = "SOPInstanceUID;SOPClassUID;FrameOfReferenceUID;StudyInstanceUID;SeriesInstanceUID"
@@ -34,6 +37,16 @@ class OrthancError(RuntimeError):
 
 class OrthancChanged(RuntimeError):
     """The archive changed after the user selected a particular snapshot."""
+
+
+class OrthancDeliveryUnknown(OrthancError):
+    """A send may have started; callers must not silently submit another one."""
+
+
+def modality_id(value):
+    if not isinstance(value, str) or not _MODALITY.fullmatch(value):
+        raise ValueError("Invalid configured Orthanc destination identifier")
+    return value
 
 
 def orthanc_id(value):
@@ -140,8 +153,8 @@ class OrthancClient:
             raise OrthancError(message)
         return response
 
-    def _json(self, method, path, **kwargs):
-        response = self._request(method, path, headers={"Accept": "application/json"}, **kwargs)
+    def _json(self, method, path, *, headers=None, **kwargs):
+        response = self._request(method, path, headers={"Accept": "application/json", **(headers or {})}, **kwargs)
         try:
             raw = bytearray()
             for block in response.iter_content(chunk_size=64 * 1024):
@@ -160,6 +173,100 @@ class OrthancClient:
     def status(self):
         value = _record(self._json("GET", "/system"))
         return {"name": _text(value.get("Name")) or "Orthanc", "version": _text(value.get("Version")), "api_version": value.get("ApiVersion")}
+
+    def destinations(self, allowlist):
+        """Expose only explicitly configured aliases, never their network details."""
+        allowed = tuple(dict.fromkeys(modality_id(value) for value in allowlist))
+        if not allowed:
+            return []
+        rows = _record(self._json("GET", "/modalities", params={"expand": "true"}))
+        result = []
+        for name in allowed:
+            if name not in rows:
+                continue
+            entry = _record(rows[name])
+            aet = entry.get("AET")
+            if not isinstance(aet, str) or not 1 <= len(aet) <= 16 or aet != aet.strip() or "\\" in aet or any(not 32 <= ord(char) <= 126 for char in aet):
+                raise OrthancError("Orthanc returned an invalid destination AE title.")
+            result.append({"id": name, "name": name, "aet": aet})
+        return result
+
+    def upload_instance(self, path, *, expected_sha256=None, max_bytes=512 * 1024**2):
+        """Stream immutable SEG bytes and verify the archive's retained copy.
+
+        AlreadyStored identifies a SOP, not identical content. Read-back hashing
+        makes retries safe without overwriting a different object with that UID.
+        """
+        path = Path(path)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("The DICOM SEG artifact is unavailable")
+        size = path.stat().st_size
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or not 0 < size <= max_bytes:
+            raise ValueError("The DICOM SEG artifact exceeds the archive upload limit")
+        digest = hash_file(path)
+        if expected_sha256 is not None and expected_sha256 != digest:
+            raise ValueError("The saved DICOM SEG artifact changed; create a new export")
+        with path.open("rb") as stream:
+            value = _record(self._json("POST", "/instances", headers={"Content-Type": "application/dicom"}, data=stream))
+        try:
+            resource_id = orthanc_id(value.get("ID"))
+        except ValueError:
+            raise OrthancError("Orthanc returned an invalid uploaded instance identifier.") from None
+        if value.get("Status") not in {"Success", "AlreadyStored"}:
+            raise OrthancError("Orthanc did not confirm storage of the DICOM SEG.")
+        response = self._request("GET", f"/instances/{resource_id}/file")
+        retained, received = hashlib.sha256(), 0
+        try:
+            for block in response.iter_content(chunk_size=_BLOCK):
+                received += len(block)
+                if received > size:
+                    raise OrthancError("The archive copy differs from the saved DICOM SEG. No send was started.")
+                retained.update(block)
+        except requests.RequestException:
+            raise OrthancError("The archived DICOM SEG could not be verified. Retry the export.") from None
+        finally:
+            response.close()
+        if received != size or retained.hexdigest() != digest or hash_file(path) != digest:
+            raise OrthancError("The archive copy differs from the saved DICOM SEG. No send was started.")
+        return {"id": resource_id, "status": value["Status"], "sha256": digest, "size": size}
+
+    def start_store(self, instance_ids, destination):
+        destination = modality_id(destination)
+        if not isinstance(instance_ids, (tuple, list)) or not 1 <= len(instance_ids) <= 1024:
+            raise ValueError("Select between 1 and 1024 DICOM SEG instances")
+        resources = list(dict.fromkeys(orthanc_id(value) for value in instance_ids))
+        try:
+            value = _record(
+                self._json("POST", f"/modalities/{destination}/store", json={"Resources": resources, "Synchronous": False, "StorageCommitment": False})
+            )
+            job_id = value.get("ID")
+            if not isinstance(job_id, str) or not _JOB.fullmatch(job_id):
+                raise OrthancError("Invalid transfer job identifier")
+            return job_id
+        except OrthancError:
+            # A response can be lost after Orthanc has submitted the job. The
+            # caller persists intent before this request and retains that doubt.
+            raise OrthancDeliveryUnknown("Orthanc did not confirm whether the send started. Check the transfer before explicitly retrying.") from None
+
+    def store_job(self, job_id):
+        if not isinstance(job_id, str) or not _JOB.fullmatch(job_id):
+            raise ValueError("Invalid Orthanc transfer job identifier")
+        value = _record(self._json("GET", f"/jobs/{job_id}"))
+        state = value.get("State")
+        if state not in {"Pending", "Running", "Retry", "Paused", "Success", "Failure"}:
+            raise OrthancError("Orthanc returned an unknown transfer state.")
+        content = _record(value.get("Content", {}))
+        result = {"id": job_id, "state": state, "instances_count": None, "failed_instances_count": None}
+        for key, field in (("instances_count", "InstancesCount"), ("failed_instances_count", "FailedInstancesCount")):
+            count = content.get(field)
+            if count is None and state not in {"Success", "Failure"}:
+                continue
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise OrthancError("Orthanc returned invalid transfer counts.")
+            result[key] = count
+        if state == "Failure":
+            result["error"] = "Orthanc could not send the DICOM SEG. Check the destination listener and transfer status."
+        return result
 
     def _study(self, value):
         value = _record(value)

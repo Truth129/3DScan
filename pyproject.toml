@@ -9,7 +9,7 @@ description = "Local chest–abdomen CT reconstruction and revisioned anatomical
 requires-python = ">=3.12,<3.15"
 dependencies = [
   "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "python-multipart>=0.0.20",
-  "numpy>=2,<3", "scipy>=1.15,<2", "nibabel>=5.3,<6", "pydicom>=3,<4", "python-gdcm>=3.2,<4",
+  "numpy>=2,<3", "scipy>=1.15,<2", "nibabel>=5.3,<6", "pydicom>=3,<4", "python-gdcm>=3.2,<4", "highdicom==0.28.2",
   "pynrrd>=1,<2", "SimpleITK>=2.4,<3", "vtk>=9.4,<10", "Pillow>=11,<13", "requests>=2.32,<3",
 ]
 
