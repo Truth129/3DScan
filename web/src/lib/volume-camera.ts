@@ -116,3 +116,43 @@ export function fitVolumeCameraClipping(camera: CornerstoneVolumeCameraRAS, boun
   validate(fitted);
   return fitted;
 }
+
+/** Fit physical bounds in the current orthographic view, including portrait panes. */
+export function fitVolumeCameraBounds(camera: CornerstoneVolumeCameraRAS, bounds: readonly [Point, Point], aspect = 1): CornerstoneVolumeCameraRAS {
+  validate(camera);
+  if (!positive(aspect)) throw new Error('Invalid volume camera aspect.');
+  // Reuse clipping validation before computing a new centre or projection.
+  fitVolumeCameraClipping(camera, bounds);
+  const center = bounds[0].map((value, axis) => (value + bounds[1][axis]) / 2) as Point;
+  const forward = camera.focalPointRAS.map((value, axis) => value - camera.positionRAS[axis]);
+  const distance = Math.hypot(...forward);
+  const normal = forward.map(value => value / distance);
+  const right = [
+    normal[1] * camera.viewUpRAS[2] - normal[2] * camera.viewUpRAS[1],
+    normal[2] * camera.viewUpRAS[0] - normal[0] * camera.viewUpRAS[2],
+    normal[0] * camera.viewUpRAS[1] - normal[1] * camera.viewUpRAS[0],
+  ];
+  const length = Math.hypot(...right);
+  const x = right.map(value => value / length);
+  const y = [x[1] * normal[2] - x[2] * normal[1], x[2] * normal[0] - x[0] * normal[2], x[0] * normal[1] - x[1] * normal[0]];
+  let halfHeight = 0;
+  for (const i of [0, 1])
+    for (const j of [0, 1])
+      for (const k of [0, 1]) {
+        const delta = [bounds[i][0] - center[0], bounds[j][1] - center[1], bounds[k][2] - center[2]];
+        halfHeight = Math.max(
+          halfHeight,
+          Math.abs(delta.reduce((sum, value, axis) => sum + value * x[axis], 0)) / aspect,
+          Math.abs(delta.reduce((sum, value, axis) => sum + value * y[axis], 0)),
+        );
+      }
+  return fitVolumeCameraClipping(
+    {
+      ...camera,
+      focalPointRAS: center,
+      positionRAS: center.map((value, axis) => value - normal[axis] * distance) as Point,
+      parallelScaleMM: Math.max(1, halfHeight * 1.15),
+    },
+    bounds,
+  );
+}

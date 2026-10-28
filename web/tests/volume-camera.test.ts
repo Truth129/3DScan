@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { CameraView, Point } from '../src/types';
 import type { PortableCamera } from '../src/lib/portable-viewer';
-import { fitVolumeCameraClipping, namedVolumeCamera, portableCameraFromVolume, volumeCameraFromPortable } from '../src/lib/volume-camera';
+import {
+  fitVolumeCameraBounds,
+  fitVolumeCameraClipping,
+  namedVolumeCamera,
+  portableCameraFromVolume,
+  volumeCameraFromPortable,
+} from '../src/lib/volume-camera';
 
 const portable: PortableCamera = {
   position_ras: [140, -220, 75],
@@ -13,6 +19,35 @@ const portable: PortableCamera = {
 };
 
 describe('physical volume camera handoff', () => {
+  it('fits a selected off-centre structure in both wide and portrait review panes', () => {
+    const camera = volumeCameraFromPortable(portable, 180, 1, 2000);
+    const bounds: [Point, Point] = [
+      [30, -20, 40],
+      [70, 40, 140],
+    ];
+    for (const aspect of [0.4, 2.5]) {
+      const fitted = fitVolumeCameraBounds(camera, bounds, aspect);
+      expect(fitted.focalPointRAS).toEqual([50, 10, 90]);
+      const normal = fitted.focalPointRAS.map((value, axis) => value - fitted.positionRAS[axis]);
+      const n = normal.map(value => value / Math.hypot(...normal));
+      const right = [
+        n[1] * camera.viewUpRAS[2] - n[2] * camera.viewUpRAS[1],
+        n[2] * camera.viewUpRAS[0] - n[0] * camera.viewUpRAS[2],
+        n[0] * camera.viewUpRAS[1] - n[1] * camera.viewUpRAS[0],
+      ];
+      const x = right.map(value => value / Math.hypot(...right));
+      const y = [x[1] * n[2] - x[2] * n[1], x[2] * n[0] - x[0] * n[2], x[0] * n[1] - x[1] * n[0]];
+      for (const i of [0, 1])
+        for (const j of [0, 1])
+          for (const k of [0, 1]) {
+            const d = [bounds[i][0] - 50, bounds[j][1] - 10, bounds[k][2] - 90];
+            expect(Math.abs(d.reduce((sum, v, a) => sum + v * x[a], 0)) / (aspect * fitted.parallelScaleMM)).toBeLessThan(1);
+            expect(Math.abs(d.reduce((sum, v, a) => sum + v * y[a], 0)) / fitted.parallelScaleMM).toBeLessThan(1);
+          }
+    }
+    expect(() => fitVolumeCameraBounds(camera, bounds, 0)).toThrow('aspect');
+  });
+
   it('refits all source corners after a long CT rotates or a heart camera moves closer', () => {
     const bounds: [Point, Point] = [
       [-150, -200, -800],

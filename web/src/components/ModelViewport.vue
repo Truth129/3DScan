@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, onMounted, onBeforeUnmount, onErrorCaptured, useId, watch, type Component } from 'vue';
 import type { CornerstoneVolumeCameraRAS } from '../lib/cornerstone-volume-3d';
-import { fitVolumeCameraClipping, namedVolumeCamera, portableCameraFromVolume, volumeCameraFromPortable } from '../lib/volume-camera';
+import type { NativeReviewState } from '../lib/vtk-review-input';
+import { fitVolumeCameraBounds, fitVolumeCameraClipping, namedVolumeCamera, portableCameraFromVolume, volumeCameraFromPortable } from '../lib/volume-camera';
 import type {
   CameraView,
   Geometry,
@@ -100,6 +101,8 @@ interface VolumePreview {
   resetView(): void;
   retry(): Promise<void>;
   retryMask(): Promise<void>;
+  prepareReviewPlane(): Promise<boolean>;
+  reviewPatientToCanvas(ras: Point): [number, number] | undefined;
 }
 const volumePreview = ref<VolumePreview>();
 const preferCornerstone =
@@ -110,6 +113,22 @@ const volumeRenderer = ref<'three' | 'vtk'>(preferCornerstone ? 'vtk' : 'three')
 const vtkComponentFailed = ref(false),
   vtkComponentVersion = ref(0);
 const vtkCamera = shallowRef<CornerstoneVolumeCameraRAS>();
+interface NativeReviewStatus {
+  surfaceLoading: boolean;
+  surfaceError: string;
+  surfaceRevision: string;
+  targetReady: boolean;
+  planeReady: boolean;
+  planeError: string;
+}
+const nativeReviewStatus = ref<NativeReviewStatus>({
+  surfaceLoading: false,
+  surfaceError: '',
+  surfaceRevision: '',
+  targetReady: false,
+  planeReady: false,
+  planeError: '',
+});
 const nativeMaskStatus = ref<VolumeMaskStatus>({ ready: false, loading: false, error: '' });
 let pendingVolumeCamera: CornerstoneVolumeCameraRAS | undefined;
 const viewport = ref<HTMLElement>(),
@@ -280,7 +299,6 @@ const vtkAvailable = computed(
     modality.value === 'CT' &&
     !props.initialSnapshot &&
     !props.localSession?.networkFree &&
-    !props.reviewActive &&
     !!props.geometry &&
     !hasCornerstoneShear(props.geometry.affine_ras) &&
     ctVolumeAvailable.value,
@@ -326,6 +344,10 @@ const gpuFamily = computed(() =>
 );
 const overlayPalette = computed(() => (props.overlays ?? []).map(item => ({ id: item.id, color: ctOverlayColor(item.color) })));
 const needsPlane = computed(() => !vtkSelected.value && ctPlaneAvailable.value && props.viewportActive !== false && showPlane.value);
+// Native review uses the same exact 2D mask frames; it never builds a second CT texture.
+const needsPlaneFrame = computed(
+  () => ctPlaneAvailable.value && props.viewportActive !== false && showPlane.value && (!vtkSelected.value || !!props.reviewActive),
+);
 const needsVolume = computed(() => !vtkSelected.value && ctVolumeAvailable.value && props.viewportActive !== false && showVolume.value && !props.reviewActive);
 const volumeFamily = computed(() =>
   planeRequest.value ? JSON.stringify([planeRequest.value.base, planeRequest.value.geometry.shape, planeRequest.value.geometry.affine_ras, 'volume']) : '',
@@ -410,17 +432,67 @@ const reviewReady = computed(
     !!target.value &&
     !props.reviewDisabled &&
     (props.reviewTool === 'scissors'
-      ? !loading.value && !error.value
+      ? vtkSelected.value
+        ? vtkReady.value && !nativeReviewStatus.value.surfaceLoading && !nativeReviewStatus.value.surfaceError
+        : !loading.value && !error.value
       : reviewMode.value === 'plane'
-        ? showPlane.value && exactPlaneReady.value && targetOverlayAvailable.value
+        ? showPlane.value &&
+          exactPlaneReady.value &&
+          targetOverlayAvailable.value &&
+          (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady && !nativeReviewStatus.value.planeError))
         : showSegmentation.value &&
           selectedSegmentationOpacity.value > 0.02 &&
           hasTargetSurface.value &&
-          hasModel.value &&
-          !loading.value &&
+          (vtkSelected.value
+            ? vtkReady.value &&
+              nativeReviewStatus.value.targetReady &&
+              nativeReviewStatus.value.surfaceRevision === props.modelRevisionId &&
+              !nativeReviewStatus.value.surfaceLoading &&
+              !nativeReviewStatus.value.surfaceError
+            : hasModel.value && !loading.value) &&
           props.reviewTool === 'point'),
 );
+const reviewContext = computed(() =>
+  JSON.stringify([
+    props.caseId,
+    props.revisionId,
+    target.value?.id,
+    props.geometry?.shape,
+    props.geometry?.affine_ras,
+    props.reviewTool === 'scissors'
+      ? ['scissors', props.reviewScissorsShape, props.reviewScissorsOperation]
+      : [desiredPlaneContext.value, reviewMode.value, props.reviewTool, props.reviewInclude !== false, props.reviewRadius || 3],
+  ]),
+);
+const nativeReview = computed<NativeReviewState | undefined>(() =>
+  vtkSelected.value && props.reviewActive && props.geometry && target.value
+    ? {
+        enabled: true,
+        mode: reviewMode.value,
+        targetId: target.value.id,
+        tool: props.reviewTool || 'navigate',
+        include: props.reviewInclude !== false,
+        radiusMm: props.reviewRadius || 3,
+        scissorsShape: props.reviewScissorsShape ?? 'freehand',
+        scissorsOperation: props.reviewScissorsOperation ?? 'erase_inside',
+        disabled: !reviewReady.value,
+        geometry: props.geometry,
+        prompts: props.reviewPrompts || [],
+        contextKey: reviewContext.value,
+        planeMeta: displayedMeta.value,
+        showPlane: showPlane.value,
+      }
+    : undefined,
+);
+const nativeReviewFrame = computed(() => (vtkSelected.value && props.reviewActive && showPlane.value ? coloredPlaneFrame.value : undefined));
 const reviewHint = computed(() => {
+  if (vtkSelected.value && props.reviewActive) {
+    if (vtkError.value) return vtkError.value;
+    if (!vtkReady.value) return 'Preparing the native CT review scene…';
+    if (reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceError) return nativeReviewStatus.value.surfaceError;
+    if (nativeReviewStatus.value.planeError) return nativeReviewStatus.value.planeError;
+    if (reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceLoading) return 'Preparing the target surface…';
+  }
   if (props.reviewActive && props.reviewTool === 'scissors')
     return error.value
       ? 'The 3D surface preview is unavailable. Reload the model to continue cutting.'
@@ -429,7 +501,10 @@ const reviewHint = computed(() => {
         : props.reviewDisabled
           ? 'Editing paused while the current operation finishes.'
           : `3D scissors · ${props.reviewScissorsOperation === 'erase_outside' ? 'erase outside' : 'erase inside'} through the full depth of ${target.value?.name || 'the selected segment'}. Draw on the 3D view; right drag rotates. Esc cancels a cut.`;
-  if (planeError.value && needsPlane.value) return planeError.value;
+  if (vtkSelected.value && vtkError.value) return vtkError.value;
+  if (vtkSelected.value && reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceError) return nativeReviewStatus.value.surfaceError;
+  if (vtkSelected.value && nativeReviewStatus.value.planeError) return nativeReviewStatus.value.planeError;
+  if (planeError.value && needsPlaneFrame.value) return planeError.value;
   if (!props.reviewActive) {
     if (!showPlane.value) return '';
     if (gpuActive.value) return 'GPU volume · local navigation. Drag to rotate; scroll to zoom.';
@@ -924,7 +999,7 @@ function retryVolume() {
 async function loadReviewPlane(exact = false) {
   const request = planeRequest.value,
     id = ++planeLoadId;
-  if (!needsPlane.value || !request || disposed) {
+  if (!needsPlaneFrame.value || !request || disposed) {
     reviewFrames.cancel();
     planeLoading.value = false;
     syncReview();
@@ -940,17 +1015,23 @@ async function loadReviewPlane(exact = false) {
   syncReview();
   const family = modelReviewFrameFamilyKey(request);
   const present = (value: ModelReviewFrame) => {
-    if (disposed || !needsPlane.value || family !== desiredPlaneFamily.value) return;
+    if (disposed || !needsPlaneFrame.value || family !== desiredPlaneFamily.value) return;
     planeFrame.value = value;
     planeFrameFamily.value = family;
     planeLoading.value = value.context !== desiredPlaneContext.value;
     syncReview();
-    if (faceWhenReady) {
+    if (faceWhenReady && (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady))) {
       faceWhenReady = false;
-      scene?.focusReviewPlane();
+      facePlane();
     }
   };
   try {
+    if (vtkSelected.value) {
+      // The shared native budget must admit cache/transport bytes before the
+      // worker materializes an exact frame for a new overlay selection.
+      const admitted = await volumePreview.value?.prepareReviewPlane();
+      if (!admitted || disposed || id !== planeLoadId || family !== desiredPlaneFamily.value) return;
+    }
     const value = await reviewFrames.request(exact ? { ...request, exact: true } : request, present);
     if (disposed || id !== planeLoadId || family !== desiredPlaneFamily.value) return;
     if (value) present(value);
@@ -959,7 +1040,7 @@ async function loadReviewPlane(exact = false) {
       // full CT downloads. Main-view navigation keeps using the local preview.
       clearTimeout(exactPlaneTimer);
       exactPlaneTimer = window.setTimeout(() => {
-        if (!disposed && id === planeLoadId && needsPlane.value && props.reviewActive && !props.fullResolution) void loadReviewPlane(true);
+        if (!disposed && id === planeLoadId && needsPlaneFrame.value && props.reviewActive && !props.fullResolution) void loadReviewPlane(true);
       }, 150);
     }
   } catch (reason) {
@@ -975,7 +1056,7 @@ function queueReviewPlane() {
   // Cancel old immutable-alias readers in this same update, before a draft can
   // be discarded on the server. Only starting the replacement waits for RAF.
   planeLoadId++;
-  const family = needsPlane.value ? desiredPlaneFamily.value : '';
+  const family = needsPlaneFrame.value ? desiredPlaneFamily.value : '';
   const previousFamily = requestedFamily;
   if (family !== requestedFamily) {
     reviewFrames.cancel();
@@ -983,16 +1064,17 @@ function queueReviewPlane() {
     planeFrameFamily.value = '';
     requestedFamily = family;
   }
-  planeLoading.value = needsPlane.value && currentPlane.value?.context !== desiredPlaneContext.value;
+  planeLoading.value = needsPlaneFrame.value && currentPlane.value?.context !== desiredPlaneContext.value;
   planeError.value = '';
-  if (!needsPlane.value && !previousFamily) return;
+  if (!needsPlaneFrame.value) reviewFrames.clear();
+  if (!needsPlaneFrame.value && !previousFamily) return;
   if (gpuActive.value) {
     reviewFrames.cancel();
     planeLoading.value = false;
     syncReview();
-    if (faceWhenReady) {
+    if (faceWhenReady && (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady))) {
       faceWhenReady = false;
-      scene?.focusReviewPlane();
+      facePlane();
     }
     return;
   }
@@ -1000,12 +1082,12 @@ function queueReviewPlane() {
   // shared 3D texture supplies the plane as soon as its bounded upload finishes.
   if (props.localSession?.networkFree) {
     planeError.value = gpuFallback.value ? `Embedded ${modality.value} plane unavailable: ${gpuFallback.value}` : '';
-    planeLoading.value = needsPlane.value && !planeError.value;
+    planeLoading.value = needsPlaneFrame.value && !planeError.value;
     syncReview();
     return;
   }
   syncReview();
-  if (!needsPlane.value) return;
+  if (!needsPlaneFrame.value) return;
   if (requestFrame) return;
   requestFrame = requestAnimationFrame(() => {
     requestFrame = 0;
@@ -1195,6 +1277,7 @@ onMounted(() => {
     loading.value = false;
     emit('renderer', 'vtk');
     void observeReviewControls();
+    queueReviewPlane();
   } else initializeThree();
 });
 onBeforeUnmount(() => {
@@ -1334,7 +1417,7 @@ watch(
   },
 );
 watch(
-  () => [desiredPlaneContext.value, needsPlane.value, props.localSession, props.localReady, props.fullResolution, props.reviewActive, reviewMode.value],
+  () => [desiredPlaneContext.value, needsPlaneFrame.value, props.localSession, props.localReady, props.fullResolution, props.reviewActive, reviewMode.value],
   queueReviewPlane,
 );
 watch(
@@ -1427,6 +1510,15 @@ watch(
 );
 watch(() => [props.reviewActive, controlsVisible.value, showPlane.value, showVolume.value], observeReviewControls);
 watch(
+  () => [vtkReady.value, nativeReviewStatus.value.planeReady, desiredPlaneContext.value],
+  () => {
+    if (vtkSelected.value && vtkReady.value && faceWhenReady && exactPlaneReady.value && nativeReviewStatus.value.planeReady) {
+      faceWhenReady = false;
+      facePlane();
+    }
+  },
+);
+watch(
   () => [volumeError.value, effectiveMaskError.value],
   ([volumeFailure, maskFailure]) => {
     if (volumeFailure || maskFailure) volumeOptionsOpen.value = true;
@@ -1488,13 +1580,26 @@ function zoomView(factor: number) {
     vtkCamera.value = { ...vtkCamera.value, parallelScaleMM: Math.max(0.01, Math.min(1e6, vtkCamera.value.parallelScaleMM / factor)) };
   else scene?.zoom(factor);
 }
+function nativeAspect() {
+  const rect = viewport.value?.querySelector('.cornerstone-volume-view canvas')?.getBoundingClientRect();
+  return rect?.width && rect.height ? rect.width / rect.height : 1;
+}
 function focusView() {
-  if (vtkSelected.value) volumePreview.value?.resetView();
+  if (vtkSelected.value && props.reviewActive && target.value?.bounds_ras && vtkCamera.value) {
+    vtkCamera.value = fitVolumeCameraBounds(vtkCamera.value, target.value.bounds_ras, nativeAspect());
+  } else if (vtkSelected.value) volumePreview.value?.resetView();
   else scene?.focus();
 }
 function nativeReady(value: boolean) {
   vtkReady.value = value;
-  if (value) vtkError.value = '';
+  if (value) {
+    vtkError.value = '';
+    queueReviewPlane();
+    if (faceWhenReady && exactPlaneReady.value) {
+      faceWhenReady = false;
+      facePlane();
+    }
+  }
   window.__SCAN3D_RENDER_READY__ = value;
 }
 function facePlane() {
@@ -1517,7 +1622,13 @@ function facePlane() {
       ...camera,
       focalPointRAS: focal,
       positionRAS: focal.map((value, axis) => value + (normal[axis] / length) * distance) as Point,
-      viewUpRAS: up.map(value => value / upLength) as Point,
+      viewUpRAS: up.map(value => -value / upLength) as Point,
+      parallelScaleMM:
+        0.575 *
+        Math.max(
+          (geometry.shape[axes[0]] * Math.hypot(...geometry.affine_ras.slice(0, 3).map(row => row[axes[0]]))) / nativeAspect(),
+          geometry.shape[axes[1]] * upLength,
+        ),
     },
     geometry.bounds_ras,
   );
@@ -1602,7 +1713,7 @@ defineExpose({
   exportSnapshot,
   volumeDiagnostics: () => ({ renderer: volumeRenderer.value, ...volumePreview.value?.diagnostics() }),
   captureVolumePNG: () => volumePreview.value?.capturePNG(),
-  reviewPatientToCanvas: (ras: Point) => scene?.reviewPatientToCanvas(ras),
+  reviewPatientToCanvas: (ras: Point) => (vtkSelected.value ? volumePreview.value?.reviewPatientToCanvas(ras) : scene?.reviewPatientToCanvas(ras)),
 });
 </script>
 
@@ -1624,13 +1735,13 @@ defineExpose({
     :data-volume-invert="renderVolumeSettings.signal_window.invert"
     :data-volume-memory-bytes="gpuMemoryBytes"
     :style="planeLayout ? { '--review-scene-top': `${reviewSceneTop}px` } : undefined"
-    :data-ct-plane-visible="needsPlane"
+    :data-ct-plane-visible="vtkSelected ? showPlane : needsPlane"
     :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"
     :data-review-ready="reviewReady"
     :data-review-context="displayedContext"
     :data-model-revision="modelRevisionId"
-    :data-surface-revision="surfaceRevisionLoaded"
-    :data-surface-loading="loading"
+    :data-surface-revision="vtkSelected ? nativeReviewStatus.surfaceRevision : surfaceRevisionLoaded"
+    :data-surface-loading="vtkSelected ? nativeReviewStatus.surfaceLoading : loading"
     :data-review-pending-context="desiredPlaneContext"
     :data-review-native-axis="displayedMeta?.native?.axis"
     :data-review-native-index="displayedMeta?.native?.index"
@@ -1644,6 +1755,7 @@ defineExpose({
     :data-volume-mask-pending="volumeMaskLoading"
     :data-volume-mask-error="effectiveMaskError"
     :data-volume-renderer="vtkSelected ? 'vtk' : 'three'"
+    :data-volume-camera="vtkSelected ? JSON.stringify(vtkCamera) : undefined"
   >
     <div ref="surface" class="model-canvas" :style="{ visibility: vtkSelected ? 'hidden' : undefined }"></div>
     <component
@@ -1668,6 +1780,19 @@ defineExpose({
       :mask="volumeMask"
       :revision-base="planeRequest?.base"
       :mask-source-provider="maskSourceProvider"
+      :model-revision-id="modelRevisionId"
+      :review="nativeReview"
+      :review-frame="nativeReviewFrame"
+      :review-plane-active="!!reviewActive && showPlane"
+      :review-geometry="geometry"
+      :review-window="window || 400"
+      :review-level="level ?? 40"
+      :review-overlay-count="planeRequest?.overlays.length ?? 0"
+      :review-compare="compare"
+      @review-status="nativeReviewStatus = $event"
+      @retry-plane="queueReviewPlane"
+      @gesture="reviewGesture"
+      @pick="(id: string, ras: Point) => emit('pick', id, ras)"
       @ready="nativeReady"
       @error="vtkError = $event"
       @camera="vtkCamera = $event"
@@ -1830,7 +1955,7 @@ defineExpose({
         />
         <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
       </div>
-      <p v-if="!vtkSelected && reviewHint" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
+      <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
         {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
       </p>
     </div>
@@ -1870,7 +1995,7 @@ defineExpose({
     <div class="viewport-tools">
       <button title="Zoom in" aria-label="Zoom in" @click="zoomView(1.25)">+</button>
       <button title="Zoom out" aria-label="Zoom out" @click="zoomView(0.8)">−</button>
-      <span></span><button :title="vtkSelected ? 'Fit CT volume' : 'Focus selected structure'" @click="focusView">Focus</button>
+      <span></span><button :title="vtkSelected && !reviewActive ? 'Fit CT volume' : 'Focus selected structure'" @click="focusView">Focus</button>
       <button title="Reset view" @click="vtkSelected ? volumePreview?.resetView() : selectView('oblique')">Reset</button>
       <button title="Save image" @click="screenshot">PNG ↗</button>
     </div>
@@ -1942,6 +2067,42 @@ defineExpose({
 }
 .cornerstone-primary {
   container: native-volume / inline-size;
+}
+@container native-volume (min-width: 440px) {
+  .cornerstone-primary.model-review .model-review-controls {
+    left: auto;
+    width: 220px;
+    max-height: calc(100% - 170px);
+  }
+  .model-viewport.cornerstone-primary.model-review .model-canvas {
+    top: 42px;
+    right: 240px;
+    bottom: 24px;
+  }
+  .cornerstone-primary.model-review .camera-strip {
+    left: auto;
+    right: 10px;
+    bottom: 54px;
+    width: 220px;
+    max-width: 220px;
+    flex-wrap: wrap;
+    justify-content: center;
+    transform: none;
+  }
+  .cornerstone-primary.model-review .viewport-tools {
+    left: auto;
+    right: 10px;
+    bottom: 14px;
+    width: 220px;
+    justify-content: center;
+    transform: none;
+  }
+  .cornerstone-primary.model-review .viewport-tools button {
+    padding: 7px 8px;
+  }
+  .cornerstone-primary.model-review .viewport-hint {
+    right: 240px;
+  }
 }
 @media (max-height: 850px) {
   @container native-volume (min-width: 620px) {
