@@ -1,8 +1,9 @@
 # Orthanc and OsiriX incoming studies
 
 The incoming connector is implemented, qualified with synthetic data and active
-in the main app. The incoming receiver is running. Segmentation return
-is deferred. The target is **OsiriX MD 14.3.0** on the local network, with
+in the main app. The incoming receiver is running. Synthetic DICOM SEG return
+passes transport; overlay qualification and general revision export remain
+pending. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -100,7 +101,43 @@ Repeated imports of the same snapshot reuse the existing case/job. Interrupted
 status polling resumes the same job; failed/cancelled attempts can retry without
 overwriting previous source bytes. Restart recovery marks interrupted transfers
 retryable. Opening the CT preserves archive/content/manifest digests in its image
-source identity. DICOM SEG/RTSTRUCT return is not implemented in this milestone.
+source identity. General revision DICOM SEG/RTSTRUCT export is not implemented.
+
+## Synthetic segmentation return qualification
+
+The user confirmed OsiriX's listener AE `OsiriX-Mac`, port `11112`.
+Outbound C-ECHO works with `osirix-mac.local`, which resolves to
+`10.20.0.107`. Hostnames work for outgoing connections even though incoming
+source-host checks require a literal IP.
+
+`tests/osirix_seg_smoke.py` generates fresh synthetic CT and two independent
+binary masks, then creates a source-referenced binary SEG with test-only
+highdicom 0.28.2. It uses an oblique, anisotropic, non-square CT and a permuted,
+reversed NIfTI grid. Export gathers exact mask voxels through the full affine;
+it neither resamples nor flattens overlapping segments into one labelmap.
+
+To regenerate locally, use an isolated environment inheriting the app's imaging
+packages, with highdicom 0.28.2 installed only there:
+
+```bash
+PYTHONPATH=$PWD /path/to/test-venv/bin/python tests/osirix_seg_smoke.py --output /tmp/scan3d-osirix-seg-fixture-NEW
+```
+
+The runner never sends anything. It verifies packed bits, each frame's source
+UID/geometry, exact native CT/mask projection, DS lengths and a highdicom source
+round trip, and writes a 13-file hash manifest. Standard IOD validation is a
+separate gate; see the validation record for the reviewed validator limitation.
+
+The prepared test was uploaded only to the separate synthetic archive on 8043;
+every downloaded source hash matched. Orthanc sent 12 CT images followed by one
+SEG to OsiriX with calling AE `SCAN3D`. Both C-STORE jobs succeeded with zero
+failed instances; the temporary outbound profile was removed. Patient:
+`SYNTHETIC^SEGRETURN`, ID `SCAN3D-SEG-6610cfe7`. Expected display: a red
+**Synthetic ring** with a hole and a cyan **Synthetic block** overlapping its
+right side. User confirmation of usable overlays/alignment remains pending;
+storage success does not establish display or edit support. General case export
+and RTSTRUCT fallback remain separate work. Audit and synthetic fixtures:
+`.runtime/validation/osirix-seg-return-20261028T133800Z/`.
 
 ## Synthetic development archive
 

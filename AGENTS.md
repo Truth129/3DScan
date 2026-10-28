@@ -201,7 +201,13 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    The user subsequently enabled HTTP bind `["0.0.0.0"]`, remote access and a
    UFW8044 rule, retaining authentication, and confirmed Explorer works from
    the Mac. The main 3DScan HTTP listener remains loopback9010.
-   Receiving through Tailscale and segmentation return are deferred. See
+   Receiving through Tailscale is deferred. The user requested segmentation
+   return qualification: listener `osirix-mac.local:11112`, AE
+   `OsiriX-Mac`. Twelve synthetic CTs plus one two-mask binary SEG passed
+   C-STORE from the separate 8043 archive; actual overlay/alignment confirmation
+   and general revision export remain pending. Test-only highdicom 0.28.2 was
+   isolated; production dependencies/services are unchanged. Audit:
+   `.runtime/validation/osirix-seg-return-20261028T133800Z/`. See
    `docs/ORTHANC.md` and the newest validation section before operating it.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user

@@ -191,6 +191,16 @@ artifacts. Their simplification never changes mask-derived volumes.
 
 ## Incoming Orthanc boundary
 
+Source preparation uses pydicom for DICOM metadata, dcm2niix for conversion and
+nibabel for full-affine NIfTI handling. SimpleITK 2.5.2 is already pinned for
+downstream imaging dependencies; the app does not directly import it. Consider
+it for specific future registration/filter operations with explicit RAS/LPS and
+array-order adapters. Its NIfTI IO can reject or orthogonalize sheared grids,
+and spacing-aware filters do not necessarily honor the full affine, so it does
+not replace the authoritative readers or geometry-aware measurements. Installed
+TotalSegmentator 2.18.0 converts direct DICOM input using dicom2nifti, while this
+app supplies the already-prepared NIfTI and avoids that second conversion.
+
 Orthanc owns its archive/index independently of 3DScan's case records. The
 backend keeps archive credentials, performs REST searches and returns bounded
 study/series summaries. Browser searches send identity fields in POST bodies;
@@ -211,8 +221,12 @@ source digests accompany the prepared immutable image asset. Import does not
 convert or segment; a separate **Open CT** action prepares the reference image
 on the CPU lane. The receiver's Mac/IP/AE allowlist, administrator-applied UFW
 rule and main-app restart approval remain prerequisites for activation. The
-separate synthetic development archive is already available. Segmentation
-return to OsiriX is deferred; [the runbook](ORTHANC.md) records current status.
+separate synthetic development archive is already available. The standalone
+SEG qualification maps native mask voxels to original DICOM pixels using the
+full RAS/LPS affine, retains overlapping masks and checks per-frame source
+references independently. Its synthetic C-STORE passes; user overlay review and
+general revision export remain pending. The highdicom dependency is isolated
+from the production runtime; [the runbook](ORTHANC.md) records current status.
 
 ## Scan and correction lifecycle
 
