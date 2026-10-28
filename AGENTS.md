@@ -30,8 +30,10 @@ Read before changing anything:
   request on 28 October 2026. `scan3d.service` is a systemd user unit on
   `127.0.0.1:9010`, published on the tailnet at
   `https://scan3d-host.example.ts.net:8443`. `.runtime/rocm10/code-dir`
-  selects `/home/user/Projects/3DScan`. Python loads at startup; frontend changes
-  become live when built assets replace `web/dist`. Do not treat this checkout
+  selects `/home/user/Projects/3DScan`. Python changes apply on restart, but some
+  modules load on first use, so restart promptly after they land and stop the
+  service first when code moves between modules. Frontend changes become live
+  when built assets replace `web/dist`. Do not treat this checkout
   as isolated from the live app. Test builds must still go to scratch directories.
   The previous frozen `ct-hardening-20261027` release is retained for rollback.
 - **Ask the user first** before stopping or restarting the service, switching releases,
@@ -135,7 +137,9 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
   Audit and guarded rollback: `.runtime/development-cutover-20261027T185251Z/`
   (directory timestamp is UTC). The existing service, runtime and library were
   retained; aggregate record counts were unchanged. 884 backend tests and both
-  viewer builds passed before switching.
+  viewer builds passed before switching. The modular refactor merge (`34e25db`)
+  is active (PID558151); audit and prior backend snapshot:
+  `.runtime/modular-refactor-merge-20261028T190109Z/`.
 - **Library:** the user has added cases since the 27 October reset; preserve them.
   The library archived at that reset is at
   `.runtime/archive/data-20261027T143742Z`, waiting for the user to delete it.
