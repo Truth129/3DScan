@@ -2,15 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import AnatomyPanel from './components/AnatomyPanel.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
-import {
-  displayStructures,
-  normalizeStructureColor,
-  readStructureColors,
-  saveStructureColors,
-  setStructureColor,
-  resetStructureColor,
-  type StructureColorOverrides,
-} from './lib/display-appearance';
+import { displayStructures, normalizeStructureColor } from './lib/display-appearance';
 import WorkspacePanels from './components/WorkspacePanels.vue';
 import { readWorkspacePanels, saveWorkspacePanels, setWorkspacePanel, canHideWorkspacePanel, type WorkspacePanelId } from './lib/workspace-panels';
 import ModelViewport from './components/ModelViewport.vue';
@@ -25,9 +17,13 @@ import ExportViewerDialog from './components/ExportViewerDialog.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
-import { api, request, revisionUrl } from './lib/api';
+import { api, revisionUrl } from './lib/api';
 import { colorCss, initialDisplay, prettyName } from './lib/geometry';
 import { useStructureDisplay } from './lib/use-structure-display';
+import { useStructureColors } from './lib/use-structure-colors';
+import { useCandidateSurface } from './lib/use-candidate-surface';
+import { useLocalCT } from './lib/use-local-ct';
+import { useImageProbe } from './lib/use-image-probe';
 import {
   preparedImageChoices,
   sameImageSource,
@@ -42,8 +38,6 @@ import {
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
 import { recoverCaseJob } from './lib/jobs';
-import { LocalCTSession, type LocalCTProgress } from './lib/ct-volume';
-import { preloadCTSource } from './lib/ct-preload';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
@@ -82,51 +76,20 @@ const importing = ref(false),
 const selected = ref(''),
   display = ref<StructureDisplay>({}),
   point = ref<Point>([0, 0, 0]);
-const colorOverrides = ref<StructureColorOverrides>({});
 const colorScope = computed(() =>
   activeCase.value && revision.value
     ? JSON.stringify([activeCase.value.id, revision.value.reference_image_id ?? revision.value.image_asset?.id ?? revision.value.id])
     : '',
 );
-let colorSaveTimer = 0,
-  pendingColorSave: { scope: string; colors: StructureColorOverrides } | undefined;
-function flushColorPreferences() {
-  clearTimeout(colorSaveTimer);
-  if (pendingColorSave) {
-    saveStructureColors(pendingColorSave.scope, pendingColorSave.colors);
-    pendingColorSave = undefined;
-  }
-}
-watch(
-  colorScope,
-  scope => {
-    flushColorPreferences();
-    colorOverrides.value = readStructureColors(scope);
-  },
-  { immediate: true, flush: 'sync' },
-);
-watch(
-  colorOverrides,
-  colors => {
-    if (!colorScope.value) return;
-    pendingColorSave = { scope: colorScope.value, colors: { ...colors } };
-    clearTimeout(colorSaveTimer);
-    colorSaveTimer = window.setTimeout(flushColorPreferences, 150);
-  },
-  { flush: 'sync' },
-);
+const { overrides: colorOverrides, change: changeColor, reset: resetColor } = useStructureColors(() => colorScope.value);
 const shownStructures = computed(() => displayStructures(shownRevision.value?.structures ?? [], colorOverrides.value));
 const maskStructures = computed(() => displayStructures(revision.value?.structures ?? [], colorOverrides.value));
 function changeSegmentColor(color: string) {
   const original = shownRevision.value?.structures.find(item => item.id === selected.value) ?? pendingStructures.value.find(item => item.id === selected.value);
-  colorOverrides.value =
-    normalizeStructureColor(color) === normalizeStructureColor(original?.color)
-      ? resetStructureColor(colorOverrides.value, selected.value)
-      : setStructureColor(colorOverrides.value, selected.value, color);
+  changeColor(selected.value, color, original?.color);
 }
 function resetSegmentColor() {
-  colorOverrides.value = resetStructureColor(colorOverrides.value, selected.value);
-  flushColorPreferences();
+  resetColor(selected.value);
 }
 
 function readOverlayOpacity() {
@@ -152,12 +115,6 @@ const interactiveDraft = ref<InteractiveReview>(),
   interactiveCandidate = ref(true),
   interactiveDisabled = ref(false);
 const interactiveScissors = ref<{ shape: ScissorsShape; operation: ScissorsOperation }>({ shape: 'freehand', operation: 'erase_inside' });
-const candidateSurfaceRevision = shallowRef<Revision>(),
-  candidateSurfaceSession = ref(''),
-  candidateSurfaceLoading = ref(false),
-  candidateSurfaceError = ref('');
-let surfacePreviewGeneration = 0;
-const surfacePreviewCache = new Map<string, Revision>();
 const interactiveOpen = ref(false),
   interactivePrompts = ref<InteractivePrompt[]>([]),
   interactiveInclude = ref(true),
@@ -205,7 +162,6 @@ const ctOverlayStructures = computed(() =>
 );
 const windowWidth = ref(400),
   level = ref(40),
-  hu = ref<number | null>(null),
   compare = ref(false),
   before = ref(false);
 const sourceAssets = shallowRef<ImageAsset[]>([]);
@@ -284,25 +240,8 @@ let revisionRequest = 0;
 let pollTimer = 0,
   noticeTimer = 0,
   caseGeneration = 0,
-  probeGeneration = 0,
   measurementToken = '',
   alive = true;
-let probeNext: { url: string; generation: number } | undefined;
-let probeRunning = false,
-  probeFrame = 0;
-let probeController: AbortController | undefined;
-const localCT = shallowRef<LocalCTSession>(),
-  localCTReady = ref(false),
-  localCTFull = ref(false);
-const ctProgress = ref<LocalCTProgress>(),
-  fullCTProgress = ref<LocalCTProgress>();
-const ctLocalError = ref(''),
-  ctOverlayError = ref(''),
-  ctOverlayRetrying = ref(false),
-  ctCaching = ref(false);
-let ctGeneration = 0,
-  fullCandidate: LocalCTSession | undefined;
-let ctPreparedGrid = '';
 const structure = computed(
   () =>
     shownStructures.value.find(s => s.id === selected.value) ||
@@ -336,53 +275,51 @@ const scissorsSurfacePending = computed(
     !!interactiveReview.value?.candidate?.preview_3d_ready &&
     (candidateSurfaceLoading.value || !!candidateSurfaceError.value || candidateSurfaceRevision.value?.id !== reviewCandidateRevision(interactiveReview.value)),
 );
-async function loadCandidateSurface() {
-  const generation = ++surfacePreviewGeneration,
-    caseId = activeCase.value?.id;
-  const review = interactiveReview.value,
-    alias = reviewCandidateRevision(review);
-  if (!caseId || !review || !alias || !review.candidate?.preview_3d_ready) {
-    candidateSurfaceLoading.value = false;
-    candidateSurfaceError.value = '';
-    return;
-  }
-  candidateSurfaceLoading.value = true;
-  candidateSurfaceError.value = '';
-  try {
-    const cached = surfacePreviewCache.get(alias),
-      next = cached ?? (await api.revision(caseId, alias));
-    if (generation !== surfacePreviewGeneration || caseId !== activeCase.value?.id || alias !== reviewCandidateRevision(interactiveReview.value)) return;
-    if (!next.model_manifest_url) throw new Error('The workstation did not return a 3D candidate preview.');
-    surfacePreviewCache.delete(alias);
-    surfacePreviewCache.set(alias, next);
-    while (surfacePreviewCache.size > 8) surfacePreviewCache.delete(surfacePreviewCache.keys().next().value!);
-    candidateSurfaceRevision.value = next;
-    candidateSurfaceSession.value = review.id;
-  } catch (reason) {
-    if (generation === surfacePreviewGeneration)
-      candidateSurfaceError.value = reason instanceof Error ? reason.message : 'The 3D candidate preview could not be loaded.';
-  } finally {
-    if (generation === surfacePreviewGeneration) candidateSurfaceLoading.value = false;
-  }
-}
-watch(
-  () => [activeCase.value?.id, revision.value?.id],
-  () => {
-    surfacePreviewGeneration++;
-    surfacePreviewCache.clear();
-    candidateSurfaceRevision.value = undefined;
-    candidateSurfaceSession.value = '';
-    candidateSurfaceLoading.value = false;
-    candidateSurfaceError.value = '';
-  },
-);
-watch(
-  () => [interactiveReview.value?.id, reviewCandidateRevision(interactiveReview.value)],
-  () => {
-    void loadCandidateSurface();
-  },
-);
+const {
+  revision: candidateSurfaceRevision,
+  session: candidateSurfaceSession,
+  loading: candidateSurfaceLoading,
+  error: candidateSurfaceError,
+  load: loadCandidateSurface,
+} = useCandidateSurface({
+  caseId: () => activeCase.value?.id,
+  revisionId: () => revision.value?.id,
+  review: () => interactiveReview.value,
+});
 const ctBase = computed(() => (activeCase.value && ctRevisionId.value ? revisionUrl(activeCase.value.id, ctRevisionId.value) : ''));
+const {
+  hu,
+  probe,
+  invalidate: invalidateProbe,
+} = useImageProbe({
+  base: () => ctBase.value,
+  point: () => point.value,
+  local: () => (localCTFull.value && localCTReady.value ? localCT.value : undefined),
+});
+const {
+  localCT,
+  localCTReady,
+  localCTFull,
+  ctProgress,
+  fullCTProgress,
+  ctLocalError,
+  ctOverlayError,
+  ctOverlayRetrying,
+  ctCaching,
+  ctDeliveryMode,
+  ctPercent,
+  fullCTPercent,
+  prepareLocalCT,
+  cacheFullCT,
+  cancelFullCT,
+  retryCTOverlays,
+} = useLocalCT({
+  base: () => ctBase.value,
+  grid: () => (activeCase.value && revision.value ? `${activeCase.value.id}:${referenceImageKey(revision.value)}` : ''),
+  overlays: () => ({ ids: [...ctOverlayIds.value], compare: compare.value }),
+  label: () => sourceLabel.value,
+  onReady: probe,
+});
 const synthetic = computed(() => activeCase.value?.synthetic || revision.value?.synthetic || /synthetic|demo/i.test(revision.value?.source || ''));
 const exportDisabledReason = computed(() => {
   if (vtkPreview.value) return 'Switch the 3D renderer to Three.js (legacy) for HTML export. PNG is available in Cornerstone3D.';
@@ -488,8 +425,7 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   display.value = Object.fromEntries(
     Object.entries(initialDisplay(next.structures)).map(([key, state]) => [key, preserve && previous[key] ? previous[key] : state]),
   );
-  probeGeneration++;
-  hu.value = null;
+  invalidateProbe();
   if (preserve) setPoint([...point.value]);
   else point.value = [...next.geometry.center_ras];
 }
@@ -510,10 +446,7 @@ async function openCase(id: string) {
   interactivePrompts.value = [];
   workspaceMode.value = 'model';
   reviewFocus.value = 'both';
-  probeGeneration++;
-  probeNext = undefined;
-  probeController?.abort();
-  hu.value = null;
+  invalidateProbe();
   clearTimeout(pollTimer);
   job.value = undefined;
   jobMeasurements.value = undefined;
@@ -787,193 +720,6 @@ function setPoint(next: Point) {
   point.value = geometry ? (next.map((v, i) => Math.max(geometry.bounds_ras[0][i], Math.min(geometry.bounds_ras[1][i], v))) as Point) : next;
   probe();
 }
-function probe() {
-  if (!ctBase.value) return;
-  const [x, y, z] = point.value,
-    generation = ++probeGeneration;
-  probeNext = { url: `${ctBase.value}/probe?x=${x}&y=${y}&z=${z}`, generation };
-  hu.value = null;
-  clearTimeout(probeFrame);
-  probeFrame = window.setTimeout(
-    () => {
-      probeFrame = 0;
-      void pumpProbe();
-    },
-    localCTFull.value && localCTReady.value ? 0 : 120,
-  );
-}
-async function pumpProbe() {
-  if (probeRunning) return;
-  probeRunning = true;
-  try {
-    while (probeNext && alive) {
-      const current = probeNext;
-      probeNext = undefined;
-      probeController = new AbortController();
-      try {
-        const result =
-          localCTFull.value && localCTReady.value && localCT.value
-            ? await localCT.value.probe([...point.value])
-            : await request<{ hu: number }>(current.url, { signal: probeController.signal });
-        if (current.generation === probeGeneration && alive) hu.value = result.hu;
-      } catch {
-        if (current.generation === probeGeneration && alive) hu.value = null;
-      }
-    }
-  } finally {
-    probeRunning = false;
-    probeController = undefined;
-  }
-}
-async function prepareLocalCT(url: string) {
-  const id = ++ctGeneration;
-  const grid = activeCase.value && revision.value ? `${activeCase.value.id}:${referenceImageKey(revision.value)}` : '';
-  const retainFrame = !!url && !!localCT.value && localCTReady.value && ctPreparedGrid === grid;
-  cancelFullCT();
-  ctLocalError.value = '';
-  ctOverlayError.value = '';
-  ctProgress.value = undefined;
-  if (!retainFrame) {
-    localCTReady.value = false;
-    localCT.value?.dispose();
-    localCT.value = undefined;
-    localCTFull.value = false;
-  }
-  ctPreparedGrid = grid;
-  if (!url) return;
-  let session = localCT.value;
-  try {
-    if (session) void session.setBase(url);
-    else {
-      session = new LocalCTSession(url, {
-        quality: 'preview',
-        onProgress: value => {
-          if (localCT.value === session) ctProgress.value = value;
-        },
-        onOverlayError: reason => {
-          if (session && localCT.value === session) ctOverlayError.value = reason?.message ?? '';
-        },
-        onError: reason => {
-          if (session && localCT.value === session) failLocalCT(reason.message);
-        },
-      });
-      localCT.value = session;
-    }
-    // Start the selected mask alongside the CT. Neither download depends on a
-    // slice component mounting or the first slider/crosshair interaction.
-    const active = session;
-    if (
-      !(await preloadCTSource(
-        active,
-        () => ({ ids: [...ctOverlayIds.value], compare: compare.value }),
-        () => id === ctGeneration && alive && localCT.value === active,
-      ))
-    )
-      return;
-    localCTReady.value = true;
-    probe();
-    // Show the small navigation volume first, then warm exact local review in
-    // the background using the existing bounded, low-priority download path.
-    await nextTick();
-    if (id === ctGeneration && alive) void cacheFullCT();
-  } catch (reason) {
-    if (id !== ctGeneration || !alive) return;
-    session?.dispose();
-    localCT.value = undefined;
-    localCTFull.value = false;
-    localCTReady.value = false;
-    ctLocalError.value = reason instanceof Error ? reason.message : `Local ${sourceLabel.value} navigation is unavailable. Retry loading the source images.`;
-  }
-}
-function failLocalCT(reason: string) {
-  ctGeneration++;
-  cancelFullCT();
-  localCT.value?.dispose();
-  localCT.value = undefined;
-  localCTReady.value = false;
-  localCTFull.value = false;
-  ctLocalError.value = reason;
-  ctOverlayError.value = '';
-}
-function cancelFullCT() {
-  fullCandidate?.dispose();
-  fullCandidate = undefined;
-  ctCaching.value = false;
-  fullCTProgress.value = undefined;
-}
-async function cacheFullCT() {
-  if (!ctBase.value || !localCTReady.value || localCTFull.value || ctCaching.value) return;
-  const id = ctGeneration;
-  ctCaching.value = true;
-  ctLocalError.value = '';
-  let candidate: LocalCTSession | undefined;
-  try {
-    candidate = new LocalCTSession(ctBase.value, {
-      quality: 'full',
-      maxOverlayBytes: 192 * 1024 ** 2,
-      onProgress: value => {
-        if (fullCandidate === candidate) fullCTProgress.value = value;
-      },
-      onOverlayError: reason => {
-        if (candidate && localCT.value === candidate) ctOverlayError.value = reason?.message ?? '';
-      },
-      onError: reason => {
-        if (candidate && localCT.value === candidate) failLocalCT(reason.message);
-      },
-    });
-    fullCandidate = candidate;
-    const active = candidate;
-    if (
-      !(await preloadCTSource(
-        active,
-        () => ({ ids: [...ctOverlayIds.value], compare: compare.value }),
-        () => id === ctGeneration && alive && fullCandidate === active,
-      ))
-    )
-      return;
-    if (!alive || id !== ctGeneration || candidate !== fullCandidate) {
-      candidate.dispose();
-      return;
-    }
-    const previous = localCT.value;
-    localCT.value = candidate;
-    localCTFull.value = true;
-    fullCandidate = undefined;
-    ctCaching.value = false;
-    fullCTProgress.value = undefined;
-    ctOverlayError.value = candidate.overlayError?.message ?? '';
-    previous?.dispose();
-    probe();
-  } catch (reason) {
-    if (candidate !== fullCandidate || !alive || id !== ctGeneration) return;
-    candidate?.dispose();
-    fullCandidate = undefined;
-    ctCaching.value = false;
-    ctLocalError.value = `Full ${sourceLabel.value} caching was unavailable. Fast navigation remains active. ${reason instanceof Error ? reason.message : ''}`;
-  }
-}
-async function retryCTOverlays() {
-  const session = localCT.value;
-  if (!session || ctOverlayRetrying.value) return;
-  ctOverlayRetrying.value = true;
-  try {
-    await session.retryOverlay([...ctOverlayIds.value], compare.value);
-  } catch {
-    /* The session reports mask errors without replacing its source image. */
-  } finally {
-    ctOverlayRetrying.value = false;
-  }
-}
-const ctDeliveryMode = computed(() => (localCTReady.value ? (localCTFull.value ? 'full' : 'progressive') : ctLocalError.value ? 'error' : 'loading'));
-const ctPercent = computed(() => Math.round((100 * (ctProgress.value?.loadedBytes || 0)) / Math.max(1, ctProgress.value?.totalBytes || 1)));
-const fullCTPercent = computed(() => Math.round((100 * (fullCTProgress.value?.loadedBytes || 0)) / Math.max(1, fullCTProgress.value?.totalBytes || 1)));
-watch(
-  ctBase,
-  value => {
-    void prepareLocalCT(value);
-  },
-  { immediate: true },
-);
 watch(ctRevisionId, () => {
   compare.value = false;
 });
@@ -1118,7 +864,6 @@ function keyboard(event: KeyboardEvent) {
   }
 }
 onMounted(async () => {
-  window.addEventListener('pagehide', flushColorPreferences);
   document.addEventListener('keydown', keyboard);
   const results = await Promise.allSettled([api.cases(), api.health()]);
   if (results[0].status === 'fulfilled') {
@@ -1135,21 +880,11 @@ onMounted(async () => {
   loading.value = false;
 });
 onBeforeUnmount(() => {
-  window.removeEventListener('pagehide', flushColorPreferences);
-  flushColorPreferences();
   catalogGate.invalidate();
   revisionRequest++;
   alive = false;
-  surfacePreviewGeneration++;
-  surfacePreviewCache.clear();
-  ctGeneration++;
-  localCT.value?.dispose();
-  cancelFullCT();
   clearTimeout(pollTimer);
   clearTimeout(noticeTimer);
-  clearTimeout(probeFrame);
-  probeNext = undefined;
-  probeController?.abort();
   document.removeEventListener('keydown', keyboard);
 });
 </script>
