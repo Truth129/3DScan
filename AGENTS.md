@@ -207,14 +207,23 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    C-STORE from the separate 8043 archive. After an accidental deletion/resend,
    the user confirms SEG appears as usable ROIs, with different database
    presentation from native OsiriX ROIs. Basic receive/display compatibility
-   passes; exact alignment, editing/resave and general revision export remain
-   unqualified. Test-only highdicom 0.28.2 was
-   isolated; production dependencies/services are unchanged. Audit:
+   passes; exact clinical alignment and editing/resave remain user qualification.
+   Prototype audit:
    `.runtime/validation/osirix-seg-return-20261028T133800Z/`. See
    `docs/ORTHANC.md` and the newest validation section before operating it.
+   Saved-revision export is now implemented and qualified in the checkout:
+   per-structure binary SEG, exact full-affine/source/mask binding, archive/send,
+   explicit same-SOP resend and restart-safe delivery receipts. The UI is native
+   renderer independent. 1,071 backend and 495 web tests, both scratch builds,
+   six compiled browser gates and real synthetic API→Orthanc→OsiriX delivery pass.
+   highdicom 0.28.2 / pyjpegls 1.5.1 are hash-pinned; prepared wheels and frontend
+   await an approved idle main-app activation. No GPU or patient library was
+   used for qualification. Audit: `.runtime/dicom-seg-integration-20261028T150235Z/`.
+   Existing Orthanc modality `osirix` can be enabled through the app allowlist;
+   receiver restart/configuration changes are unnecessary.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
-   - DICOM SEG/SR export, which adds a dependency to the pinned runtime
+   - DICOM SR export and further export/viewer qualification
    - per-structure review status for the agreement metrics
    - frontend restructuring: stores, a router, typed API models
 4. **Smaller follow-ups:**

@@ -2,8 +2,8 @@
 
 The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
-passes transport and user-confirmed basic ROI display; general revision export
-remains pending. The target is **OsiriX MD 14.3.0** on the local network, with
+passes transport and user-confirmed basic ROI display. Saved-revision export is
+implemented, qualified and staged for activation. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -101,7 +101,46 @@ Repeated imports of the same snapshot reuse the existing case/job. Interrupted
 status polling resumes the same job; failed/cancelled attempts can retry without
 overwriting previous source bytes. Restart recovery marks interrupted transfers
 retryable. Opening the CT preserves archive/content/manifest digests in its image
-source identity. General revision DICOM SEG/RTSTRUCT export is not implemented.
+source identity.
+
+## Export saved masks through Orthanc
+
+In a saved segmentation's toolbar choose **DICOM SEG…**, select the nonempty
+masks, then **Archive in Orthanc** or choose a viewer and **Send to** it. This
+uses the current saved revision's masks, with independent objects preserving
+overlaps; source CT pixels are not sent again. The original patient/study/frame
+and source-image references are retained. CT must have been imported through
+the configured Orthanc; local-folder sources and MR are not supported by this
+first export adapter. Unsaved correction and comparison states block export.
+
+An archive-only action stores SEG beside the original study in Orthanc. Sending
+asks that same Orthanc to perform C-STORE. The app does not make a direct DICOM
+connection to OsiriX. Existing modality `osirix` already has the confirmed Mac
+AE/port. Enable it in the main app environment with:
+
+```bash
+SCAN3D_ORTHANC_EXPORT_DESTINATIONS=osirix
+```
+
+Only configured IDs are accepted; users cannot supply a host/URL from the
+browser. An empty allowlist keeps archive-only export available. Reuse the
+existing incoming modality profile, whose host must remain a literal IP for
+strict incoming checks; introducing a second same-AE hostname profile can make
+incoming lookup ambiguous. DHCP reservation remains recommended for this LAN
+configuration. The synthetic test uses a separate outgoing-only profile and
+successfully sends via `osirix-mac.local:11112`.
+
+Closing/reopening the dialog never sends automatically. A lost status check
+resumes the same job. **Send again** is deliberately different: after known
+success it creates another delivery attempt of the same SOP instances, useful
+if the receiver deleted the results. Unknown or incomplete delivery is shown
+honestly; explicit retry checks a known Orthanc job and never regenerates SEG
+identities. Nothing resumes or sends automatically at application startup.
+
+The integration is staged in `.runtime/dicom-seg-integration-20261028T150235Z/`.
+Qualified packages/frontend and the `osirix` allowlist need installation with
+an approved idle main-app restart. The Orthanc receiver needs no restart or
+configuration change. RTSTRUCT and editing/resave fidelity remain separate work.
 
 ## Synthetic segmentation return qualification
 
@@ -137,8 +176,8 @@ failed instances; the temporary outbound profile was removed. Patient:
 right side. After an accidental deletion, all 13 instances were resent
 successfully. The user confirms the SEG appears as usable ROIs, while its
 database presentation differs from native OsiriX ROIs. This establishes basic
-receive/display compatibility; exact alignment, editing/resave, general case
-export and RTSTRUCT fallback remain separate work. Audit and synthetic fixtures:
+receive/display compatibility; exact alignment, editing/resave and RTSTRUCT
+fallback remain separate qualification. Audit and synthetic fixtures:
 `.runtime/validation/osirix-seg-return-20261028T133800Z/`.
 
 ## Synthetic development archive

@@ -65,8 +65,9 @@ flowchart LR
   end
 
   UI <-->|"LAN / WAN · private Tailscale HTTPS"| API
-  OSIRIX["OsiriX MD 14.3.0"] -->|"DICOM Send"| ORTHANC[("Separate private Orthanc receiver<br/>AE SCAN3D · DICOM port 4243")]
+  OSIRIX["OsiriX MD 14.3.0"] <-->|"DICOM source import / SEG return"| ORTHANC[("Separate private Orthanc receiver<br/>AE SCAN3D · DICOM port 4243")]
   API -->|"REST browse and explicit selected-series copy"| ORTHANC
+  CPU -->|"Source-bound SEG instances and explicit delivery job"| ORTHANC
   API -->|"Scalar chunks and descriptors"| RAM
   API -->|"GLB meshes and mask slabs"| WEBGL
   API <--> DB
@@ -221,13 +222,34 @@ source digests accompany the prepared immutable image asset. Import does not
 convert or segment; a separate **Open CT** action prepares the reference image
 on the CPU lane. The receiver's Mac/IP/AE allowlist, administrator-applied UFW
 rule and main-app restart approval remain prerequisites for activation. The
-separate synthetic development archive is already available. The standalone
-SEG qualification maps native mask voxels to original DICOM pixels using the
-full RAS/LPS affine, retains overlapping masks and checks per-frame source
-references independently. Synthetic C-STORE passes, and the user confirms basic
-ROI display in OsiriX; exact alignment/editing and general revision export remain
-unqualified. The highdicom dependency is isolated
-from the production runtime; [the runbook](ORTHANC.md) records current status.
+separate synthetic development archive remains available.
+
+Saved-revision SEG export runs on the CPU lane. The adapter binds the original
+Orthanc source manifest/archive, immutable reference image, selected masks and
+enqueue-time file identities before encoding. Full RAS/LPS affine checks prove
+that every original CT pixel matches an integer native voxel; no mask resampling
+is allowed. Each nonempty structure becomes one binary SEG instance in a shared
+new series, bounding memory independently of structure count and preserving
+overlaps. Only CT headers are read; source CT pixel arrays are not assembled.
+UTF-8 metadata preserves source names and segment labels, and corrected masks
+are described as semiautomatic 3DScan outputs rather than untouched model output.
+
+An immutable export manifest pins SEG/mask/reference hashes and SOP identities
+before upload. Orthanc retains and sends the same files, with read-back hashing
+protecting against a different object already stored under the same UID. Server
+allowlisted modality IDs control outgoing destinations. Delivery intent/job IDs
+are persisted separately; an explicit retry checks any known Orthanc job and
+reuses exact SOP bytes. Startup never sends or resumes an export automatically.
+Polling stops after 120 seconds with an unconfirmed outcome if the remote job
+has not finished. Explicit **Send again** starts a new delivery attempt only
+after known success, while ordinary duplicate requests reuse the prior job.
+Export never changes or activates a segmentation revision. The first adapter
+requires an original classic CT imported through the configured archive.
+
+Synthetic API-to-Orthanc-to-OsiriX transport and user-confirmed basic ROI display
+pass; exact clinical alignment/editing remains user qualification. highdicom
+0.28.2 and pyjpegls 1.5.1 are pinned in the deployment lock. The integrated feature
+is qualified and staged; [the runbook](ORTHANC.md) records activation status.
 
 ## Scan and correction lifecycle
 

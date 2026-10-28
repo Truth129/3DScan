@@ -63,9 +63,12 @@ The connector and incoming receiver are **active**. The destination address is
 `OsiriX-Mac`. The separate synthetic archive remains available for
 development. See the
 [Orthanc setup and transfer guide](docs/ORTHANC.md) for current status and
-connection settings. A synthetic binary DICOM SEG return test passes transport,
-and the user confirms ROI display in OsiriX. General segmentation export is the
-next implementation step.
+connection settings. For a saved segmentation, choose **DICOM SEG…**, select its
+masks and choose **Archive in Orthanc** or **Send to** a configured viewer.
+**Send again** deliberately resends the same instances after a successful send;
+reopening the panel or resuming status never sends automatically. This first
+export adapter requires classic CT imported through the configured Orthanc.
+The integration is qualified and staged; see the runbook for activation status.
 
 ### Back up the case library
 
