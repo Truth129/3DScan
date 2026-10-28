@@ -270,6 +270,15 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    Isolated synthetic C-FIND/C-MOVE, unknown-AE refusal and persisted restart
    qualification pass; no host archive or Mac was contacted for the test.
    Audit: `.runtime/orthanc-query-retrieve-20261028T193732Z/`.
+   The user reports "Unknown" in the SEG series Study Description column.
+   Read-only metadata checking of the authorized affected case confirms the
+   exported `(0008,1030)` already exactly matches the common nonempty original
+   CT Study Description. No clinical text/identifiers were retained. All 49
+   encoder tests now explicitly cover description inheritance and Unicode.
+   No encoder/profile/runtime change was needed; awaiting the user's check of
+   that tag in the received SEG's OsiriX Meta-Data view. The MD import/display
+   cause is unconfirmed; do not presume missing source metadata or regenerate
+   unchanged export files as a fix.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification

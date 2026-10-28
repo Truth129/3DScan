@@ -87,6 +87,7 @@ def test_exact_independent_masks_preserve_overlap_and_source_geometry(fixture):
         assert seg.SeriesInstanceUID == result.series_instance_uid
         assert seg.SeriesDescription == f"3DScan segmentations {result.revision_id[:8]}"
         assert seg.StudyInstanceUID == result.study_instance_uid == fixture["images"][0].StudyInstanceUID
+        assert seg.StudyDescription == fixture["images"][0].StudyDescription
         assert seg.FrameOfReferenceUID == result.frame_of_reference_uid == fixture["images"][0].FrameOfReferenceUID
         assert seg.SegmentSequence[0].SegmentAlgorithmType == "AUTOMATIC"
         assert seg.SegmentSequence[0].SegmentAlgorithmName == "TotalSegmentator"
@@ -480,6 +481,7 @@ def test_non_latin_segment_labels_are_preserved_as_utf8(fixture, label):
     for path in fixture["paths"]:
         source = pydicom.dcmread(path)
         source.PatientName = "SYNTHETIC^Müller"
+        source.StudyDescription = "Étude synthétique"
         source.save_as(path, enforce_file_format=True)
     segment = fixture["segments"][0]
     fixture["segments"] = [dicom_seg.SegmentInput(segment.id, label, segment.color, segment.mask_path)]
@@ -488,6 +490,7 @@ def test_non_latin_segment_labels_are_preserved_as_utf8(fixture, label):
     assert seg.SegmentSequence[0].SegmentLabel == label
     assert seg.SpecificCharacterSet == "ISO_IR 192"
     assert seg.PatientName == "SYNTHETIC^Müller"
+    assert seg.StudyDescription == "Étude synthétique"
 
 
 def test_unexpected_reader_errors_do_not_expose_clinical_paths(fixture, monkeypatch):

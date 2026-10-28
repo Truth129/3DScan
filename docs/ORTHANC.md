@@ -148,6 +148,15 @@ voxel per axis and 0.05 mm in patient space. Masks are gathered by integer
 indices without interpolation, and the original DICOM positions remain in the
 SEG. Larger discrepancies stop export before anything is uploaded or sent.
 
+Study Description `(0008,1030)` is inherited from the original CT study metadata
+by highdicom and retained in the combined object, including decoded non-Latin
+text in the UTF-8 export. A read-only check of the user's reported "Unknown"
+column confirms the affected export already contains the exact nonempty source
+description. Check that raw tag in the received SEG's OsiriX Meta-Data view
+before attributing a database label to missing export metadata. Its MD 14.3
+import/display behaviour remains under investigation; no profile change or
+automatic resend was made for this report.
+
 An archive-only action stores SEG beside the original study in Orthanc. Sending
 asks that same Orthanc to perform C-STORE. The app does not make a direct DICOM
 connection to OsiriX. Existing modality `osirix` already has the confirmed Mac
