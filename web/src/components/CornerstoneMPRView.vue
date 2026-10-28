@@ -455,6 +455,7 @@ defineExpose({
   </div>
 </template>
 
+<style scoped src="./cornerstone-slice.css"></style>
 <style scoped>
 .ct-mpr-controls {
   display: flex;
@@ -476,53 +477,5 @@ defineExpose({
 }
 .ct-mpr-controls > span {
   color: var(--muted);
-}
-.cornerstone-image {
-  min-height: 150px;
-}
-.cornerstone-viewport {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  overflow: hidden;
-}
-.cornerstone-viewport :deep(.viewport-element) {
-  position: absolute !important;
-  inset: 0;
-  z-index: 0;
-}
-.cornerstone-viewport :deep(canvas.cornerstone-canvas) {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: none !important;
-  max-height: none !important;
-  object-fit: fill;
-}
-.cornerstone-annotations {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-}
-.cornerstone-annotations :deep(.ct-gesture-layer.active) {
-  pointer-events: auto;
-}
-.cornerstone-reset {
-  position: absolute;
-  right: 7px;
-  bottom: 5px;
-  z-index: 4;
-  font-size: 9px;
-  background: #10131cb3;
-  padding: 2px 5px;
-}
-.slice-direction,
-.ct-local-loading {
-  z-index: 4;
-}
-.slice-error {
-  z-index: 5;
 }
 </style>
