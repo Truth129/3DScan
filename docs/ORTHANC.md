@@ -13,8 +13,8 @@ Tailscale receiving deferred until a later configuration change.
 | Destination address | `10.20.0.3` |
 | Destination DICOM port | `4243` |
 | Destination AE title | `SCAN3D` |
-| Allowed Mac address | `10.20.0.118` |
-| Mac calling AE title | `OsiriX-mac` (case-sensitive) |
+| Allowed Mac address | `10.20.0.107` |
+| Mac calling AE title | `OsiriX-Mac` (case-sensitive) |
 | Private Orthanc API | `http://127.0.0.1:8044` |
 
 In OsiriX add that destination under its DICOM locations and verify it, then
@@ -39,7 +39,7 @@ back up Orthanc's originals/index.
 Prepare the private configuration without starting a listener:
 
 ```bash
-.venv-rocm10-py314/bin/python scripts/orthanc_receiver.py prepare --remote-host 10.20.0.118 --remote-aet OsiriX-mac
+.venv-rocm10-py314/bin/python scripts/orthanc_receiver.py prepare --remote-host 10.20.0.107 --remote-aet OsiriX-Mac
 ```
 
 The helper reuses the checksum-pinned binary, creates private config/credentials,
@@ -56,6 +56,16 @@ changed by the integration. The authenticated HTTP API remains loopback-only.
 
 If either machine's IP changes, review the destination and sender allowlist.
 Accepting the Mac through Tailscale also needs an explicit sender update.
+
+On 28 October, rejected-association metadata identified the actual Mac sender
+as `10.20.0.107` / `OsiriX-Mac`, correcting the initially supplied
+`10.20.0.118` / `OsiriX-mac`. A reachable host can still fail C-ECHO when
+the calling AE or source IP differs from this allowlist. The correction was
+saved atomically in the private configuration and applied to the running
+receiver with authenticated `PUT /modalities/osirix`, without a service restart.
+This API replaces the whole sender definition; preserve all operation flags.
+REST updates alone are lost on restart with the default file-based modality
+configuration. Audit: `.runtime/orthanc-sender-correction-20261028T125441Z/`.
 
 `deployment/scan3d-orthanc.service` is the receiver user-unit template. The main
 app loads the private `connection.env` through its `orthanc.conf` systemd drop-in.
