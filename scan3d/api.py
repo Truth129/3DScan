@@ -20,7 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model
 from . import __version__
 from .config import Settings
 from .errors import NotFound
-from .service import Service, extract_zip, safe_relative
+from .fileio import extract_zip, safe_relative
+from .service import Service
 from .store import ReviewConflict, public_case, public_job, public_revision
 from .uploads import ImportConflict, Uploads
 from .portable_export import ExportRequest

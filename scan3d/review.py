@@ -16,7 +16,7 @@ import shutil
 
 import numpy as np
 
-from .fileio import hash_file as _digest
+from .fileio import atomic_json, code_fingerprint, hash_file as _digest
 from . import __version__, imaging
 from .errors import NotFound
 from .interactive_prompts import normalize_options, normalize_prompts
@@ -706,8 +706,6 @@ class ReviewManager:
             **overlap,
             **preview,
         )
-        from .service import atomic_json
-
         atomic_json(directory / "candidate.json", candidate)
         self.service.check_cancel(job)
         return self.store.publish_review_candidate(job, candidate)
@@ -774,8 +772,6 @@ class ReviewManager:
         for entry in affected_ledger:
             entry["before_mask_sha256"] = source_hashes[entry["id"]]
             entry["after_mask_sha256"] = changes[entry["id"]]["mask_sha256"]
-        from .service import atomic_json, code_fingerprint
-
         method = review.get("method", "nninteractive")
         source = (
             ("direct_edit_new_structure" if is_new else "direct_edit_correction")

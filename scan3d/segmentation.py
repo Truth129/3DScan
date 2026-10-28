@@ -15,7 +15,7 @@ import sys
 import time
 import uuid
 
-from .fileio import hash_file as _digest
+from .fileio import atomic_text, hash_file as _digest
 from .imaging import _binary_nonempty, _image
 from . import segmentation_options
 from .segmentation_options import normalize_options, resolved_task_config, task_capabilities
@@ -353,9 +353,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
     def save_manifest():
         content = json.dumps(manifest, indent=2) + "\n"
         for destination in (run_dir / "inference.json", manifest_path):
-            pending = destination.with_suffix(".json.writing")
-            pending.write_text(content)
-            pending.replace(destination)
+            atomic_text(destination, content)
 
     save_manifest()
     structures = []

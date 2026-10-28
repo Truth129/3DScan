@@ -15,54 +15,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import __version__
 from .config import Settings
+from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
 from .store import LANES, Store, identifier, job_lane, now
 
 log = logging.getLogger(__name__)
-
-
-def code_fingerprint():
-    digest = hashlib.sha256()
-    for path in sorted(Path(__file__).parent.glob("*.py")):
-        digest.update(path.name.encode())
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
-
-
-def atomic_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{identifier()}.writing")
-    try:
-        temporary.write_text(json.dumps(value, indent=2, allow_nan=False))
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def safe_relative(name):
-    path = Path(name.replace("\\", "/"))
-    if path.is_absolute() or any(p in ("..", "") for p in path.parts) or not path.parts:
-        raise ValueError("Unsafe archive or upload filename")
-    return path
-
-
-def extract_zip(archive, target, limit):
-    with zipfile.ZipFile(archive) as z:
-        entries = z.infolist()
-        if len(entries) > 100_000 or sum(e.file_size for e in entries) > limit:
-            raise ValueError("Archive exceeds expanded import limit")
-        for entry in entries:
-            path = target / safe_relative(entry.filename)
-            if (entry.external_attr >> 16) & 0o170000 == 0o120000:
-                raise ValueError("Archive symlinks are not supported")
-            if entry.is_dir():
-                path.mkdir(parents=True, exist_ok=True)
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                if path.exists():
-                    raise ValueError("Duplicate archive filename")
-                with z.open(entry) as src, path.open("wb") as dst:
-                    shutil.copyfileobj(src, dst, 1024 * 1024)
 
 
 class Service:
@@ -593,9 +549,7 @@ class Service:
             )
             self.check_cancel(job)
             run_manifest = json.loads((inference / "inference.json").read_text())
-            pending = cached.with_suffix(".json.writing")
-            pending.write_text(json.dumps({"structures": structures, "model_fingerprint": run_manifest["model_fingerprint"], "manifest": run_manifest}))
-            pending.replace(cached)
+            atomic_text(cached, json.dumps({"structures": structures, "model_fingerprint": run_manifest["model_fingerprint"], "manifest": run_manifest}))
         self.stage(job, "Checking masks and generating surfaces")
         from .segmentation_merge import merge_task_outputs
 

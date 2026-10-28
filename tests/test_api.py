@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 
 from scan3d.api import create_app
 from scan3d.config import Settings
-from scan3d.service import Service, extract_zip
+from scan3d.fileio import extract_zip
+from scan3d.service import Service
 
 
 @pytest.fixture
