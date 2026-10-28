@@ -5,7 +5,8 @@ in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is
 implemented and active. The per-frame compatibility update enables discovery,
 but OsiriX shows only one of eight masks from separate SEG objects. A combined
-multi-segment object update is being qualified. The target is **OsiriX MD 14.3.0** on the local network, with
+multi-segment object update is now active after an approved idle app restart.
+Its actual OsiriX display still needs confirmation. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
 ## Connection settings
@@ -171,7 +172,10 @@ or masks were copied or retained as fixtures. OsiriX's internal handling is
 unconfirmed; one object containing all eight independently numbered segments
 matches the earlier accepted prototype. The combined encoder streams packed
 pixels and keeps the same per-mask memory bound; its actual display still
-needs confirmation after activation and an explicit fresh export.
+needs confirmation after an explicit fresh export. Encoding version 3 is now
+active after an approved idle app restart; both lanes and aggregate counts pass.
+Orthanc and frontend assets are unchanged. Audit and prior backend snapshot:
+`.runtime/dicom-seg-combined-20261028T192927Z/`.
 
 The user approved activation, which installed the qualified packages/frontend
 and `osirix` allowlist and restarted idle 3DScan. Both lanes are healthy; all 19
