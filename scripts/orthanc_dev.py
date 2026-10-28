@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import signal
@@ -25,6 +26,7 @@ BINARY_URL = f"https://orthanc.uclouvain.be/downloads/linux-standard-base/orthan
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DIRECTORY = ROOT / ".runtime" / "orthanc-dev"
 URL = "http://127.0.0.1:8043"
+UNIT = "scan3d-orthanc-dev.service"
 
 
 def private_json(path: Path, value: dict) -> None:
@@ -161,31 +163,84 @@ def system(directory: Path) -> dict:
     return {"url": URL, "version": value["Version"], "name": value["Name"], "credentials_file": str(directory / "connection.env")}
 
 
+def unit_state(directory: Path) -> dict[str, str]:
+    response = subprocess.run(
+        ["systemctl", "--user", "show", UNIT, "--property=LoadState,Transient,ExecStart,WorkingDirectory,MainPID,ActiveState", "--no-pager"],
+        capture_output=True,
+        text=True,
+    )
+    fields = dict(line.split("=", 1) for line in response.stdout.splitlines() if "=" in line)
+    if fields.get("LoadState") == "not-found":
+        return fields
+    binary = directory / "bin" / f"Orthanc-{VERSION}"
+    config = directory / "orthanc.json"
+    arguments = re.search(r"argv\[\]=(.*?) ;", fields.get("ExecStart", ""))
+    if (
+        fields.get("LoadState") != "loaded"
+        or fields.get("Transient") != "yes"
+        or fields.get("WorkingDirectory") != str(directory)
+        or not arguments
+        or shlex.split(arguments[1]) != [str(binary), str(config), f"--logfile={directory / 'orthanc.log'}"]
+    ):
+        raise RuntimeError("The development unit is unavailable or belongs to another command; no unit was changed.")
+    return fields
+
+
+def record_process(directory: Path, pid: int, *, unit: bool = False) -> None:
+    started = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    record = directory / "process.json"
+    if record.exists():
+        record.unlink()
+    private_json(record, {"pid": pid, "started": started, **({"unit": UNIT} if unit else {})})
+
+
 def start(directory: Path) -> dict:
     binary = install(directory)
     config = configure(directory)
     if process_record(directory):
         return {"status": "running", **system(directory)}
+    state = unit_state(directory)
+    if state.get("LoadState") == "loaded":
+        raise RuntimeError("The owned development unit is already loaded; inspect its status before starting again.")
     with socket.socket() as probe:
         try:
             probe.bind(("127.0.0.1", 8043))
         except OSError as error:
             raise RuntimeError("Port 8043 is occupied; the existing listener was left untouched.") from error
     log = directory / "orthanc.log"
-    with log.open("ab") as output:
-        log.chmod(0o600)
-        process = subprocess.Popen([str(binary), str(config)], cwd=directory, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
-    started = Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
-    record = directory / "process.json"
-    if record.exists():
-        record.unlink()
-    private_json(record, {"pid": process.pid, "started": started})
+    log.touch(mode=0o600, exist_ok=True)
+    log.chmod(0o600)
+    result = subprocess.run(
+        [
+            "systemd-run",
+            "--user",
+            f"--unit={UNIT}",
+            "--collect",
+            "--quiet",
+            f"--property=WorkingDirectory={directory}",
+            "--property=UMask=0077",
+            "--property=Restart=no",
+            "--property=NoNewPrivileges=yes",
+            str(binary),
+            str(config),
+            f"--logfile={log}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode:
+        raise RuntimeError("The development user unit could not start; no existing service was changed.")
     for _ in range(100):
-        if process.poll() is not None:
+        state = unit_state(directory)
+        pid = int(state.get("MainPID", "0"))
+        if state.get("ActiveState") == "failed":
             raise RuntimeError(f"Orthanc exited; inspect the private sandbox log at {log}.")
         try:
             result = system(directory)
-            return {"status": "running", **result}
+            if pid:
+                record_process(directory, pid, unit=True)
+                process_record(directory)
+                return {"status": "running", "unit": UNIT, **result}
         except (HTTPError, URLError, TimeoutError, ConnectionError):
             time.sleep(0.1)
     raise RuntimeError(f"Orthanc is still starting; inspect the private sandbox log at {log}.")
@@ -195,7 +250,13 @@ def stop(directory: Path) -> dict:
     record = process_record(directory)
     if not record:
         return {"status": "stopped", "data_retained": True}
-    os.kill(record["pid"], signal.SIGTERM)
+    if record.get("unit"):
+        state = unit_state(directory)
+        if state.get("MainPID") != str(record["pid"]):
+            raise RuntimeError("The owned development unit PID changed; no service was stopped.")
+        subprocess.run(["systemctl", "--user", "stop", UNIT], check=True)
+    else:
+        os.kill(record["pid"], signal.SIGTERM)
     for _ in range(100):
         try:
             current = process_record(directory)
@@ -208,9 +269,19 @@ def stop(directory: Path) -> dict:
     raise RuntimeError("The sandbox did not stop in 10 seconds; no force-kill was sent.")
 
 
+def foreground(directory: Path) -> None:
+    binary = install(directory)
+    config = configure(directory)
+    if process_record(directory):
+        raise RuntimeError("This sandbox is already running; use status to inspect it.")
+    record_process(directory, os.getpid())
+    os.chdir(directory)
+    os.execv(binary, [str(binary), str(config), f"--logfile={directory / 'orthanc.log'}"])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["install", "start", "status", "stop"])
+    parser.add_argument("action", choices=["install", "start", "run", "status", "stop"])
     parser.add_argument("--directory", type=Path, default=DEFAULT_DIRECTORY, help="Separate development storage, never the live case library")
     args = parser.parse_args()
     directory = args.directory.expanduser().resolve()
@@ -226,6 +297,9 @@ def main() -> None:
             result = {"status": "installed", "url": URL, "version": VERSION, "credentials_file": str(directory / "connection.env")}
         elif args.action == "start":
             result = start(directory)
+        elif args.action == "run":
+            foreground(directory)
+            return
         elif args.action == "stop":
             result = stop(directory)
         elif process_record(directory):

@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -91,3 +92,37 @@ def test_cli_rejects_unowned_storage_before_reading_it(tmp_path):
     assert result.returncode == 2
     assert "owned .runtime/orthanc-dev" in result.stderr
     assert not list(tmp_path.iterdir())
+
+
+def test_lifecycle_unit_must_be_transient_and_run_only_owned_binary(tmp_path, monkeypatch):
+    fields = {
+        "LoadState": "loaded",
+        "Transient": "yes",
+        "MainPID": "123",
+        "WorkingDirectory": str(tmp_path),
+        "ExecStart": f"{{ path={tmp_path}/bin/Orthanc-{orthanc_dev.VERSION} ; argv[]={tmp_path}/bin/Orthanc-{orthanc_dev.VERSION} {tmp_path}/orthanc.json --logfile={tmp_path}/orthanc.log ; }}",
+    }
+
+    def response(*_args, **_kwargs):
+        return SimpleNamespace(stdout="\n".join(f"{key}={value}" for key, value in fields.items()), returncode=0)
+
+    monkeypatch.setattr(orthanc_dev.subprocess, "run", response)
+    assert orthanc_dev.unit_state(tmp_path)["MainPID"] == "123"
+    for key, value in [("Transient", "no"), ("WorkingDirectory", "/unrelated"), ("ExecStart", "{ path=/unrelated ; argv[]=/unrelated ; }")]:
+        previous = fields[key]
+        fields[key] = value
+        with pytest.raises(RuntimeError, match="no unit was changed"):
+            orthanc_dev.unit_state(tmp_path)
+        fields[key] = previous
+
+
+def test_stop_refuses_an_owned_unit_whose_pid_changed(tmp_path, monkeypatch):
+    signals = []
+    calls = []
+    monkeypatch.setattr(orthanc_dev, "process_record", lambda _directory: {"pid": 123, "unit": orthanc_dev.UNIT})
+    monkeypatch.setattr(orthanc_dev, "unit_state", lambda _directory: {"MainPID": "456"})
+    monkeypatch.setattr(orthanc_dev.os, "kill", lambda *args: signals.append(args))
+    monkeypatch.setattr(orthanc_dev.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(RuntimeError, match="no service was stopped"):
+        orthanc_dev.stop(tmp_path)
+    assert signals == [] and calls == []
