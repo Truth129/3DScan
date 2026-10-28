@@ -121,9 +121,10 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 - **Branch:** `expansion`; the Cornerstone phase 1/2 changes are local and unpushed.
   The earlier CI baseline is green on Python 3.14 and the web job.
 - **Live code:** development checkout, initially activated from `09ff189`, CT-only.
-  The frontend now serves native Cornerstone3D/vtk.js with bounded masking from
-  `2ea391e` (memory fix `ff291c5`), installed
+  The frontend now serves native Cornerstone3D/vtk.js with bounded masking and
+  the native correction reviewer from `54c23ec` (installation through `42d7a78`),
   without restarting the backend. Frontend audit/rollback:
+  `.runtime/native-review-frontend-20261028T051359Z/`. The prior masking audit is
   `.runtime/native-mask-frontend-20261027T224248Z/`. The earlier native-port audit
   remains at `.runtime/cornerstone-primary-frontend-20261027T204309Z/`. The
   previous frozen `ct-hardening-20261027` release (`971b05c`) remains available.
