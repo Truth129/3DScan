@@ -237,9 +237,13 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    `.runtime/dicom-seg-grid-fix-20261028T184308Z/`.
    The user subsequently reports OsiriX cannot discover masks in the app SEG.
    A per-frame identification compatibility fix and encoding-version cache
-   migration are prepared (1,083 backend / 504 web tests, seven browser gates).
-   Actual OsiriX display is still unconfirmed. Frontend publication and idle
-   app restart need fresh approval; audit/staged files:
+   migration are active after explicit approval (backend `448009b`, PID572157).
+   1,083 backend / 504 web tests and seven browser gates pass. Both lanes,
+   CT-only policy, all 19 assets and private HTTPS index pass; aggregate counts
+   remain 4 cases/22 revisions/39 jobs/10 reviews/4 image assets. Orthanc PID436143
+   is unchanged, with zero warning/error journal priorities. No DICOM was sent
+   during activation. Actual OsiriX display is still unconfirmed; refresh and
+   explicitly export to generate the updated SOPs. Audit/guarded rollback:
    `.runtime/dicom-seg-per-frame-20261028T191145Z/`.
 3. **Decisions waiting on the user:**
    - sign-in and an audit trail, needed before a second user

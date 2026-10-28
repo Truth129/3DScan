@@ -4,7 +4,7 @@ The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is
 implemented and active, but the user reports that OsiriX cannot discover masks
-in the first per-structure encoding. A per-frame compatibility update is staged
+in the first per-structure encoding. A per-frame compatibility update is active
 and still needs actual viewer display confirmation. The target is **OsiriX MD 14.3.0** on the local network, with
 Tailscale receiving deferred until a later configuration change.
 
@@ -152,10 +152,14 @@ exact rejection mechanism is not confirmed. The macro is moved, never duplicated
 between shared and per-frame groups, following
 [DICOM functional-group rules](https://dicom.nema.org/medical/dicom/current/output/chtml/part03/sect_C.7.6.16.html).
 Encoding version 2 generates new SOPs only on an explicit export, leaving prior
-files and delivery receipts intact. After activation, refresh the app and use
+files and delivery receipts intact. Refresh the app and use
 **Send to osirix** to create the updated files. **Send again** reuses files
 already sent with the current encoding. Successful C-STORE proves transport;
 it does not establish OsiriX mask discovery or clinical alignment.
+The compatibility update was activated with explicit approval; both worker
+lanes, the served frontend and aggregate library counts pass. Orthanc stayed
+running and no DICOM was sent during activation. Audit/guarded rollback:
+`.runtime/dicom-seg-per-frame-20261028T191145Z/`.
 
 The user approved activation, which installed the qualified packages/frontend
 and `osirix` allowlist and restarted idle 3DScan. Both lanes are healthy; all 19
