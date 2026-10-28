@@ -496,14 +496,9 @@ using a conservative available-memory estimate; `SCAN3D_MESH_THREADS` defaults
 to 16 for VTK's available native CPU backend. Inference and browser drawing use
 the GPU; exact voxel counting remains on the CPU after an end-to-end benchmark.
 
-```bash
-source scripts/production-env.sh
-python -m pytest -q
-cd web
-npm run typecheck
-npm test
-npm run build
-```
+Run the [development checks](docs/SETUP.md#development-checks) for backend tests,
+web checks, scratch builds and synthetic browser workflows. Test builds stay
+outside the frontend served by the live app.
 
 The tests cover oblique/reflected geometry, voxel-derived measurements, mask
 operations, draft isolation/acceptance, cancellation and restart recovery,
