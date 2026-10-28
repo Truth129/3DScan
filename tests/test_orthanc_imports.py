@@ -20,7 +20,10 @@ import pytest
 from scan3d import dicom
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.errors import NotFound
 from scan3d.orthanc import OrthancChanged, OrthancError, snapshot_fingerprint
+from scan3d.service import Service
+from scan3d.orthanc_models import json_record, parse_download, parse_snapshot
 
 
 def oid(value):
@@ -86,7 +89,8 @@ class SyntheticArchive:
                 for index, (resource_id, data) in enumerate(self.files.items())
             ],
         }
-        self.snapshot_doc["snapshot"] = snapshot_fingerprint(self.snapshot_doc)
+        self.snapshot_doc["snapshot"] = "0" * 64
+        self.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(self.snapshot_doc))
         self.error = None
         self.download_error = None
         self.manifest_mutation = None
@@ -110,7 +114,7 @@ class SyntheticArchive:
         if self.error:
             raise self.error
         assert series_id == SERIES
-        return copy.deepcopy(self.snapshot_doc)
+        return parse_snapshot(self.snapshot_doc)
 
     def find_studies(self, query, *, limit, offset):
         if self.error:
@@ -120,7 +124,7 @@ class SyntheticArchive:
 
     def study_series(self, study_id):
         assert study_id == STUDY
-        return {"study": {"id": STUDY, "study_uid": STUDY_UID}, "series": [self.snapshot(SERIES)]}
+        return {"study": {"id": STUDY, "study_uid": STUDY_UID}, "series": [json_record(self.snapshot(SERIES))]}
 
     def download(self, snapshot, destination, *, max_bytes, progress, cancelled):
         self.entered.set()
@@ -134,33 +138,33 @@ class SyntheticArchive:
         destination = Path(destination)
         files = []
         received = 0
-        for index, item in enumerate(snapshot["instances"]):
-            data = self.files[item["id"]]
+        for index, item in enumerate(snapshot.instances):
+            data = self.files[item.id]
             received += len(data)
             assert received <= max_bytes
             name = f"{index:06d}.dcm"
             (destination / name).write_bytes(data)
             files.append(
                 {
-                    "instance_id": item["id"],
-                    "sop_instance_uid": item["sop_instance_uid"],
+                    "instance_id": item.id,
+                    "sop_instance_uid": item.sop_instance_uid,
                     "sha256": hashlib.sha256(data).hexdigest(),
                     "size": len(data),
                     "path": name,
                 }
             )
-            progress(index + 1, len(snapshot["instances"]), received)
+            progress(index + 1, len(snapshot.instances), received)
         self.downloaded += 1
         content = [{key: item[key] for key in ("sop_instance_uid", "sha256", "size")} for item in sorted(files, key=lambda item: item["sop_instance_uid"])]
         result = {
-            "snapshot": snapshot,
+            "snapshot": json_record(snapshot),
             "files": files,
             "bytes": received,
             "content_digest": hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
         }
         if self.manifest_mutation:
             self.manifest_mutation(result)
-        return result
+        return parse_download(result)
 
 
 @pytest.fixture
@@ -212,6 +216,36 @@ def test_queries_remain_private_and_modality_policy_applies_before_import(rig):
     rejected = start(rig)
     assert rejected.status_code == 400 and "not enabled" in rejected.json()["detail"]
     assert rig.service.store.list("cases") == []
+
+
+@pytest.mark.parametrize("error", [OrthancError("Synthetic unavailable"), NotFound("Synthetic wrong endpoint"), ValueError("Synthetic bad configuration")])
+def test_connection_status_reports_unavailable_without_exposing_upstream_details(rig, error):
+    rig.archive.error = error
+    response = rig.http.get("/api/orthanc/status")
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "configured": True,
+        "connected": False,
+        "name": "Orthanc",
+        "error": "Cannot connect to the configured Orthanc archive.",
+    }
+    assert str(error) not in response.text
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "body", "headers", "status"),
+    [
+        ("POST", "/api/orthanc/studies/query", {"patient_id": "SYNTHETIC-ORTHANC", "limit": 0}, {}, 422),
+        ("POST", "/api/orthanc/studies/query", {"patient_id": "SYNTHETIC-ORTHANC"}, {}, 404),
+        ("POST", "/api/orthanc/imports", {"series_id": "not-an-id", "snapshot": "a" * 64}, {}, 422),
+        ("POST", "/api/orthanc/studies/query", {}, {"Origin": "https://unrelated.example.test"}, 403),
+    ],
+)
+def test_archive_request_errors_are_not_cacheable(rig, method, url, body, headers, status):
+    if status == 404:
+        rig.archive.error = NotFound("Synthetic study no longer available")
+    response = rig.http.request(method, url, json=body, headers=headers)
+    assert response.status_code == status and response.headers["cache-control"] == "no-store"
 
 
 def test_concurrent_requests_and_completed_retries_reuse_one_job_and_case(rig):
@@ -319,6 +353,31 @@ def test_cancellation_after_the_last_download_still_prevents_source_publication(
     assert list((rig.settings.data_dir / "orthanc-staging").iterdir()) == []
 
 
+def test_transfer_progress_and_cancel_polls_do_not_rewrite_or_reparse_each_instance(rig, monkeypatch):
+    from scan3d import orthanc_imports
+
+    # A burst of tiny files and chunk checks shares one polling interval. The
+    # first/final progress and unconditional pre-publication check still occur.
+    monkeypatch.setattr(orthanc_imports, "time", SimpleNamespace(monotonic=lambda: 0.0))
+    updates, polls = [], []
+    update_job, cancelled = rig.service.store.update_job, rig.service.cancelled
+
+    def update(job_id, **changes):
+        if changes.get("progress", {}).get("phase") == "archive_import":
+            updates.append(changes["progress"]["completed"])
+        return update_job(job_id, **changes)
+
+    def poll(job):
+        polls.append(job["id"])
+        return cancelled(job)
+
+    monkeypatch.setattr(rig.service.store, "update_job", update)
+    monkeypatch.setattr(rig.service, "cancelled", poll)
+    job = start(rig).json()
+    assert execute_cpu(rig, job["id"])["status"] == "completed"
+    assert updates == [1, 3] and len(polls) <= 3
+
+
 @pytest.mark.parametrize("identity", ["study", "series", "frame", "sop", "sop_class", "file_meta", "modality"])
 def test_downloaded_dicom_identity_is_verified_independently_of_archive_tags(rig, identity):
     first = next(iter(rig.archive.files))
@@ -350,7 +409,7 @@ def test_downloaded_dicom_identity_is_verified_independently_of_archive_tags(rig
     # DICOM identity checking rather than only the simpler byte-size guard.
     for entry in rig.archive.snapshot_doc["instances"]:
         entry["size"] = len(rig.archive.files[entry["id"]])
-    rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(rig.archive.snapshot_doc)
+    rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
     job = start(rig).json()
     result = execute_cpu(rig, job["id"])
     assert result["status"] == "failed"
@@ -388,6 +447,63 @@ def test_transfer_failure_keeps_original_source_unpublished_and_can_retry(rig):
     retry = start(rig).json()
     assert retry["case_id"] == job["case_id"]
     assert execute_cpu(rig, retry["id"])["status"] == "completed"
+
+
+def test_startup_recovers_interrupted_import_without_contacting_the_archive(rig, monkeypatch):
+    job = start(rig).json()
+    assert rig.service.store.claim("cpu")["id"] == job["id"]
+    restarted = Service(rig.settings)
+    monkeypatch.setattr(restarted.orthanc, "client", lambda: pytest.fail("Recovery must not contact Orthanc"))
+    restarted.start(lanes=("cpu",))
+    try:
+        interrupted = restarted.store.get("jobs", job["id"])
+        case = restarted.store.get("cases", job["case_id"])
+        assert interrupted["status"] == "failed" and interrupted["stage"] == "Interrupted"
+        assert case["status"] == "import_failed" and not case.get("source_dir")
+    finally:
+        restarted.stop()
+    retry = start(rig).json()
+    assert retry["case_id"] == job["case_id"] and retry["id"] != job["id"]
+    assert execute_cpu(rig, retry["id"])["status"] == "completed"
+
+
+def test_recovery_of_an_older_failed_attempt_preserves_a_queued_retry(rig):
+    rig.archive.download_error = OrthancError("The synthetic transfer was interrupted.")
+    failed = start(rig).json()
+    assert execute_cpu(rig, failed["id"])["status"] == "failed"
+    rig.archive.download_error = None
+    retry = start(rig).json()
+    rig.service.orthanc.recover()
+    assert rig.service.store.get("cases", retry["case_id"])["status"] == "importing"
+    assert rig.service.store.get("jobs", retry["id"])["status"] == "queued"
+    assert execute_cpu(rig, retry["id"])["status"] == "completed"
+    rig.service.orthanc.recover()
+    assert rig.service.store.get("cases", retry["case_id"])["status"] == "imported"
+
+
+def test_failed_manifest_publication_retains_unreferenced_source_bytes_and_retries_fresh(rig, monkeypatch):
+    from scan3d import orthanc_imports
+
+    write_manifest = orthanc_imports.atomic_json
+
+    def unavailable(*_args):
+        raise OSError("Synthetic manifest publication failure")
+
+    monkeypatch.setattr(orthanc_imports, "atomic_json", unavailable)
+    failed = start(rig).json()
+    assert execute_cpu(rig, failed["id"])["status"] == "failed"
+    case = rig.service.store.get("cases", failed["case_id"])
+    assert case["status"] == "import_failed" and not case.get("source_dir") and case["references"] == {}
+    retained = rig.service.store.case_dir(case["id"]) / "sources" / failed["id"] / "dicom"
+    before = {file.name: file.read_bytes() for file in retained.iterdir()}
+    assert before and set(before.values()) == set(rig.archive.files.values())
+    monkeypatch.setattr(orthanc_imports, "atomic_json", write_manifest)
+    retry = start(rig).json()
+    assert retry["case_id"] == failed["case_id"] and retry["id"] != failed["id"]
+    assert execute_cpu(rig, retry["id"])["status"] == "completed"
+    case = rig.service.store.get("cases", retry["case_id"])
+    assert Path(case["source_dir"]) != retained
+    assert {file.name: file.read_bytes() for file in retained.iterdir()} == before
 
 
 def test_open_scan_carries_the_archive_digest_into_immutable_image_identity(rig, monkeypatch):

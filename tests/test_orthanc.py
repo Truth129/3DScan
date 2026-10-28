@@ -1,6 +1,7 @@
 """Synthetic archive transport; no network, workstation library or GPU access."""
 
 import copy
+from dataclasses import replace
 import hashlib
 import json
 from urllib.parse import urlsplit
@@ -138,17 +139,17 @@ def test_queries_are_bounded_and_read_only_with_no_ambient_auth_or_redirects(arc
 def test_snapshot_binds_source_study_series_frame_sop_and_file_version(archive):
     client, upstream = archive
     snapshot = client.snapshot(SERIES)
-    assert snapshot["study_uid"] == "1.2.3" and snapshot["series_uid"] == "1.2.3.4"
-    assert snapshot["frame_of_reference_uid"] == "1.2.3.9"
-    assert snapshot["completeness"] == "complete" and snapshot["warnings"] == []
-    assert [item["id"] for item in snapshot["instances"]] == [A, B]
+    assert snapshot.study_uid == "1.2.3" and snapshot.series_uid == "1.2.3.4"
+    assert snapshot.frame_of_reference_uid == "1.2.3.9"
+    assert snapshot.completeness == "complete" and snapshot.warnings == ()
+    assert [item.id for item in snapshot.instances] == [A, B]
     upstream.instances.reverse()
     upstream.series["Instances"].reverse()
-    assert client.snapshot(SERIES)["snapshot"] == snapshot["snapshot"]
+    assert client.snapshot(SERIES).snapshot == snapshot.snapshot
     upstream.instances[0]["FileUuid"] = "replacement-with-same-SOP-UID"
-    assert client.snapshot(SERIES)["snapshot"] != snapshot["snapshot"]
+    assert client.snapshot(SERIES).snapshot != snapshot.snapshot
     other = OrthancClient("https://another.example.test", session=upstream)
-    assert other.snapshot(SERIES)["snapshot"] != snapshot["snapshot"]
+    assert other.snapshot(SERIES).snapshot != snapshot.snapshot
 
 
 def test_study_series_summaries_keep_the_selected_snapshot(archive):
@@ -158,7 +159,7 @@ def test_study_series_summaries_keep_the_selected_snapshot(archive):
     summary = result["series"][0]
     assert summary["id"] == SERIES and summary["modality"] == "CT"
     assert summary["instance_count"] == summary["expected_instances"] == 2
-    assert summary["snapshot"] == client.snapshot(SERIES)["snapshot"]
+    assert summary["snapshot"] == client.snapshot(SERIES).snapshot
     upstream.study["Series"] = []
     with pytest.raises(OrthancChanged, match="study changed"):
         client.snapshot(SERIES)
@@ -170,12 +171,12 @@ def test_download_streams_selected_instances_and_binds_exact_content(archive, tm
     progress = []
     result = client.download(snapshot, tmp_path / "staging", max_bytes=100, progress=lambda *value: progress.append(value))
     assert progress == [(1, 2, 11), (2, 2, 22)]
-    assert result["bytes"] == 22 and result["snapshot"] == snapshot
-    for item in result["files"]:
-        actual = (tmp_path / "staging" / item["path"]).read_bytes()
-        assert actual == upstream.files[item["instance_id"]]
-        assert item["sha256"] == hashlib.sha256(actual).hexdigest()
-    assert len(result["content_digest"]) == 64
+    assert result.bytes == 22 and result.snapshot == snapshot
+    for item in result.files:
+        actual = (tmp_path / "staging" / item.path).read_bytes()
+        assert actual == upstream.files[item.instance_id]
+        assert item.sha256 == hashlib.sha256(actual).hexdigest()
+    assert len(result.content_digest) == 64
     assert not any("archive" in urlsplit(call[1]).path for call in upstream.calls)
     assert all(call[0] == "GET" for call in upstream.calls)
     assert all(response.closed for response in upstream.responses)
@@ -216,12 +217,12 @@ def test_inactivity_alone_never_claims_complete_acquisition(archive, tmp_path):
     client, upstream = archive
     upstream.series.update(ExpectedNumberOfInstances=None, Status="Unknown", IsStable=True)
     snapshot = client.snapshot(SERIES)
-    assert snapshot["completeness"] == "unknown"
-    assert "not proof" in snapshot["warnings"][0]
-    assert client.download(snapshot, tmp_path / "explicit-snapshot", max_bytes=100)["bytes"] == 22
+    assert snapshot.completeness == "unknown"
+    assert "not proof" in snapshot.warnings[0]
+    assert client.download(snapshot, tmp_path / "explicit-snapshot", max_bytes=100).bytes == 22
     upstream.series["IsStable"] = False
     receiving = client.snapshot(SERIES)
-    assert receiving["completeness"] == "receiving"
+    assert receiving.completeness == "receiving"
     with pytest.raises(OrthancChanged, match="still receiving or incomplete"):
         client.download(receiving, tmp_path / "receiving", max_bytes=100)
     assert not (tmp_path / "receiving").exists()
@@ -232,7 +233,7 @@ def test_known_incomplete_series_cannot_be_imported(archive, tmp_path, status, e
     client, upstream = archive
     upstream.series.update(Status=status, ExpectedNumberOfInstances=expected)
     snapshot = client.snapshot(SERIES)
-    assert snapshot["completeness"] == "incomplete"
+    assert snapshot.completeness == "incomplete"
     with pytest.raises(OrthancChanged):
         client.download(snapshot, tmp_path, max_bytes=100)
 
@@ -255,8 +256,7 @@ def test_limits_cancel_and_truncated_files_stop_before_a_success_result(archive,
 def test_stream_growth_and_mutated_snapshot_never_bypass_the_size_bound(archive, tmp_path):
     client, upstream = archive
     snapshot = client.snapshot(SERIES)
-    changed = copy.deepcopy(snapshot)
-    changed["instances"][0]["size"] = 1
+    changed = replace(snapshot, instances=(replace(snapshot.instances[0], size=1), *snapshot.instances[1:]))
     with pytest.raises(OrthancChanged, match="no longer valid"):
         client.download(changed, tmp_path / "tampered", max_bytes=100)
     upstream.files[A] *= 2

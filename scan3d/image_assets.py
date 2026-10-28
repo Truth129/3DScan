@@ -24,7 +24,8 @@ from .domain import Modality
 
 _ID = re.compile(r"[a-f0-9]{32}")
 _DIGEST = re.compile(r"[a-f0-9]{64}")
-_SOURCE_FIELDS = {"series_uid", "study_uid", "frame_of_reference_uid", "sop_class_uids"}
+_SOURCE_DIGESTS = {"source_archive_key", "source_content_sha256", "source_manifest_sha256"}
+_SOURCE_FIELDS = {"series_uid", "study_uid", "frame_of_reference_uid", "sop_class_uids"} | _SOURCE_DIGESTS
 
 
 @lru_cache(maxsize=128)
@@ -164,6 +165,8 @@ def validate_image_asset(record):
     if not isinstance(source, dict) or set(source) - _SOURCE_FIELDS:
         raise ValueError("Invalid image source metadata")
     for key, value in source.items():
+        if key in _SOURCE_DIGESTS and (not isinstance(value, str) or not _DIGEST.fullmatch(value)):
+            raise ValueError("Invalid source archive digest")
         values = value if key == "sop_class_uids" else [value]
         if not isinstance(values, list) or any(item is not None and (not isinstance(item, str) or not item or len(item) > 256) for item in values):
             raise ValueError("Invalid image source identifier")

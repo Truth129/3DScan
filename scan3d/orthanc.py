@@ -5,6 +5,7 @@ complete. A selected snapshot is checked again after transfer; accepted source
 identity still comes from the downloaded DICOM and its content hashes.
 """
 
+from dataclasses import replace
 import hashlib
 import json
 import math
@@ -15,6 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 
 from .errors import NotFound
+from .orthanc_models import ArchiveInstance, DownloadedFile, DownloadManifest, SeriesSnapshot, content_digest, parse_snapshot, snapshot_fingerprint
 
 _ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{8}){4}\Z")
 _UID = re.compile(r"[0-9]+(?:\.[0-9]+)*\Z")
@@ -72,17 +74,6 @@ def _number(value, *, optional=False):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise OrthancError("Orthanc returned an invalid instance count or size.")
     return value
-
-
-def snapshot_fingerprint(snapshot):
-    try:
-        fields = {
-            key: snapshot[key]
-            for key in ("source_key", "study_id", "study_uid", "series_id", "series_uid", "frame_of_reference_uid", "instances", "expected_instances", "status")
-        }
-    except (KeyError, TypeError):
-        raise OrthancChanged("The selected Orthanc snapshot is no longer valid. Refresh it before importing.") from None
-    return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 class OrthancClient:
@@ -217,28 +208,25 @@ class OrthancClient:
         series = []
         for resource_id in study.get("Series", []):
             snap = self.snapshot(resource_id)
-            if snap["study_id"] != study_id or snap["study_uid"] != summary["study_uid"]:
+            if snap.study_id != study_id or snap.study_uid != summary["study_uid"]:
                 raise OrthancChanged("The Orthanc study changed. Refresh its series before importing.")
             series.append(
                 {
-                    key: snap[key]
-                    for key in (
-                        "id",
-                        "description",
-                        "modality",
-                        "series_uid",
-                        "instance_count",
-                        "expected_instances",
-                        "stable",
-                        "completeness",
-                        "snapshot",
-                        "warnings",
-                    )
+                    "id": snap.id,
+                    "description": snap.description,
+                    "modality": snap.modality,
+                    "series_uid": snap.series_uid,
+                    "instance_count": snap.instance_count,
+                    "expected_instances": snap.expected_instances,
+                    "stable": snap.stable,
+                    "completeness": snap.completeness,
+                    "snapshot": snap.snapshot,
+                    "warnings": list(snap.warnings),
                 }
             )
         return {"study": summary, "series": series}
 
-    def snapshot(self, series_id):
+    def snapshot(self, series_id) -> SeriesSnapshot:
         series_id = orthanc_id(series_id)
         raw = _record(self._json("GET", f"/series/{series_id}", params={"requested-tags": "FrameOfReferenceUID"}))
         try:
@@ -271,15 +259,15 @@ class OrthancClient:
             if not isinstance(file_uuid, str) or not file_uuid or len(file_uuid) > 128:
                 raise OrthancError("Orthanc did not provide immutable DICOM file identities.")
             instances.append(
-                {
-                    "id": item_id,
-                    "sop_instance_uid": _uid(tags.get("SOPInstanceUID")),
-                    "sop_class_uid": _uid(tags.get("SOPClassUID")),
-                    "file_uuid": file_uuid,
-                    "size": _number(item.get("FileSize")),
-                }
+                ArchiveInstance(
+                    id=item_id,
+                    sop_instance_uid=_uid(tags.get("SOPInstanceUID")),
+                    sop_class_uid=_uid(tags.get("SOPClassUID")),
+                    file_uuid=file_uuid,
+                    size=_number(item.get("FileSize")),
+                )
             )
-        if {item["id"] for item in instances} != set(listed) or len({item["sop_instance_uid"] for item in instances}) != len(listed):
+        if {item.id for item in instances} != set(listed) or len({item.sop_instance_uid for item in instances}) != len(listed):
             raise OrthancChanged("The Orthanc series contains changed or duplicate instances. Refresh it before importing.")
         tags = _tags(raw)
         expected = _number(raw.get("ExpectedNumberOfInstances"), optional=True)
@@ -297,40 +285,43 @@ class OrthancClient:
             else "unknown"
         )
         warnings = [] if completeness == "complete" else ["An unchanged snapshot is not proof that the scanner sent the full acquisition."]
-        result = {
-            "id": series_id,
-            "source_key": self.source_key,
-            "series_id": series_id,
-            "series_uid": _uid(tags.get("SeriesInstanceUID")),
-            "study_id": parent,
-            "study_uid": study_summary["study_uid"],
-            "frame_of_reference_uid": _uid(tags.get("FrameOfReferenceUID"), optional=True),
-            "description": _text(tags.get("SeriesDescription")),
-            "modality": _text(tags.get("Modality")),
-            "instance_count": len(instances),
-            "expected_instances": expected,
-            "stable": stable,
-            "status": status,
-            "completeness": completeness,
-            "warnings": warnings,
-            "instances": sorted(instances, key=lambda item: item["id"]),
-        }
-        result["snapshot"] = snapshot_fingerprint(result)
-        return result
+        result = SeriesSnapshot(
+            id=series_id,
+            source_key=self.source_key,
+            series_id=series_id,
+            series_uid=_uid(tags.get("SeriesInstanceUID")),
+            study_id=parent,
+            study_uid=study_summary["study_uid"],
+            frame_of_reference_uid=_uid(tags.get("FrameOfReferenceUID"), optional=True),
+            description=_text(tags.get("SeriesDescription")),
+            modality=_text(tags.get("Modality")),
+            instance_count=len(instances),
+            expected_instances=expected,
+            stable=stable,
+            status=status,
+            completeness=completeness,
+            warnings=tuple(warnings),
+            instances=tuple(sorted(instances, key=lambda item: item.id)),
+            snapshot="0" * 64,
+        )
+        try:
+            return parse_snapshot(replace(result, snapshot=snapshot_fingerprint(result)))
+        except ValueError:
+            raise OrthancError("Orthanc returned invalid series metadata.") from None
 
-    def download(self, snapshot, destination, *, max_bytes, progress=None, cancelled=None):
-        if snapshot.get("source_key") != self.source_key or snapshot.get("snapshot") != snapshot_fingerprint(snapshot):
+    def download(self, snapshot: SeriesSnapshot, destination, *, max_bytes, progress=None, cancelled=None) -> DownloadManifest:
+        if snapshot.source_key != self.source_key or snapshot.snapshot != snapshot_fingerprint(snapshot):
             raise OrthancChanged("The selected Orthanc snapshot is no longer valid. Refresh it before importing.")
-        if snapshot.get("completeness") not in {"complete", "unknown"} or snapshot.get("stable") is not True:
+        if snapshot.completeness not in {"complete", "unknown"} or snapshot.stable is not True:
             raise OrthancChanged("The Orthanc series is still receiving or incomplete. Refresh it when the acquisition is finished.")
         if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
             raise ValueError("Invalid Orthanc import size limit")
-        if sum(item["size"] for item in snapshot["instances"]) > max_bytes:
+        if sum(item.size for item in snapshot.instances) > max_bytes:
             raise ValueError("Orthanc import exceeds size limit")
         if cancelled and cancelled():
             raise InterruptedError("Orthanc import cancelled")
-        current = self.snapshot(snapshot["series_id"])
-        if current["snapshot"] != snapshot["snapshot"] or current["stable"] is not True:
+        current = self.snapshot(snapshot.series_id)
+        if current.snapshot != snapshot.snapshot or current.stable is not True:
             raise OrthancChanged("The Orthanc series changed before transfer. Refresh it before importing.")
         destination = Path(destination)
         destination.mkdir(parents=True, exist_ok=True)
@@ -338,10 +329,10 @@ class OrthancClient:
             raise ValueError("Orthanc imports require an empty staging directory")
         total = 0
         files = []
-        for index, item in enumerate(snapshot["instances"]):
+        for index, item in enumerate(snapshot.instances):
             if cancelled and cancelled():
                 raise InterruptedError("Orthanc import cancelled")
-            resource_id = orthanc_id(item["id"])
+            resource_id = orthanc_id(item.id)
             response = self._request("GET", f"/instances/{resource_id}/file", headers={"Accept": "application/dicom"})
             path = destination / f"{index:06d}.dcm"
             digest = hashlib.sha256()
@@ -353,30 +344,23 @@ class OrthancClient:
                             raise InterruptedError("Orthanc import cancelled")
                         size += len(block)
                         total += len(block)
-                        if size > item["size"] or total > max_bytes:
+                        if size > item.size or total > max_bytes:
                             raise OrthancChanged("The Orthanc file changed size during transfer. Refresh before importing.")
                         output.write(block)
                         digest.update(block)
-                if size != item["size"]:
+                if size != item.size:
                     raise OrthancChanged("The Orthanc file transfer ended early. Retry the import.")
             except requests.RequestException:
                 raise OrthancError("The Orthanc DICOM transfer was interrupted. Retry the import.") from None
             finally:
                 response.close()
-            files.append(
-                {"instance_id": resource_id, "sop_instance_uid": item["sop_instance_uid"], "sha256": digest.hexdigest(), "size": size, "path": path.name}
-            )
+            files.append(DownloadedFile(instance_id=resource_id, sop_instance_uid=item.sop_instance_uid, sha256=digest.hexdigest(), size=size, path=path.name))
             if progress:
-                progress(index + 1, len(snapshot["instances"]), total)
+                progress(index + 1, len(snapshot.instances), total)
         if cancelled and cancelled():
             raise InterruptedError("Orthanc import cancelled")
-        current = self.snapshot(snapshot["series_id"])
-        if current["snapshot"] != snapshot["snapshot"] or current["stable"] is not True:
+        current = self.snapshot(snapshot.series_id)
+        if current.snapshot != snapshot.snapshot or current.stable is not True:
             raise OrthancChanged("The Orthanc series changed during transfer. Refresh it before importing.")
-        content = [{key: item[key] for key in ("sop_instance_uid", "sha256", "size")} for item in sorted(files, key=lambda item: item["sop_instance_uid"])]
-        return {
-            "snapshot": snapshot,
-            "files": files,
-            "bytes": total,
-            "content_digest": hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
-        }
+        files = tuple(files)
+        return DownloadManifest(snapshot=snapshot, files=files, bytes=total, content_digest=content_digest(files))

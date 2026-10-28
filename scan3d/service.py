@@ -74,6 +74,7 @@ class Service:
         self.worker_lock = None
         self.interactive_runtime = None
         self._reviews = None
+        self._orthanc = None
         self._lane_guard = threading.Lock()
         self._running_lanes = 0
         self._preparation_slots = None
@@ -90,6 +91,14 @@ class Service:
 
             self._reviews = ReviewManager(self)
         return self._reviews
+
+    @property
+    def orthanc(self):
+        if self._orthanc is None:
+            from .orthanc_imports import OrthancImports
+
+            self._orthanc = OrthancImports(self)
+        return self._orthanc
 
     def _interactive(self):
         if self.interactive_runtime is None:
@@ -122,6 +131,7 @@ class Service:
             return
         self.worker_lock = lock
         self.store.recover()
+        self.orthanc.recover()
         self.stop_event.clear()
         self._running_lanes = len(lanes)
         self.threads = {lane: threading.Thread(target=self._loop, args=(lane,), daemon=True, name=f"scan3d-{lane}-worker") for lane in lanes}
@@ -348,7 +358,10 @@ class Service:
 
     def execute(self, job):
         try:
-            if job["kind"] == "process":
+            if job["kind"] == "orthanc_import":
+                self.orthanc.run(job)
+                return
+            elif job["kind"] == "process":
                 revision = self._process(job)
             elif job["kind"] == "segment":
                 # Stop the warm review worker, returning its VRAM, only when
@@ -408,6 +421,11 @@ class Service:
         modality = series.get("modality", "CT")
         self.stage(job, f"Preparing {modality} for viewing; segmentation has not been requested")
         image_source = {key: series[key] for key in ("study_uid", "frame_of_reference_uid", "sop_class_uids") if key in series}
+        archive = case.get("import_source")
+        if archive and archive.get("series_uid") == series["uid"]:
+            image_source.update(
+                source_archive_key=archive["source_key"], source_content_sha256=archive["content_digest"], source_manifest_sha256=archive["manifest_sha256"]
+            )
         return self.build_ct_revision(
             case["id"],
             ct,

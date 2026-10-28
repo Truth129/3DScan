@@ -26,6 +26,7 @@ from .uploads import ImportConflict, Uploads
 from .portable_export import ExportRequest
 from .acquisition import CardiacPhase, StudyProfile
 from .domain import Modality, VolumeQuality
+from .orthanc import OrthancChanged, OrthancError
 
 
 class ViewerStaticFiles(StaticFiles):
@@ -90,6 +91,21 @@ class ImportPart(Input):
 
 
 import_manifest = TypeAdapter(list[ImportPart])
+
+
+class OrthancQuery(Input):
+    patient_id: str | None = Field(None, max_length=256)
+    patient_name: str | None = Field(None, max_length=256)
+    accession_number: str | None = Field(None, max_length=256)
+    study_date: str | None = Field(None, max_length=256)
+    offset: int = Field(0, ge=0, le=1_000_000)
+    limit: int = Field(25, ge=1, le=50)
+
+
+class OrthancImport(Input):
+    series_id: str = Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{8}){4}$")
+    snapshot: str = Field(pattern=r"^[0-9a-f]{64}$")
+    label: str | None = Field(None, max_length=128)
 
 
 class Process(Input):
@@ -302,17 +318,30 @@ def create_app(settings: Settings | None = None):
     async def import_conflict(request, exc):
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+    @app.exception_handler(OrthancChanged)
+    async def orthanc_changed(request, exc):
+        return JSONResponse(status_code=409, content={"detail": str(exc)}, headers={"Cache-Control": "no-store"})
+
+    @app.exception_handler(OrthancError)
+    async def orthanc_error(request, exc):
+        return JSONResponse(status_code=502, content={"detail": str(exc)}, headers={"Cache-Control": "no-store"})
+
     @app.middleware("http")
     async def same_origin(request: Request, call_next):
         # Local filesystem endpoints must not be callable by an unrelated browser origin.
+        private = request.url.path == "/api/totalsegmentator/license" or request.url.path.startswith("/api/orthanc/")
         origin = request.headers.get("origin")
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
             from urllib.parse import urlsplit
 
             if urlsplit(origin).netloc != request.headers.get("host"):
-                headers = {"Cache-Control": "no-store"} if request.url.path == "/api/totalsegmentator/license" else None
+                headers = {"Cache-Control": "no-store"} if private else None
                 return JSONResponse(status_code=403, content={"detail": "Cross-origin mutations are not allowed"}, headers=headers)
-        return await call_next(request)
+        response = await call_next(request)
+        if private:
+            # Archive queries and validation failures can contain study identity.
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/api/health")
     def health():
@@ -418,6 +447,24 @@ def create_app(settings: Settings | None = None):
     @app.post("/api/cases/import-local")
     def import_local(body: ImportLocal):
         return case_view(service.import_local(body.path, body.label))
+
+    @app.get("/api/orthanc/status")
+    def orthanc_status():
+        return JSONResponse(service.orthanc.status(), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/orthanc/studies/query")
+    def orthanc_studies(body: OrthancQuery):
+        names = {"patient_id": "PatientID", "patient_name": "PatientName", "accession_number": "AccessionNumber", "study_date": "StudyDate"}
+        query = {tag: value.strip() for name, tag in names.items() if (value := getattr(body, name)) and value.strip()}
+        return JSONResponse(service.orthanc.studies(query, body.offset, body.limit), headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/orthanc/studies/{study_id}/series")
+    def orthanc_series(study_id: str):
+        return JSONResponse(service.orthanc.series(study_id), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/orthanc/imports")
+    def orthanc_import(body: OrthancImport):
+        return JSONResponse(public_job(service.orthanc.start(body.series_id, body.snapshot, body.label)), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/cases/import")
     def import_files(files: list[UploadFile] = File(...), label: str | None = Form(None)):
@@ -570,6 +617,8 @@ def create_app(settings: Settings | None = None):
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel(job_id: str):
         job = service.store.get("jobs", job_id)
+        if job["kind"] == "orthanc_import":
+            return public_job(service.orthanc.cancel(job_id))
         if job["status"] in ("queued", "running"):
             changes = dict(cancel_requested=True)
             if job["status"] == "queued":

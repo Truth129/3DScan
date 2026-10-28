@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 
@@ -17,6 +17,9 @@ class Settings:
     upload_limit: int = 16 * 1024**3
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")
     modalities: tuple[str, ...] = MODALITIES
+    orthanc_url: str = field(default="", repr=False)
+    orthanc_username: str = field(default="", repr=False)
+    orthanc_password: str = field(default="", repr=False)
 
     @classmethod
     def from_env(cls):
@@ -26,8 +29,12 @@ class Settings:
         return cls(
             Path(os.environ.get("SCAN3D_DATA_DIR", ROOT / "data")).resolve(),
             tuple(Path(p).expanduser().resolve() for p in os.environ.get("SCAN3D_IMPORT_ROOTS", str(ROOT)).split(os.pathsep) if p),
+            web_dir=Path(os.environ.get("SCAN3D_WEB_DIR", ROOT / "web" / "dist")).expanduser().resolve(),
             allowed_hosts=tuple(p.strip() for p in os.environ.get("SCAN3D_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if p.strip()),
             modalities=modalities,
+            orthanc_url=os.environ.get("SCAN3D_ORTHANC_URL", "").strip(),
+            orthanc_username=os.environ.get("SCAN3D_ORTHANC_USERNAME", ""),
+            orthanc_password=os.environ.get("SCAN3D_ORTHANC_PASSWORD", ""),
         )
 
     def modality_unavailable(self, modality) -> str | None:
