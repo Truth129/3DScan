@@ -41,7 +41,7 @@ export function colorCss(color: string | number[]): string {
 export function initialDisplay(structures: Structure[]): StructureDisplay {
   return Object.fromEntries(structures.map(s => [s.id, { visible: true, opacity: defaultOpacity(s) }]));
 }
-export function setGroupVisibility(structures: Structure[], display: StructureDisplay, group: string, visible: boolean) {
+export function setGroupVisibility(structures: readonly Structure[], display: StructureDisplay, group: string, visible: boolean) {
   for (const structure of structures) {
     const state = display[structure.id];
     if (state && (structure.group || 'Anatomy') === group) state.visible = visible;

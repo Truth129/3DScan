@@ -4,7 +4,8 @@ import AnatomyPanel from './components/AnatomyPanel.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
 import { displayStructures, normalizeStructureColor, normalizeStructureColors, setStructureColor, resetStructureColor } from './lib/display-appearance';
 import ModelViewport from './components/ModelViewport.vue';
-import { colorCss, initialDisplay, prettyName, setGroupVisibility } from './lib/geometry';
+import { colorCss, initialDisplay, prettyName } from './lib/geometry';
+import { useStructureDisplay } from './lib/use-structure-display';
 import { imageContext, imagePresentation } from './lib/image-domain';
 import { validWindow, validLevel } from './lib/image-workspace';
 import { revisionUrl } from './lib/api';
@@ -23,12 +24,6 @@ function changeSegmentColor(color: string) {
 }
 function resetSegmentColor() {
   colorOverrides.value = resetStructureColor(colorOverrides.value, selected.value);
-}
-function allSegmentOpacity(value: number) {
-  if (Number.isFinite(value))
-    Object.values(display.value).forEach(item => {
-      item.opacity = Math.max(0, Math.min(1, value));
-    });
 }
 
 const layers = props.payload?.layers ?? { segmentation: true, ct_volume: false, ct_plane: false };
@@ -70,25 +65,7 @@ const preparation = computed(() =>
     ? `Preparing embedded ${progress.value.stage === 'ct' ? modality : 'masks'} · ${(progress.value.loadedBytes / 1024 ** 2).toFixed(1)} MB read`
     : `Embedded ${modality} · local GPU rendering`,
 );
-function solo(id: string) {
-  Object.entries(display.value).forEach(([key, value]) => {
-    value.visible = key === id;
-  });
-  selected.value = id;
-}
-function all() {
-  Object.values(display.value).forEach(value => {
-    value.visible = true;
-  });
-}
-function hideAll() {
-  Object.values(display.value).forEach(value => {
-    value.visible = false;
-  });
-}
-function groupVisibility(group: string, visible: boolean) {
-  setGroupVisibility(props.manifest.structures, display.value, group, visible);
-}
+const { visibility, groupVisibility, solo, showAll, hideAll, allSegmentOpacity } = useStructureDisplay(() => props.manifest.structures, display, selected);
 function toggleOverlay(id: string, enabled: boolean) {
   overlayIds.value = enabled ? [...new Set([...overlayIds.value, id])] : overlayIds.value.filter(value => value !== id);
 }
@@ -146,14 +123,10 @@ onBeforeUnmount(() => session.value?.dispose());
           :display="display"
           :selected="selected"
           @select="selected = $event"
-          @visibility="
-            (id, visible) => {
-              display[id].visible = visible;
-            }
-          "
+          @visibility="visibility"
           @group-visibility="groupVisibility"
           @solo="solo"
-          @all="all"
+          @all="showAll"
           @hide-all="hideAll"
         />
       </aside>

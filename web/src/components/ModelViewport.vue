@@ -22,7 +22,7 @@ import { colorCTOverlays, ctOverlayColor, type CTOverlaySelection } from '../lib
 import type { GPUOverlaySourceProvider, GPUOverlaySources, RenderCTSession } from '../lib/gpu-volume-data';
 import { sharedVolumeMemoryBudget, volumeMemoryRequest, type VolumeMemoryLease, type VolumeMemoryRequest } from '../lib/volume-memory-budget';
 import { nativeSliceMetadata, transformPoint } from '../lib/ct-reslice';
-import { api, revisionUrl } from '../lib/api';
+import { revisionUrl } from '../lib/api';
 import { moveNativeSlice, nativeSliceFor } from '../lib/interactive-review';
 import {
   ModelReviewFrames,
@@ -35,15 +35,10 @@ import {
 import { imagePresentation, type ImageContext, type ImageCapability } from '../lib/image-domain';
 import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
-import {
-  cinematicReferenceError,
-  CINEMATIC_HEART_PRESET,
-  MR_SIGNAL_PRESET,
-  DEFAULT_CINEMATIC_SETTINGS,
-  freshVolumeSettings,
-  type CTVolumeSettings,
-} from '../lib/volume-presets';
-import { CinematicReferenceGate, hasCinematicReferenceMasks } from '../lib/cinematic-reference';
+import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings } from '../lib/volume-presets';
+import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
+import { useCinematicReference } from '../lib/use-cinematic-reference';
+import { useExpandedViewport } from '../lib/use-expanded-viewport';
 import { cardiacCamera } from '../lib/cardiac-camera';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
@@ -133,11 +128,8 @@ const nativeMaskStatus = ref<VolumeMaskStatus>({ ready: false, loading: false, e
 let pendingVolumeCamera: CornerstoneVolumeCameraRAS | undefined;
 const viewport = ref<HTMLElement>(),
   expandButton = ref<HTMLButtonElement>();
-const viewportId = useId(),
-  expanded = ref(false);
-let expansionVersion = 0,
-  previousFocus: HTMLElement | undefined;
-let inertSiblings: { element: HTMLElement; inert: boolean }[] = [];
+const viewportId = useId();
+const { expanded, setExpanded } = useExpandedViewport(viewport, expandButton);
 const surface = ref<HTMLElement>();
 const reviewControls = ref<HTMLElement>();
 const reviewSceneTop = ref(140);
@@ -149,64 +141,6 @@ const orientation = ref<OrientationAxis[]>([]);
 const progress = ref<SurfaceProgress>();
 const hasModel = ref(false);
 const surfaceRevisionLoaded = ref('');
-// Resize the existing scene in place: reparenting or remounting its canvas would
-// discard the camera, CT textures and warm segmentation caches.
-async function setExpanded(value: boolean, restoreFocus = true) {
-  if (value === expanded.value) return;
-  const version = ++expansionVersion;
-  expanded.value = value;
-  if (value) {
-    previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    await nextTick();
-    if (!expanded.value || version !== expansionVersion || !viewport.value) return;
-    let branch = viewport.value;
-    while (branch.parentElement) {
-      const parent = branch.parentElement;
-      for (const sibling of parent.children) {
-        if (sibling === branch || !(sibling instanceof HTMLElement)) continue;
-        inertSiblings.push({ element: sibling, inert: sibling.inert });
-        sibling.inert = true;
-      }
-      if (parent === document.body) break;
-      branch = parent;
-    }
-    document.addEventListener('keydown', expandedKeyboard, true);
-    expandButton.value?.focus({ preventScroll: true });
-  } else {
-    document.removeEventListener('keydown', expandedKeyboard, true);
-    for (const { element, inert } of inertSiblings) element.inert = inert;
-    inertSiblings = [];
-    const focus = previousFocus;
-    previousFocus = undefined;
-    if (restoreFocus) {
-      await nextTick();
-      if (version === expansionVersion && focus?.isConnected) focus.focus({ preventScroll: true });
-    }
-  }
-}
-function expandedKeyboard(event: KeyboardEvent) {
-  if (event.isComposing) return;
-  if (event.key === 'Escape') {
-    event.preventDefault();
-    event.stopPropagation();
-    void setExpanded(false);
-    return;
-  }
-  if (event.key !== 'Tab' || !viewport.value) return;
-  const items = Array.from(viewport.value.querySelectorAll<HTMLElement>('button,input,select,textarea,a[href],summary,[tabindex]:not([tabindex="-1"])')).filter(
-    item => !item.matches(':disabled') && item.tabIndex >= 0 && !item.closest('[inert]') && item.getClientRects().length,
-  );
-  const first = items[0],
-    last = items.at(-1),
-    outside = !viewport.value.contains(document.activeElement);
-  if (event.shiftKey && (document.activeElement === first || outside)) {
-    event.preventDefault();
-    last?.focus();
-  } else if (!event.shiftKey && (document.activeElement === last || outside)) {
-    event.preventDefault();
-    first?.focus();
-  }
-}
 const reviewMode = ref<'surface' | 'plane'>('surface'),
   reviewPlane = ref<Plane>(props.initialSnapshot?.state.plane.plane ?? 'axial'),
   showPlane = ref(props.initialSnapshot?.layers.ct_plane ?? false);
@@ -237,18 +171,26 @@ const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? preferCornerst
   volumeSettings = shallowRef(freshVolumeSettings(props.initialSnapshot?.state.volume)),
   volumeError = ref(''),
   volumeFamilyReady = ref('');
-const referenceLoading = ref(false),
-  referenceMessage = ref(''),
-  referenceError = ref(false);
-let referenceController: AbortController | undefined;
-const automaticReference = new CinematicReferenceGate();
-const referenceKey = computed(() => (props.caseId && props.revisionId ? JSON.stringify([props.caseId, props.revisionId]) : ''));
 const referenceAvailable = computed(
   () => !signalVolume.value && !!props.caseId && !!props.revisionId && !props.initialSnapshot && !props.reviewActive && props.structures.length > 0,
 );
 const automaticReferenceAvailable = computed(
   () => referenceAvailable.value && !props.revisionId!.startsWith('review-') && hasCinematicReferenceMasks(props.maskStructures ?? props.structures),
 );
+const reference = useCinematicReference({
+  source: () => ({ caseId: props.caseId, revisionId: props.revisionId }),
+  settings: volumeSettings,
+  available: referenceAvailable,
+  changed: syncReview,
+});
+const {
+  key: referenceKey,
+  loading: referenceLoading,
+  message: referenceMessage,
+  error: referenceError,
+  measure: measureCinematicReference,
+  setSettings: setVolumeSettings,
+} = reference;
 const volumeMask = shallowRef(freshVolumeMaskSettings(props.initialSnapshot?.state.volume_mask)),
   maskFamilyReady = ref(''),
   maskError = ref(''),
@@ -913,60 +855,6 @@ function fallbackToCTPlane() {
   faceWhenReady = true;
   queueReviewPlane();
 }
-function cancelReference() {
-  referenceController?.abort();
-  referenceController = undefined;
-  referenceLoading.value = false;
-}
-function setVolumeSettings(settings: CTVolumeSettings) {
-  const manual =
-    settings.cinematic.myocardiumHU !== volumeSettings.value.cinematic.myocardiumHU || settings.cinematic.bloodHU !== volumeSettings.value.cinematic.bloodHU;
-  if (manual) automaticReference.edited(referenceKey.value);
-  const cancelled = referenceLoading.value;
-  cancelReference();
-  if (manual) {
-    referenceMessage.value = 'Using manually selected reference HU. Automatic measurement will not replace this pair.';
-    referenceError.value = false;
-  } else if (cancelled) {
-    referenceMessage.value =
-      'Reference measurement cancelled. The current HU pair is unchanged; use Measure from segments to retry, or enter both values manually.';
-    referenceError.value = false;
-  }
-  volumeSettings.value = freshVolumeSettings(settings);
-  syncReview();
-}
-async function measureCinematicReference(automatic = false) {
-  if (!referenceAvailable.value || volumeSettings.value.preset !== CINEMATIC_HEART_PRESET) return;
-  cancelReference();
-  const controller = new AbortController(),
-    caseId = props.caseId!,
-    revisionId = props.revisionId!;
-  referenceController = controller;
-  referenceLoading.value = true;
-  referenceMessage.value = automatic ? 'Measuring myocardium and blood-pool HU from this segmentation…' : '';
-  referenceError.value = false;
-  try {
-    const measured = await api.cinematicReference(caseId, revisionId, controller.signal);
-    if (controller.signal.aborted || disposed || caseId !== props.caseId || revisionId !== props.revisionId) return;
-    const invalid = cinematicReferenceError(measured.myocardium_hu, measured.blood_hu);
-    if (invalid) throw new Error(`${invalid} Set both reference values manually.`);
-    volumeSettings.value = freshVolumeSettings({
-      ...volumeSettings.value,
-      cinematic: { ...volumeSettings.value.cinematic, myocardiumHU: measured.myocardium_hu, bloodHU: measured.blood_hu },
-    });
-    referenceMessage.value = `Measured medians: myocardium ${measured.myocardium_hu.toFixed(1)} HU; ${measured.blood_source === 'aorta' ? 'aorta' : 'left heart'} ${measured.blood_hu.toFixed(1)} HU.`;
-    syncReview();
-  } catch (reason) {
-    if (controller.signal.aborted || disposed) return;
-    referenceError.value = true;
-    referenceMessage.value = `${reason instanceof Error ? reason.message : 'Reference measurement failed.'} The current reference HU pair is unchanged; enter both values manually or retry measurement.`;
-  } finally {
-    if (referenceController === controller) {
-      referenceController = undefined;
-      referenceLoading.value = false;
-    }
-  }
-}
 function setVolumeMask(settings: VolumeMaskSettings) {
   volumeMask.value = freshVolumeMaskSettings(settings, availableMaskStructures.value);
   maskError.value = '';
@@ -1286,7 +1174,7 @@ onBeforeUnmount(() => {
   emit('renderer', 'three');
   void setExpanded(false, false);
   disposed = true;
-  cancelReference();
+  reference.cancel();
   loadId++;
   planeLoadId++;
   gpuController?.abort();
@@ -1305,10 +1193,7 @@ watch(() => [props.manifestUrl, props.modelUrl, props.modelData], load);
 watch(
   () => [props.caseId, props.revisionId, ctOnly.value] as const,
   (current, previous) => {
-    automaticReference.select(referenceKey.value);
-    cancelReference();
-    referenceMessage.value = '';
-    referenceError.value = false;
+    reference.selectSource();
     if (!props.initialSnapshot && previous && current[0] !== previous[0]) {
       volumeMask.value = freshVolumeMaskSettings({ ...volumeMask.value, margin_mm: 0 }, availableMaskStructures.value);
     }
@@ -1330,9 +1215,9 @@ watch(
 );
 watch(
   () => [referenceKey.value, volumeSettings.value.preset, showVolume.value, automaticReferenceAvailable.value] as const,
-  ([key, preset, visible, available]) => {
+  ([_key, preset, visible, available]) => {
     if (preset !== CINEMATIC_HEART_PRESET || !visible || props.initialSnapshot || props.reviewActive) return;
-    if (available && automaticReference.claim(key)) {
+    if (available && reference.claimAutomatic()) {
       void measureCinematicReference(true);
       return;
     }

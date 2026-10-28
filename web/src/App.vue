@@ -26,7 +26,8 @@ import SeriesPicker from './components/SeriesPicker.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
 import { api, request, revisionUrl } from './lib/api';
-import { colorCss, initialDisplay, prettyName, setGroupVisibility } from './lib/geometry';
+import { colorCss, initialDisplay, prettyName } from './lib/geometry';
+import { useStructureDisplay } from './lib/use-structure-display';
 import {
   preparedImageChoices,
   sameImageSource,
@@ -127,12 +128,7 @@ function resetSegmentColor() {
   colorOverrides.value = resetStructureColor(colorOverrides.value, selected.value);
   flushColorPreferences();
 }
-function allSegmentOpacity(value: number) {
-  if (Number.isFinite(value))
-    Object.values(display.value).forEach(item => {
-      item.opacity = Math.max(0, Math.min(1, value));
-    });
-}
+
 function readOverlayOpacity() {
   try {
     const raw = localStorage.getItem('scan3d-2d-overlay-opacity-v1'),
@@ -1007,28 +1003,11 @@ function followCTSelection() {
   ctFollowing.value = true;
   ctPinned.value = [];
 }
-function visibility(id: string, visible: boolean) {
-  if (display.value[id]) display.value[id].visible = visible;
-}
-function groupVisibility(group: string, visible: boolean) {
-  setGroupVisibility(shownRevision.value?.structures || [], display.value, group, visible);
-}
-function solo(id: string) {
-  Object.entries(display.value).forEach(([key, state]) => {
-    state.visible = key === id;
-  });
-  selected.value = id;
-}
-function showAll() {
-  Object.values(display.value).forEach(state => {
-    state.visible = true;
-  });
-}
-function hideAll() {
-  Object.values(display.value).forEach(state => {
-    state.visible = false;
-  });
-}
+const { visibility, groupVisibility, solo, showAll, hideAll, allSegmentOpacity } = useStructureDisplay(
+  () => shownRevision.value?.structures ?? [],
+  display,
+  selected,
+);
 function changeSummary(item: Revision) {
   const op = item.operation;
   if (op && Array.isArray(op.affected_structures)) {
