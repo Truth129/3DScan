@@ -108,7 +108,9 @@ onBeforeUnmount(() => {
 <template>
   <div class="dialog-backdrop" @click.self="close" @keydown.esc="close">
     <section class="import-dialog" :class="{ 'orthanc-import': source === 'orthanc' }" role="dialog" aria-modal="true" aria-labelledby="import-title">
-      <header><span class="eyebrow">NEW CASE</span><button class="icon-button" aria-label="Close import" :disabled="locked" @click="close">×</button></header>
+      <header>
+        <span class="eyebrow">NEW CASE</span><button type="button" class="icon-button" aria-label="Close import" :disabled="locked" @click="close">×</button>
+      </header>
       <h2 id="import-title">Start with an imaging study.</h2>
       <p class="muted">
         Import DICOM files or choose a series from Orthanc. Select a CT reconstruction{{ mrEnabled ? ' or static 3D MR sequence' : '' }} before processing.
@@ -116,6 +118,7 @@ onBeforeUnmount(() => {
       <div class="import-source-tabs" role="group" aria-label="Import source">
         <button
           class="button secondary"
+          type="button"
           :class="{ selected: source === 'files' }"
           :aria-pressed="source === 'files'"
           :disabled="locked"
@@ -125,6 +128,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="button secondary"
+          type="button"
           :class="{ selected: source === 'orthanc' }"
           :aria-pressed="source === 'orthanc'"
           :disabled="locked"
@@ -147,8 +151,8 @@ onBeforeUnmount(() => {
           <strong>{{ files.length ? `${fileCount(files.length)} selected` : 'Your source images belong here' }}</strong>
           <span>{{ files.length ? `${size} MB · ready to import` : 'Drop a ZIP or DICOM files, or browse a folder' }}</span>
           <div class="button-row">
-            <button class="button" :disabled="locked" @click="folder?.click()">Choose folder</button
-            ><button class="button secondary" :disabled="locked" @click="archive?.click()">Choose ZIP / files</button>
+            <button type="button" class="button" :disabled="locked" @click="folder?.click()">Choose folder</button
+            ><button type="button" class="button secondary" :disabled="locked" @click="archive?.click()">Choose ZIP / files</button>
           </div>
           <input ref="folder" type="file" webkitdirectory multiple hidden @change="select" /><input
             ref="archive"
@@ -177,9 +181,9 @@ onBeforeUnmount(() => {
         </div>
         <p v-if="message" class="import-message" :class="{ error: message.error }" :role="message.error ? 'alert' : 'status'">{{ message.text }}</p>
         <footer>
-          <button v-if="progress && progress.phase !== 'indexing'" class="text-button" @click="cancel">Cancel upload</button>
-          <button v-else class="text-button" :disabled="locked" @click="emit('demo')">Explore synthetic demo ↗</button>
-          <button class="button primary" :disabled="!files.length || locked" @click="start">
+          <button type="button" v-if="progress && progress.phase !== 'indexing'" class="text-button" @click="cancel">Cancel upload</button>
+          <button type="button" v-else class="text-button" :disabled="locked" @click="emit('demo')">Explore synthetic demo ↗</button>
+          <button type="button" class="button primary" :disabled="!files.length || locked" @click="start">
             <span v-if="locked" class="spinner"></span
             >{{ progress ? (progress.phase === 'indexing' ? 'Checking series…' : 'Uploading…') : busy ? 'Importing…' : 'Import scan →' }}
           </button>

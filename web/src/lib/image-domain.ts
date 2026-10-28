@@ -6,6 +6,9 @@ export interface ImageSource {
   study_uid?: string | null;
   frame_of_reference_uid?: string | null;
   sop_class_uids?: string[] | null;
+  source_archive_key?: string;
+  source_content_sha256?: string;
+  source_manifest_sha256?: string;
 }
 export interface ImageScalar {
   dtype: string;

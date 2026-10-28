@@ -261,12 +261,12 @@ onBeforeUnmount(() => {
             : 'Check the archive connection, then try again.'
         }}
       </p>
-      <button class="button secondary" :disabled="locked" @click="connect">Retry connection</button>
+      <button type="button" class="button secondary" :disabled="locked" @click="connect">Retry connection</button>
     </div>
     <template v-else>
       <div class="archive-heading">
         <strong>{{ status.name || 'Orthanc archive' }}</strong
-        ><button class="text-button" :disabled="locked || searchLoading" @click="connect">Refresh connection</button>
+        ><button type="button" class="text-button" :disabled="locked || searchLoading" @click="connect">Refresh connection</button>
       </div>
       <form class="archive-search" @submit.prevent="search()">
         <label class="field">Patient ID<input v-model="patientId" aria-label="Orthanc patient ID" :disabled="locked" maxlength="128" /></label>
@@ -277,12 +277,13 @@ onBeforeUnmount(() => {
       </form>
       <p v-if="searchLoading" class="archive-message" role="status">Loading studies…</p>
       <p v-if="searchError" class="archive-message error" role="alert">
-        {{ searchError }} <button class="text-button" :disabled="locked" @click="search(0, false)">Retry search</button>
+        {{ searchError }} <button type="button" class="text-button" :disabled="locked" @click="search(0, false)">Retry search</button>
       </p>
       <div v-if="page" class="archive-results">
         <p v-if="!page.studies.length" class="archive-message" role="status">No matching studies. Try a different search.</p>
         <div v-else class="study-list" role="group" aria-label="Orthanc studies">
           <button
+            type="button"
             v-for="item in page.studies"
             :key="item.id"
             class="study-entry"
@@ -305,15 +306,22 @@ onBeforeUnmount(() => {
         </div>
         <div class="archive-pagination">
           <span>{{ page.studies.length ? `${page.offset + 1}–${page.offset + page.studies.length}` : '0' }} studies</span
-          ><button class="text-button" :disabled="locked || searchLoading || page.offset === 0" @click="search(Math.max(0, page.offset - limit), false)">
+          ><button
+            type="button"
+            class="text-button"
+            :disabled="locked || searchLoading || page.offset === 0"
+            @click="search(Math.max(0, page.offset - limit), false)"
+          >
             Previous</button
-          ><button class="text-button" :disabled="locked || searchLoading || !page.has_more" @click="search(page.offset + limit, false)">Next</button>
+          ><button type="button" class="text-button" :disabled="locked || searchLoading || !page.has_more" @click="search(page.offset + limit, false)">
+            Next
+          </button>
         </div>
       </div>
       <section v-if="study" class="archive-series" aria-label="Orthanc series">
         <header>
           <h3>Choose a reconstruction</h3>
-          <button class="text-button" :disabled="locked || seriesLoading" @click="chooseStudy(study!)">Refresh series</button>
+          <button type="button" class="text-button" :disabled="locked || seriesLoading" @click="chooseStudy(study!)">Refresh series</button>
         </header>
         <p v-if="seriesLoading" class="archive-message" role="status">Checking available series…</p>
         <p v-else-if="seriesError" class="archive-message error" role="alert">{{ seriesError }}</p>
@@ -349,13 +357,15 @@ onBeforeUnmount(() => {
     </p>
     <div v-if="previousJob && !importJob" class="archive-message">
       <p>An earlier archive import can be checked.</p>
-      <button class="button secondary" :disabled="locked" @click="resume">Check previous import</button>
+      <button type="button" class="button secondary" :disabled="locked" @click="resume">Check previous import</button>
     </div>
     <footer>
-      <button v-if="pending" class="text-button" :disabled="cancelLoading" @click="cancel">{{ cancelLoading ? 'Cancelling…' : 'Cancel import' }}</button>
+      <button type="button" v-if="pending" class="text-button" :disabled="cancelLoading" @click="cancel">
+        {{ cancelLoading ? 'Cancelling…' : 'Cancel import' }}
+      </button>
       <span v-else class="archive-identifier">Archive source stays unchanged.</span>
-      <button v-if="pending && !importLoading" class="button secondary" :disabled="locked" @click="resume">Resume import status</button>
-      <button v-else class="button primary" :disabled="!canImport" @click="start">
+      <button type="button" v-if="pending && !importLoading" class="button secondary" :disabled="locked" @click="resume">Resume import status</button>
+      <button type="button" v-else class="button primary" :disabled="!canImport" @click="start">
         <span v-if="importLoading" class="spinner"></span>{{ importLoading ? 'Importing series…' : 'Import selected series →' }}
       </button>
     </footer>
