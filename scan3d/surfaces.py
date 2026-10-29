@@ -16,6 +16,7 @@ import zipfile
 
 import numpy as np
 
+from .compressed_files import cached_gzip
 from .fileio import atomic_destination as _atomic_destination, hash_file as hash_file
 from .imaging import _binary, _foreground_bounds
 from .surface_glb import (
@@ -383,15 +384,18 @@ def prepare_surface(structure, cache_dir: Path, detailed=False, progress=None, d
                 temporary.write_bytes(b"")
             result["path"] = None
         else:
-            _write_model([(structure, arrays)], asset_path, detailed)
+            _write_model([(structure, arrays)], asset_path, detailed, precompress=not detailed)
             result["triangles"] = len(arrays[2])
         _record_cache(asset_path, triangles=result["triangles"])
         timings["package"] += time.perf_counter() - started
     return result
 
 
-def _write_model(structure_arrays, output_path: Path, detailed: bool = False) -> dict:
-    return write_model(structure_arrays, output_path, detailed, display_simplification=_display_simplification())
+def _write_model(structure_arrays, output_path: Path, detailed: bool = False, *, precompress=True) -> dict:
+    report = write_model(structure_arrays, output_path, detailed, display_simplification=_display_simplification())
+    if precompress:
+        cached_gzip(output_path)
+    return report
 
 
 def import_display_assets(structures, model_path: Path, cache_dir: Path, expected_simplification: dict, progress=None) -> dict:

@@ -300,7 +300,8 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    - per-structure review status for the agreement metrics
    - frontend restructuring: stores, a router, typed API models
 4. **Smaller follow-ups:**
-   - precompress GLBs instead of gzipping per request
+   - GLB precompression is prepared and synthetically qualified; applying it to
+     the live checkout and restarting awaits approval (see newest validation)
    - warm the agreement cache when a revision is committed
    - age review priority so segmentations cannot starve
    - finish 768 px workspace sizing outside the native 3D pane

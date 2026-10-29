@@ -502,6 +502,8 @@ Source hashes record the exact processing code and downloaded model checkpoints.
   use glTF metres; API coordinates and measurements use millimetres/millilitres.
   Display meshes are quantized (KHR_mesh_quantization, within 0.03 mm) to halve
   transfer size; detailed exports remain float32. Masks stay authoritative.
+  GLB downloads reuse precompressed gzip files when accepted by the client;
+  original bytes remain available for raw downloads and byte ranges.
 - Cornerstone3D/vtk.js shares the CT source, GPU texture and context between
   native MPR and 3D. A local worker supplies preview and exact slice navigation;
   warm navigation and windowing need no workstation requests. Three.js remains

@@ -42,20 +42,22 @@ class ViewerStaticFiles(StaticFiles):
 class SelectiveGZip:
     """Compress JSON and viewer assets for remote clients; leave downloads alone.
 
-    Pre-gzipped CT chunks and review frames declare Content-Encoding and pass
-    through unchanged. Slicer ZIPs are already compressed, and HTML exports keep
+    GLB routes negotiate cached gzip files themselves. Pre-gzipped CT chunks and
+    review frames declare Content-Encoding and pass through unchanged.
+    Slicer ZIPs are already compressed, and HTML exports keep
     Content-Length so browsers can show download progress.
     Level 5 is within 0.5% of level 9's size on the viewer bundles at half the CPU.
     """
 
     _skip = re.compile(r"/(?:slicer\.zip|export\.html)$")
+    _glb = re.compile(r"^/api/cases/[^/]+/revisions/[^/]+/(?:model\.glb|surfaces/[^/]+\.glb)$")
 
     def __init__(self, app):
         self.app = app
         self.gzip = GZipMiddleware(app, minimum_size=1024, compresslevel=5)
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http" and not self._skip.search(scope["path"]):
+        if scope["type"] == "http" and not (self._skip.search(scope["path"]) or self._glb.fullmatch(scope["path"])):
             await self.gzip(scope, receive, send)
         else:
             await self.app(scope, receive, send)

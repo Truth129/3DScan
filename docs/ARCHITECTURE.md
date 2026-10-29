@@ -190,6 +190,14 @@ Native reference images and masks remain authoritative for editing and
 measurements. GLB meshes and the bounded 3D mask union are derived presentation
 artifacts. Their simplification never changes mask-derived volumes.
 
+GLB packaging also prepares deterministic streaming gzip siblings. The API
+negotiates the compressed or original representation without recompressing each
+response; old assets fill this cache on their first gzip request. Atomic writes,
+per-file locks and source/output stat identities reject incomplete or stale
+cache entries. Compression IO failures permit raw downloads. Byte ranges keep
+raw offsets, and ETags identify the selected representation. This transport
+cache changes neither mesh identity nor mask-derived measurements.
+
 ## Incoming Orthanc boundary
 
 Source preparation uses pydicom for DICOM metadata, dcm2niix for conversion and
@@ -351,7 +359,7 @@ reusable after cancellation or restart.
 - [nnInteractive engine](../scan3d/interactive.py) and its [supervised worker process](../scan3d/interactive_worker.py).
 - [DICOM preparation](../scan3d/dicom.py), [inference](../scan3d/segmentation.py), [native operations and measurements](../scan3d/imaging.py).
 - [Read-only Orthanc REST transport](../scan3d/orthanc.py), [validated immutable archive records](../scan3d/orthanc_models.py), [snapshot import and recovery](../scan3d/orthanc_imports.py), [source-bound DICOM SEG encoding](../scan3d/dicom_seg.py) and [delivery](../scan3d/orthanc_exports.py), [receiver operation](ORTHANC.md).
-- [CPU contouring and surface caches](../scan3d/surfaces.py), [GLB encoding and decoding](../scan3d/surface_glb.py), [bounded hashing, archive extraction and atomic artifact publication](../scan3d/fileio.py).
+- [CPU contouring and surface caches](../scan3d/surfaces.py), [GLB encoding and decoding](../scan3d/surface_glb.py), [reusable gzip transport files](../scan3d/compressed_files.py), [bounded hashing, archive extraction and atomic artifact publication](../scan3d/fileio.py).
 - [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display union](../scan3d/volume_mask_union.py).
 - [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone stack adapter](../web/src/lib/cornerstone-runtime.ts), [native MPR](../web/src/lib/cornerstone-mpr.ts), [shared memory budget](../web/src/lib/volume-memory-budget.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).
 - [Portable export](../scan3d/portable_export.py), [embedded offline data](../web/src/lib/portable-viewer.ts), [MRI expansion boundaries](./EXPANSION_FOUNDATION.md).

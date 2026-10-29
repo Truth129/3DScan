@@ -1,6 +1,8 @@
 """Viewer data: surfaces, chunked CT and mask volumes, review frames, probes and exports."""
 
 from collections import OrderedDict
+from email.utils import parsedate
+import hashlib
 import json
 from pathlib import Path
 import threading
@@ -8,6 +10,7 @@ import threading
 from fastapi import HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from .compressed_files import cached_gzip
 from .domain import VolumeQuality
 from .errors import NotFound
 from .portable_export import ExportRequest
@@ -64,16 +67,69 @@ def slice_file_key(filename):
     return (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
+def _encoding_preferences(value):
+    qualities = {}
+    for item in value.split(","):
+        encoding, *parameters = item.strip().lower().split(";")
+        quality = 1.0
+        for parameter in parameters:
+            name, _, weight = parameter.strip().partition("=")
+            if name.strip() == "q":
+                try:
+                    quality = float(weight)
+                except ValueError:
+                    quality = 0.0
+                if not 0 <= quality <= 1:
+                    quality = 0.0
+        qualities[encoding.strip()] = quality
+    gzip = qualities.get("gzip", qualities.get("*", 0))
+    identity = qualities.get("identity", 0 if qualities.get("*") == 0 else 1)
+    # An implicit identity preference does not defeat an explicitly requested
+    # coding; an explicit higher identity weight does.
+    return gzip > 0 and gzip >= qualities.get("identity", 0), identity > 0
+
+
+def _glb_response(target, request, cache_control=None):
+    headers = {"Vary": "Accept-Encoding"}
+    if cache_control:
+        headers["Cache-Control"] = cache_control
+    gzip, identity = _encoding_preferences(request.headers.get("accept-encoding", ""))
+    selected = Path(target)
+    encoding = "identity"
+    # Keep byte ranges in the original downloadable GLB representation.
+    if gzip and "range" not in request.headers:
+        compressed = cached_gzip(selected)
+        if compressed is not None:
+            selected, encoding = compressed, "gzip"
+            headers["Content-Encoding"] = encoding
+    if encoding == "identity" and not identity:
+        raise HTTPException(406, "No acceptable GLB encoding is available", headers=headers)
+    stat = selected.stat()
+    signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, encoding)
+    headers["ETag"] = '"' + hashlib.sha256(repr(signature).encode()).hexdigest() + '"'
+    response = FileResponse(selected, media_type="model/gltf-binary", headers=headers, stat_result=stat)
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match is not None:
+        not_modified = any(tag.strip().removeprefix("W/") in ("*", headers["ETag"]) for tag in if_none_match.split(","))
+    else:
+        since = parsedate(request.headers.get("if-modified-since", ""))
+        modified = parsedate(response.headers["last-modified"])
+        not_modified = since is not None and modified is not None and since >= modified
+    if not_modified:
+        return Response(status_code=304, headers={**headers, "Last-Modified": response.headers["last-modified"]})
+    return response
+
+
 def add_routes(app, service):
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/model.glb")
-    def model(case_id: str, revision_id: str, detail: bool = False):
+    def model(case_id: str, revision_id: str, request: Request, detail: bool = False):
         if revision_id.startswith("review-"):
             raise NotFound("Candidate models are available through their surface manifest")
         revision = service.store.revision(case_id, revision_id)
         if not revision["structures"]:
             raise ValueError("This image has no segmentation surfaces yet")
         target = service.ensure_detailed(case_id, revision_id) if detail else Path(revision["directory"]) / "model.glb"
-        return FileResponse(target, media_type="model/gltf-binary")
+        return _glb_response(target, request)
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/model-manifest")
     def model_manifest(case_id: str, revision_id: str):
@@ -88,7 +144,7 @@ def add_routes(app, service):
         return JSONResponse(result, headers={"Cache-Control": "private, no-store"}) if revision_id.startswith("review-") else result
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/surfaces/{key}.glb")
-    def surface(case_id: str, revision_id: str, key: str):
+    def surface(case_id: str, revision_id: str, key: str, request: Request):
         from .surfaces import surface_asset_path
 
         revision = service.ct_revision(case_id, revision_id)
@@ -97,7 +153,7 @@ def add_routes(app, service):
         target = surface_asset_path(service.surface_cache, key)
         if not target.is_file():
             raise HTTPException(503, "Cached surface is unavailable; regenerate the model")
-        return FileResponse(target, media_type="model/gltf-binary", headers={"Cache-Control": "private, max-age=31536000, immutable"})
+        return _glb_response(target, request, "private, max-age=31536000, immutable")
 
     review_cache = service.settings.data_dir / "review-cache"
 
