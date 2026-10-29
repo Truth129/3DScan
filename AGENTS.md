@@ -301,6 +301,12 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    The C-MOVE workflow was recommended, but the Mac's selected retrieval mode
    is unconfirmed. C-GET would need peer-specific AllowGet if selected.
 3. **Decisions waiting on the user:**
+   - optional native OsiriX ROI export: the user requested it; an unqualified
+     synthetic archive prototype passes exact readback. With explicit approval,
+     12 synthetic CTs + one two-mask SEG were sent successfully to the Mac.
+     Save/return of native ROIs is pending for synthetic patient
+     `SCAN3D-SEG-7363b7af`; do not expose the production option before MD 14.3
+     qualification. Audit: `.runtime/validation/osirix-native-roi-reference-20261029T062846Z/`
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification
    - per-structure review status for the agreement metrics

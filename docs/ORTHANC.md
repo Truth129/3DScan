@@ -309,6 +309,28 @@ receive/display compatibility; exact alignment, editing/resave and RTSTRUCT
 fallback remain separate qualification. Audit and synthetic fixtures:
 `.runtime/validation/osirix-seg-return-20261028T133800Z/`.
 
+## Native OsiriX ROI export investigation
+
+The user requested a second export option for native OsiriX brush ROIs. The
+existing user-verified DICOM SEG path remains active. Native ROI SR export is
+not implemented in the app: a synthetic-only named-key archive prototype has
+exact mask readback, but MD 14.3's interpretation and save/reload are unqualified.
+
+With explicit approval on 29 October, sent a fresh 12-image synthetic CT and
+one two-mask SEG from the separate 8043 archive. Both transfers succeeded with
+zero failed instances; no experimental native archives were sent. Look for
+`SYNTHETIC^SEGRETURN`, patient ID `SCAN3D-SEG-7363b7af`. The expected ROIs are a
+red **Synthetic ring** with a hole and cyan **Synthetic block**, overlapping on
+the ring's right side.
+
+The next qualification step is to save those ROIs in OsiriX and send the whole
+synthetic study back to the existing `SCAN3D` destination, including native ROI
+SR objects. Preserve the synthetic identities and geometry so the returned
+brushes can be matched to the known masks. Inspect only that returned synthetic
+study; receiving it does not authorize broader clinical archive inspection.
+Audit and retained synthetic sources/truth:
+`.runtime/validation/osirix-native-roi-reference-20261029T062846Z/`.
+
 ## Synthetic development archive
 
 The development archive is a separate local Orthanc 1.13.0 process at
