@@ -323,11 +323,27 @@ zero failed instances; no experimental native archives were sent. Look for
 red **Synthetic ring** with a hole and cyan **Synthetic block**, overlapping on
 the ring's right side.
 
-The next qualification step is to save those ROIs in OsiriX and send the whole
-synthetic study back to the existing `SCAN3D` destination, including native ROI
-SR objects. Preserve the synthetic identities and geometry so the returned
-brushes can be matched to the known masks. Inspect only that returned synthetic
-study; receiving it does not authorize broader clinical archive inspection.
+The user saved and returned the native ROIs. Ten verified synthetic SR files
+contain 16 brush objects / 15 unique per-image ROIs: one source slice has a
+byte-identical duplicate archive under another report SOP. All reconstructed
+masks match the known source masks exactly, including the ring's hole and 529
+overlapping voxels. Source references, spacing, crop offsets and origins pass.
+The next gate is an app-produced native writer's synthetic OsiriX import,
+display and save round trip. Inspect only the returned synthetic study;
+receiving it does not authorize broader clinical archive inspection.
+
+The verified MD 14.3 reference uses `NSKeyedArchiver` in a binary plist, with
+type-20 brush ROIs. `textureBuffer` holds a one-byte zero placeholder and
+`textureWidth`/`textureHeight` are 1; the real crop dimensions are in
+`textureWidthCompressed`/`textureHeightCompressed`. The
+`textureBufferCompressedSize` field is the decoded byte count, equal to their
+product. `textureBufferCompressed` uses documented
+[Apple LZ4 framing](https://developer.apple.com/documentation/compression/compression_lz4)
+and decodes to row-major 0/255 mask bytes. Crop corners are inclusive. Source
+SOP references, rather than the ROI's unset `zLocation`, identify the image
+plane. The reference's `imageOrigin` matches source LPS x/y for this fixture;
+that observation alone is not a general geometry qualification.
+
 Audit and retained synthetic sources/truth:
 `.runtime/validation/osirix-native-roi-reference-20261029T062846Z/`.
 
