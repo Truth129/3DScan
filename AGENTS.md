@@ -40,11 +40,11 @@ Read before changing anything:
   using the R9700 GPU, pushing, or anything outward-facing. Run test servers on other
   ports (9011, 9031–9034 were used) against temporary data.
 - **Production is CT-only:** `production-env.sh` sets `SCAN3D_MODALITIES=CT`. MRI is
-  implemented on `expansion` but stays off in production until the user qualifies it.
+  implemented in the checkout but stays off in production until the user qualifies it.
 - **Never delete user data.** To remove it, move it to `.runtime/archive/` (git-ignored)
   and let the user delete the archive.
-- **Git:** commit locally in focused commits on `expansion`. Ask before pushing, and never
-  force-push.
+- **Git:** work on `master` and commit locally in focused commits. Ask before pushing,
+  and never force-push.
 
 ## Commands
 
@@ -116,15 +116,18 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 
 ## Agent notes
 
-- Claude Code subagent worktrees have started from `master` instead of the current
-  branch. Check `git merge-base HEAD expansion` and reset onto the intended commit before
-  working.
+- Subagent worktrees have previously started from the wrong base. Verify the
+  checkout's branch and intended base (`git status --short --branch` and
+  `git merge-base HEAD master`) before working. New work should start from the
+  current `master` commit unless the user specifies another base.
 - `/tmp` is RAM-backed on this workstation. Delete large scratch builds and venvs when
   done.
 
-## State on 28 October 2026
+## Current state (updated 29 October 2026)
 
-- **Branch:** `expansion`; the Cornerstone phase 1/2 changes are local and unpushed.
+- **Branch:** `master`, at the user's request on 29 October 2026, after
+  fast-forwarding it to `expansion` and switching this checkout. Continue new work
+  on `master`; existing local work remains unpushed.
   The earlier CI baseline is green on Python 3.14 and the web job.
 - **Live code:** development checkout, initially activated from `09ff189`, CT-only.
   The frontend now serves native Cornerstone3D/vtk.js with bounded masking and
@@ -146,6 +149,17 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
   Both lanes, CT-only health and all 67 served frontend files pass; aggregate
   record counts are unchanged. Orthanc PID436143 is unchanged. Audit and prior
   backend source: `.runtime/glb-precompression-20261029T060018Z/`.
+- **Native OsiriX ROIs, 29 October 2026:** the standalone native brush writer
+  (`fa96757`, confirmation `b39f5b0`) passes synthetic import/display on OsiriX
+  MD 14.3: the user confirms "Yes, it works". Sent only 12 synthetic CTs and
+  9 native ROI SRs containing 15 brushes, with zero C-STORE failures and no SEG.
+  Patient `SYNTHETIC^NATIVEROI`, ID `SCAN3D-NROI-ebc4b232`; independent readback
+  preserves both masks exactly, including the hole and 529 overlapping voxels.
+  1,215 backend tests pass (1 skipped), with Ruff lint/format checks. Audit:
+  `.runtime/validation/osirix-native-roi-writer-20261029T065107Z/`.
+  App API/UI integration is deferred at the user's request. Editing/save/reload,
+  exact receiver re-export and other source geometries still need qualification;
+  synthetic display success does not qualify clinical use.
 - **Library:** the user has added cases since the 27 October reset; preserve them.
   The library archived at that reset is at
   `.runtime/archive/data-20261027T143742Z`, waiting for the user to delete it.
@@ -301,15 +315,12 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    The C-MOVE workflow was recommended, but the Mac's selected retrieval mode
    is unconfirmed. C-GET would need peer-specific AllowGet if selected.
 3. **Decisions waiting on the user:**
-   - optional native OsiriX ROI export: the user requested it; an unqualified
-     synthetic archive prototype passes exact readback. With explicit approval,
-     12 synthetic CTs + one two-mask SEG were sent successfully to the Mac.
-     The user returned native ROIs for synthetic patient `SCAN3D-SEG-7363b7af`:
-     10 SRs / 16 brushes / 15 unique per-image ROIs decode exactly, preserving
-     the hole and 529 overlapping voxels. Named-key plist / Apple LZ4 framing,
-     source links, spacing and crop bounds are verified. An app-produced native
-     writer still needs synthetic MD 14.3 import/display/save qualification
-     before exposing the option. Audit:
+   - optional native OsiriX ROI export: the standalone writer's synthetic
+     import/display is user-confirmed (see current state above). The user deferred
+     app export-menu integration; resume it when requested, with the remaining
+     editing/save/reload and geometry qualification. The earlier returned native
+     reference also decodes exactly: 10 SRs / 16 brushes / 15 unique per-image
+     ROIs. Reference audit:
      `.runtime/validation/osirix-native-roi-reference-20261029T062846Z/`
    - sign-in and an audit trail, needed before a second user
    - DICOM SR export and further export/viewer qualification
