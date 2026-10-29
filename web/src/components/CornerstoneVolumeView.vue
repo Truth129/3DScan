@@ -10,6 +10,7 @@ import { VTKReviewPlane } from '../lib/vtk-review-plane';
 import { VTKCTPlane, type VTKCTPlaneState } from '../lib/vtk-ct-plane';
 import { VTKSurfaceScene } from '../lib/vtk-surface-scene';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
+import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib/volume-lighting';
 import type { CTVolumeSettings } from '../lib/volume-presets';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
@@ -18,6 +19,7 @@ const props = defineProps<{
   session?: RenderCTSession;
   sourceKey?: string;
   settings: CTVolumeSettings;
+  lighting?: NativeVolumeLightingSettings;
   camera?: CornerstoneVolumeCameraRAS;
   volumeVisible?: boolean;
   segmentationVisible?: boolean;
@@ -66,6 +68,7 @@ const localMasks = new VolumeMaskSources();
 let maskController: AbortController | undefined,
   maskGeneration = 0;
 let reserveMask: ((bytes: number) => void) | undefined, reserveMaskTransport: ((bytes: number) => void) | undefined;
+let retainedLightPose: NativeVolumeLightPose | undefined, lightPoseSession: RenderCTSession | undefined, lightPoseSourceKey: string | undefined;
 let viewer: CornerstoneVolume3D | undefined, controller: AbortController | undefined, observer: ResizeObserver | undefined;
 let lease: CornerstoneSourceLease | undefined, planeLayer: VTKCTPlane | undefined, surfaces: VTKSurfaceScene | undefined;
 let featureRenderer: vtkRenderer | undefined;
@@ -203,6 +206,9 @@ async function initialize() {
   const session = props.session,
     id = generation;
   if (!session || session.isDisposed) return;
+  if (lightPoseSession !== session || lightPoseSourceKey !== props.sourceKey) retainedLightPose = undefined;
+  lightPoseSession = session;
+  lightPoseSourceKey = props.sourceKey;
   const active = new AbortController();
   controller = active;
   await nextTick();
@@ -217,6 +223,11 @@ async function initialize() {
     if (props.sourceKey && sourceLease.source.descriptor.key !== props.sourceKey) throw new Error('The CT source changed while the viewer was loading.');
     const instance = await CornerstoneVolume3D.create(host.value, sourceLease.owner, {
       settings: props.settings,
+      lighting: props.lighting,
+      lightPose: retainedLightPose,
+      onLightPose: pose => {
+        if (!disposed && id === generation) retainedLightPose = pose;
+      },
       camera: props.camera,
       // Reconcile the latest mask before the first visible CT frame, including
       // settings changed while this asynchronous attachment was in progress.
@@ -286,6 +297,7 @@ async function initialize() {
     // Appearance and camera can change while the shared actor is attaching.
     // Reconcile the latest props before publishing a ready viewport.
     instance.setSettings(props.settings);
+    instance.setLighting(props.lighting);
     syncPresentation();
     if (props.camera) instance.setCamera(props.camera);
     await renderFeatures(instance, id);
@@ -539,6 +551,21 @@ watch(
     if (!instance) return;
     try {
       instance.setSettings(settings);
+      await renderFeatures(instance, id);
+    } catch (reason) {
+      if (!disposed && id === generation) fail(reason);
+    }
+  },
+  { deep: true },
+);
+watch(
+  () => props.lighting,
+  async lighting => {
+    const instance = viewer,
+      id = generation;
+    if (!instance) return;
+    try {
+      instance.setLighting(lighting);
       await renderFeatures(instance, id);
     } catch (reason) {
       if (!disposed && id === generation) fail(reason);

@@ -5,6 +5,7 @@ import type { CornerstoneMPR } from '../src/lib/cornerstone-mpr';
 import type { Point } from '../src/types';
 import { transformPoint, type VolumeDescriptor } from '../src/lib/ct-reslice';
 import { rasToLps } from '../src/lib/cornerstone-frame';
+import { freshNativeVolumeLighting } from '../src/lib/volume-lighting';
 import { freshVolumeSettings } from '../src/lib/volume-presets';
 import {
   CornerstoneVolume3D,
@@ -92,6 +93,8 @@ function setup() {
   const mprActor = actor();
   const viewports = new Map<string, any>(['axial', 'coronal', 'sagittal'].map(id => [id, { id, getActor: () => ({ actor: mprActor }) }]));
   const rendererEvents = new Set<(event: { type: string }) => void>();
+  let rendererLights: any[] = [];
+  let twoSidedLighting = true;
   let viewport: any;
   const engine = {
     id: 'mpr-owner',
@@ -115,6 +118,14 @@ function setup() {
           element.dispatchEvent(event('camera', {}));
         },
         getRenderer: () => ({
+          getLights: () => rendererLights,
+          getReferenceByName: (name: string) => (name === 'twoSidedLighting' ? twoSidedLighting : undefined),
+          setTwoSidedLighting: (value: boolean) => {
+            twoSidedLighting = value;
+          },
+          setLightCollection: (lights: any[]) => {
+            rendererLights = lights;
+          },
           onEvent(callback: (event: { type: string }) => void) {
             rendererEvents.add(callback);
             return { unsubscribe: () => rendererEvents.delete(callback) };
@@ -202,6 +213,7 @@ function setup() {
     rotationCleanup,
     context,
     rendererEvents,
+    mprActor,
   };
 }
 beforeEach(() => {
@@ -489,5 +501,93 @@ describe('physical shared CT volume', () => {
     await rejected;
     expect(fixture.texture.delete).not.toHaveBeenCalled();
     expect(fixture.callbacks.size).toBe(0);
+  });
+});
+
+function liveStats(adapter: CornerstoneVolume3D) {
+  const stats = adapter.stats();
+  if (!('lighting' in stats)) throw new Error('Expected a live native volume.');
+  return stats;
+}
+
+describe('native volume light ownership', () => {
+  it('moves a camera-relative scene light while following and freezes it for fixed-light orbit', async () => {
+    const fixture = setup();
+    const settings = freshNativeVolumeLighting({ mode: 'cinematic', azimuth: 35, elevation: 20 });
+    const onLightPose = vi.fn();
+    const adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, {
+      settings: freshVolumeSettings(),
+      lighting: settings,
+      camera,
+      onLightPose,
+    });
+    adapters.push(adapter);
+    const original = liveStats(adapter);
+    expect(original.lighting).toMatchObject({ mode: 'cinematic', owned: true, rendererLightCount: 1, twoSidedLighting: false });
+    expect(original.scattering).toBe(0.5);
+    expect(fixture.mprActor.getProperty().getVolumetricScatteringBlending()).toBe(0);
+    const light = adapter.nativeRenderer.getLights()[0];
+    expect(light.lightTypeIsSceneLight()).toBe(true);
+    const orbit = { ...camera, positionRAS: [180, 20, 130] as Point };
+    adapter.setCamera(orbit);
+    await adapter.render();
+    const followed = liveStats(adapter);
+    expect(followed.lighting?.positionLPS).not.toEqual(original.lighting?.positionLPS);
+    adapter.setLighting({ ...settings, lightFollowsCamera: false });
+    await adapter.render();
+    const fixed = liveStats(adapter).lighting;
+    expect(fixed?.positionLPS).toEqual(followed.lighting?.positionLPS);
+    adapter.setCamera({ ...camera, positionRAS: [-170, -40, 120] });
+    await adapter.render();
+    expect(liveStats(adapter).lighting).toEqual(fixed);
+    adapter.setLighting({ ...settings, lightFollowsCamera: false, ambient: 0.9 });
+    await adapter.render();
+    expect(liveStats(adapter).lighting?.positionLPS).toEqual(fixed?.positionLPS);
+    adapter.setLighting({ ...settings, lightFollowsCamera: false, azimuth: -25 });
+    await adapter.render();
+    expect(liveStats(adapter).lighting?.positionLPS).not.toEqual(fixed?.positionLPS);
+    expect(onLightPose).toHaveBeenCalled();
+    adapter.dispose();
+    expect(light.isDeleted()).toBe(true);
+    expect(fixture.texture.delete).not.toHaveBeenCalled();
+  });
+
+  it('restores the renderer light collection and preset materials without changing MPR', async () => {
+    const fixture = setup();
+    const adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera });
+    adapters.push(adapter);
+    const original = liveStats(adapter);
+    const renderer = adapter.nativeRenderer;
+    const previousLight = { fixture: 'previous-headlight' };
+    renderer.setLightCollection([previousLight as any]);
+    adapter.setLighting(freshNativeVolumeLighting({ mode: 'ambient-occlusion', ambient: 0.7, diffuse: 0.4, aoRadius: 7, aoKernelSize: 12 }));
+    await adapter.render();
+    expect(liveStats(adapter)).toMatchObject({ localAO: true, scattering: 0, ambient: 0.7, diffuse: 0.4, aoRadius: 7, aoKernelSize: 12 });
+    const owned = renderer.getLights()[0];
+    expect(renderer.getLights()).toHaveLength(1);
+    adapter.setLighting(freshNativeVolumeLighting());
+    await adapter.render();
+    expect(renderer.getLights()).toEqual([previousLight]);
+    expect(owned.isDeleted()).toBe(true);
+    expect(liveStats(adapter)).toMatchObject({
+      ambient: original.ambient,
+      diffuse: original.diffuse,
+      localAO: false,
+      lighting: { mode: 'preset', owned: false, twoSidedLighting: true },
+    });
+    expect(fixture.mprActor.getProperty().getLocalAmbientOcclusion()).toBe(false);
+  });
+
+  it('reattaches a frozen world light after Retry rather than moving it to the current camera', async () => {
+    const fixture = setup();
+    const lighting = freshNativeVolumeLighting({ mode: 'standard', lightFollowsCamera: false });
+    const lightPose = { positionRAS: [55, 67, 89] as Point, focalPointRAS: [2, 3, 4] as Point };
+    const adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), lighting, camera, lightPose });
+    adapters.push(adapter);
+    expect(liveStats(adapter).lighting).toMatchObject({ positionLPS: [-55, -67, 89], focalPointLPS: [-2, -3, 4] });
+    adapter.setCamera({ ...camera, positionRAS: [-80, -100, 120] });
+    adapter.setLighting(lighting);
+    await adapter.render();
+    expect(liveStats(adapter).lighting).toMatchObject({ positionLPS: [-55, -67, 89], focalPointLPS: [-2, -3, 4] });
   });
 });

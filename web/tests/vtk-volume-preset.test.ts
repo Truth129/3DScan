@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import vtkVolume from '@kitware/vtk.js/Rendering/Core/Volume';
 import vtkVolumeMapper from '@kitware/vtk.js/Rendering/Core/VolumeMapper';
 import { applyVTKVolumePreset } from '../src/lib/vtk-volume-preset';
+import { freshNativeVolumeLighting } from '../src/lib/volume-lighting';
 import { freshVolumeSettings } from '../src/lib/volume-presets';
 
 function volume() {
@@ -81,6 +82,66 @@ describe('native VTK volume settings', () => {
       expect(transfer.getMTime()).toBe(changed);
       expect(fixture.mapper.getSampleDistance()).toBe(before.sampleDistanceMM);
       expect(fixture.actor.getProperty().getVolumetricScatteringBlending()).toBe(before.scattering);
+    } finally {
+      fixture.dispose();
+    }
+  });
+});
+
+describe('VolView-style native lighting modes', () => {
+  it('applies independent modes to every CT appearance without changing transfer functions or sampling', () => {
+    const fixture = volume();
+    const settings = freshVolumeSettings({ preset: 'bone' });
+    const before = structuredClone(settings);
+    try {
+      const base = applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.4 });
+      const color = fixture.actor.getProperty().getRGBTransferFunction(0).getRange();
+      for (const mode of ['standard', 'cinematic', 'ambient-occlusion'] as const) {
+        const lighting = freshNativeVolumeLighting({
+          mode,
+          ambient: 0.4,
+          diffuse: 0.6,
+          specular: 0.8,
+          specularPower: 45,
+          scattering: 0.65,
+          reach: 0.7,
+          aoKernelSize: 12,
+          aoRadius: 9,
+        });
+        const actual = applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.4, nativeLighting: lighting });
+        expect(actual).toMatchObject({
+          shade: true,
+          ambient: 0.4,
+          diffuse: 0.6,
+          specular: 0.8,
+          specularPower: 45,
+          sampleDistanceMM: base.sampleDistanceMM,
+          opacityUnitDistanceMM: base.opacityUnitDistanceMM,
+          scattering: mode === 'cinematic' ? 0.65 : 0,
+          localAO: mode === 'ambient-occlusion',
+          giReach: 0.7,
+          aoKernelSize: 12,
+          aoRadius: 9,
+        });
+        expect(fixture.actor.getProperty().getRGBTransferFunction(0).getRange()).toEqual(color);
+      }
+      expect(settings).toEqual(before);
+      const restored = applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.4, nativeLighting: freshNativeVolumeLighting() });
+      expect(restored).toEqual(base);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it('keeps explicit benchmark lighting authoritative over optional native display controls', () => {
+    const fixture = volume();
+    try {
+      const result = applyVTKVolumePreset(fixture.actor, freshVolumeSettings(), {
+        sampleDistanceMM: 0.4,
+        lighting: 'off',
+        nativeLighting: freshNativeVolumeLighting({ mode: 'cinematic', scattering: 1 }),
+      });
+      expect(result).toMatchObject({ shade: false, scattering: 0, localAO: false });
     } finally {
       fixture.dispose();
     }

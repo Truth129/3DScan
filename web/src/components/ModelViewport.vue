@@ -42,6 +42,7 @@ import {
 import { imagePresentation, type ImageContext, type ImageCapability } from '../lib/image-domain';
 import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
+import { freshNativeVolumeLighting } from '../lib/volume-lighting';
 import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings } from '../lib/volume-presets';
 import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
@@ -176,6 +177,7 @@ const signalVolume = computed(() => modality.value !== 'CT');
 const allows = (capability: ImageCapability) => !props.capabilities || props.capabilities.includes(capability);
 const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? preferCornerstone),
   volumeSettings = shallowRef(freshVolumeSettings(props.initialSnapshot?.state.volume)),
+  nativeLighting = shallowRef(freshNativeVolumeLighting()),
   volumeError = ref(''),
   volumeFamilyReady = ref('');
 const referenceAvailable = computed(
@@ -1615,6 +1617,7 @@ defineExpose({
       :session="vtkSession"
       :source-key="localSession?.descriptor?.key"
       :settings="renderVolumeSettings"
+      :lighting="nativeLighting"
       :camera="vtkCamera"
       :volume-visible="showVolume"
       :segmentation-visible="showSegmentation"
@@ -1744,11 +1747,12 @@ defineExpose({
           observeReviewControls();
         "
       >
-        <summary>{{ modality }} volume settings <span>Appearance · opacity · mask · crop</span></summary>
+        <summary>{{ modality }} volume settings <span>Appearance · lighting · mask · crop</span></summary>
         <VolumeControls
           headerless
           :enabled="showVolume"
           :settings="renderVolumeSettings"
+          :native-lighting="vtkSelected ? nativeLighting : undefined"
           :modality="modality"
           :heart-view-available="!!heartCamera && !reviewActive && (!vtkSelected || vtkReady)"
           @heart-view="showHeartView"
@@ -1770,6 +1774,7 @@ defineExpose({
           :message="showVolume ? volumeMessage : ''"
           @update:enabled="setVolumeEnabled"
           @update:settings="setVolumeSettings"
+          @update:native-lighting="nativeLighting = $event"
           @update:mask="setVolumeMask"
           @retry-mask="retryVolumeMask"
           @retry="retryVolume"

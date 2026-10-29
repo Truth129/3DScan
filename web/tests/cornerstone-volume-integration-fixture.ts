@@ -345,6 +345,7 @@ async function stats() {
     owner: shared.source,
     shared,
     visibility: { mpr: state.showMPR, model: state.showModel },
+    presentation: { window: state.window, level: state.level },
     preview: model?.volumeDiagnostics?.(),
     model: { ...document.querySelector<HTMLElement>('#model .model-viewport')?.dataset },
     previewMounted: !!document.querySelector('#model .cornerstone-volume-view'),

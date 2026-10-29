@@ -1,5 +1,7 @@
 import type * as Core from '@cornerstonejs/core';
 import type * as Tools from '@cornerstonejs/tools';
+import vtkLight from '@kitware/vtk.js/Rendering/Core/Light';
+import { freshNativeVolumeLighting, nativeVolumeLightPose, type NativeVolumeLightingSettings, type NativeVolumeLightPose } from './volume-lighting';
 import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 import type { Point } from '../types';
 import type { CornerstoneMPR } from './cornerstone-mpr';
@@ -24,6 +26,9 @@ export interface CornerstoneVolumeCameraRAS {
 }
 export interface CornerstoneVolume3DOptions {
   settings: CTVolumeSettings;
+  lighting?: NativeVolumeLightingSettings;
+  lightPose?: NativeVolumeLightPose;
+  onLightPose?: (pose: NativeVolumeLightPose | undefined) => void;
   camera?: CornerstoneVolumeCameraRAS;
   volumeVisible?: boolean;
   signal?: AbortSignal;
@@ -120,7 +125,11 @@ export class CornerstoneVolume3D {
   private group?: NonNullable<ReturnType<typeof Tools.ToolGroupManager.createToolGroup>>;
   private disposed = false;
   private settings: CTVolumeSettings;
-  private presetStats: Record<string, unknown> = {};
+  private lighting: NativeVolumeLightingSettings;
+  private light?: ReturnType<typeof vtkLight.newInstance>;
+  private previousLights?: ReturnType<typeof vtkLight.newInstance>[];
+  private previousTwoSidedLighting?: boolean;
+  private presetStats: Partial<ReturnType<typeof applyVTKVolumePreset>> = {};
   private listeners: (() => void)[] = [];
   private clipping: { plane: ReturnType<typeof vtkPlane.newInstance>; normal: Point; origin: Point }[] = [];
   private applyingCamera = false;
@@ -146,6 +155,7 @@ export class CornerstoneVolume3D {
     private options: CornerstoneVolume3DOptions,
   ) {
     this.settings = freshVolumeSettings(options.settings);
+    this.lighting = freshNativeVolumeLighting(options.lighting);
     this.volumeVisible = options.volumeVisible ?? true;
   }
 
@@ -201,6 +211,7 @@ export class CornerstoneVolume3D {
       instance.installTools();
       engine.resize(false, true);
       instance.setCamera(options.camera ?? instance.defaultCamera());
+      instance.configureLight(true, options.lightPose);
       instance.ready = true;
       await instance.render();
       return instance;
@@ -340,6 +351,7 @@ export class CornerstoneVolume3D {
     const camera = () => {
       if (this.disposed) return;
       this.restoreCrop();
+      this.updateLightFromCamera();
       if (this.ready && !this.applyingCamera) this.queueCameraUpdate();
     };
     const reset = this.nativeRenderer.onEvent(event => {
@@ -456,6 +468,7 @@ export class CornerstoneVolume3D {
   private configurePreset() {
     this.presetStats = applyVTKVolumePreset(this.actor!, this.settings, {
       sampleDistanceMM: cornerstoneVolumeStepMM(this.owner.sourceDescriptor, this.settings.quality),
+      nativeLighting: this.lighting,
     });
     const mapper = this.actor!.getMapper()!;
     mapper.removeAllClippingPlanes();
@@ -465,6 +478,49 @@ export class CornerstoneVolume3D {
       mapper.addClippingPlane(plane);
       return { plane, normal, origin };
     });
+  }
+  /** A SceneLight never receives vtk.js's implicit camera transform. Keeping
+   * ownership here prevents a 3D lighting edit from changing MPR lights. */
+  private configureLight(reposition = false, retainedPose?: NativeVolumeLightPose) {
+    if (this.lighting.mode === 'preset') {
+      this.releaseLight();
+      this.options.onLightPose?.(undefined);
+      return;
+    }
+    if (!this.light) {
+      this.previousLights = [...this.nativeRenderer.getLights()];
+      this.previousTwoSidedLighting = this.nativeRenderer.getReferenceByName('twoSidedLighting') === true;
+      this.nativeRenderer.setTwoSidedLighting(false);
+      this.light = vtkLight.newInstance({ positional: true, coneAngle: 90, intensity: 1, color: [1, 1, 1] });
+      this.light.setLightTypeToSceneLight();
+      this.nativeRenderer.setLightCollection([this.light]);
+      reposition = true;
+    }
+    if (retainedPose && !this.lighting.lightFollowsCamera) this.setLightPose(retainedPose);
+    else if (reposition || this.lighting.lightFollowsCamera) this.setLightPose(nativeVolumeLightPose(this.camera, this.lighting));
+  }
+  private setLightPose(pose: NativeVolumeLightPose) {
+    if (!this.light) return;
+    if ([pose.positionRAS, pose.focalPointRAS].some(point => point.length !== 3 || !point.every(Number.isFinite)))
+      throw new Error('Invalid native light position.');
+    this.light.setPositionFrom(rasToLps(pose.positionRAS));
+    this.light.setFocalPointFrom(rasToLps(pose.focalPointRAS));
+    this.options.onLightPose?.(structuredClone(pose));
+  }
+  private updateLightFromCamera() {
+    if (this.light && this.lighting.lightFollowsCamera) this.setLightPose(nativeVolumeLightPose(this.camera, this.lighting));
+  }
+  private releaseLight() {
+    if (!this.light) return;
+    if (!this.engine.hasBeenDestroyed && this.viewport) {
+      const renderer = this.viewport.getRenderer();
+      renderer.setLightCollection(this.previousLights ?? []);
+      renderer.setTwoSidedLighting(this.previousTwoSidedLighting ?? true);
+    }
+    this.light.delete();
+    this.light = undefined;
+    this.previousLights = undefined;
+    this.previousTwoSidedLighting = undefined;
   }
   private restoreCrop() {
     // The legacy camera rewrites the first two mapper planes as an MPR slab.
@@ -505,6 +561,16 @@ export class CornerstoneVolume3D {
     this.stopRotation();
     this.settings = freshVolumeSettings(settings);
     this.configurePreset();
+    this.requestRender();
+  }
+  setLighting(input: NativeVolumeLightingSettings | undefined) {
+    this.assertAlive();
+    this.stopRotation();
+    const next = freshNativeVolumeLighting(input);
+    const reposition = next.azimuth !== this.lighting.azimuth || next.elevation !== this.lighting.elevation;
+    this.lighting = next;
+    this.configurePreset();
+    this.configureLight(reposition);
     this.requestRender();
   }
   setCamera(camera: CornerstoneVolumeCameraRAS) {
@@ -581,6 +647,14 @@ export class CornerstoneVolume3D {
     return {
       ...this.presetStats,
       renderer: 'cornerstone3d',
+      lighting: {
+        ...this.lighting,
+        positionLPS: this.light ? [...this.light.getPosition()] : null,
+        focalPointLPS: this.light ? [...this.light.getFocalPoint()] : null,
+        owned: !!this.light,
+        rendererLightCount: this.nativeRenderer.getLights().length,
+        twoSidedLighting: this.nativeRenderer.getReferenceByName('twoSidedLighting') === true,
+      },
       disposed: false,
       frames: this.frames,
       viewportId: this.id,
@@ -656,6 +730,7 @@ export class CornerstoneVolume3D {
     }
     for (const remove of this.listeners.splice(0)) remove();
     this.stopRotation();
+    this.releaseLight();
     if (this.group) {
       for (const tool of [this.libs.tools.TrackballRotateTool, this.libs.tools.PanTool, this.libs.tools.ZoomTool]) this.group.setToolDisabled(tool.toolName);
       this.group.removeViewports(this.engine.id, this.id);

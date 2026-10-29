@@ -348,6 +348,17 @@ presets, native lighting/scattering, opacity, masking and cropping. Enable
 **Mask to segmentation**, choose segments and select **Inside** or **Outside**;
 **Display margin** grows only that display region. Empty/loading/failed masks
 keep the CT volume hidden while slices and surfaces remain available.
+Open **CT volume settings → Lighting and shadows** for **Standard**,
+**Cinematic (VolView Hybrid)** or **Ambient occlusion**. Adjust ambient, diffuse,
+specular and shininess independently of the CT appearance. Cinematic mode adds
+scattering and shadow reach; ambient occlusion adds sample count and radius.
+**Light follows camera** can be turned off to hold the light in the scene while
+rotating; azimuth/elevation position it from the current view. **Reset lighting**
+returns to preset lighting. These are VolView’s vtk.js volume-lighting techniques,
+using the existing shared CT texture. Shadows come from the volume itself;
+segmentation meshes do not cast shadows into it. Lighting settings apply to the
+native 3D panel and PNG; portable HTML retains its legacy renderer. See
+[cinematic rendering](docs/VOLVIEW_RENDERING.md) for details.
 **Three.js (legacy)** retains the previous renderer and HTML
 export. The following cinematic-heart recipe describes that legacy renderer.
 

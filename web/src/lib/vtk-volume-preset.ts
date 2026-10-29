@@ -1,9 +1,11 @@
 import type { vtkVolume } from '@kitware/vtk.js/Rendering/Core/Volume';
 import { ColorSpace } from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction/Constants';
+import { freshNativeVolumeLighting, type NativeVolumeLightingSettings } from './volume-lighting';
 import { CINEMATIC_HEART_PRESET, freshVolumeSettings, getVolumePreset, type CTVolumeSettings } from './volume-presets';
 
 export interface VTKVolumeQuality {
   sampleDistanceMM: number;
+  nativeLighting?: NativeVolumeLightingSettings;
   imageSampleDistance?: number;
   lighting?: 'off' | 'preset' | 'scattering';
   scattering?: number;
@@ -44,9 +46,17 @@ export function applyVTKVolumePreset(actor: vtkVolume, settings: CTVolumeSetting
   const kernel = quality.aoKernelSize ?? 8;
   if (!Number.isSafeInteger(kernel) || kernel < 1 || kernel > 32) throw new Error('Invalid VTK ambient-occlusion kernel.');
   const mapped = vtkVolumePreset(settings);
+  const nativeLighting = freshNativeVolumeLighting(quality.nativeLighting);
+  const custom = nativeLighting.mode !== 'preset' && quality.lighting === undefined;
   const cinematic = mapped.preset.id === CINEMATIC_HEART_PRESET;
   const lighting = quality.lighting ?? (cinematic && mapped.settings.cinematic.shadows > 0 ? 'scattering' : 'preset');
-  const scattering = lighting === 'scattering' ? (quality.scattering ?? (quality.lighting === undefined ? mapped.settings.cinematic.shadows / 2 : 0.5)) : 0;
+  const scattering = custom
+    ? nativeLighting.mode === 'cinematic'
+      ? nativeLighting.scattering
+      : 0
+    : lighting === 'scattering'
+      ? (quality.scattering ?? (quality.lighting === undefined ? mapped.settings.cinematic.shadows / 2 : 0.5))
+      : 0;
   const mapper = actor.getMapper();
   if (!mapper) throw new Error('The VTK volume has no mapper.');
   const property = actor.getProperty();
@@ -58,11 +68,11 @@ export function applyVTKVolumePreset(actor: vtkVolume, settings: CTVolumeSetting
   opacity.removeAllPoints();
   for (const point of mapped.opacity) opacity.addPoint(...point);
   property.setScalarOpacityUnitDistance(0, mapped.opacityUnitDistanceMM);
-  property.setShade(lighting !== 'off' && mapped.preset.shade);
-  property.setAmbient(mapped.preset.ambient);
-  property.setDiffuse(mapped.preset.diffuse);
-  property.setSpecular(mapped.preset.specular);
-  property.setSpecularPower(mapped.preset.specularPower);
+  property.setShade(custom || (lighting !== 'off' && mapped.preset.shade));
+  property.setAmbient(custom ? nativeLighting.ambient : mapped.preset.ambient);
+  property.setDiffuse(custom ? nativeLighting.diffuse : mapped.preset.diffuse);
+  property.setSpecular(custom ? nativeLighting.specular : mapped.preset.specular);
+  property.setSpecularPower(custom ? nativeLighting.specularPower : mapped.preset.specularPower);
   if (mapped.preset.interpolation === 'nearest') property.setInterpolationTypeToNearest();
   else property.setInterpolationTypeToLinear();
   const [low, high] = mapped.gradient;
@@ -75,10 +85,10 @@ export function applyVTKVolumePreset(actor: vtkVolume, settings: CTVolumeSetting
   property.setGradientOpacityMaximumValue(0, high[0]);
   property.setGradientOpacityMaximumOpacity(0, high[1]);
   property.setVolumetricScatteringBlending(scattering);
-  property.setGlobalIlluminationReach(quality.giReach ?? mapped.settings.cinematic.shadowReach);
-  property.setLocalAmbientOcclusion(quality.localAO ?? false);
-  property.setLAOKernelSize(kernel);
-  property.setLAOKernelRadius(quality.aoKernelRadius ?? 5);
+  property.setGlobalIlluminationReach(custom ? nativeLighting.reach : (quality.giReach ?? mapped.settings.cinematic.shadowReach));
+  property.setLocalAmbientOcclusion(custom ? nativeLighting.mode === 'ambient-occlusion' : (quality.localAO ?? false));
+  property.setLAOKernelSize(custom ? nativeLighting.aoKernelSize : kernel);
+  property.setLAOKernelRadius(custom ? nativeLighting.aoRadius : (quality.aoKernelRadius ?? 5));
   mapper.setBlendModeToComposite();
   mapper.setAutoAdjustSampleDistances(false);
   mapper.setImageSampleDistance(quality.imageSampleDistance ?? 1);
@@ -89,6 +99,12 @@ export function applyVTKVolumePreset(actor: vtkVolume, settings: CTVolumeSetting
     sampleDistanceMM: mapper.getSampleDistance(),
     imageSampleDistance: mapper.getImageSampleDistance(),
     shade: property.getShade(),
+    ambient: property.getAmbient(),
+    diffuse: property.getDiffuse(),
+    specular: property.getSpecular(),
+    specularPower: property.getSpecularPower(),
+    aoKernelSize: property.getLAOKernelSize(),
+    aoRadius: property.getLAOKernelRadius(),
     opacityUnitDistanceMM: property.getScalarOpacityUnitDistance(0),
     gradientOpacity: property.getUseGradientOpacity(0),
     scattering: property.getVolumetricScatteringBlending(),

@@ -14,12 +14,15 @@ import {
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, visibleVolumeMaskIds, type VolumeMaskSettings } from '../lib/volume-mask';
 import { colorCss, prettyName } from '../lib/geometry';
 import type { Structure, StructureDisplay } from '../types';
+import NativeVolumeLightingControls from './NativeVolumeLightingControls.vue';
+import type { NativeVolumeLightingSettings } from '../lib/volume-lighting';
 
 const props = withDefaults(
   defineProps<{
     enabled: boolean;
     headerless?: boolean;
     settings: CTVolumeSettings;
+    nativeLighting?: NativeVolumeLightingSettings;
     modality?: string;
     ready?: boolean;
     loading?: boolean;
@@ -45,6 +48,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   'update:enabled': [value: boolean];
   'update:settings': [value: CTVolumeSettings];
+  'update:nativeLighting': [value: NativeVolumeLightingSettings];
   'update:mask': [value: VolumeMaskSettings];
   'retry-mask': [];
   'measure-reference': [];
@@ -265,7 +269,7 @@ watch(maskOpen, layout);
         <p v-if="referenceMessage" class="volume-cinematic-message" :class="{ error: referenceError }" :role="referenceError ? 'alert' : 'status'">
           {{ referenceMessage }}
         </p>
-        <div class="volume-cinematic-lighting">
+        <div v-if="!nativeLighting || nativeLighting.mode === 'preset'" class="volume-cinematic-lighting">
           <label class="volume-slider"
             >Shadows <output>{{ settings.cinematic.shadows === 0 ? 'Off' : settings.cinematic.shadows.toFixed(1) }}</output
             ><input
@@ -291,10 +295,17 @@ watch(maskOpen, layout);
               @input="update({ cinematic: { ...settings.cinematic, shadowReach: number($event) } })"
           /></label>
         </div>
-        <p class="volume-preset-note">
+        <p v-if="!nativeLighting" class="volume-preset-note">
           Shadows resolve after rotation stops; dragging uses a lighter preview. This is an interactive WebGL approximation of the supplied Slicer look.
         </p>
       </div>
+      <NativeVolumeLightingControls
+        v-if="nativeLighting && !signalVolume"
+        :settings="nativeLighting"
+        :disabled="disabled"
+        @update="emit('update:nativeLighting', $event)"
+        @layout="layout"
+      />
       <p v-if="otherModality" class="volume-preset-note">This preset is designed for another modality and may need adjustment for CT.</p>
       <p v-if="projectionNamed" class="volume-preset-note">Slicer’s {{ preset.label }} appearance, shown with composite volume rendering.</p>
       <div v-if="maskSupported" class="volume-mask">

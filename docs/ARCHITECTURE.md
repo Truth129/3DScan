@@ -148,6 +148,18 @@ after upload; only the crop texture remains. Empty/loading/error states hide CT
 in either mode, and Retry rebuilds just the mask. Mode/camera/crop changes reuse
 the texture; source/revision changes invalidate it before replacement.
 
+Native CT lighting exposes the same vtk.js scattering and local ambient
+occlusion used by VolView, without embedding another application or creating
+another volume. A separate panel-owned lighting state selects preset, standard,
+cinematic/hybrid or ambient occlusion and adjusts material coefficients. Manual
+modes own one scene light on the 3D renderer; camera events update a following
+light, while a fixed light retains its patient-RAS pose. The shared engine’s MPR
+renderers retain their own lights and properties. Retry retains the fixed pose
+for the same source, and disposal restores renderer lights and deletes only the
+owned light. Preset mode preserves earlier appearance and heart-scattering
+behavior. No portable recipe/API schema or dependency version changes. See
+[VolView rendering](VOLVIEW_RENDERING.md).
+
 The isolated mask bridge installs an actor-local view-node factory before VTK
 freezes its public API. It extends the pinned Core streaming mapper, sharing the
 original CT texture, and uses guarded shader replacements. Other actors/MPR
