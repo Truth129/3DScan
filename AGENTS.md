@@ -160,6 +160,18 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
   App API/UI integration is deferred at the user's request. Editing/save/reload,
   exact receiver re-export and other source geometries still need qualification;
   synthetic display success does not qualify clinical use.
+- **Tiled workspace and segment colours, 29 October 2026:** live from master
+  `f40b66e` after an approved idle restart (PID1004577). The tiled viewer-first
+  layout and native **Color segments**, with its `/volume-labels` route, passed
+  synthetic gates only; colour appearance has no clinical review. Health, both
+  lanes, CT-only, all 86 served frontend files and aggregate counts
+  (4/22/42/10/4) pass, with zero journal warnings. Audit and guarded rollback:
+  `.runtime/ui-tiling-segment-colours-20261029T141017Z/`.
+- **Orthanc decoupled, 29 October 2026:** the user moved the receiver into another
+  repository. It now runs as the user unit `orthanc.service` (PID987679, unchanged
+  by the activation above), and the project's `scan3d-orthanc.service` is inactive
+  and disabled. The app reports it connected. The Orthanc notes below describe the
+  earlier in-repository setup.
 - **Library:** the user has added cases since the 27 October reset; preserve them.
   The library archived at that reset is at
   `.runtime/archive/data-20261027T143742Z`, waiting for the user to delete it.
