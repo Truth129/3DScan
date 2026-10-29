@@ -85,6 +85,9 @@ For browser archive review, open
 with the existing Orthanc login. OHIF uses DICOMweb and is separate from 3DScan's
 import, segmentation and revision workflow. See [viewer access and operation](docs/ORTHANC.md#ohif-browser-viewer-with-dicomweb).
 
+Orthanc Explorer 2 **1.15.0** is also qualified and staged for a trial, pending
+an approved Orthanc restart. See [trial status and access](docs/ORTHANC.md#explorer-2-trial-prepared-for-activation).
+
 An experimental standalone native OsiriX brush writer is also available for
 synthetic qualification. It creates source-linked ROI SR reports directly from
 saved binary masks. Its synthetic test sends CT plus native reports without a
