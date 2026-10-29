@@ -80,6 +80,11 @@ remain retained. On 29 October 2026 the user confirms they have verified that
 SEG works in OsiriX MD 14.3.0, including the earlier eight-segment display check.
 The integration is qualified and active; see the runbook for runtime details.
 
+For browser archive review, open
+[OHIF over private HTTPS](https://scan3d-host.example.ts.net:8444/ohif/)
+with the existing Orthanc login. OHIF uses DICOMweb and is separate from 3DScan's
+import, segmentation and revision workflow. See [viewer access and operation](docs/ORTHANC.md#ohif-browser-viewer-with-dicomweb).
+
 An experimental standalone native OsiriX brush writer is also available for
 synthetic qualification. It creates source-linked ROI SR reports directly from
 saved binary masks. Its synthetic test sends CT plus native reports without a

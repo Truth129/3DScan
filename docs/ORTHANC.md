@@ -36,6 +36,60 @@ Mac. Its current HTTP bind is only `["0.0.0.0"]`, with `RemoteAccessAllowed` and
 the wildcard and causes startup failure. The main 3DScan app's browser addresses
 remain loopback `http://127.0.0.1:9010` and its existing private HTTPS tailnet URL.
 
+## OHIF browser viewer with DICOMweb
+
+OHIF is active on the existing Orthanc after the user's approved restart on
+29 October 2026. Open
+[OHIF over private HTTPS](https://scan3d-host.example.ts.net:8444/ohif/)
+and sign in with the existing Orthanc HTTP Basic credentials. The workstation
+address is `http://127.0.0.1:8044/ohif/`; LAN access remains
+`http://10.20.0.3:8044/ohif/`. Prefer HTTPS from the Mac: browser secure-context
+requirements affect the decoder workers and MPR over ordinary remote HTTP.
+
+Orthanc remains version **1.13.0**. Its OHIF plugin **1.8** bundles OHIF
+**3.12.0**, alongside DICOMweb plugin **1.24**. The configuration explicitly sets
+`OHIF.DataSource` to `dicom-web` and `OHIF.RouterBasename` to `/ohif/`, enabling
+the study list. DICOMweb is enabled at `/dicom-web/`; WADO-URI is at `/wado`.
+The bundled viewer uses relative DICOMweb URLs, so the same configuration works
+through loopback, LAN and private HTTPS. The OHIF plugin supplies the COOP/COEP
+headers used for browser isolation.
+
+The private HTTPS port `8444` proxies the existing authenticated Orthanc HTTP
+server. Existing Tailscale Serve routes on `443` and `8443` are preserved; no
+Funnel or new firewall rule was added. Authentication, HTTP bind, archive storage
+and index, DICOM port `4243` and all Mac AE/IP/operation permissions are unchanged.
+Only `scan3d-orthanc.service` was restarted; 3DScan was not restarted.
+
+OHIF is a separate archive viewer. Opening a study there does not import it into
+3DScan, prepare its reference grid or run segmentation. 3DScan's saved revisions,
+correction history and explicit SEG archive/send workflow retain their existing
+boundaries. The synthetic qualification covers CT stack and MPR display; it does
+not establish an OHIF SEG editing/write-back round trip or clinical accuracy.
+
+Seven API checks and seven software-browser gates pass on a fresh scratch
+archive with twelve synthetic CT images. They cover authentication, relative
+configuration, QIDO/full metadata, exact WADO frame bytes, forwarded HTTPS bulk
+URLs, signed CT decoding, visible stack/MPR images and no severe browser errors.
+The browser harness uses normal HTTP Basic authentication for decoder workers
+(`browser_smoke.py --prime-auth`). It uses SwiftShader, without the R9700.
+No live patient queries, archive image reads or DICOM sends were used.
+
+Audit, versioned plugin files and hashes, private before/after configurations,
+qualification evidence and activation record:
+`.runtime/ohif-dicomweb-20261029T072802Z/`. Retain this directory: the running
+configuration loads its plugin files. The before/after configurations contain
+credentials and must stay private. Guarded rollback restores the prior Orthanc
+configuration and removes only this unchanged `8444` Serve route, retaining the
+archive and other listeners:
+
+```bash
+.venv-rocm10-py314/bin/python .runtime/ohif-dicomweb-20261029T072802Z/activate.py --rollback --approved
+```
+
+Obtain fresh approval before a later rollback/restart unless the current approval
+already covers failure recovery. Running the helper without `--approved` only
+prints its plan. See the newest [validation record](VALIDATION.md).
+
 ## Receiver activation
 
 The separate incoming archive is `.runtime/orthanc-incoming/`. Its storage and

@@ -228,6 +228,15 @@ study/series summaries. Browser searches send identity fields in POST bodies;
 all connector responses use `no-store`. The client never receives archive
 credentials or parses the original DICOM.
 
+The same Orthanc now serves a separate OHIF 3.12.0 browser application through
+its OHIF 1.8 and DICOMweb 1.24 plugins. The explicit DICOMweb data source uses
+relative `/dicom-web/` URLs; authenticated private HTTPS on port `8444` provides
+the secure browser context for MPR. OHIF uses the archive's own login and reads
+DICOM directly, independently of 3DScan's prepared-volume viewer. Opening an
+OHIF study does not create a 3DScan case, revision or inference job. Existing
+archive ownership, import provenance and saved-mask export contracts remain.
+See [OHIF operation](ORTHANC.md#ohif-browser-viewer-with-dicomweb).
+
 The existing OsiriX Mac also has explicitly approved DICOM C-FIND/C-MOVE
 permissions on Orthanc, separate from 3DScan's REST adapter and outgoing sends.
 Strict calling/called AE and source-IP checks remain enforced. This enables
