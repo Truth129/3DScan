@@ -125,6 +125,17 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
 
 ## Current state (updated 29 October 2026)
 
+- **DICOM SEG import and 3 GiB budget, 29 October 2026:** qualified `591b031`
+  (budget `695b33d`) is live after an approved idle restart (PID1103823).
+  **Import DICOM SEG…** appends source-bound independent binary masks to a
+  prepared classic CT as a new editable revision, with exact parent undo.
+  Uncompressed little-endian binary SEG on the exact native grid is supported;
+  fractional, labelmap, concatenated, compressed and resampled SEG are refused.
+  1,271 backend tests, 551 web tests, both scratch builds and six SwiftShader
+  browser gates pass. Both lanes, CT-only, all 92 served frontend files and
+  unchanged aggregate counts (5/26/50/11/5) pass, with zero journal warnings.
+  Orthanc PID1016797 is unchanged. Audit/guarded rollback:
+  `.runtime/seg-import-20261029T172854Z/`. Refresh old tabs for the new budget.
 - **Branch:** `master`, at the user's request on 29 October 2026, after
   fast-forwarding it to `expansion` and switching this checkout. Continue new work
   on `master`; existing local work remains unpushed.
@@ -219,8 +230,9 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    broader patient-data access. Large combined MPR/all-surface views can exceed
    the conservative memory budget; closing MPR or hiding surfaces frees capacity.
    Completed CT transfer staging is now released; mesh memory charges only one
-   largest-part upload scratch and disables unused picking maps. The 2 GiB cap
-   is unchanged. Masking/memory qualification used synthetic data only.
+   largest-part upload scratch and disables unused picking maps. The desktop cap
+   is now 3 GiB after the approved 29 October SEG import activation; the 256 MiB
+   low-memory cap is unchanged. Masking/memory qualification used synthetic data only.
    See the newest `docs/VALIDATION.md` section for evidence and browser-startup notes.
 2. **Orthanc incoming integration:** the adapter, CPU import/recovery/provenance and
    browser workflow are implemented. A separate private receiver targets OsiriX
