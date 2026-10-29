@@ -80,6 +80,13 @@ remain retained. On 29 October 2026 the user confirms they have verified that
 SEG works in OsiriX MD 14.3.0, including the earlier eight-segment display check.
 The integration is qualified and active; see the runbook for runtime details.
 
+An experimental standalone native OsiriX brush writer is also available for
+synthetic qualification. It creates source-linked ROI SR reports directly from
+saved binary masks. Its synthetic test sends CT plus native reports without a
+SEG; OsiriX display and save/reload still need user verification. The app's
+export menu continues to offer the qualified SEG workflow. See
+[native ROI qualification](docs/ORTHANC.md#native-osirix-roi-export-investigation).
+
 ### Back up the case library
 
 ```bash
