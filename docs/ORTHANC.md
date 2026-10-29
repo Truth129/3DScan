@@ -4,9 +4,11 @@ The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is
 implemented and active. The combined multi-segment object update is active after
-an approved idle app restart, and the user confirms all eight selected segments
-now display. The target is **OsiriX MD 14.3.0** on the local network, with
-Tailscale receiving deferred until a later configuration change.
+an approved idle app restart, and all eight selected segments display. On
+29 October 2026 the user confirms they have verified that SEG works in OsiriX;
+the active combined SEG return workflow is user-verified. The target is
+**OsiriX MD 14.3.0** on the local network, with Tailscale receiving deferred until
+a later configuration change.
 
 ## Connection settings
 
@@ -251,14 +253,15 @@ object has segment number 1 within one series. No clinical identifiers, images
 or masks were copied or retained as fixtures. OsiriX's internal handling is
 unconfirmed; one object containing all eight independently numbered segments
 matches the earlier accepted prototype. The combined encoder streams packed
-pixels and keeps the same per-mask memory bound; its actual display still
-needs confirmation after an explicit fresh export. Encoding version 3 is now
-active after an approved idle app restart; both lanes and aggregate counts pass.
+pixels and keeps the same per-mask memory bound. Display was awaiting user
+confirmation at activation, as subsequently recorded below. Encoding version 3
+is now active after an approved idle app restart; both lanes and aggregate counts pass.
 Orthanc and frontend assets are unchanged. Audit and prior backend snapshot:
 `.runtime/dicom-seg-combined-20261028T192927Z/`.
-The user subsequently confirms all eight segments now show in OsiriX. This
-qualifies basic multi-segment discovery/display; exact clinical alignment and
-editing/resave remain separate user qualification.
+The user subsequently confirms all eight segments now show in OsiriX. On
+29 October 2026 they explicitly confirm they have already verified that SEG
+works in OsiriX MD 14.3.0. The active combined SEG return workflow is
+user-verified; earlier pending display statements are historical.
 
 The user approved activation, which installed the qualified packages/frontend
 and `osirix` allowlist and restarted idle 3DScan. Both lanes are healthy; all 19

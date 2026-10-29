@@ -210,8 +210,8 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    `OsiriX-Mac`. Twelve synthetic CTs plus one two-mask binary SEG passed
    C-STORE from the separate 8043 archive. After an accidental deletion/resend,
    the user confirms SEG appears as usable ROIs, with different database
-   presentation from native OsiriX ROIs. Basic receive/display compatibility
-   passes; exact clinical alignment and editing/resave remain user qualification.
+   presentation from native OsiriX ROIs. This established basic receive/display
+   compatibility; later saved-revision SEG verification is recorded below.
    Prototype audit:
    `.runtime/validation/osirix-seg-return-20261028T133800Z/`. See
    `docs/ORTHANC.md` and the newest validation section before operating it.
@@ -242,8 +242,9 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    CT-only policy, all 19 assets and private HTTPS index pass; aggregate counts
    remain 4 cases/22 revisions/39 jobs/10 reviews/4 image assets. Orthanc PID436143
    is unchanged, with zero warning/error journal priorities. No DICOM was sent
-   during activation. Actual OsiriX display is still unconfirmed; refresh and
-   explicitly export to generate the updated SOPs. Audit/guarded rollback:
+   during activation. OsiriX display was unconfirmed at this stage; the later
+   combined-profile verification below supersedes that status. Audit/guarded
+   rollback:
    `.runtime/dicom-seg-per-frame-20261028T191145Z/`.
    The user then reports only one of eight masks visible and explicitly allowed
    a read-only check of that affected scan. Its export contains all eight
@@ -257,8 +258,11 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    CT-only policy and unchanged frontend/private HTTPS index pass; counts remain
    4 cases/22 revisions/41 jobs/10 reviews/4 image assets. Orthanc PID436143 is
    unchanged. Activation triggered no DICOM send. The user confirms all eight
-   segments now display in OsiriX; exact clinical alignment/editing remains
-   user qualification. Audit/guarded rollback:
+   segments now display in OsiriX. On 29 October 2026 the user explicitly confirms
+   they have already verified that SEG works in OsiriX MD 14.3.0. Treat the active
+   combined SEG return workflow as user-verified. Query/Retrieve verification
+   is separate.
+   Audit/guarded rollback:
    `.runtime/dicom-seg-combined-20261028T192927Z/`.
    OsiriX Query/Retrieve was empty because `AllowFind` and `AllowMove` were
    false in file and live settings. With explicit approval both flags are now
