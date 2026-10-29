@@ -191,6 +191,29 @@ configuration can use the Mac's stable tailnet IP. Simply substituting the
 hostname in this incoming allowlist would reject associations. See the
 [Orthanc DICOM guide](https://orthanc.uclouvain.be/book/dicom-guide.html#configuring-orthanc).
 
+### Two addresses with the same AE title
+
+An isolated synthetic experiment on the exact pinned Orthanc **1.13.0**
+confirms that duplicate symbolic entries do **not** enable incoming access from
+both addresses with this receiver's strict configuration. With
+`DicomCheckModalityHost:true` and all global `DicomAlwaysAllow*` flags false,
+the lexically first same-AE entry accepts C-ECHO, C-STORE and C-FIND; the other
+address is rejected at association. Swapping the hosts between the symbolic
+names reverses the accepted address, even with reverse JSON insertion order.
+
+Explicit REST requests by symbolic modality ID can C-ECHO and C-STORE to either
+address. C-MOVE destination lookup by AE chooses the first entry and does not
+fall back when that listener is unavailable. Duplicate entries are therefore
+useful for explicitly selected outgoing routes, but are not a bidirectional
+LAN/Tailscale configuration under the current policy.
+
+The test used two loopback addresses and synthetic CT in a private network
+namespace; it did not contact the Mac or qualify the actual Tailscale route.
+Unknown source/AE refusal remained enabled. No live configuration, peer entry,
+service, firewall or runtime dependency was changed. Evidence and harness:
+`.runtime/orthanc-dual-address-20261029T085936Z/`. See the dated
+[validation record](VALIDATION.md).
+
 `deployment/scan3d-orthanc.service` is the receiver user-unit template. The main
 app loads the private `connection.env` through its `orthanc.conf` systemd drop-in.
 The qualified frontend was installed with prior lazy chunks retained, and the
