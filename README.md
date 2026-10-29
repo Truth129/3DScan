@@ -60,10 +60,14 @@ the CPU; receiving or opening a study never starts segmentation automatically.
 The configured Mac can also query Orthanc directly from OsiriX Query/Retrieve
 and retrieve studies with C-MOVE using that same DICOM destination.
 
-The connector and incoming receiver are **active**. The destination address is
-`10.20.0.3`; the allowed sender is `10.20.0.107` with calling AE
-`OsiriX-Mac`. The separate synthetic archive remains available for
-development. See the
+The connector and incoming receiver are **active**. The OsiriX destination is
+`100.64.0.10:4243`; Orthanc now allows the Mac's Tailscale address
+`100.64.0.20` with calling AE `OsiriX-Mac`. This address change was
+persisted and hot-applied without service restarts or firewall edits. Incoming
+C-ECHO awaits the user's retry; the reverse connection reaches the Mac on port
+`11112` but its DICOM association aborts, so Tailscale return transport remains
+unqualified. See [Tailscale switch status](docs/ORTHANC.md#tailscale-dicom-switch).
+The separate synthetic archive remains available for development. See the
 [Orthanc setup and transfer guide](docs/ORTHANC.md) for current status and
 connection settings. For a saved segmentation, choose **DICOM SEG…**, select its
 masks and choose **Archive in Orthanc** or **Send to** a configured viewer.
@@ -78,7 +82,8 @@ preserving overlaps without assembling a multi-mask volume in memory.
 After encoder updates, an explicit export creates fresh files; earlier exports
 remain retained. On 29 October 2026 the user confirms they have verified that
 SEG works in OsiriX MD 14.3.0, including the earlier eight-segment display check.
-The integration is qualified and active; see the runbook for runtime details.
+The existing SEG encoding/display qualification remains valid; see the runbook
+for current transport status.
 
 For browser archive review, open
 [OHIF over private HTTPS](https://scan3d-host.example.ts.net:8444/ohif/)

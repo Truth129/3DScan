@@ -7,21 +7,24 @@ implemented and active. The combined multi-segment object update is active after
 an approved idle app restart, and all eight selected segments display. On
 29 October 2026 the user confirms they have verified that SEG works in OsiriX;
 the active combined SEG return workflow is user-verified. The target is
-**OsiriX MD 14.3.0** on the local network, with Tailscale receiving deferred until
-a later configuration change.
+**OsiriX MD 14.3.0**. The existing Mac peer now uses its Tailscale address;
+incoming verification awaits the user's retry, and reverse DICOM verification
+still needs investigation. Earlier LAN exchange qualification remains historical
+evidence; see [current Tailscale status](#tailscale-dicom-switch).
 
 ## Connection settings
 
 | Purpose | Setting |
 | --- | --- |
 | OsiriX destination name | 3DScan |
-| Destination address | `10.20.0.3` |
+| Destination address | `100.64.0.10` (workstation Tailscale IPv4) |
 | Destination DICOM port | `4243` |
 | Destination AE title | `SCAN3D` |
-| Allowed Mac address | `10.20.0.107` |
+| Allowed Mac address | `100.64.0.20` (Mac Tailscale IPv4) |
 | Mac calling AE title | `OsiriX-Mac` (case-sensitive) |
 | Orthanc API / Explorer on workstation | `http://127.0.0.1:8044` |
 | Orthanc Explorer from the Mac | `http://10.20.0.3:8044/app/explorer.html` |
+| Preferred Explorer 2 from the Mac | `https://scan3d-host.example.ts.net:8444/ui/app/` |
 
 In OsiriX add that destination under its DICOM locations and verify it, then
 select a series and use **DICOM Send**. Open the usual 3DScan app on this
@@ -149,10 +152,11 @@ Its database is independent of the 3DScan case library. Imports retain local
 source copies and exact archive provenance; backing up 3DScan alone does not
 back up Orthanc's originals/index.
 
-Prepare the private configuration without starting a listener:
+For a new receiver, prepare the private configuration without starting a listener
+(the current receiver is already configured):
 
 ```bash
-.venv-rocm10-py314/bin/python scripts/orthanc_receiver.py prepare --remote-host 10.20.0.107 --remote-aet OsiriX-Mac
+.venv-rocm10-py314/bin/python scripts/orthanc_receiver.py prepare --remote-host 100.64.0.20 --remote-aet OsiriX-Mac
 ```
 
 The helper reuses the checksum-pinned binary, creates private config/credentials,
@@ -170,8 +174,9 @@ any-address UFW 8044 rule and remote HTTP access for Explorer. The preparation
 helper still defaults to loopback-only HTTP for a new receiver; it refuses to
 overwrite the user's changed configuration.
 
-If either machine's IP changes, review the destination and sender allowlist.
-Accepting the Mac through Tailscale also needs an explicit sender update.
+If either machine's Tailscale IP changes, review the destination and sender
+allowlist. The earlier LAN sender entry was replaced by the single Tailscale
+entry below; direct LAN associations are no longer allowlisted.
 
 On 28 October, rejected-association metadata identified the actual Mac sender
 as `10.20.0.107` / `OsiriX-Mac`, correcting the initially supplied
@@ -186,10 +191,55 @@ The user subsequently confirmed that OsiriX → SCAN3D sending works.
 
 `osirix-mac.local` resolves on this workstation, but Orthanc requires a
 literal IP for incoming validation while `DicomCheckModalityHost` is enabled.
-Use a router DHCP reservation to retain the LAN address; a later Tailscale
-configuration can use the Mac's stable tailnet IP. Simply substituting the
+The current entry uses the Mac's literal Tailscale IP. Simply substituting the
 hostname in this incoming allowlist would reject associations. See the
 [Orthanc DICOM guide](https://orthanc.uclouvain.be/book/dicom-guide.html#configuring-orthanc).
+
+### Tailscale DICOM switch
+
+At the user's request on 29 October 2026, the existing `osirix` entry was
+persisted and hot-applied with only `Host` changed from `10.20.0.107` to
+`100.64.0.20`. AE `OsiriX-Mac`, listener port `11112`, Store/Find/Move
+permissions and strict source/AE checks are unchanged. No duplicate peer was
+added. Orthanc PID842420 and 3DScan PID735851 remain unchanged; no restart,
+firewall, tailnet policy or application dependency change was made. Aggregate
+archive counts remain unchanged.
+
+In OsiriX **Preferences → Locations**, set the Orthanc destination to:
+
+- Address: **100.64.0.10**
+- Port: **4243**
+- Called AE: **SCAN3D**
+- Calling AE: **OsiriX-Mac**
+- TLS: disabled, with transport carried over Tailscale
+
+Keep the Mac's own OsiriX listener on **11112**. That port is for delivery back
+to the Mac, not the Orthanc destination. A user retry to workstation port11112
+was refused; the corrected port4243 reached Orthanc but was rejected while the
+LAN-only sender entry was still active. **Incoming C-ECHO confirmation after
+the switch is pending the user's retry.**
+
+The Mac's Tailscale TCP11112 is reachable from the workstation, but C-ECHO
+aborts during DICOM association. The identical LAN C-ECHO succeeds. This is
+an unresolved return-path limitation, not evidence that incoming sends/searches
+or returned SEG/C-MOVE work over Tailscale. No patient transfer or search was
+used to investigate it.
+
+Application ports remain Mac→workstation TCP4243, workstation→Mac TCP11112,
+and browser HTTPS8444. Router forwarding is normally unnecessary; restrictive
+tailnet grants/ACLs must permit the corresponding directions. Tailscale's
+default Linux netfilter mode can accept tailnet traffic ahead of UFW, so UFW
+alone is not a tailnet access policy. Current UFW inspection requires a sudo
+password and was not performed; no additional port rule was installed.
+See the official [Tailscale firewall guidance](https://tailscale.com/docs/reference/faq/firewall-ports)
+and [netfilter modes](https://tailscale.com/docs/reference/netfilter-modes).
+
+Private before/after configurations, guarded hot-apply/rollback helper, live
+readback and aggregate/service evidence:
+`.runtime/orthanc-tailscale-20261029T091444Z/`. Config snapshots contain
+credentials. `apply.py --apply --rollback` restores only the unchanged matching
+prior peer/file configuration without restarting; use it only when rollback is
+authorized. It does not restore archive data or change firewall rules.
 
 ### Two addresses with the same AE title
 
@@ -253,9 +303,11 @@ PID584950 remain unchanged and healthy. No patient records were searched or
 retrieved to apply this change. Audit/guarded rollback:
 `.runtime/orthanc-query-retrieve-20261028T193732Z/`.
 
-In OsiriX Query/Retrieve use the same node as DICOM Send: host `10.20.0.3`,
+In OsiriX Query/Retrieve use the same node as DICOM Send: host `100.64.0.10`,
 port `4243`, called AE `SCAN3D`, and calling/listener AE `OsiriX-Mac`.
 Choose C-MOVE retrieval; Orthanc already knows the Mac's listener port `11112`.
+The current Tailscale return association still needs qualification as described
+in [switch status](#tailscale-dicom-switch).
 Port `8044` is the HTTP Explorer, not the DICOM query port. Clear restrictive
 date/name filters when checking a newly enabled query. See the official
 [Orthanc permissions guide](https://orthanc.uclouvain.be/book/faq/security.html)
@@ -344,8 +396,9 @@ Only configured IDs are accepted; users cannot supply a host/URL from the
 browser. An empty allowlist keeps archive-only export available. Reuse the
 existing incoming modality profile, whose host must remain a literal IP for
 strict incoming checks; introducing a second same-AE hostname profile can make
-incoming lookup ambiguous. DHCP reservation remains recommended for this LAN
-configuration. The synthetic test uses a separate outgoing-only profile and
+incoming lookup ambiguous. The current profile uses the Mac's Tailscale IP,
+with return-path qualification pending as recorded above. The earlier synthetic
+LAN test uses a separate outgoing-only profile and
 successfully sends via `osirix-mac.local:11112`.
 
 Closing/reopening the dialog never sends automatically. A lost status check
@@ -401,8 +454,9 @@ editing/resave fidelity remain separate work.
 ## Synthetic segmentation return qualification
 
 The user confirmed OsiriX's listener AE `OsiriX-Mac`, port `11112`.
-Outbound C-ECHO works with `osirix-mac.local`, which resolves to
-`10.20.0.107`. Hostnames work for outgoing connections even though incoming
+During the LAN qualification, outbound C-ECHO worked with
+`osirix-mac.local`, resolving to `10.20.0.107`. Hostnames work for
+outgoing connections even though incoming
 source-host checks require a literal IP.
 
 `tests/osirix_seg_smoke.py` generates fresh synthetic CT and two independent

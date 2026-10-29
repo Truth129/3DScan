@@ -248,6 +248,14 @@ permissions on Orthanc, separate from 3DScan's REST adapter and outgoing sends.
 Strict calling/called AE and source-IP checks remain enforced. This enables
 direct OsiriX Query/Retrieve without routing searches through 3DScan.
 
+The existing `osirix` peer now uses the Mac's Tailscale address
+`100.64.0.20:11112`; OsiriX should target workstation
+`100.64.0.10:4243`, called AE `SCAN3D`. Only the peer host was persisted and
+hot-applied, without service restarts or firewall edits. Incoming C-ECHO awaits
+the user's retry. Reverse TCP connectivity works but the DICOM association
+aborts, so bidirectional Tailscale transport is not yet qualified. See
+[switch status](ORTHANC.md#tailscale-dicom-switch).
+
 Explicit import queues a CPU job for one immutable series snapshot. Known
 incomplete/receiving series are blocked; unknown declared counts retain a visible
 warning. Bounded downloads check snapshot membership before/after transfer, then
