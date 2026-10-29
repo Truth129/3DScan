@@ -36,18 +36,17 @@ Mac. Its current HTTP bind is only `["0.0.0.0"]`, with `RemoteAccessAllowed` and
 the wildcard and causes startup failure. The main 3DScan app's browser addresses
 remain loopback `http://127.0.0.1:9010` and its existing private HTTPS tailnet URL.
 
-## Explorer 2 trial prepared for activation
+## Explorer 2 trial
 
-Orthanc Explorer 2 **1.15.0** is qualified and staged on 29 October 2026;
-it is **not active yet**. Activating it requires the user's approval to restart
-only `scan3d-orthanc.service`. The additive configuration retains the current
-default UI with `IsDefaultOrthancUI:false` and offers the new interface at
-`/ui/app/`, using the existing Orthanc login. After activation the preferred
-trial address will be
+Orthanc Explorer 2 **1.15.0** is active after the user's approved restart on
+29 October 2026. Only `scan3d-orthanc.service` was restarted; its new PID is
+**842420**. The additive configuration retains the current default UI with
+`IsDefaultOrthancUI:false` and offers the new interface at `/ui/app/`, using the
+existing Orthanc login. Open
 [Explorer 2 over private HTTPS](https://scan3d-host.example.ts.net:8444/ui/app/).
 The workstation/LAN paths use the same suffix on port `8044`.
 
-The staged configuration preserves OHIF/DICOMweb, authentication, network
+The configuration preserves OHIF/DICOMweb, authentication, network
 listeners, archive paths and every DICOM peer permission. Explorer 2 detects
 the existing OHIF plugin and supplies study links to `/ohif/`. No new network
 route or modality-persistence change is needed. The existing legacy interface
@@ -63,21 +62,29 @@ configured destinations, so it is not part of live installation verification.
 
 Private plugin, hashes, before/after configurations, synthetic evidence and
 approval-only activation/rollback:
-`.runtime/orthanc-explorer2-20261029T080042Z/`. Retain this directory if activated;
-the candidate loads the plugin directly from it. Config snapshots contain
-credentials and must remain private. Running the helper without `--approved`
+`.runtime/orthanc-explorer2-20261029T080042Z/`. Retain this directory;
+the running configuration loads the plugin directly from it. Config snapshots
+contain credentials and must remain private. Running the helper without `--approved`
 prints the plan without changing the live service:
 
 ```bash
 .venv-rocm10-py314/bin/python .runtime/orthanc-explorer2-20261029T080042Z/activate.py
 ```
 
-After explicit approval, `--approved` applies the exact qualified configuration,
-guards idle jobs and incoming associations, restarts Orthanc and checks static
-access/authentication, plugin versions and unchanged aggregate counts. It
-restores the previous configuration on activation failure. A later
-`--rollback --approved` also requires restart approval and retains the existing
-OHIF/DICOMweb configuration and HTTPS route.
+Activation guarded idle jobs, incoming associations, the baseline PID and
+configuration/plugin/evidence hashes. Loopback and certificate-validated HTTPS
+static/authentication checks pass, including all eleven referenced JS/CSS assets
+through both addresses. Archive counts remain unchanged. 3DScan remains PID735851 with both lanes healthy and CT-only
+policy; all existing Tailscale routes are unchanged. Journal priority metadata
+shows no warnings or errors. No patient records were read or DICOM sent.
+
+The helper restores the previous configuration on activation failure. A later
+rollback requires fresh restart approval, verifies the active configuration/PID
+and retains the existing OHIF/DICOMweb configuration and HTTPS route:
+
+```bash
+.venv-rocm10-py314/bin/python .runtime/orthanc-explorer2-20261029T080042Z/activate.py --rollback --approved
+```
 
 ## OHIF browser viewer with DICOMweb
 

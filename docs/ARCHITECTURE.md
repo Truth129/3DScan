@@ -237,11 +237,11 @@ OHIF study does not create a 3DScan case, revision or inference job. Existing
 archive ownership, import provenance and saved-mask export contracts remain.
 See [OHIF operation](ORTHANC.md#ohif-browser-viewer-with-dicomweb).
 
-Orthanc Explorer 2 **1.15.0** is separately qualified and staged for an optional
-archive UI at `/ui/app/`, including links to the existing OHIF viewer. Its
-activation awaits an approved Orthanc-only restart. The staged configuration
-retains the legacy default UI, current authentication and archive/application
-boundaries. See [trial status](ORTHANC.md#explorer-2-trial-prepared-for-activation).
+Orthanc Explorer 2 **1.15.0** is active after the approved Orthanc-only restart
+on 29 October 2026. Its optional archive UI at `/ui/app/` uses the existing
+Orthanc login and private HTTPS port `8444`, including links to the existing
+OHIF viewer. The legacy default UI, current authentication and archive/application
+boundaries remain unchanged. See [trial operation](ORTHANC.md#explorer-2-trial).
 
 The existing OsiriX Mac also has explicitly approved DICOM C-FIND/C-MOVE
 permissions on Orthanc, separate from 3DScan's REST adapter and outgoing sends.
