@@ -83,8 +83,9 @@ The integration is qualified and active; see the runbook for runtime details.
 An experimental standalone native OsiriX brush writer is also available for
 synthetic qualification. It creates source-linked ROI SR reports directly from
 saved binary masks. Its synthetic test sends CT plus native reports without a
-SEG; OsiriX display and save/reload still need user verification. The app's
-export menu continues to offer the qualified SEG workflow. See
+SEG; the user confirms these native ROIs work in OsiriX. Editing/save/reload and
+other geometries still need qualification. The app's export menu continues to
+offer the qualified SEG workflow. See
 [native ROI qualification](docs/ORTHANC.md#native-osirix-roi-export-investigation).
 
 ### Back up the case library

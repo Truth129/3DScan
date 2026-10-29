@@ -314,8 +314,9 @@ fallback remain separate qualification. Audit and synthetic fixtures:
 The user requested a second export option for native OsiriX brush ROIs. The
 existing user-verified DICOM SEG path remains active. A standalone experimental
 native writer now emits Basic Text SR reports directly from exact saved masks.
-Its API/UI integration waits for synthetic MD 14.3 interpretation and
-save/reload qualification.
+The user confirms its first synthetic native ROI import/display works in
+MD 14.3. API/UI integration is not enabled; editing and save/reload still need
+qualification.
 
 With explicit approval on 29 October, sent a fresh 12-image synthetic CT and
 one two-mask SEG from the separate 8043 archive. Both transfers succeeded with
@@ -377,9 +378,11 @@ The user approved this writer's synthetic test on 29 October. Both transfers
 succeeded: 12/12 CT and 9/9 native ROI SR files, zero failures, no SEG sent.
 Open `SYNTHETIC^NATIVEROI`, patient ID `SCAN3D-NROI-ebc4b232`, then its CT.
 Expected ROIs are red **Synthetic ring** with a hole and cyan **Synthetic block**
-overlapping its right side. Display and editing/save/reload are awaiting the
-user's check. For an exact round trip, save the ROIs and send this synthetic
-study back to SCAN3D with native ROI SR objects. Audit and terminal receipts:
+overlapping its right side. The user confirms "Yes, it works", passing basic
+native ROI import/display for this fixture. Editing/save/reload and an exact
+receiver round trip are not yet separately qualified. To verify them, save the
+ROIs and send this synthetic study back to SCAN3D with native ROI SR objects.
+Audit and terminal receipts:
 `.runtime/validation/osirix-native-roi-writer-20261029T065107Z/`.
 
 Audit and retained synthetic sources/truth:

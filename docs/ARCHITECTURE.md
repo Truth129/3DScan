@@ -292,8 +292,9 @@ Fresh report/series/brush identities and exact source SOP/evidence references
 avoid using returned patient archives as templates. The package is published
 with Linux exclusive atomic rename after input stamp/hash checks; cancellation
 and failure discard owned staging. No route, job integration, dependency change
-or live runtime activation accompanies this writer. Synthetic OsiriX display
-and save/reload gate the future export option and broader geometry support.
+or live runtime activation accompanies this writer. The user confirms the first
+synthetic native import/display works. Editing/save/reload, app integration and
+broader source-geometry qualification remain before production activation.
 
 ## Scan and correction lifecycle
 
