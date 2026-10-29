@@ -359,6 +359,21 @@ def test_label_union_reduction_keeps_labels_and_validates_selection(tmp_path, mo
         union.volume_label_union(ct, masks, cache)
 
 
+def test_label_union_cache_rejects_edited_or_digest_stripped_labels(tmp_path):
+    ct, masks, _, _, cache = fixture(tmp_path)
+    result = union.volume_label_union(ct, masks, cache)
+    manifest = review_volume._entry(cache, result["key"]) / "manifest.json"
+    for tamper in ("swap", "strip"):
+        record = json.loads(manifest.read_text())
+        if tamper == "swap":
+            record["descriptor"]["labels"] = record["descriptor"]["labels"][::-1]
+        else:
+            del record["descriptor_sha256"]
+        manifest.write_text(json.dumps(record))
+        assert review_volume._read_cached(cache, result["key"]) is None
+        assert union.volume_label_union(ct, masks, cache) == result
+
+
 def test_api_label_union_keeps_request_order_and_chunk_ownership(tmp_path):
     ct, masks, a, b, _ = fixture(tmp_path)
     app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "missing"))

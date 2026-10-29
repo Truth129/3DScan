@@ -132,7 +132,9 @@ def _read_cached(cache_dir, key):
         descriptor = record["descriptor"]
         if record["implementation"] != _IMPLEMENTATION or descriptor["key"] != key or descriptor["schema_version"] != 1:
             return None
-        if ("descriptor_sha256" in record or descriptor.get("volume_mask_union")) and (record.get("descriptor_sha256") != _identity(descriptor)):
+        # Presentation unions always carry a digest: their selection or labels decide what is shown.
+        union = descriptor.get("volume_mask_union") or descriptor.get("volume_label_union")
+        if ("descriptor_sha256" in record or union) and (record.get("descriptor_sha256") != _identity(descriptor)):
             return None
         # Digests are memoized by inode, length, mtime AND ctime. A corrupted or
         # replaced compressed artifact is checked again before it can be served.
