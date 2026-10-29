@@ -294,6 +294,20 @@ return workflow is user-verified. highdicom 0.28.2 and pyjpegls 1.5.1 are pinned
 in the deployment lock. The integrated feature
 is qualified and active; [the runbook](ORTHANC.md) records runtime details.
 
+`osirix_roi.py` and `osirix_roi_archive.py` provide an experimental, standalone
+native OsiriX MD 14.3 brush writer. They reuse the SEG source-grid proof, gather
+exact independent mask planes and spool packed bits with one dense mask at a
+time. Each occupied source image receives a Basic Text SR containing every
+selected nonempty brush on that image. Named-key binary plists use documented
+Apple LZ4 stored-block framing, with no new dependency or Mac runtime required.
+Fresh report/series/brush identities and exact source SOP/evidence references
+avoid using returned patient archives as templates. The package is published
+with Linux exclusive atomic rename after input stamp/hash checks; cancellation
+and failure discard owned staging. No route, job integration, dependency change
+or live runtime activation accompanies this writer. The user confirms the first
+synthetic native import/display works. Editing/save/reload, app integration and
+broader source-geometry qualification remain before production activation.
+
 ## Scan and correction lifecycle
 
 ```mermaid

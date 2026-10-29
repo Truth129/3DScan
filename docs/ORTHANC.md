@@ -309,6 +309,85 @@ receive/display compatibility; exact alignment, editing/resave and RTSTRUCT
 fallback remain separate qualification. Audit and synthetic fixtures:
 `.runtime/validation/osirix-seg-return-20261028T133800Z/`.
 
+## Native OsiriX ROI export investigation
+
+The user requested a second export option for native OsiriX brush ROIs. The
+existing user-verified DICOM SEG path remains active. A standalone experimental
+native writer now emits Basic Text SR reports directly from exact saved masks.
+The user confirms its first synthetic native ROI import/display works in
+MD 14.3. API/UI integration is not enabled; editing and save/reload still need
+qualification.
+
+With explicit approval on 29 October, sent a fresh 12-image synthetic CT and
+one two-mask SEG from the separate 8043 archive. Both transfers succeeded with
+zero failed instances; no experimental native archives were sent. Look for
+`SYNTHETIC^SEGRETURN`, patient ID `SCAN3D-SEG-7363b7af`. The expected ROIs are a
+red **Synthetic ring** with a hole and cyan **Synthetic block**, overlapping on
+the ring's right side.
+
+The user saved and returned the native ROIs. Ten verified synthetic SR files
+contain 16 brush objects / 15 unique per-image ROIs: one source slice has a
+byte-identical duplicate archive under another report SOP. All reconstructed
+masks match the known source masks exactly, including the ring's hole and 529
+overlapping voxels. Source references, spacing, crop offsets and origins pass.
+The next gate is the native writer's synthetic OsiriX import, display and save
+round trip. Inspect only the returned synthetic study;
+receiving it does not authorize broader clinical archive inspection.
+
+The verified MD 14.3 reference uses `NSKeyedArchiver` in a binary plist, with
+type-20 brush ROIs. `textureBuffer` holds a one-byte zero placeholder and
+`textureWidth`/`textureHeight` are 1; the real crop dimensions are in
+`textureWidthCompressed`/`textureHeightCompressed`. The
+`textureBufferCompressedSize` field is the decoded byte count, equal to their
+product. `textureBufferCompressed` uses documented
+[Apple LZ4 framing](https://developer.apple.com/documentation/compression/compression_lz4)
+and decodes to row-major 0/255 mask bytes. Crop corners are inclusive. Source
+SOP references, rather than the ROI's unset `zLocation`, identify the image
+plane. The reference's `imageOrigin` matches source LPS x/y for this fixture;
+that observation alone is not a general geometry qualification.
+
+The new writer uses fresh NSKeyedArchiver objects matching the reference's
+72 ROI keys and scalar/UID types. It emits Apple's documented `bv4-` stored
+blocks plus `bv4$` end marker, preserving cropped row-major 0/255 bytes without
+requiring a platform-specific compressor. Placeholder texture fields, inclusive
+crop bounds, exact spacing and populated `savedStudyInstanceUID` match the
+returned brush profile. Each occupied image gets one report with all its
+independent brushes; each new report has fresh report/series/brush identities.
+`SeriesNumber=5002`, `SeriesDescription=OsiriX ROI SR` and `InstanceNumber=0`
+preserve the observed recognition/source-frame behavior. Manufacturer remains
+3DScan. The observed private namespace `99_OSIRIX` is a deliberate compatibility
+limitation: its underscore violates current DICOM coding-scheme syntax.
+
+Run the prepare-only synthetic gate from an isolated source copy:
+
+```bash
+PYTHONPATH=$PWD:$PWD/tests PYTHONSAFEPATH=1 python tests/osirix_roi_smoke.py \
+  --output /tmp/scan3d-osirix-roi-<unique>
+```
+
+It writes a new private fixture, twelve CT files and nine native ROI reports
+with fifteen brushes, exact readback evidence and a SHA-256 manifest. There is
+no SEG in this package. Outgoing transfer still requires explicit user approval,
+the separate synthetic 8043 archive, exact-file hash verification and CT-before-SR
+ordering. Never send a patient/study archive resource that could include other
+instances. Retain write-ahead transfer intents and receipts; an unknown outcome
+must be inspected before a retry. This experiment does not enable native ROI
+exports for clinical cases or qualify untested source orientations.
+
+The user approved this writer's synthetic test on 29 October. Both transfers
+succeeded: 12/12 CT and 9/9 native ROI SR files, zero failures, no SEG sent.
+Open `SYNTHETIC^NATIVEROI`, patient ID `SCAN3D-NROI-ebc4b232`, then its CT.
+Expected ROIs are red **Synthetic ring** with a hole and cyan **Synthetic block**
+overlapping its right side. The user confirms "Yes, it works", passing basic
+native ROI import/display for this fixture. Editing/save/reload and an exact
+receiver round trip are not yet separately qualified. To verify them, save the
+ROIs and send this synthetic study back to SCAN3D with native ROI SR objects.
+Audit and terminal receipts:
+`.runtime/validation/osirix-native-roi-writer-20261029T065107Z/`.
+
+Audit and retained synthetic sources/truth:
+`.runtime/validation/osirix-native-roi-reference-20261029T062846Z/`.
+
 ## Synthetic development archive
 
 The development archive is a separate local Orthanc 1.13.0 process at
