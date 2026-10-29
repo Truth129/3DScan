@@ -329,3 +329,58 @@ describe('bounded independent volume-mask union transport', () => {
     loader.dispose();
   });
 });
+
+describe('ordered segment colour label transport', () => {
+  function labelUnion(key: string, labels: string[]) {
+    const { volume_mask_union: _, ...base } = descriptor(key);
+    return { ...base, volume_label_union: true, labels, selected_structure_ids: [...labels].sort() };
+  }
+  it('keeps the painting order, omits the margin and caches labels apart from masks', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        const query = new URL(url, 'http://localhost').searchParams;
+        if (url.includes('/volume-labels?')) {
+          const current = labelUnion(`labels-${calls.length}`, query.getAll('structure_ids'));
+          return Response.json({ schema_version: 1, current, source_id: `volume-label-union:${current.key}` });
+        }
+        return metadata({ ...descriptor(url), selected_structure_ids: query.getAll('structure_ids') });
+      }),
+    );
+    const loader = new VolumeMaskSources(0),
+      signal = new AbortController().signal;
+    const labels = await loader.labels('/revision/', ['b', 'a', 'b'], signal);
+    expect(calls[0]).toBe('/revision/volume-labels?structure_ids=b&structure_ids=a');
+    expect(labels.overlays[0].id).toBe(`volume-label-union:${labels.overlays[0].current.descriptor.key}`);
+    expect(labels.overlays[0].current.descriptor.labels).toEqual(['b', 'a']);
+    await loader.labels('/revision', ['b', 'a'], signal);
+    expect(calls).toHaveLength(1);
+    await loader.labels('/revision', ['a', 'b'], signal);
+    await loader.get('/revision', ['b', 'a'], signal);
+    expect(calls.slice(1)).toEqual([
+      '/revision/volume-labels?structure_ids=a&structure_ids=b',
+      '/revision/volume-mask?structure_ids=a&structure_ids=b&margin_mm=0',
+    ]);
+    expect(await loader.labels('/revision', [], signal)).toEqual({ overlays: [] });
+    loader.dispose();
+  });
+  it('rejects a plain union, a reordered label list or a foreign source id before reading voxels', async () => {
+    const responses = [
+      () => metadata(descriptor('plain')),
+      () => Response.json({ schema_version: 1, current: labelUnion('swapped', ['a', 'b']), source_id: 'volume-label-union:swapped' }),
+      () => Response.json({ schema_version: 1, current: labelUnion('foreign', ['b', 'a']), source_id: 'volume-mask-union:foreign' }),
+    ];
+    for (const respond of responses) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => respond()),
+      );
+      const loader = new VolumeMaskSources(0);
+      await expect(loader.labels('/revision', ['b', 'a'], new AbortController().signal)).rejects.toThrow(/label/);
+      loader.dispose();
+    }
+    await expect(new VolumeMaskSources(0).labels('/revision', ['a', ''], new AbortController().signal)).rejects.toThrow('Invalid segment colour selection');
+  });
+});

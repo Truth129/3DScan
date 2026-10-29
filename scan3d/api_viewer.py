@@ -207,6 +207,27 @@ def add_routes(app, service):
         )
         return with_image_context(descriptor, asset)
 
+    def review_volume_labels(case_id, revision_id, structure_ids, cancelled=None):
+        from .volume_mask_union import volume_label_union
+
+        revision = service.ct_revision(case_id, revision_id)
+        asset = service.store.resolve_reference(revision)
+        # Order is meaningful: label n is the n-th structure and later ones win overlaps.
+        ordered_ids = list(dict.fromkeys(structure_ids))
+        if not ordered_ids:
+            raise ValueError("Select at least one structure to colour the volume")
+        structures = {structure["id"]: structure for structure in revision["structures"]}
+        if any(structure_id not in structures for structure_id in ordered_ids):
+            raise ValueError("Unknown structure")
+        descriptor = volume_label_union(
+            asset["file_path"],
+            [(structure_id, structures[structure_id]["mask_file"]) for structure_id in ordered_ids],
+            review_cache,
+            reference_image_id=asset["id"],
+            cancelled=cancelled,
+        )
+        return with_image_context(descriptor, asset)
+
     def volume_chunk(descriptor, key, index):
         from .review_volume import chunk_path
 
@@ -281,28 +302,32 @@ def add_routes(app, service):
     ):
         return volume_chunk(review_mask(case_id, revision_id, structure_id, parent, quality, margin_mm), key, index)
 
-    @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-mask")
-    async def volume_mask_manifest(
-        request: Request, case_id: str, revision_id: str, structure_ids: list[str] = Query(default=[]), margin_mm: float = Query(0, ge=0, le=5)
-    ):
-        from urllib.parse import urlencode
+    async def cancellable_presentation(request, build, *args):
         import asyncio
-        from .review_volume import display_margin
 
         cancelled = threading.Event()
-        work = asyncio.create_task(asyncio.to_thread(review_volume_mask, case_id, revision_id, structure_ids, margin_mm, cancelled.is_set))
+        work = asyncio.create_task(asyncio.to_thread(build, *args, cancelled.is_set))
         try:
             while not work.done():
                 await asyncio.wait({work}, timeout=0.1)
                 if not work.done() and await request.is_disconnected():
                     raise HTTPException(499, "Volume mask request cancelled")
-            current = await work
+            return await work
         finally:
             cancelled.set()
             if not work.done():
                 # A native decode already in progress finishes into its reusable
                 # cache; the cooperative union runner then stops before publish.
                 work.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-mask")
+    async def volume_mask_manifest(
+        request: Request, case_id: str, revision_id: str, structure_ids: list[str] = Query(default=[]), margin_mm: float = Query(0, ge=0, le=5)
+    ):
+        from urllib.parse import urlencode
+        from .review_volume import display_margin
+
+        current = await cancellable_presentation(request, review_volume_mask, case_id, revision_id, structure_ids, margin_mm)
         prefix = f"/api/cases/{case_id}/revisions/{revision_id}/volume-mask"
         query = "?" + urlencode([*(("structure_ids", value) for value in sorted(set(structure_ids))), ("margin_mm", display_margin(margin_mm))])
         return JSONResponse(
@@ -315,6 +340,22 @@ def add_routes(app, service):
         case_id: str, revision_id: str, key: str, index: int, structure_ids: list[str] = Query(default=[]), margin_mm: float = Query(0, ge=0, le=5)
     ):
         return volume_chunk(review_volume_mask(case_id, revision_id, structure_ids, margin_mm), key, index)
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-labels")
+    async def volume_labels_manifest(request: Request, case_id: str, revision_id: str, structure_ids: list[str] = Query(default=[])):
+        from urllib.parse import urlencode
+
+        current = await cancellable_presentation(request, review_volume_labels, case_id, revision_id, structure_ids)
+        prefix = f"/api/cases/{case_id}/revisions/{revision_id}/volume-labels"
+        query = "?" + urlencode([("structure_ids", value) for value in dict.fromkeys(structure_ids)])
+        return JSONResponse(
+            {"schema_version": 1, "source_id": f"volume-label-union:{current['key']}", "current": with_chunk_urls(current, prefix, query)},
+            headers={"Cache-Control": "private, no-store"},
+        )
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-labels/{key}/chunks/{index}")
+    def volume_labels_chunk(case_id: str, revision_id: str, key: str, index: int, structure_ids: list[str] = Query(default=[])):
+        return volume_chunk(review_volume_labels(case_id, revision_id, structure_ids), key, index)
 
     frame_cache = _FrameCache()
 

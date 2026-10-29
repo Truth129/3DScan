@@ -317,3 +317,80 @@ def test_api_union_preserves_mr_reference_and_presentation(tmp_path):
         assert descriptor["reference_image_id"] == asset["id"] and descriptor["modality"] == "MR"
         assert descriptor["scalar"]["units"] == "signal" and descriptor["presentation"] == asset["presentation"]
         assert client.get(descriptor["chunks"][0]["url"]).status_code == 200
+
+
+def test_label_union_numbers_structures_in_order_and_later_labels_win_overlaps(tmp_path):
+    ct, masks, a, b, cache = fixture(tmp_path)
+    assert ((a == 1) & (b == 1)).any(), "The fixture must overlap"
+
+    def labelled(first, second):
+        expected = np.zeros(a.shape, np.uint8)
+        expected[first == 1] = 1
+        expected[second == 1] = 2
+        return expected[2:16, 3:20, 5:25]
+
+    result = union.volume_label_union(ct, masks, cache, reference_image_id="source-one")
+    np.testing.assert_array_equal(decode(cache, result), labelled(a, b))
+    assert result["labels"] == ["a", "b"] and result["selected_structure_ids"] == ["a", "b"]
+    assert result["volume_label_union"] and not result["volume_mask_union"] and result["presentation_only"]
+    assert result["display_margin_mm"] == 0 and result["reference_image_id"] == "source-one"
+    reversed_order = union.volume_label_union(ct, masks[::-1], cache, reference_image_id="source-one")
+    np.testing.assert_array_equal(decode(cache, reversed_order), labelled(b, a))
+    assert reversed_order["labels"] == ["b", "a"] and reversed_order["key"] != result["key"]
+    plain = union.volume_mask_union(ct, masks, cache, reference_image_id="source-one")
+    assert plain["key"] not in {result["key"], reversed_order["key"]} and "labels" not in plain
+
+
+def test_label_union_reduction_keeps_labels_and_validates_selection(tmp_path, monkeypatch):
+    ct, masks, a, b, cache = fixture(tmp_path)
+    monkeypatch.setattr(union, "_MAX_BYTES", 600)
+    reduced = union.volume_label_union(ct, masks, cache)
+    values = decode(cache, reduced)
+    assert reduced["approximate"] and int(np.prod(reduced["shape"])) <= 600
+    assert set(np.unique(values)) == {0, 1, 2}
+    with pytest.raises(ValueError, match="at least one"):
+        union.volume_label_union(ct, [], cache)
+    with pytest.raises(ValueError, match="only once"):
+        union.volume_label_union(ct, [masks[0], masks[0]], cache)
+    with pytest.raises(ValueError, match="valid structure"):
+        union.volume_label_union(ct, [("", masks[0][1])], cache)
+    monkeypatch.setattr(union, "_MAX_LABELS", 1)
+    with pytest.raises(ValueError, match="at most 1"):
+        union.volume_label_union(ct, masks, cache)
+
+
+def test_api_label_union_keeps_request_order_and_chunk_ownership(tmp_path):
+    ct, masks, a, b, _ = fixture(tmp_path)
+    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "missing"))
+    service = app.state.service
+    case = service.new_case("Label transport")
+    revision = {
+        "case_id": case["id"],
+        "id": uuid.uuid4().hex,
+        "ct_file": str(ct),
+        "geometry": imaging.geometry(ct),
+        "structures": [{"id": i, "mask_file": str(p)} for i, p in masks],
+    }
+    service.store.save("revisions", revision)
+    prefix = f"/api/cases/{case['id']}/revisions/{revision['id']}"
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        response = client.get(prefix + "/volume-labels", params=[("structure_ids", "b"), ("structure_ids", "a"), ("structure_ids", "b")])
+        assert response.status_code == 200 and "no-store" in response.headers["cache-control"]
+        result = response.json()
+        descriptor = result["current"]
+        assert result["source_id"] == "volume-label-union:" + descriptor["key"]
+        assert descriptor["labels"] == ["b", "a"] and str(tmp_path) not in json.dumps(result)
+        chunks = [client.get(chunk["url"]) for chunk in descriptor["chunks"]]
+        assert all(chunk.status_code == 200 and chunk.headers["content-encoding"] == "gzip" for chunk in chunks)
+        actual = np.frombuffer(b"".join(c.content for c in chunks), np.uint8).reshape(descriptor["shape"], order="F")
+        expected = np.zeros(a.shape, np.uint8)
+        expected[b == 1] = 1
+        expected[a == 1] = 2
+        np.testing.assert_array_equal(actual, expected[2:16, 3:20, 5:25])
+        chunk = descriptor["chunks"][0]["url"]
+        assert "structure_ids=b&structure_ids=a" in chunk
+        assert client.get(chunk.replace("structure_ids=b&structure_ids=a", "structure_ids=a&structure_ids=b")).status_code == 404
+        assert client.get(chunk.replace("structure_ids=b&", "structure_ids=unknown&")).status_code == 400
+        assert client.get(prefix + "/volume-labels").status_code == 400
+        other = service.new_case("Other source")
+        assert client.get(chunk.replace(case["id"], other["id"])).status_code == 404

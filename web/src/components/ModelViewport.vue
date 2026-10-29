@@ -51,6 +51,7 @@ import { COMPACT_SCREEN_QUERY, useFoldingControls } from '../lib/use-folding-con
 import { cardiacCamera } from '../lib/cardiac-camera';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
+import { freshVolumeColorSettings, volumeColorRequest, type VolumeColorSettings } from '../lib/volume-colors';
 import { normalizePortableState, type PortableLayers, type PortableRenderSnapshot } from '../lib/portable-viewer';
 const props = defineProps<{
   modelUrl?: string;
@@ -105,6 +106,7 @@ interface VolumePreview {
   resetView(): void;
   retry(): Promise<void>;
   retryMask(): Promise<void>;
+  retryColors(): Promise<void>;
   prepareReviewPlane(): Promise<boolean>;
   reviewPatientToCanvas(ras: Point): [number, number] | undefined;
 }
@@ -134,6 +136,7 @@ const nativeReviewStatus = ref<NativeReviewStatus>({
   planeError: '',
 });
 const nativeMaskStatus = ref<VolumeMaskStatus>({ ready: false, loading: false, error: '' });
+const nativeColorStatus = ref<VolumeMaskStatus>({ ready: false, loading: false, error: '' });
 let pendingVolumeCamera: CornerstoneVolumeCameraRAS | undefined;
 const viewport = ref<HTMLElement>(),
   expandButton = ref<HTMLButtonElement>();
@@ -210,6 +213,9 @@ const volumeMask = shallowRef(freshVolumeMaskSettings(props.initialSnapshot?.sta
   maskError = ref(''),
   atlasFamilyReady = ref('');
 const availableMaskStructures = computed(() => props.maskStructures ?? props.structures);
+// Segment colours tint only the native volume; label order and colours come from the anatomy list.
+const volumeColors = shallowRef(freshVolumeColorSettings());
+const volumeColorsRequest = computed(() => volumeColorRequest(volumeColors.value, availableMaskStructures.value));
 const heartCamera = computed(() =>
   signalVolume.value ? undefined : cardiacCamera(availableMaskStructures.value, volumeMask.value.enabled ? volumeMask.value.margin_mm : 0),
 );
@@ -843,6 +849,9 @@ function setVolumeMask(settings: VolumeMaskSettings) {
   volumeMask.value = freshVolumeMaskSettings(settings, availableMaskStructures.value);
   maskError.value = '';
   syncReview();
+}
+function setVolumeColors(settings: VolumeColorSettings) {
+  volumeColors.value = freshVolumeColorSettings(settings, availableMaskStructures.value);
 }
 function retryVolumeMask() {
   if (vtkSelected.value) {
@@ -1593,6 +1602,10 @@ defineExpose({
     :data-volume-mask-ready="volumeMaskReady"
     :data-volume-mask-pending="volumeMaskLoading"
     :data-volume-mask-error="effectiveMaskError"
+    :data-volume-colors-enabled="volumeColorsRequest.enabled"
+    :data-volume-colors-selection="JSON.stringify(volumeColorsRequest.ids)"
+    :data-volume-colors-ready="nativeColorStatus.ready"
+    :data-volume-colors-error="nativeColorStatus.error"
     :data-volume-renderer="vtkSelected ? 'vtk' : 'three'"
     :data-volume-camera="vtkSelected ? JSON.stringify(vtkCamera) : undefined"
   >
@@ -1618,6 +1631,7 @@ defineExpose({
       :display="display"
       :selected="selected"
       :mask="volumeMask"
+      :colors="volumeColorsRequest"
       :revision-base="planeRequest?.base"
       :mask-source-provider="maskSourceProvider"
       :model-revision-id="modelRevisionId"
@@ -1637,6 +1651,7 @@ defineExpose({
       @error="vtkError = $event"
       @camera="vtkCamera = $event"
       @mask-status="nativeMaskStatus = $event"
+      @color-status="nativeColorStatus = $event"
     />
     <div v-if="vtkSelected && vtkComponentFailed" class="viewport-state error-state" role="alert">
       <strong>Cornerstone3D unavailable</strong>
@@ -1783,6 +1798,13 @@ defineExpose({
           @update:native-lighting="nativeLighting = $event"
           @update:mask="setVolumeMask"
           @retry-mask="retryVolumeMask"
+          :colors="volumeColors"
+          :colors-available="vtkAvailable"
+          :colors-supported="vtkSelected"
+          :colors-loading="nativeColorStatus.loading"
+          :colors-error="nativeColorStatus.error"
+          @update:colors="setVolumeColors"
+          @retry-colors="volumePreview?.retryColors()"
           @retry="retryVolume"
         />
       </details>

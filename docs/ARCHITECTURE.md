@@ -148,6 +148,15 @@ after upload; only the crop texture remains. Empty/loading/error states hide CT
 in either mode, and Retry rebuilds just the mask. Mode/camera/crop changes reuse
 the texture; source/revision changes invalidate it before replacement.
 
+Native **Color segments** uses a revision-bound label union from the same
+cropping pipeline: each crop voxel stores the index of the chosen structure
+covering it, painted largest first. A second nearest-sampled R8 crop texture
+(at most 8 MiB) feeds a guarded shader hook that tints the transfer-function
+colour before lighting, so shading, scattering and shadows stay the CT's own
+and opacity is untouched. Colours and strength are uniforms; only a new
+selection reloads labels. A second hook slot on the same mapper node lets it
+compose with masking.
+
 Native CT lighting exposes the same vtk.js scattering and local ambient
 occlusion used by VolView, without embedding another application or creating
 another volume. A separate panel-owned lighting state selects preset, standard,
@@ -409,7 +418,7 @@ reusable after cancellation or restart.
 - [DICOM preparation](../scan3d/dicom.py), [inference](../scan3d/segmentation.py), [native operations and measurements](../scan3d/imaging.py).
 - [Read-only Orthanc REST transport](../scan3d/orthanc.py), [validated immutable archive records](../scan3d/orthanc_models.py), [snapshot import and recovery](../scan3d/orthanc_imports.py), [source-bound DICOM SEG encoding](../scan3d/dicom_seg.py) and [delivery](../scan3d/orthanc_exports.py), [receiver operation](ORTHANC.md).
 - [CPU contouring and surface caches](../scan3d/surfaces.py), [GLB encoding and decoding](../scan3d/surface_glb.py), [reusable gzip transport files](../scan3d/compressed_files.py), [bounded hashing, archive extraction and atomic artifact publication](../scan3d/fileio.py).
-- [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display union](../scan3d/volume_mask_union.py).
+- [Candidate review and acceptance](../scan3d/review.py), [scalar/mask transport](../scan3d/review_volume.py), [display and label unions](../scan3d/volume_mask_union.py), [segment colour labels](../web/src/lib/vtk-volume-labels.ts).
 - [Browser source worker](../web/src/lib/ct-volume.ts), [Cornerstone stack adapter](../web/src/lib/cornerstone-runtime.ts), [native MPR](../web/src/lib/cornerstone-mpr.ts), [shared memory budget](../web/src/lib/volume-memory-budget.ts), [3D scene](../web/src/lib/scene.ts), [volume renderer](../web/src/lib/ct-volume-renderer.ts).
 - [Portable export](../scan3d/portable_export.py), [embedded offline data](../web/src/lib/portable-viewer.ts), [MRI expansion boundaries](./EXPANSION_FOUNDATION.md).
 - The [workspace shell](../web/src/App.vue) delegates [local source streaming](../web/src/lib/use-local-ct.ts), the [crosshair value probe](../web/src/lib/use-image-probe.ts), the [candidate 3D preview](../web/src/lib/use-candidate-surface.ts) and [per-image colour preferences](../web/src/lib/use-structure-colors.ts).

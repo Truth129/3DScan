@@ -13,6 +13,7 @@ import {
 } from '../lib/volume-presets';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, visibleVolumeMaskIds, type VolumeMaskSettings } from '../lib/volume-mask';
 import { colorCss, prettyName } from '../lib/geometry';
+import { freshVolumeColorSettings, MAX_VOLUME_COLOR_SEGMENTS, type VolumeColorSettings } from '../lib/volume-colors';
 import type { Structure, StructureDisplay } from '../types';
 import NativeVolumeLightingControls from './NativeVolumeLightingControls.vue';
 import type { NativeVolumeLightingSettings } from '../lib/volume-lighting';
@@ -42,8 +43,21 @@ const props = withDefaults(
     maskError?: boolean;
     maskMarginFixed?: boolean;
     maskSupported?: boolean;
+    colors?: VolumeColorSettings;
+    /** Offered where the Cornerstone3D renderer exists; supported while it is selected. */
+    colorsAvailable?: boolean;
+    colorsSupported?: boolean;
+    colorsLoading?: boolean;
+    colorsError?: string;
   }>(),
-  { mask: () => freshVolumeMaskSettings(), structures: () => [], selected: '', display: () => ({}), maskSupported: true },
+  {
+    mask: () => freshVolumeMaskSettings(),
+    structures: () => [],
+    selected: '',
+    display: () => ({}),
+    maskSupported: true,
+    colors: () => freshVolumeColorSettings(),
+  },
 );
 const emit = defineEmits<{
   'update:enabled': [value: boolean];
@@ -54,6 +68,8 @@ const emit = defineEmits<{
   'measure-reference': [];
   'heart-view': [];
   retry: [];
+  'update:colors': [value: VolumeColorSettings];
+  'retry-colors': [];
 }>();
 const axes = ['i', 'j', 'k'] as const;
 const maskOpen = ref(props.mask.enabled),
@@ -120,6 +136,27 @@ function reset() {
 }
 function updateMask(change: Partial<VolumeMaskSettings>) {
   emit('update:mask', freshVolumeMaskSettings({ ...props.mask, ...change }, props.structures));
+}
+const colorsOpen = ref(false),
+  colorSearch = ref('');
+const colorIds = computed(() => new Set(props.colors.ids));
+const colorStructures = computed(() => {
+  const query = colorSearch.value.trim().toLowerCase().replaceAll('_', ' ');
+  return props.structures.filter(
+    structure => !query || `${prettyName(structure.name)} ${prettyName(structure.group)} ${structure.task}`.toLowerCase().includes(query),
+  );
+});
+function updateColors(change: Partial<VolumeColorSettings>) {
+  emit('update:colors', freshVolumeColorSettings({ ...props.colors, ...change }, props.structures));
+}
+function toggleColor(id: string, checked: boolean) {
+  updateColors({ ids: checked ? [...props.colors.ids, id] : props.colors.ids.filter(value => value !== id) });
+}
+function enableColors(enabled: boolean) {
+  // Starting with the selected segment gives an immediate, predictable result.
+  const ids = enabled && !props.colors.ids.length && currentMaskTarget.value ? [props.selected] : props.colors.ids;
+  updateColors({ enabled, ids });
+  colorsOpen.value = enabled;
 }
 function toggleMask(id: string, checked: boolean) {
   updateMask({ ids: checked ? [...props.mask.ids, id] : props.mask.ids.filter(value => value !== id) });
@@ -428,6 +465,107 @@ watch(
           </p>
         </template>
       </div>
+      <div v-if="colorsAvailable" class="volume-colors">
+        <div class="volume-mask-header">
+          <label
+            class="volume-toggle"
+            :title="
+              !colorsSupported
+                ? 'Segment colours use the Cornerstone3D renderer.'
+                : structures.length
+                  ? `Tint the ${modalityLabel} volume inside chosen segments with their anatomy-list colours.`
+                  : 'Run segmentation first to create anatomical segments.'
+            "
+            ><input
+              type="checkbox"
+              :aria-label="`Color segments in the ${modalityLabel} volume`"
+              :checked="colors.enabled && colorsSupported"
+              :disabled="disabled || !structures.length || !colorsSupported"
+              @change="enableColors(($event.target as HTMLInputElement).checked)"
+            />Color segments</label
+          ><span v-if="!colorsSupported" class="volume-mask-help">Uses Cornerstone3D.</span
+          ><span v-else-if="!structures.length" class="volume-mask-help">Run segmentation first.</span
+          ><button
+            v-if="colors.enabled && colorsSupported"
+            type="button"
+            class="text-button"
+            :aria-expanded="colorsOpen"
+            aria-label="Choose colored segments"
+            @click="colorsOpen = !colorsOpen"
+          >
+            {{ colorsOpen ? 'Done' : 'Choose segments' }} · {{ colors.ids.length }} {{ colorsOpen ? '▴' : '▾' }}
+          </button>
+        </div>
+        <template v-if="colors.enabled && colorsSupported">
+          <div v-if="colorsOpen" class="volume-mask-picker volume-colors-picker">
+            <div class="volume-mask-actions">
+              <button
+                type="button"
+                class="button secondary compact"
+                :disabled="disabled || !currentMaskTarget"
+                title="Color the segment selected in the anatomy list"
+                @click="updateColors({ ids: [selected] })"
+              >
+                Use selected</button
+              ><button
+                type="button"
+                class="button secondary compact"
+                :disabled="disabled || !visibleMaskIds.length"
+                title="Color a snapshot of all currently visible segments"
+                @click="updateColors({ ids: visibleMaskIds })"
+              >
+                Use visible</button
+              ><button type="button" class="text-button" :disabled="disabled || !colors.ids.length" @click="updateColors({ ids: [] })">Clear</button>
+            </div>
+            <input
+              v-model="colorSearch"
+              class="volume-mask-search"
+              type="search"
+              aria-label="Search colored segments"
+              placeholder="Search segments…"
+              :disabled="disabled"
+            />
+            <div class="volume-mask-segments" role="group" aria-label="Colored segments">
+              <label v-for="structure in colorStructures" :key="structure.id" class="volume-color-segment"
+                ><input
+                  type="checkbox"
+                  :aria-label="`Color segment ${prettyName(structure.name)}`"
+                  :checked="colorIds.has(structure.id)"
+                  :disabled="disabled || (!colorIds.has(structure.id) && colors.ids.length >= MAX_VOLUME_COLOR_SEGMENTS)"
+                  @change="toggleColor(structure.id, ($event.target as HTMLInputElement).checked)"
+                /><i :style="{ background: colorCss(structure.color) }" aria-hidden="true"></i><span>{{ prettyName(structure.name) }}</span
+                ><small>{{ prettyName(structure.group) }}</small></label
+              >
+              <p v-if="!colorStructures.length" class="volume-mask-help">No matching segments.</p>
+            </div>
+            <p class="volume-mask-help">
+              Each segment uses its anatomy-list colour; change it under Selected structure. Colours change only how the {{ modalityLabel }} volume looks, never
+              masks or measurements. Up to {{ MAX_VOLUME_COLOR_SEGMENTS }} segments.
+            </p>
+          </div>
+          <label class="volume-slider volume-colors-strength"
+            >Color strength <output>{{ Math.round(colors.strength * 100) }}%</output>
+            <input
+              type="range"
+              aria-label="Segment color strength"
+              min="0"
+              max="1"
+              step="0.05"
+              :value="colors.strength"
+              :disabled="disabled"
+              @input="updateColors({ strength: number($event) })"
+            />
+          </label>
+          <p v-if="!colors.ids.length" class="volume-mask-message" role="status">Choose at least one segment to color.</p>
+          <p v-else-if="colorsLoading" class="volume-mask-message" role="status">Preparing segment colours…</p>
+          <p v-else-if="colorsError" class="volume-mask-message" role="status">
+            {{ colorsError }}
+            <button type="button" class="text-button" aria-label="Retry segment colors" :disabled="disabled" @click="emit('retry-colors')">
+              Retry colours
+            </button>
+          </p>
+        </template>
+      </div>
       <details class="volume-crop">
         <summary>Crop volume <span>Native i / j / k</span></summary>
         <div class="volume-crop-grid">
@@ -472,6 +610,7 @@ watch(
 
 <style scoped>
 .volume-controls {
+  container: volume-controls / inline-size;
   min-width: 0;
   color: #bac7d9;
   font-size: 10px;
@@ -672,7 +811,8 @@ output {
   color: #a2b2c8;
   margin: 7px 0 0;
 }
-.volume-mask {
+.volume-mask,
+.volume-colors {
   margin-top: 8px;
   padding-top: 7px;
   border-top: 1px solid #343e50;
@@ -751,7 +891,8 @@ output {
   padding: 3px 5px;
   scrollbar-width: thin;
 }
-.volume-mask-segment {
+.volume-mask-segment,
+.volume-color-segment {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -759,29 +900,34 @@ output {
   padding: 4px 3px;
   cursor: pointer;
 }
-.volume-mask-segment:hover {
+.volume-mask-segment:hover,
+.volume-color-segment:hover {
   background: var(--surface-hover);
 }
-.volume-mask-segment input {
+.volume-mask-segment input,
+.volume-color-segment input {
   margin: 0;
   flex-shrink: 0;
   width: 13px;
   height: 13px;
 }
-.volume-mask-segment i {
+.volume-mask-segment i,
+.volume-color-segment i {
   display: block;
   flex-shrink: 0;
   width: 6px;
   height: 6px;
   border-radius: 50%;
 }
-.volume-mask-segment > span {
+.volume-mask-segment > span,
+.volume-color-segment > span {
   font-size: 10px;
   line-height: 1.4;
   color: #e2eaf6;
   overflow-wrap: anywhere;
 }
-.volume-mask-segment small {
+.volume-mask-segment small,
+.volume-color-segment small {
   margin-left: auto;
   text-align: right;
   flex-shrink: 0;
@@ -789,6 +935,19 @@ output {
   font-size: 8px;
   line-height: 1.4;
   color: #8596ae;
+}
+/* Without a region selector, the actions and search lead the colour picker. */
+.volume-colors-picker > .volume-mask-actions,
+.volume-colors-picker > .volume-mask-search {
+  grid-row: 1;
+}
+.volume-color-segment i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+.volume-colors-strength {
+  margin-top: 8px;
 }
 .volume-mask-help {
   font-size: 9px;
@@ -827,7 +986,8 @@ output {
   min-height: 26px;
   padding: 4px 8px;
 }
-@media (max-width: 760px) {
+/* The controls float in a narrow panel over the 3D view, so follow the panel's width. */
+@container volume-controls (max-width: 430px) {
   .volume-appearance {
     grid-template-columns: minmax(130px, 1fr) minmax(110px, 1fr);
     gap: 8px 12px;

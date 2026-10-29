@@ -1,9 +1,12 @@
 import { validateDescriptor, type VolumeChunk, type VolumeDescriptor } from './ct-reslice';
-import { GPU_VOLUME_SLAB_BYTES, gpuVolumeSlabRange, isVolumeDisplayUnion, type GPUOverlaySources } from './gpu-volume-data';
+import { GPU_VOLUME_SLAB_BYTES, gpuVolumeSlabRange, isVolumeDisplayUnion, isVolumeLabelUnion, type GPUOverlaySources } from './gpu-volume-data';
 import { normalizeVolumeMaskMargin } from './volume-mask';
 
 const MAX_DESCRIPTORS = 256;
 const MAX_MASKS = 128;
+const MAX_LABELS = 255;
+/** A union clips the volume; an ordered label union colours it by segment. */
+type UnionKind = 'mask' | 'labels';
 type Slot = { signal: AbortSignal; start: () => void; reject: () => void };
 
 function aborted(): DOMException {
@@ -36,13 +39,24 @@ export class VolumeMaskSources {
   }
 
   async get(base: string, ids: readonly string[], signal: AbortSignal, marginMM = 0): Promise<GPUOverlaySources> {
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)) throw new Error('Invalid volume mask selection');
+    const selected = [...new Set(ids)].sort();
+    if (selected.length > MAX_MASKS) throw new Error(`Choose up to ${MAX_MASKS} volume mask segments`);
+    return this.source('mask', base, selected, signal, normalizeVolumeMaskMargin(marginMM));
+  }
+
+  /** Label n of the result is `ids[n - 1]`; later segments win where they overlap. */
+  async labels(base: string, ids: readonly string[], signal: AbortSignal): Promise<GPUOverlaySources> {
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)) throw new Error('Invalid segment colour selection');
+    const ordered = [...new Set(ids)];
+    if (ordered.length > MAX_LABELS) throw new Error(`Choose up to ${MAX_LABELS} segments to colour`);
+    return this.source('labels', base, ordered, signal, 0);
+  }
+
+  private async source(kind: UnionKind, base: string, selected: string[], signal: AbortSignal, marginMM: number): Promise<GPUOverlaySources> {
     const epoch = this.generation;
     this.assertCurrent(epoch, [signal]);
     if (typeof base !== 'string' || !base.trim()) throw new Error('A CT revision is required for the volume mask');
-    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string' || !id)) throw new Error('Invalid volume mask selection');
-    marginMM = normalizeVolumeMaskMargin(marginMM);
-    const selected = [...new Set(ids)].sort();
-    if (selected.length > MAX_MASKS) throw new Error(`Choose up to ${MAX_MASKS} volume mask segments`);
     if (!selected.length) return { overlays: [] };
     base = base.replace(/\/+$/, '');
     const selection = new AbortController(),
@@ -50,7 +64,7 @@ export class VolumeMaskSources {
     this.controllers.add(selection);
     signal.addEventListener('abort', abortSelection, { once: true });
     try {
-      const metadata = await this.descriptor(base, selected, epoch, selection.signal, marginMM);
+      const metadata = await this.descriptor(kind, base, selected, epoch, selection.signal, marginMM);
       this.assertCurrent(epoch, [signal]);
       const descriptor = metadata.current;
       return {
@@ -94,8 +108,8 @@ export class VolumeMaskSources {
   private assertCurrent(epoch: number, signals: readonly (AbortSignal | undefined)[]): void {
     if (this.disposed || epoch !== this.generation || signals.some(signal => signal?.aborted)) throw aborted();
   }
-  private async descriptor(base: string, ids: string[], epoch: number, signal: AbortSignal, marginMM: number): Promise<UnionMetadata> {
-    const key = JSON.stringify([base, ids, marginMM]),
+  private async descriptor(kind: UnionKind, base: string, ids: string[], epoch: number, signal: AbortSignal, marginMM: number): Promise<UnionMetadata> {
+    const key = JSON.stringify([kind, base, ids, marginMM]),
       previous = this.metadata.get(key);
     if (previous) {
       this.metadata.delete(key);
@@ -122,11 +136,18 @@ export class VolumeMaskSources {
     this.assertCurrent(epoch, [signal]);
     const query = new URLSearchParams();
     for (const id of ids) query.append('structure_ids', id);
-    query.set('margin_mm', String(marginMM));
-    const descriptor = await this.request(`${base}/volume-mask?${query}`, 'no-store', epoch, [signal], async response => {
+    if (kind === 'mask') query.set('margin_mm', String(marginMM));
+    const endpoint = kind === 'mask' ? 'volume-mask' : 'volume-labels';
+    const descriptor = await this.request(`${base}/${endpoint}?${query}`, 'no-store', epoch, [signal], async response => {
       const data = await response.json();
       if (data?.schema_version !== 1 || !data.current) throw new Error('Unsupported volume mask descriptor');
       const current = validateDescriptor(data.current as VolumeDescriptor, 'mask');
+      if (kind === 'labels') {
+        if (!isVolumeLabelUnion(current) || data.source_id !== `volume-label-union:${current.key}`)
+          throw new Error('Segment colouring requires a bounded presentation label union');
+        if (JSON.stringify(current.labels) !== JSON.stringify(ids)) throw new Error('Segment colour labels do not match the request');
+        return { current: structuredClone(current), sourceId: data.source_id as string };
+      }
       if (!isVolumeDisplayUnion(current) || data.source_id !== `volume-mask-union:${current.key}`)
         throw new Error('Volume masking requires a bounded presentation union');
       const selected = current.selected_structure_ids;

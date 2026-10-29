@@ -13,6 +13,10 @@ export interface VTKMaskShaderProgram {
   setUniformMatrix(name: string, value: number[]): void;
   setUniform3iv(name: string, value: number[]): void;
 }
+export interface VTKLabelShaderProgram extends VTKMaskShaderProgram {
+  setUniformf(name: string, value: number): void;
+  setUniform3fv(name: string, value: Float32Array): void;
+}
 interface ShaderCell {
   getProgram(): VTKMaskShaderProgram | null;
 }
@@ -20,10 +24,16 @@ export interface VTKVolumeMaskHooks {
   draw(draw: () => void): void;
   parameters(program: VTKMaskShaderProgram | null): void;
 }
+export interface VTKVolumeLabelHooks {
+  draw(draw: () => void): void;
+  parameters(program: VTKLabelShaderProgram | null): void;
+}
 export interface VTKMaskMapperNode extends vtkViewNode {
   renderPieceDraw(renderer: unknown, actor: unknown): void;
   setMapperShaderParameters(cell: ShaderCell, renderer: unknown, actor: unknown): void;
   setMaskHooks(hooks?: VTKVolumeMaskHooks): void;
+  /** Segment colouring binds its own texture beside the mask; both wrap one draw. */
+  setLabelHooks(hooks?: VTKVolumeLabelHooks): void;
 }
 
 function extendMaskNode(publicAPI: object, model: object, initialValues: object) {
@@ -33,24 +43,32 @@ function extendMaskNode(publicAPI: object, model: object, initialValues: object)
   const node = publicAPI as VTKMaskMapperNode;
   const draw = node.renderPieceDraw,
     parameters = node.setMapperShaderParameters;
-  let hooks: VTKVolumeMaskHooks | undefined;
+  let hooks: VTKVolumeMaskHooks | undefined, labelHooks: VTKVolumeLabelHooks | undefined;
   // macro.newInstance freezes the resulting public API. Install permanent
-  // methods now and change only their private hook closure after construction.
+  // methods now and change only their private hook closures after construction.
   node.setMaskHooks = value => {
     hooks = value;
   };
+  node.setLabelHooks = value => {
+    labelHooks = value;
+  };
   node.renderPieceDraw = (renderer, actor) => {
-    const render = () => draw(renderer, actor);
-    if (hooks) hooks.draw(render);
-    else render();
+    const render = () => draw(renderer, actor),
+      mask = hooks,
+      labels = labelHooks;
+    const masked = mask ? () => mask.draw(render) : render;
+    if (labels) labels.draw(masked);
+    else masked();
   };
   node.setMapperShaderParameters = (cell, renderer, actor) => {
     parameters(cell, renderer, actor);
-    hooks?.parameters(cell.getProgram());
+    const program = cell.getProgram();
+    hooks?.parameters(program);
+    labelHooks?.parameters(program as VTKLabelShaderProgram | null);
   };
   const release = node.delete;
   node.delete = () => {
-    hooks = undefined;
+    hooks = labelHooks = undefined;
     release();
   };
 }
@@ -78,7 +96,7 @@ export function attachVTKMaskMapperFactory(actorNode: vtkViewNode, mapper: { get
   if (oldNode) actorNode.removeNode(oldNode);
   actorNode.setMyFactory(factory);
   const node = actorNode.addMissingNode(mapper) as VTKMaskMapperNode | undefined;
-  if (!node || typeof node.setMaskHooks !== 'function') {
+  if (!node || typeof node.setMaskHooks !== 'function' || typeof node.setLabelHooks !== 'function') {
     actorNode.setMyFactory(previousFactory);
     factory.delete();
     throw new Error('The native CT streaming mapper does not support bounded segmentation masking.');
@@ -90,6 +108,7 @@ export function attachVTKMaskMapperFactory(actorNode: vtkViewNode, mapper: { get
       if (disposed) return;
       disposed = true;
       node.setMaskHooks(undefined);
+      node.setLabelHooks(undefined);
       actorNode.setMyFactory(previousFactory);
       factory.delete();
     },

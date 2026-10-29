@@ -14,6 +14,8 @@ import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib
 import type { CTVolumeSettings } from '../lib/volume-presets';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
+import { isVolumeLabelUnion } from '../lib/gpu-volume-data';
+import type { VolumeColorRequest } from '../lib/volume-colors';
 
 const props = defineProps<{
   session?: RenderCTSession;
@@ -31,6 +33,7 @@ const props = defineProps<{
   display?: StructureDisplay;
   selected?: string;
   mask?: VolumeMaskSettings;
+  colors?: VolumeColorRequest;
   revisionBase?: string;
   maskSourceProvider?: GPUOverlaySourceProvider;
   modelRevisionId?: string;
@@ -48,6 +51,7 @@ const emit = defineEmits<{
   camera: [value: CornerstoneVolumeCameraRAS];
   error: [reason: string];
   maskStatus: [status: VolumeMaskStatus];
+  colorStatus: [status: VolumeMaskStatus];
   gesture: [prompt: InteractivePrompt];
   pick: [id: string, point: Point];
   retryPlane: [];
@@ -64,10 +68,17 @@ const ready = ref(false),
 const maskLoading = ref(false),
   maskError = ref(''),
   maskReady = ref(false);
-const localMasks = new VolumeMaskSources();
+const localMasks = new VolumeMaskSources(),
+  localColors = new VolumeMaskSources();
 let maskController: AbortController | undefined,
   maskGeneration = 0;
 let reserveMask: ((bytes: number) => void) | undefined, reserveMaskTransport: ((bytes: number) => void) | undefined;
+const colorLoading = ref(false),
+  colorError = ref(''),
+  colorReady = ref(false);
+let colorController: AbortController | undefined,
+  colorGeneration = 0;
+let reserveColors: ((bytes: number) => void) | undefined, reserveColorTransport: ((bytes: number) => void) | undefined;
 let retainedLightPose: NativeVolumeLightPose | undefined, lightPoseSession: RenderCTSession | undefined, lightPoseSourceKey: string | undefined;
 let viewer: CornerstoneVolume3D | undefined, controller: AbortController | undefined, observer: ResizeObserver | undefined;
 let lease: CornerstoneSourceLease | undefined, planeLayer: VTKCTPlane | undefined, surfaces: VTKSurfaceScene | undefined;
@@ -95,6 +106,14 @@ const maskFamily = computed(() =>
 const maskMode = () => (props.mask?.enabled ? props.mask.mode : 'off');
 function publishMaskStatus() {
   emit('maskStatus', { ready: maskReady.value, loading: maskLoading.value, error: maskError.value });
+}
+// Colours and strength are uniforms; only a new selection or order reloads labels.
+const colorFamily = computed(() =>
+  JSON.stringify([props.revisionBase ?? props.session?.revisionBase, props.colors?.enabled ? props.colors.ids : [], props.volumeVisible !== false]),
+);
+const colorStyle = () => ({ colors: props.colors?.colors ?? [], strength: props.colors?.strength ?? 0 });
+function publishColorStatus() {
+  emit('colorStatus', { ready: colorReady.value, loading: colorLoading.value, error: colorError.value });
 }
 
 function publishReviewStatus() {
@@ -168,6 +187,14 @@ function disposeFeatures() {
   maskReady.value = maskLoading.value = false;
   maskError.value = '';
   publishMaskStatus();
+  colorController?.abort();
+  colorGeneration++;
+  localColors.clear();
+  reserveColorTransport?.(0);
+  reserveColors = reserveColorTransport = undefined;
+  colorReady.value = colorLoading.value = false;
+  colorError.value = '';
+  publishColorStatus();
   surfaceController?.abort();
   surfaceGeneration++;
   surfaces?.dispose();
@@ -261,7 +288,7 @@ async function initialize() {
     viewer = instance;
     instance.clearMask(maskMode());
     featureRenderer = instance.nativeRenderer;
-    const featureBytes = { plane: 0, reviewPlane: 0, reviewFrames: 0, surfaces: 0, mask: 0, maskTransport: 0 };
+    const featureBytes = { plane: 0, reviewPlane: 0, reviewFrames: 0, surfaces: 0, mask: 0, maskTransport: 0, colors: 0, colorTransport: 0 };
     const reserveFeature = (feature: keyof typeof featureBytes) => (bytes: number) => {
       const previous = featureBytes[feature];
       try {
@@ -294,6 +321,8 @@ async function initialize() {
     });
     reserveMask = reserveFeature('mask');
     reserveMaskTransport = reserveFeature('maskTransport');
+    reserveColors = reserveFeature('colors');
+    reserveColorTransport = reserveFeature('colorTransport');
     // Appearance and camera can change while the shared actor is attaching.
     // Reconcile the latest props before publishing a ready viewport.
     instance.setSettings(props.settings);
@@ -308,6 +337,7 @@ async function initialize() {
     emit('ready', true);
     syncReviewInput();
     void loadMask();
+    void loadColors();
     void loadSurfaces();
   } catch (reason) {
     if (!disposed && !active.signal.aborted && id === generation && !session.isDisposed) fail(reason);
@@ -378,6 +408,65 @@ async function loadMask() {
       transport(0);
       maskLoading.value = false;
       publishMaskStatus();
+      void renderFeatures(instance, id).catch(reason => {
+        if (current()) fail(reason);
+      });
+    }
+  }
+}
+async function loadColors() {
+  const instance = viewer,
+    reserve = reserveColors,
+    transport = reserveColorTransport,
+    id = generation;
+  if (!instance || !reserve || !transport) return;
+  colorController?.abort();
+  const active = new AbortController(),
+    version = ++colorGeneration;
+  colorController = active;
+  const request = props.colors;
+  const current = () => !disposed && id === generation && version === colorGeneration && !active.signal.aborted && viewer === instance;
+  colorReady.value = false;
+  colorError.value = '';
+  colorLoading.value = !!request?.enabled && request.ids.length > 0 && props.volumeVisible !== false;
+  publishColorStatus();
+  if (!colorLoading.value) {
+    instance.clearLabels();
+    transport(0);
+    return;
+  }
+  try {
+    const base = props.revisionBase ?? props.session?.revisionBase;
+    if (!base) throw new Error('The selected CT revision is unavailable for segment colouring.');
+    const result = await localColors.labels(base, request!.ids, active.signal);
+    if (!current()) return;
+    const overlay = result.overlays[0],
+      descriptor = overlay?.current.descriptor;
+    if (
+      result.overlays.length !== 1 ||
+      !descriptor ||
+      !isVolumeLabelUnion(descriptor) ||
+      overlay!.parent ||
+      overlay!.id !== `volume-label-union:${descriptor.key}` ||
+      JSON.stringify(descriptor.labels) !== JSON.stringify(request!.ids)
+    )
+      throw new Error('The segment colour labels do not match the selected segments.');
+    // Charge the decoded cache and incoming chunk before reading voxels.
+    transport(2 * descriptor.byte_length);
+    await instance.setLabels(overlay!.current, colorStyle(), { signal: active.signal, reserveMemory: reserve });
+    if (!current()) return;
+    colorReady.value = true;
+  } catch (reason) {
+    if (current()) {
+      instance.clearLabels();
+      colorError.value = reason instanceof Error ? reason.message : 'Segment colours could not load.';
+    }
+  } finally {
+    if (current()) {
+      localColors.clearDecoded();
+      transport(0);
+      colorLoading.value = false;
+      publishColorStatus();
       void renderFeatures(instance, id).catch(reason => {
         if (current()) fail(reason);
       });
@@ -496,6 +585,20 @@ watch(
   () => void initialize(),
 );
 watch([() => props.mask?.enabled, () => props.volumeVisible, () => props.maskSourceProvider, maskFamily], () => void loadMask());
+watch(colorFamily, () => void loadColors());
+watch(
+  () => [props.colors?.colors, props.colors?.strength],
+  () => {
+    if (!viewer || !colorReady.value) return;
+    try {
+      viewer.setLabelStyle(colorStyle());
+    } catch (reason) {
+      colorError.value = reason instanceof Error ? reason.message : 'Segment colours could not be applied.';
+      publishColorStatus();
+    }
+  },
+  { deep: true },
+);
 watch(
   () => props.mask?.mode,
   () => {
@@ -617,6 +720,7 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(resizeFrame);
   release();
   localMasks.dispose();
+  localColors.dispose();
 });
 defineExpose({
   diagnostics: () => ({
@@ -631,6 +735,9 @@ defineExpose({
     maskLoading: maskLoading.value,
     maskError: maskError.value,
     maskReady: maskReady.value,
+    colorLoading: colorLoading.value,
+    colorError: colorError.value,
+    colorReady: colorReady.value,
     ready: ready.value,
     error: error.value,
   }),
@@ -652,6 +759,7 @@ defineExpose({
   reviewPatientToCanvas: (ras: Point) => reviewInput?.patientToCanvas(ras),
   retry: initialize,
   retryMask: loadMask,
+  retryColors: loadColors,
 });
 </script>
 

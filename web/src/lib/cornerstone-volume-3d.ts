@@ -12,6 +12,7 @@ import { cornerstoneVolumeGeometry } from './cornerstone-volume';
 import { freshVolumeSettings, type CTVolumeSettings } from './volume-presets';
 import { applyVTKVolumePreset } from './vtk-volume-preset';
 import { VTKVolumeMask, type VTKMaskMapper, type VTKMaskMapperNode, type VTKVolumeMaskMode } from './vtk-volume-mask';
+import { VTKVolumeLabels, type VTKVolumeLabelStyle } from './vtk-volume-labels';
 import type { GPUVolumeSource } from './gpu-volume-data';
 import { attachVTKMaskMapperFactory } from './vtk-volume-mask-mapper';
 
@@ -143,6 +144,8 @@ export class CornerstoneVolume3D {
   private mask?: VTKVolumeMask;
   private maskReserve?: (bytes: number) => void;
   private maskFactory?: ReturnType<typeof attachVTKMaskMapperFactory>;
+  private labels?: VTKVolumeLabels;
+  private labelReserve?: (bytes: number) => void;
   private frames = 0;
   private pending?: { promise: Promise<void>; resolve(): void; reject(reason: unknown): void; timer: ReturnType<typeof setTimeout> };
 
@@ -321,6 +324,50 @@ export class CornerstoneVolume3D {
     this.maskMode = mode;
     this.mask?.clear(mode);
     this.applyVolumeVisibility();
+    this.requestRender();
+  }
+
+  /** Segment colours tint the shared CT actor only; its visibility, opacity and
+   * mask are unchanged. The caller resolves the revision-bound label union. */
+  async setLabels(
+    source: GPUVolumeSource | undefined,
+    style: VTKVolumeLabelStyle,
+    options: { signal?: AbortSignal; reserveMemory?: (bytes: number) => void } = {},
+  ) {
+    this.assertAlive();
+    if (!source) {
+      this.clearLabels();
+      return;
+    }
+    if (options.reserveMemory) this.labelReserve = options.reserveMemory;
+    if (!this.labels) {
+      const node = this.maskFactory?.node;
+      if (!node) throw new Error('The native CT volume mapper is unavailable for segment colouring.');
+      this.labels = new VTKVolumeLabels(
+        this.owner.sourceDescriptor,
+        this.actor!.getMapper() as VTKMaskMapper,
+        node as unknown as VTKMaskMapperNode,
+        this.engine.getOffscreenMultiRenderWindow(this.id).getOpenGLRenderWindow(),
+        bytes => this.labelReserve?.(bytes),
+        () => this.requestRender(),
+      );
+    }
+    try {
+      await this.labels.set(source, style, options.signal);
+    } finally {
+      this.requestRender();
+    }
+  }
+
+  setLabelStyle(style: VTKVolumeLabelStyle) {
+    this.assertAlive();
+    this.labels?.setStyle(style);
+    this.requestRender();
+  }
+
+  clearLabels() {
+    this.assertAlive();
+    this.labels?.clear();
     this.requestRender();
   }
 
@@ -675,6 +722,7 @@ export class CornerstoneVolume3D {
         textureCount: 0,
         additionalFullGridMaskBytes: 0,
       },
+      labels: this.labels?.stats() ?? { ready: false, key: '', labels: [], gpuBytes: 0, reservedBytes: 0, textureCount: 0, additionalFullGridLabelBytes: 0 },
       volumeId: this.source.volumeId,
       sourceKey: this.owner.sourceDescriptor.key,
       sourceVolumeIsMPROwner: this.libs.core.cache.getVolume(this.source.volumeId) === this.source,
@@ -718,6 +766,8 @@ export class CornerstoneVolume3D {
     this.settleFrame(new DOMException('The experimental CT viewer was disposed.', 'AbortError'));
     this.mask?.dispose();
     this.mask = undefined;
+    this.labels?.dispose();
+    this.labels = undefined;
     this.maskFactory?.dispose();
     this.maskFactory = undefined;
     this.detachingFeatures = true;

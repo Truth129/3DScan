@@ -84,7 +84,8 @@ export function vtkVolumeMaskTransform(ct: VolumeDescriptor, mask: VolumeDescrip
 function cancelled() {
   return new DOMException('Volume mask preparation cancelled.', 'AbortError');
 }
-function readMask(source: GPUVolumeSource, signal: AbortSignal): Promise<ArrayBuffer> {
+/** Read a whole cropped presentation source; cancellation wins even if the provider ignores it. */
+export function readMask(source: GPUVolumeSource, signal: AbortSignal): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const abort = () => {
       signal.removeEventListener('abort', abort);

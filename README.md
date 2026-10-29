@@ -386,6 +386,14 @@ presets, native lighting/scattering, opacity, masking and cropping. Enable
 **Mask to segmentation**, choose segments and select **Inside** or **Outside**;
 **Display margin** grows only that display region. Empty/loading/failed masks
 keep the CT volume hidden while slices and surfaces remain available.
+**Color segments** tints the CT volume inside chosen segments with their
+anatomy-list colours while keeping the CT's own shading and opacity. **Color
+strength** blends from the plain CT (0%) to full segment colour. Choose segments
+with **Use selected**, **Use visible** or the list, and change a segment's
+colour under **Selected structure**. Colouring combines with masking and
+lighting and changes only the 3D appearance, never masks, slices or
+measurements. It needs Cornerstone3D and tints only visible tissue, so
+air-filled segments such as lungs stay transparent.
 Open **CT volume settings → Lighting and shadows** for **Standard**,
 **Cinematic (VolView Hybrid)** or **Ambient occlusion**. Adjust ambient, diffuse,
 specular and shininess independently of the CT appearance. Cinematic mode adds

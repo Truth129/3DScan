@@ -31,6 +31,9 @@ export interface VolumeDescriptor extends ImageContext {
   display_margin_mm?: number;
   presentation_only?: boolean;
   volume_mask_union?: boolean;
+  /** A volume-display label union colours the native CT volume by segment. */
+  volume_label_union?: boolean;
+  labels?: string[];
 }
 export type VolumeValues = Int16Array | Uint16Array | Float32Array | Uint8Array;
 export interface ResidentVolume {

@@ -54,6 +54,36 @@ export function isVolumeDisplayUnion(descriptor: VolumeDescriptor): descriptor i
   );
 }
 
+export interface VolumeLabelUnion extends VolumeDescriptor {
+  quality: 'preview';
+  presentation_only: true;
+  volume_label_union: true;
+  /** Label n marks `labels[n - 1]`; zero is background. */
+  labels: string[];
+  selected_structure_ids?: string[];
+}
+
+export function isVolumeLabelUnion(descriptor: VolumeDescriptor): descriptor is VolumeLabelUnion {
+  const candidate = descriptor as Partial<VolumeLabelUnion> & { volume_mask_union?: unknown };
+  return (
+    candidate.quality === 'preview' &&
+    candidate.presentation_only === true &&
+    candidate.volume_label_union === true &&
+    candidate.volume_mask_union !== true &&
+    Array.isArray(candidate.labels) &&
+    candidate.labels.length > 0 &&
+    candidate.labels.length <= 255 &&
+    candidate.labels.every(id => typeof id === 'string' && !!id) &&
+    new Set(candidate.labels).size === candidate.labels.length &&
+    descriptor.kind === 'mask' &&
+    descriptor.dtype === 'uint8' &&
+    descriptor.byte_length <= GPU_VOLUME_MASK_UNION_BYTES &&
+    !!descriptor.reference_geometry &&
+    typeof descriptor.reference_image_id === 'string' &&
+    descriptor.reference_image_id.length > 0
+  );
+}
+
 export interface GPUVolumeSource {
   readonly descriptor: VolumeDescriptor;
   /** Native i-fastest raw voxels. Consume/release each slab before reading another. */
