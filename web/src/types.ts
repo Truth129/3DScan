@@ -68,6 +68,7 @@ export interface Job {
   stage: string;
   error?: string;
   revision_id?: string;
+  source_revision_id?: string;
   created_at: string;
   progress?: { phase: string; completed: number; total: number; timings_seconds?: Record<string, number> };
 }

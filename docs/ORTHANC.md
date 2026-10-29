@@ -323,6 +323,30 @@ this peer if that mode is selected in OsiriX. The Mac's actual selected mode
 has not been independently inspected. File changes and live REST updates must
 both be applied when changing these permissions without restarting Orthanc.
 
+## Import existing SEG masks from local files
+
+After importing and opening the original classic CT in 3DScan, choose
+**Import DICOM SEG…** in its toolbar and select the SEG objects themselves.
+Up to 64 files and 512 MiB total are accepted, also subject to the configured
+upload limit. A CPU job validates the patient/study/frame/source references
+and full-affine native voxel alignment, then appends independent masks in a
+new saved revision. Existing masks, holes and overlaps remain intact; the
+previous revision remains available for undo. No AI segmentation is needed.
+
+This file-upload path also works for a CT imported from a local folder or ZIP
+and requires no Orthanc connection. Receiving a SEG into Orthanc does not
+automatically attach it to a 3DScan case, and the app does not yet offer SEG
+discovery/download from the archive. Obtain the SEG files separately and select
+them explicitly. Nothing is sent back to Orthanc or OsiriX during import.
+
+The first profile accepts binary, uncompressed little-endian DICOM SEG aligned
+exactly to the prepared classic CT. Fractional, concatenated, compressed or resampled SEG,
+foreign source references and ambiguous or repeated segment planes are refused.
+Matching dimensions or names alone do not establish source identity. Cropped
+and sparse frames are supported when their pixels map to exact native voxels.
+See the [import contract](CONTRACT.md#existing-dicom-seg-import) for bounds and
+the separate [DICOM spatial rules](https://dicom.nema.org/medical/dicom/current/output/chtml/part03/sect_A.51.5.html).
+
 ## Export saved masks through Orthanc
 
 In a saved segmentation's toolbar choose **DICOM SEG…**, select the nonempty

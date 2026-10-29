@@ -29,6 +29,7 @@ import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
 import SegmentationControls from './components/SegmentationControls.vue';
 import ExportViewerDialog from './components/ExportViewerDialog.vue';
 import DicomSegExport from './components/DicomSegExport.vue';
+import DicomSegImport from './components/DicomSegImport.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
@@ -90,6 +91,7 @@ const jobMeasurements = ref<JobMeasurements>();
 const importing = ref(false),
   loading = ref(true),
   actionBusy = ref(false),
+  segImportBusy = ref(false),
   importOpen = ref(false);
 const selected = ref(''),
   display = ref<StructureDisplay>({}),
@@ -305,7 +307,7 @@ const canCompareSurfaces = computed(
 );
 const modelKey = computed(() => `${activeCase.value?.id}:${shownRevision.value ? referenceImageKey(shownRevision.value) : ''}`);
 const busyJob = computed(() => !!job.value && ['queued', 'running'].includes(job.value.status));
-const busy = computed(() => busyJob.value || actionBusy.value);
+const busy = computed(() => busyJob.value || actionBusy.value || segImportBusy.value);
 const base = computed(() => (activeCase.value && revision.value ? revisionUrl(activeCase.value.id, revision.value.id) : ''));
 const ctRevisionId = computed(() => reviewDisplayRevision(interactiveReview.value, interactiveCandidate.value) || revision.value?.id || '');
 const showingCandidate = computed(() => !!interactiveCandidate.value && !!reviewCandidateRevision(interactiveReview.value));
@@ -371,6 +373,19 @@ const savedExportDisabledReason = computed(() =>
     pendingPrompts: workspaceMode.value === 'review' && !!interactivePrompts.value.length,
   }),
 );
+const segImportDisabledReason = computed(() => {
+  if (!revision.value || activeModality.value !== 'CT') return 'Open the matching CT before importing segmentation masks.';
+  if (activeCase.value?.active_revision_id !== revision.value.id) return 'Return to the current revision before importing segmentation masks.';
+  return savedRevisionExportBlockReason({
+    caseId: activeCase.value?.id,
+    revision: revision.value,
+    busy: busy.value,
+    comparison: before.value || compare.value || ctRevisionId.value !== revision.value.id,
+    draft: interactiveDraft.value,
+    pendingPrompts: workspaceMode.value === 'review' && !!interactivePrompts.value.length,
+    action: 'importing masks',
+  });
+});
 const exportDisabledReason = computed(() =>
   vtkPreview.value ? 'Switch the 3D renderer to Three.js (legacy) for HTML export. PNG is available in Cornerstone3D.' : savedExportDisabledReason.value,
 );
@@ -594,9 +609,11 @@ function poll() {
           if (current.active_revision_id) await loadRevision(current.id, current.active_revision_id, generation, !!revision.value);
         }
         toast(
-          !revision.value?.structures.length
-            ? `${sourceLabel.value} ready. View the scan now; segmentation is available when you need it.`
-            : 'Segmentation ready. Review the masks on the source images.',
+          next.kind === 'dicom_seg_import'
+            ? 'Imported masks ready. Review them on the source CT.'
+            : !revision.value?.structures.length
+              ? `${sourceLabel.value} ready. View the scan now; segmentation is available when you need it.`
+              : 'Segmentation ready. Review the masks on the source images.',
         );
       } else if (next.status === 'failed') error.value = next.error || 'Processing failed. See the worker logs for details.';
       else toast('Processing cancelled. Completed stages remain cached.');
@@ -1024,7 +1041,15 @@ onBeforeUnmount(() => {
           ><button v-if="!synthetic" class="button secondary compact" :disabled="busy" :aria-expanded="segmentationOpen" @click="openSegmentation">
             Segment {{ sourceLabel }}…</button
           ><button v-if="!ctOnly" class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button
-          ><DicomSegExport
+          ><DicomSegImport
+            v-if="activeModality === 'CT'"
+            :key="`seg-import:${activeCase.id}:${revision.id}`"
+            :case-id="activeCase.id"
+            :revision-id="revision.id"
+            :disabled-reason="segImportDisabledReason"
+            @queued="track"
+            @busy="segImportBusy = $event"
+          /><DicomSegExport
             v-if="!ctOnly"
             :key="`${activeCase.id}:${revision.id}`"
             :case-id="activeCase.id"

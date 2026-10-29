@@ -143,3 +143,9 @@ def add_routes(app, service):
                     raise ValueError("Correction exceeds import limit")
                 out.write(chunk)
         return public_job(service.store.enqueue(case_id, "correction", {"revision_id": revision_id, "seg_file": str(path)}))
+
+    @app.post("/api/cases/{case_id}/dicom-seg/imports")
+    def import_dicom_seg(case_id: str, revision_id: str = Form(...), files: list[UploadFile] = File(...)):
+        from .dicom_seg_jobs import stage_import
+
+        return JSONResponse(public_job(stage_import(service, case_id, revision_id, files)), headers={"Cache-Control": "no-store"})

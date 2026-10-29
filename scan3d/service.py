@@ -354,12 +354,16 @@ class Service:
                 revision = self._refine(job)
             elif job["kind"] == "correction":
                 revision = self._correct(job)
+            elif job["kind"] == "dicom_seg_import":
+                from .dicom_seg_jobs import run_import
+
+                revision = run_import(self, job)
             elif job["kind"] == "include_all":
                 revision = self._include_all(job)
             else:
                 raise ValueError("Unknown job kind")
             self.check_cancel(job)
-            expected = job["payload"]["revision_id"] if job["kind"] in ("segment", "include_all", "review_accept") else None
+            expected = job["payload"]["revision_id"] if job["kind"] in ("segment", "include_all", "review_accept", "dicom_seg_import") else None
             review_guard = {key: job["payload"][key] for key in ("session_id", "generation")} if job["kind"] == "review_accept" else None
             self.store.commit_revision(revision, job, expected_active_revision_id=expected, review_guard=review_guard)
         except InterruptedError as exc:

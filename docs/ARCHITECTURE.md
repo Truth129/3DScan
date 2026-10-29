@@ -352,6 +352,8 @@ flowchart TD
   OPEN --> CONVERT["Validate and convert to reference grid"]
   CONVERT --> IMAGE["Save an image-only revision<br/>No segmentation starts automatically"]
   IMAGE --> VIEW["Review source images and render CT"]
+  IMAGE --> SEGIMPORT["Explicit local DICOM SEG upload<br/>CPU source-reference and exact native-grid checks"]
+  SEGIMPORT --> MASKS
   IMAGE --> REQUEST["User requests segmentation<br/>Task, options and license validation"]
   REQUEST --> INFER["Reuse valid cached inference or run TotalSegmentator"]
   INFER --> MASKS["Native segmentation masks"]
@@ -389,7 +391,7 @@ flowchart LR
   JOBS -->|"claim: review work first"| CPULANE
   GPULANE -->|"segment"| TS["TotalSegmentator subprocess"]
   GPULANE <-->|"JSON lines on a socket pair<br/>predict / cancel / shutdown<br/>ready / progress / result / error"| CHILD["nnInteractive worker process<br/>warm model and CT on the R9700<br/>imports torch; the API process never does"]
-  CPULANE --> CPUWORK["Archive import, preparation, direct edits, relationship-only Apply,<br/>saves, refinement, Slicer import, include-all"]
+  CPULANE --> CPUWORK["Archive/SEG import, preparation, direct edits, relationship-only Apply,<br/>saves, refinement, Slicer import, include-all"]
 ```
 
 Queued processing runs on two background threads backed by SQLite and one
@@ -410,8 +412,21 @@ Dense mask analysis and surface preparation use bounded CPU thread pools that
 share one service-wide budget across both lanes. Completed stages remain
 reusable after cancellation or restart.
 
+Existing DICOM SEG objects enter through an explicit local-file upload against
+an active prepared classic CT. CPU validation binds original source identities
+and proves full-affine integer pixel correspondence before masks join a new
+revision. The importer appends independent segment IDs, preserves existing
+masks and overlaps, and uses the usual measurement/surface and transactional
+activation paths. Source/upload hashes and a final active-parent guard reject
+changed inputs and stale jobs. Binary uncompressed little-endian SEG is
+supported independently of Orthanc; fractional/compressed/resampled inputs and
+automatic archive SEG discovery remain outside this profile. See the
+[import contract](CONTRACT.md#existing-dicom-seg-import).
+
 ## Code map
 
+- [DICOM SEG upload and revision publication](../scan3d/dicom_seg_jobs.py) and
+  [bounded native-grid decoding](../scan3d/dicom_seg_import.py).
 - [HTTP middleware and error mapping](../scan3d/api.py) with [request bodies](../scan3d/api_models.py) and routes for [health, catalogs and the license](../scan3d/api_system.py), [imports](../scan3d/api_imports.py), [case, job and revision records](../scan3d/api_cases.py), [correction sessions](../scan3d/api_reviews.py) and [viewer volumes, frames and exports](../scan3d/api_viewer.py).
 - [Job lanes, dispatch and revision building](../scan3d/service.py), [SQLite, claims and activation](../scan3d/store.py).
 - [nnInteractive engine](../scan3d/interactive.py) and its [supervised worker process](../scan3d/interactive_worker.py).

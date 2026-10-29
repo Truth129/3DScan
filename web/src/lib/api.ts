@@ -65,6 +65,12 @@ export const api = {
   dicomSegAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomSegAvailability>(`${revisionUrl(id, rid)}/dicom-seg`, { signal }),
   exportDicomSeg: (id: string, rid: string, data: DicomSegExportRequest, signal?: AbortSignal) =>
     request<DicomSegExportJob>(`${revisionUrl(id, rid)}/dicom-seg`, { ...json('POST', data), signal }),
+  importDicomSeg(id: string, rid: string, files: readonly File[], signal?: AbortSignal) {
+    const data = new FormData();
+    data.append('revision_id', rid);
+    for (const file of files) data.append('files', file);
+    return request<Job>(`${caseUrl(id)}/dicom-seg/imports`, { method: 'POST', body: data, signal });
+  },
   case: (id: string, signal?: AbortSignal) => request<Case>(caseUrl(id), { signal }),
   images: (id: string) => request<ImageAsset[]>(`${caseUrl(id)}/images`),
   image: (id: string, imageId: string) => request<ImageAsset>(`${caseUrl(id)}/images/${encodeURIComponent(imageId)}`),

@@ -40,9 +40,11 @@ export function savedRevisionExportBlockReason(options: {
   comparison: boolean;
   draft?: InteractiveReview;
   pendingPrompts?: boolean;
+  action?: 'exporting' | 'importing masks';
 }): string {
-  if (options.busy) return 'Wait for the current operation to finish before exporting.';
-  if (options.comparison) return 'Return to the current revision and turn off comparison before exporting.';
+  const action = options.action ?? 'exporting';
+  if (options.busy) return `Wait for the current operation to finish before ${action}.`;
+  if (options.comparison) return `Return to the current revision and turn off comparison before ${action}.`;
   const { draft, revision, caseId } = options;
   if (
     options.pendingPrompts ||
@@ -52,7 +54,7 @@ export function savedRevisionExportBlockReason(options: {
       !['accepted', 'discarded'].includes(draft.status) &&
       (draft.prompts.length || draft.candidate || draft.new_structure || draft.relationship_dirty))
   )
-    return 'Save or discard the correction draft before exporting the saved revision.';
+    return `Save or discard the correction draft before ${action}${action === 'importing masks' ? ' into' : ''} the saved revision.`;
   return '';
 }
 

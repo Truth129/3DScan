@@ -85,6 +85,17 @@ SEG works in OsiriX MD 14.3.0, including the earlier eight-segment display check
 The existing SEG encoding/display qualification remains valid; see the runbook
 for current transport status.
 
+To reuse existing masks, open their original CT in 3DScan and choose
+**Import DICOM SEG…**. Select up to 64 SEG files, at most 512 MiB in total.
+The CPU worker verifies the source CT references and exact native voxel alignment,
+then adds independent segments in a new saved revision without running AI.
+Existing masks and overlaps are preserved, and history restores the prior revision.
+This local-file import works with CT originally imported from a folder, ZIP or
+Orthanc; it needs no Orthanc connection. The initial profile accepts uncompressed
+little-endian binary SEG for classic CT. Fractional, compressed and resampled
+segmentations are refused explicitly. SEG objects are not discovered or imported
+automatically from Orthanc. See the [import contract](docs/CONTRACT.md#existing-dicom-seg-import).
+
 For browser archive review, open
 [OHIF over private HTTPS](https://scan3d-host.example.ts.net:8444/ohif/)
 with the existing Orthanc login. OHIF uses DICOMweb and is separate from 3DScan's
@@ -227,8 +238,9 @@ explains its noncommercial license terms.
    rendering or segmentation tasks. Different phases remain separate; series
    warnings explain unsupported geometry.
 3. Choose **Open CT**. The worker converts the selected series for CT review and
-   volume rendering without running a segmentation model. When ready, open
-   **Segment CT**, select a TotalSegmentator task and choose **Run segmentation**.
+   volume rendering without running a segmentation model. When ready, choose
+   **Import DICOM SEG…** to add existing masks, or open **Segment CT**, select a
+   TotalSegmentator task and choose **Run segmentation**.
    **Find a task or structure** searches task names and their output anatomy;
    **Included structures** previews the selected task's outputs. Search preserves
    your current task and options until you explicitly select another task.
