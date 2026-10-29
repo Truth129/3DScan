@@ -140,6 +140,12 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
   viewer builds passed before switching. The modular refactor merge (`34e25db`)
   is active (PID558151); audit and prior backend snapshot:
   `.runtime/modular-refactor-merge-20261028T190109Z/`.
+- **GLB transport, 29 October 2026:** reusable deterministic gzip files are active
+  after an approved idle stop/apply/commit/restart (`575738b`, PID735851).
+  1,110 backend tests pass (1 skipped), with pinned Ruff lint/format checks.
+  Both lanes, CT-only health and all 67 served frontend files pass; aggregate
+  record counts are unchanged. Orthanc PID436143 is unchanged. Audit and prior
+  backend source: `.runtime/glb-precompression-20261029T060018Z/`.
 - **Library:** the user has added cases since the 27 October reset; preserve them.
   The library archived at that reset is at
   `.runtime/archive/data-20261027T143742Z`, waiting for the user to delete it.
@@ -300,8 +306,6 @@ The demo case's CT and a demo mask are suitable synthetic inputs.
    - per-structure review status for the agreement metrics
    - frontend restructuring: stores, a router, typed API models
 4. **Smaller follow-ups:**
-   - GLB precompression is prepared and synthetically qualified; applying it to
-     the live checkout and restarting awaits approval (see newest validation)
    - warm the agreement cache when a revision is committed
    - age review priority so segmentations cannot starve
    - finish 768 px workspace sizing outside the native 3D pane
