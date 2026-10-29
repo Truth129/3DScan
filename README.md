@@ -364,6 +364,20 @@ display surface; it does not change the voxel mask used for volumes. Named
 bronchopulmonary territories and automated lesion characterization are outside
 this version's scope.
 
+**Workspace layout.** The viewers get the space. The sidebar holds the anatomy
+list with the selected structure's details beneath it; drag its edge to resize
+it. The stage tiles the 3D view and CT review: the layout buttons beside
+**Panels** show them side by side, stacked, or either one alone, and the divider
+between them resizes both (arrow keys move it; double-click or Enter resets it).
+Review segmentation keeps its own split. Opening options never shrinks a viewer:
+**Layers** folds the 3D rendering controls, which float over the canvas, and
+**Display** folds the CT window, overlay and MPR controls. Overlay segments and
+**Review status & tools** open as menus over the slices, and segmentation
+settings open over the stage. The three slices follow the tile's shape: axial
+above coronal and sagittal, a row, or a column. Layout choices persist in this
+browser; **Panels → Reset layout** restores the defaults. Narrow screens keep
+the Anatomy, 3D and CT tabs, with each view filling the screen.
+
 The 3D view defaults to **Cornerstone3D**, using vtk.js ray casting. Its
 **Rendering stack** shows **Segmentation**, **CT volume** and **CT plane** together
 or independently. With CT visible, surfaces are solid for correct depth;

@@ -47,6 +47,7 @@ import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, f
 import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
 import { useExpandedViewport } from '../lib/use-expanded-viewport';
+import { COMPACT_SCREEN_QUERY, useFoldingControls } from '../lib/use-folding-controls';
 import { cardiacCamera } from '../lib/cardiac-camera';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
@@ -139,8 +140,12 @@ const viewport = ref<HTMLElement>(),
 const viewportId = useId();
 const { expanded, setExpanded } = useExpandedViewport(viewport, expandButton);
 const surface = ref<HTMLElement>();
-const reviewControls = ref<HTMLElement>();
-const reviewSceneTop = ref(140);
+const controlsId = useId();
+// Rendering controls float over the canvas; short screens start with them folded away.
+const { open: controlsOpen, setOpen: setControlsOpen } = useFoldingControls(
+  'scan3d-3d-controls-open-v1',
+  () => !globalThis.matchMedia?.(COMPACT_SCREEN_QUERY).matches,
+);
 const loading = ref(true),
   error = ref(''),
   view = ref('oblique');
@@ -492,7 +497,6 @@ let gpuMemoryLease: VolumeMemoryLease | undefined, gpuMemoryRequest: VolumeMemor
 let gpuBaseTimer = 0;
 let gpuBaseRetryFamily = '',
   gpuBaseRetries = 0;
-let reviewControlsObserver: ResizeObserver | undefined;
 const reviewFrames = new ModelReviewFrames();
 const maskSources = new VolumeMaskSources();
 let initialCameraApplied = false;
@@ -509,18 +513,6 @@ function restoreInitialCamera() {
     return;
   initialCameraApplied = true;
   scene.restoreCamera(camera);
-}
-async function observeReviewControls() {
-  await nextTick();
-  if (disposed) return;
-  reviewControlsObserver?.disconnect();
-  if (!reviewControls.value) return;
-  const measure = () => {
-    if (reviewControls.value) reviewSceneTop.value = reviewControls.value.offsetTop + reviewControls.value.offsetHeight + 8;
-  };
-  measure();
-  reviewControlsObserver ??= new ResizeObserver(measure);
-  reviewControlsObserver.observe(reviewControls.value);
 }
 function syncReview() {
   if (!scene || disposed) return;
@@ -1143,7 +1135,6 @@ async function initializeThree() {
     syncReview();
     queueReviewPlane();
     void prepareGPUPlane();
-    void observeReviewControls();
   } catch {
     error.value = `WebGL is unavailable. You can still review ${modality.value} slices and export the segmentation.`;
     loading.value = false;
@@ -1153,7 +1144,6 @@ onMounted(() => {
   if (vtkSelected.value) {
     loading.value = false;
     emit('renderer', 'vtk');
-    void observeReviewControls();
     queueReviewPlane();
   } else initializeThree();
 });
@@ -1172,7 +1162,6 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(requestFrame);
   clearTimeout(exactPlaneTimer);
   clearTimeout(contextRebuildTimer);
-  reviewControlsObserver?.disconnect();
   reviewFrames.dispose();
   controller?.abort();
   scene?.dispose();
@@ -1382,7 +1371,6 @@ watch(
     queueReviewPlane();
   },
 );
-watch(() => [props.reviewActive, controlsVisible.value, showPlane.value, showVolume.value], observeReviewControls);
 watch(
   () => [vtkReady.value, nativeReviewStatus.value.planeReady, desiredPlaneContext.value],
   () => {
@@ -1395,7 +1383,10 @@ watch(
 watch(
   () => [volumeError.value, effectiveMaskError.value],
   ([volumeFailure, maskFailure]) => {
-    if (volumeFailure || maskFailure) volumeOptionsOpen.value = true;
+    if (volumeFailure || maskFailure) {
+      volumeOptionsOpen.value = true;
+      controlsOpen.value = true;
+    }
   },
 );
 watch(
@@ -1507,7 +1498,6 @@ watch(vtkSelected, active => {
     initializeThree();
   }
   emit('renderer', active ? 'vtk' : 'three');
-  void observeReviewControls();
 });
 onErrorCaptured(reason => {
   if (!vtkSelected.value) return;
@@ -1584,7 +1574,6 @@ defineExpose({
     :data-volume-level="renderVolumeSettings.signal_window.level"
     :data-volume-invert="renderVolumeSettings.signal_window.invert"
     :data-volume-memory-bytes="gpuMemoryBytes"
-    :style="planeLayout ? { '--review-scene-top': `${reviewSceneTop}px` } : undefined"
     :data-ct-plane-visible="vtkSelected ? showPlane : needsPlane"
     :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"
     :data-review-ready="reviewReady"
@@ -1657,18 +1646,35 @@ defineExpose({
     <div class="viewport-caption">
       {{ ctOnly ? `${modality} view` : '3D anatomy' }} <span class="divider">·</span> <span>{{ sourceViewLabel(view, modality) }}</span>
     </div>
-    <button
-      ref="expandButton"
-      class="text-button viewport-expand-button"
-      :aria-label="expanded ? 'Restore 3D view' : 'Expand 3D view'"
-      :title="expanded ? 'Restore 3D view (Esc)' : 'Expand 3D view'"
-      :aria-expanded="expanded"
-      :aria-controls="viewportId"
-      @click="setExpanded(!expanded)"
-    >
-      {{ expanded ? 'Restore ↙' : 'Expand ↗' }}
-    </button>
-    <div v-if="controlsVisible" ref="reviewControls" class="model-review-controls" :class="{ 'main-plane-controls': !reviewActive }">
+    <div class="viewport-corner">
+      <button
+        v-if="controlsVisible"
+        type="button"
+        class="text-button viewport-controls-toggle"
+        :aria-expanded="controlsOpen"
+        :aria-controls="controlsId"
+        :title="controlsOpen ? 'Fold the controls away to see the whole view' : 'Show layers and rendering controls'"
+        @click="setControlsOpen(!controlsOpen)"
+      >
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="m10 3 7 3.5-7 3.5-7-3.5L10 3Z" />
+          <path d="m3 10 7 3.5 7-3.5M3 13.5 10 17l7-3.5" />
+        </svg>
+        {{ reviewActive ? 'Review tools' : 'Layers' }}<span aria-hidden="true">{{ controlsOpen ? '▴' : '▾' }}</span>
+      </button>
+      <button
+        ref="expandButton"
+        class="text-button viewport-expand-button"
+        :aria-label="expanded ? 'Restore 3D view' : 'Expand 3D view'"
+        :title="expanded ? 'Restore 3D view (Esc)' : 'Expand 3D view'"
+        :aria-expanded="expanded"
+        :aria-controls="viewportId"
+        @click="setExpanded(!expanded)"
+      >
+        {{ expanded ? 'Restore ↙' : 'Expand ↗' }}
+      </button>
+    </div>
+    <div v-if="controlsVisible" v-show="controlsOpen" :id="controlsId" class="model-review-controls" :class="{ 'main-plane-controls': !reviewActive }">
       <section class="rendering-stack" aria-label="Rendering stack">
         <div class="rendering-stack-heading">Rendering stack <span>One aligned 3D view</span></div>
         <label v-if="vtkAvailable" class="rendering-stack-layer"
@@ -1744,7 +1750,7 @@ defineExpose({
         :open="volumeOptionsOpen"
         @toggle="
           volumeOptionsOpen = ($event.target as HTMLDetailsElement).open;
-          observeReviewControls();
+          if (volumeOptionsOpen) controlsOpen = true;
         "
       >
         <summary>{{ modality }} volume settings <span>Appearance · lighting · mask · crop</span></summary>
@@ -1778,7 +1784,6 @@ defineExpose({
           @update:mask="setVolumeMask"
           @retry-mask="retryVolumeMask"
           @retry="retryVolume"
-          @layout="observeReviewControls"
         />
       </details>
       <div v-if="reviewActive && reviewTool !== 'scissors'" class="model-review-row review-marking-row">
@@ -1870,11 +1875,25 @@ defineExpose({
     0 0 0 100vmax #07090de6,
     0 15px 80px #0009;
 }
-.viewport-expand-button {
+/*
+ * The canvas always fills the tile. Controls float over it and fold away, so
+ * opening options never shrinks the rendered view.
+ */
+.model-viewport {
+  container: model-tile / inline-size;
+  --viewport-toolbar-space: 104px;
+}
+.viewport-corner {
   position: absolute;
   top: 8px;
   right: 10px;
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.viewport-expand-button,
+.viewport-controls-toggle {
   min-height: 28px;
   padding: 5px 9px;
   border: 1px solid var(--line-strong);
@@ -1884,26 +1903,89 @@ defineExpose({
   font-size: 10px;
   white-space: nowrap;
 }
-.viewport-expand-button:hover {
+.viewport-controls-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.viewport-controls-toggle svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.viewport-controls-toggle > span {
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+.viewport-controls-toggle[aria-expanded='true'] {
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+}
+.viewport-expand-button:hover,
+.viewport-controls-toggle:hover {
   background: var(--surface-hover);
 }
 .model-review-controls {
   position: absolute;
-  top: 42px;
-  left: 10px;
+  top: 44px;
   right: 10px;
-  z-index: 3;
+  z-index: 4;
+  width: min(300px, calc(100% - 20px));
+  max-height: max(96px, calc(100% - 44px - var(--viewport-toolbar-space)));
   padding: 8px 10px;
   border: 1px solid #414b5d;
   border-radius: 6px;
-  background: #171d27ed;
-  box-shadow: 0 3px 12px #0003;
+  background: #171d27e6;
+  box-shadow: 0 6px 20px #0005;
+  backdrop-filter: blur(6px);
   color: #bac7d9;
   font-size: 10px;
-  max-height: clamp(72px, calc(100% - 230px), 390px);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+}
+/* Narrow tiles stack the camera views above the tools; wide tiles keep one bottom row. */
+.camera-strip {
+  bottom: 54px;
+}
+.viewport-tools {
+  bottom: 12px;
+}
+.viewport-hint {
+  top: 34px;
+  bottom: auto;
+  left: 20px;
+  right: auto;
+  text-align: left;
+}
+.model-review .viewport-hint {
+  top: 30px;
+  left: 12px;
+}
+@container model-tile (min-width: 760px) {
+  /* A container query styles descendants only, so the reserved space is set where it is used. */
+  .model-review-controls,
+  .orientation-gizmo {
+    --viewport-toolbar-space: 60px;
+  }
+  .camera-strip {
+    left: 12px;
+    bottom: 12px;
+    transform: none;
+  }
+  .viewport-tools {
+    left: auto;
+    right: 12px;
+    bottom: 12px;
+    transform: none;
+  }
+}
+@container model-tile (max-width: 420px) {
+  .viewport-hint {
+    display: none;
+  }
 }
 .rendering-stack-heading {
   display: flex;
@@ -1914,86 +1996,6 @@ defineExpose({
   color: #d8e2ef;
   font-size: 10px;
   font-weight: 600;
-}
-.cornerstone-primary .model-review-controls {
-  max-height: min(30%, 300px);
-}
-.cornerstone-primary {
-  container: native-volume / inline-size;
-}
-@container native-volume (min-width: 440px) {
-  .cornerstone-primary.model-review .model-review-controls {
-    left: auto;
-    width: 220px;
-    max-height: calc(100% - 170px);
-  }
-  .model-viewport.cornerstone-primary.model-review .model-canvas {
-    top: 42px;
-    right: 240px;
-    bottom: 24px;
-  }
-  .cornerstone-primary.model-review .camera-strip {
-    left: auto;
-    right: 10px;
-    bottom: 54px;
-    width: 220px;
-    max-width: 220px;
-    flex-wrap: wrap;
-    justify-content: center;
-    transform: none;
-  }
-  .cornerstone-primary.model-review .viewport-tools {
-    left: auto;
-    right: 10px;
-    bottom: 14px;
-    width: 220px;
-    justify-content: center;
-    transform: none;
-  }
-  .cornerstone-primary.model-review .viewport-tools button {
-    padding: 7px 8px;
-  }
-  .cornerstone-primary.model-review .viewport-hint {
-    right: 240px;
-  }
-}
-@media (max-height: 850px) {
-  @container native-volume (min-width: 620px) {
-    .cornerstone-primary .model-review-controls {
-      left: auto;
-      width: 280px;
-      max-height: calc(100% - 170px);
-    }
-    .model-viewport.cornerstone-primary .model-canvas {
-      top: 42px;
-      right: 310px;
-      bottom: 24px;
-    }
-    .cornerstone-primary .camera-strip {
-      left: auto;
-      right: 10px;
-      bottom: 54px;
-      width: 280px;
-      max-width: 280px;
-      flex-wrap: wrap;
-      justify-content: center;
-      transform: none;
-    }
-    .cornerstone-primary .viewport-tools {
-      left: auto;
-      right: 10px;
-      bottom: 14px;
-      width: 280px;
-      justify-content: center;
-      transform: none;
-    }
-    .cornerstone-primary .viewport-tools button {
-      padding: 7px 8px;
-    }
-    .cornerstone-primary .viewport-hint {
-      right: 310px;
-    }
-  }
 }
 .rendering-stack-heading > span {
   font-weight: 400;
@@ -2081,15 +2083,10 @@ defineExpose({
   padding-top: 7px;
   border-top: 1px solid #343e50;
 }
-.model-review .model-canvas,
-.model-plane .model-canvas {
-  top: var(--review-scene-top);
-  bottom: 100px;
-}
 .model-review .orientation-gizmo,
 .model-plane .orientation-gizmo {
   top: auto;
-  bottom: 106px;
+  bottom: calc(var(--viewport-toolbar-space) + 4px);
   right: 12px;
   width: 64px;
   height: 64px;

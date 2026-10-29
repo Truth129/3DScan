@@ -37,6 +37,9 @@
   height: 26px;
   color: var(--text-secondary);
 }
+.inspector-tabs .tab-short {
+  display: none;
+}
 .model-header .model-scale {
   margin-left: auto;
 }
@@ -74,133 +77,659 @@
   align-items: center;
   flex-wrap: wrap;
 }
+
+/* The reason export is unavailable stays one hover or focus away instead of taking a row. */
+.export-disabled-note {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 600;
+  cursor: help;
+  outline: 0;
+}
+.export-disabled-note:hover,
+.export-disabled-note:focus-visible {
+  color: var(--white);
+  border-color: var(--text-secondary);
+}
+.export-disabled-note:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.export-disabled-note::after {
+  content: attr(data-reason);
+  position: absolute;
+  top: calc(100% + 8px);
+  right: -6px;
+  z-index: 70;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 10px 28px #0008;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: normal;
+  text-align: left;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s;
+}
+.export-disabled-note:hover::after,
+.export-disabled-note:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* Resizing keeps the cursor and blocks text selection everywhere until the pointer is released. */
+.workspace-resizing-columns,
+.workspace-resizing-columns * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+.workspace-resizing-rows,
+.workspace-resizing-rows * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+/*
+ * Viewer-first desktop workspace: a resizable sidebar (anatomy above details)
+ * beside a stage that tiles the 3D and slice viewers. Options never take height
+ * from a viewer: 3D settings float over the canvas and slice controls share one
+ * wrapping toolbar. Sizes come from grid tracks, so hiding, resizing or
+ * rearranging a tile never remounts a viewer.
+ */
 @media (min-width: 1001px) {
-  .workspace.modular-workspace {
-    --anatomy-track: 260px;
-    --model-track: minmax(0, 1fr);
-    --review-track: 296px;
-    display: grid;
-    grid-template-columns: var(--anatomy-track) var(--model-track) var(--review-track);
-    grid-template-rows: minmax(0, 1fr);
+  /* Short laptop windows keep the whole workspace on screen instead of scrolling the page. */
+  .app-shell {
+    min-height: 480px;
   }
-  .workspace.modular-workspace > .anatomy-rail {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  .workspace.modular-workspace > .central-workspace {
-    grid-column: 2;
-    grid-row: 1;
-  }
-  .workspace.modular-workspace > .review-rail {
-    grid-column: 3;
-    grid-row: 1;
-  }
-  .workspace.modular-workspace.review-workspace {
-    --anatomy-track: 180px;
-    --model-track: minmax(280px, 0.9fr);
-    --review-track: minmax(420px, 1.6fr);
-    grid-template-columns: var(--anatomy-track) var(--model-track) var(--review-track);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-  .workspace.modular-workspace.review-workspace > .anatomy-rail {
-    grid-row: 1/3;
-  }
-  .workspace.modular-workspace.review-workspace > .central-workspace,
-  .workspace.modular-workspace.review-workspace > .review-rail {
-    grid-row: 2;
-  }
-  .workspace.modular-workspace.review-workspace > .review-workspace-toolbar {
-    grid-column: 2/4;
-    grid-row: 1;
-  }
-  .workspace.modular-workspace.panel-anatomy-hidden {
-    --anatomy-track: 0px;
-  }
-  .workspace.modular-workspace.panel-model-hidden {
-    --model-track: 0px;
-    --review-track: minmax(0, 1fr);
-  }
-  .workspace.modular-workspace.panel-review-hidden {
-    --review-track: 0px;
-    --model-track: minmax(0, 1fr);
-  }
-  .workspace.modular-workspace.panel-model-hidden > .review-rail {
-    display: flex;
-    flex-direction: column;
-  }
-  .workspace.modular-workspace.panel-model-hidden .ct-slices {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-rows: minmax(0, 1fr);
+  .case-toolbar:has(.workspace-panels) {
+    min-height: 56px;
+    padding-top: 8px;
+    padding-bottom: 8px;
     gap: 16px;
-    padding: 12px 18px;
-    flex: 1 0 300px;
-    min-height: 300px;
   }
-  .workspace.modular-workspace.panel-model-hidden .ct-slice {
-    grid-column: auto;
+  .case-toolbar:has(.workspace-panels) .case-title h1 {
+    margin-top: 3px;
+    font-size: 17px;
+  }
+  .workspace.modular-workspace {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, min(var(--sidebar-width, 280px), 34%)) auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      'sidebar sidebar-splitter toolbar'
+      'sidebar sidebar-splitter stage';
+    gap: 0;
+  }
+  .workspace.modular-workspace.panel-sidebar-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'toolbar'
+      'stage';
+  }
+  .workspace.modular-workspace > .workspace-sidebar {
+    grid-area: sidebar;
+  }
+  .workspace.modular-workspace > .sidebar-splitter {
+    grid-area: sidebar-splitter;
+  }
+  .workspace.modular-workspace > .review-workspace-toolbar {
+    grid-area: toolbar;
+    min-width: 0;
+  }
+  .workspace.modular-workspace > .workspace-stage {
+    grid-area: stage;
+  }
+
+  /* Sidebar: the anatomy list flexes; details keep their content height up to about half. */
+  .workspace-sidebar {
+    container: workspace-sidebar / inline-size;
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    overflow: hidden;
+    background: var(--panel);
   }
-  .workspace.modular-workspace.panel-model-hidden .ct-image {
+  .workspace-sidebar > .anatomy-rail {
+    flex: 1 1 0;
+    min-height: 150px;
+    border-right: 0;
+  }
+  .workspace-sidebar > .inspector {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 48%;
+    overflow: auto;
+  }
+  .workspace.modular-workspace.panel-anatomy-hidden .workspace-sidebar > .inspector {
+    flex: 1 1 auto;
+    max-height: none;
+    border-top: 0;
+  }
+  .workspace-sidebar .inspector-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    gap: 14px;
+    height: 38px;
+    min-height: 38px;
+    padding: 0 8px 0 14px;
+    background: var(--surface);
+  }
+  .workspace-sidebar .anatomy-panel > .panel-heading {
+    padding: 12px 12px 10px 14px;
+  }
+  .workspace-sidebar .anatomy-panel > .panel-heading h2 {
+    margin-top: 4px;
+  }
+  .workspace-sidebar .library-actions {
+    display: flex;
+    gap: 5px;
+    margin: 0 12px 10px;
+  }
+  .workspace-sidebar .library-action {
+    flex: 1 1 auto;
+    min-height: 28px;
+    padding: 5px 7px;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+  .workspace-sidebar .structure-search {
+    min-height: 30px;
+    margin: 0 12px 10px;
+  }
+  .workspace-sidebar .selection-content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px 12px;
+    min-height: 0;
+    padding: 12px 14px;
+  }
+  .workspace-sidebar .selection-content > * {
+    grid-column: 1 / -1;
+  }
+  .workspace-sidebar .selection-identity {
+    grid-column: 1;
+    min-width: 0;
+  }
+  .workspace-sidebar .selection-identity h2 {
+    margin: 3px 0 2px;
+    font-size: 14px;
+  }
+  .workspace-sidebar .measurement {
+    grid-column: 2;
+    align-items: flex-end;
+    gap: 5px;
+    min-width: 0;
+    padding: 0;
+    border-left: 0;
+  }
+  .workspace-sidebar .measurement strong {
+    font-size: 20px;
+  }
+  .workspace-sidebar .selection-controls {
+    min-width: 0;
+    gap: 9px;
+  }
+  .workspace-sidebar .selection-controls .button-row {
+    display: flex;
+    gap: 6px;
+  }
+  .workspace-sidebar .selection-controls .button-row > .button {
+    flex: 1;
+  }
+  .workspace-sidebar .ct-only-summary {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px;
+  }
+  .workspace-sidebar .refinement-panel,
+  .workspace-sidebar .history-content {
+    padding: 14px;
+  }
+  .workspace-sidebar .history-heading {
+    flex-wrap: wrap;
+  }
+  @container workspace-sidebar (max-width: 419px) {
+    .workspace-sidebar .inspector-tabs {
+      gap: 12px;
+    }
+    .workspace-sidebar .inspector-tabs .tab-long {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .workspace-sidebar .inspector-tabs .tab-short {
+      display: inline;
+    }
+  }
+  @container workspace-sidebar (min-width: 420px) {
+    .workspace-sidebar .selection-controls {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: center;
+      gap: 9px 16px;
+    }
+    .workspace-sidebar .selection-controls > .button-row {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* Stage: two tiles with a splitter, side by side or stacked; one tile fills it alone. */
+  .workspace.modular-workspace .workspace-stage {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    grid-template-columns: minmax(0, var(--stage-model, 600fr)) auto minmax(0, var(--stage-review, 400fr));
+    grid-template-rows: minmax(0, 1fr);
+    background: var(--bg);
+  }
+  .workspace.modular-workspace.stage-rows .workspace-stage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--stage-model, 600fr)) auto minmax(0, var(--stage-review, 400fr));
+  }
+  .workspace.modular-workspace.panel-model-hidden .workspace-stage,
+  .workspace.modular-workspace.panel-review-hidden .workspace-stage {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .workspace-stage > .central-workspace {
+    min-width: 0;
+    min-height: 0;
+  }
+  .workspace-stage .model-header {
+    height: 36px;
+    min-height: 36px;
+    padding: 0 8px 0 14px;
+  }
+  .workspace-stage .model-viewport {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  /* Slice tile: header and toolbar rows, then slices fill the rest of the tile. */
+  .workspace-stage > .review-rail:not(.ct-expanded) {
+    container: slice-tile / inline-size;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border-left: 0;
+    overflow: auto;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > * {
+    flex-shrink: 0;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > .panel-heading {
+    min-height: 36px;
+    padding: 4px 8px 4px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > .panel-heading .eyebrow {
+    display: none;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > .panel-heading h2 {
+    margin: 0;
+    font-size: 12px;
+  }
+  .review-rail > .panel-heading > .ct-controls-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .review-rail > .panel-heading > .ct-controls-toggle > span {
+    font-size: 8px;
+    color: var(--text-secondary);
+  }
+  .review-rail.ct-expanded > .panel-heading > .ct-controls-toggle {
+    display: none;
+  }
+  /* Folded controls leave the slices the whole tile; delivery errors stay visible. */
+  .workspace-stage > .review-rail.ct-controls-folded:not(.ct-expanded) > .ct-tile-toolbar:not(:has(.ct-detail-error)),
+  .workspace-stage > .review-rail.ct-controls-folded:not(.ct-expanded) > .ct-tile-toolbar > :not(.ct-delivery),
+  .workspace-stage > .review-rail.ct-controls-folded:not(.ct-expanded) .ct-mpr-controls {
+    display: none;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > .ct-tile-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .ct-tile-toolbar > .window-controls,
+  .ct-tile-toolbar > .ct-overlay-opacity,
+  .ct-tile-toolbar > .ct-overlay-picker,
+  .ct-tile-toolbar > .ct-delivery {
+    padding: 0;
+    border: 0;
+  }
+  .ct-tile-toolbar > .window-controls {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+  }
+  .ct-tile-toolbar > .window-controls label {
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+  }
+  .ct-tile-toolbar > .window-controls label:first-child {
+    flex: 0 1 auto;
+  }
+  .ct-tile-toolbar > .window-controls select {
+    width: auto;
+    min-width: 108px;
+  }
+  .ct-tile-toolbar > .window-controls input {
+    width: 58px;
+  }
+  .ct-tile-toolbar > .signal-window-controls {
+    display: flex;
+  }
+  .ct-tile-toolbar > .signal-window-controls > .text-button {
+    grid-column: auto;
+  }
+  .ct-tile-toolbar > .ct-overlay-opacity input {
+    width: 84px;
+    flex: 0 1 84px;
+  }
+  .ct-tile-toolbar > .ct-overlay-picker {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .ct-tile-toolbar > .ct-overlay-picker summary {
+    gap: 8px;
+    min-height: 26px;
+    padding: 0 9px;
+    border: 1px solid var(--control-border);
+    border-radius: 5px;
+    background: var(--surface);
+  }
+  .ct-tile-toolbar > .ct-overlay-picker details[open] > summary {
+    border-color: var(--control-border-hover);
+    background: var(--surface-hover);
+    color: var(--white);
+  }
+  /* Overlay choices open as a menu over the slices rather than pushing them down. */
+  .ct-tile-toolbar > .ct-overlay-picker .ct-overlay-options {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 30;
+    width: 290px;
+    max-width: calc(100cqw - 24px);
+    padding: 4px 10px 8px;
+    border: 1px solid var(--control-border);
+    border-radius: 7px;
+    background: var(--panel);
+    box-shadow: 0 12px 32px #0008;
+  }
+  .ct-tile-toolbar > .ct-overlay-picker .ct-overlay-legend {
+    flex-wrap: nowrap;
+    min-width: 0;
+    max-height: none;
+    margin: 0;
+    overflow: hidden;
+  }
+  .ct-tile-toolbar > .ct-overlay-picker .ct-overlay-legend > span {
+    flex-shrink: 0;
+  }
+  .ct-tile-toolbar > .ct-delivery {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    min-width: 0;
+    font-size: 9px;
+    text-align: right;
+  }
+  .ct-tile-toolbar > .ct-delivery p {
+    text-align: left;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-mpr-controls {
+    flex-shrink: 0;
+    gap: 6px 12px;
+    padding: 6px 12px 0;
+    font-size: 10px;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice-stage > .ct-detail-error {
+    flex-shrink: 0;
+    margin: 6px 12px 0;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > .probe-readout {
+    margin-top: 0;
+    padding: 6px 14px;
+    border-bottom: 0;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > .compare-check {
+    margin: 2px 14px 8px;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) > .review-status {
+    position: relative;
+    padding: 4px 14px 8px;
+  }
+  /* Review status and correction tools open as a panel over the slices. */
+  .workspace-stage > .review-rail:not(.ct-expanded) > .review-status > .review-status-body {
+    position: absolute;
+    left: 10px;
+    bottom: calc(100% + 4px);
+    z-index: 30;
+    width: min(360px, calc(100cqw - 20px));
+    max-height: 60vh;
+    overflow: auto;
+    padding: 12px 14px;
+    border: 1px solid var(--control-border);
+    border-radius: 7px;
+    background: var(--panel);
+    box-shadow: 0 12px 32px #0008;
+  }
+
+  /* Slices adapt to the space they get: axial over coronal and sagittal, a row, or a column. */
+  .workspace-stage > .review-rail:not(.ct-expanded) > .ct-slice-stage {
+    container: slice-stage / size;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 250px;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slices {
+    display: grid;
+    flex: 1 1 0;
+    min-height: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 8px 10px;
+    padding: 8px 12px;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice:first-child {
+    grid-column: 1 / -1;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice > header {
+    padding: 0 2px 4px;
+  }
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-image {
+    flex: 1 1 0;
     height: auto;
-    min-height: 260px;
-    max-height: none;
-    flex: 1;
-  }
-  .workspace.modular-workspace.panel-model-hidden .ct-image canvas {
+    min-height: 0;
     max-height: none;
   }
-  .workspace.modular-workspace.panel-model-hidden .window-controls {
-    max-width: 460px;
-    flex-shrink: 0;
+  .workspace-stage > .review-rail:not(.ct-expanded) .ct-image canvas {
+    max-height: none;
   }
-  .workspace.modular-workspace.panel-model-hidden .review-status > .field {
-    max-width: 360px;
+  @container slice-stage (aspect-ratio > 1.35) {
+    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slices {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-rows: minmax(0, 1fr);
+    }
+    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice:first-child {
+      grid-column: auto;
+    }
   }
-  .workspace.modular-workspace.panel-model-hidden .review-rail > :not(.ct-slices) {
-    flex-shrink: 0;
+  @container slice-stage (aspect-ratio < 0.67) {
+    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slices {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: repeat(3, minmax(0, 1fr));
+    }
+    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice:first-child {
+      grid-column: auto;
+    }
   }
-  .workspace.modular-workspace.panel-inspector-hidden .model-viewport {
-    flex: 1;
-  }
-  .workspace.modular-workspace.panel-anatomy-hidden > .central-workspace {
-    border-left: 0;
-  }
-  .workspace.modular-workspace.panel-model-hidden > .review-rail {
-    border-left: 0;
+
+  /* Segmentation settings float over the stage instead of pushing the viewers down. */
+  .workspace.modular-workspace > .segmentation-panel {
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    z-index: 40;
+    width: min(680px, calc(100% - 28px));
+    max-height: calc(100% - 20px);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 16px 48px #000a;
   }
 }
-@media (min-width: 1500px) {
-  .workspace.modular-workspace:not(.review-workspace) {
-    --anatomy-track: 280px;
-    --review-track: 330px;
+
+/* Phones keep the research-use label and one scrollable row of case actions;
+   the case name already shows in the header picker. */
+@media (max-width: 600px) {
+  .case-toolbar:has(.workspace-panels) {
+    flex-wrap: nowrap;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    min-height: 0;
+    padding: 8px 12px;
   }
-  .workspace.modular-workspace.panel-anatomy-hidden {
-    --anatomy-track: 0px;
+  .case-toolbar:has(.workspace-panels) .case-title h1 {
+    display: none;
   }
-  .workspace.modular-workspace.panel-model-hidden {
-    --review-track: minmax(0, 1fr);
+  .case-actions:has(.workspace-panels) {
+    flex-wrap: nowrap;
+    gap: 6px;
+    margin: 0 -12px;
+    padding: 0 12px 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
   }
-  .workspace.modular-workspace.panel-review-hidden {
-    --review-track: 0px;
+  .case-actions:has(.workspace-panels) > * {
+    flex-shrink: 0;
   }
 }
-@media (min-width: 1001px) and (max-width: 1220px) {
-  .workspace.modular-workspace:not(.review-workspace) {
-    --anatomy-track: 225px;
-    --review-track: 265px;
+
+/* Narrow screens show one area at a time through the bottom navigation. */
+@media (max-width: 1000px) {
+  .workspace.modular-workspace > .workspace-sidebar,
+  .workspace.modular-workspace > .workspace-stage {
+    height: 100%;
+    min-height: 0;
   }
-  .workspace.modular-workspace.panel-anatomy-hidden {
-    --anatomy-track: 0px;
+  .workspace.modular-workspace:not(.mobile-anatomy) > .workspace-sidebar,
+  .workspace.modular-workspace.mobile-anatomy > .workspace-stage,
+  .workspace.modular-workspace .workspace-splitter,
+  .review-rail > .panel-heading > .ct-controls-toggle {
+    display: none;
   }
-  .workspace.modular-workspace.panel-model-hidden {
-    --review-track: minmax(0, 1fr);
+  .workspace.modular-workspace.mobile-anatomy > .workspace-sidebar {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
-  .workspace.modular-workspace.panel-review-hidden {
-    --review-track: 0px;
+  .workspace.modular-workspace .workspace-sidebar > .anatomy-rail {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 45%;
+  }
+  .workspace.modular-workspace .workspace-sidebar > .inspector {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 55%;
+    overflow: auto;
+  }
+  .workspace.modular-workspace.panel-anatomy-hidden .workspace-sidebar > .inspector {
+    flex: 1 1 auto;
+    max-height: none;
+  }
+  .workspace.modular-workspace .workspace-sidebar .selection-content {
+    flex-wrap: wrap;
+    gap: 14px 20px;
+    min-height: 0;
+  }
+  .workspace.modular-workspace > .segmentation-panel {
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 40;
+    max-height: 100%;
+    box-shadow: 0 16px 48px #000a;
+  }
+}
+
+@media (min-width: 1001px) {
+  .app-header {
+    height: 52px;
+    min-height: 52px;
+  }
+  .app-footer {
+    height: 24px;
+    min-height: 24px;
+  }
+}
+@media (min-width: 1001px) and (max-height: 760px) {
+  .app-header {
+    height: 46px;
+    min-height: 46px;
+  }
+  .brand > span {
+    font-size: 20px;
+  }
+  .case-toolbar:has(.workspace-panels) {
+    min-height: 50px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .case-toolbar:has(.workspace-panels) .case-title .eyebrow {
+    font-size: 8px;
+  }
+  .case-toolbar:has(.workspace-panels) .case-title h1 {
+    margin-top: 2px;
+    font-size: 15px;
+  }
+  .app-footer {
+    height: 22px;
+    min-height: 22px;
   }
 }
 

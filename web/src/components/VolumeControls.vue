@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   cinematicReferenceError,
   CINEMATIC_HEART_PRESET,
@@ -54,7 +54,6 @@ const emit = defineEmits<{
   'measure-reference': [];
   'heart-view': [];
   retry: [];
-  layout: [];
 }>();
 const axes = ['i', 'j', 'k'] as const;
 const maskOpen = ref(props.mask.enabled),
@@ -129,12 +128,6 @@ function useMaskIds(ids: string[]) {
   updateMask({ ids });
   maskOpen.value = false;
 }
-async function layout() {
-  await nextTick();
-  emit('layout');
-}
-watch(() => props.enabled, layout);
-watch(cinematic, layout);
 watch([() => props.settings.cinematic.myocardiumHU, () => props.settings.cinematic.bloodHU], ([myocardium, blood]) => {
   myocardiumInput.value = String(myocardium);
   bloodInput.value = String(blood);
@@ -144,7 +137,6 @@ watch(
   () => props.mask.enabled,
   enabled => {
     maskOpen.value = enabled;
-    void layout();
   },
 );
 watch(
@@ -153,7 +145,6 @@ watch(
     if (failed) maskOpen.value = false;
   },
 );
-watch(maskOpen, layout);
 </script>
 
 <template>
@@ -304,7 +295,6 @@ watch(maskOpen, layout);
         :settings="nativeLighting"
         :disabled="disabled"
         @update="emit('update:nativeLighting', $event)"
-        @layout="layout"
       />
       <p v-if="otherModality" class="volume-preset-note">This preset is designed for another modality and may need adjustment for CT.</p>
       <p v-if="projectionNamed" class="volume-preset-note">Slicer’s {{ preset.label }} appearance, shown with composite volume rendering.</p>
@@ -438,7 +428,7 @@ watch(maskOpen, layout);
           </p>
         </template>
       </div>
-      <details class="volume-crop" @toggle="layout">
+      <details class="volume-crop">
         <summary>Crop volume <span>Native i / j / k</span></summary>
         <div class="volume-crop-grid">
           <div v-for="(axis, index) in axes" :key="axis" class="volume-crop-axis">

@@ -803,35 +803,37 @@ defineExpose({
 </template>
 
 <style scoped>
+/* The editing toolbar sits above both viewers, so every row it saves goes to the views. */
 .review-toolbar {
   background: #171c24;
   border-block: 1px solid #354052;
-  padding: 12px 16px;
+  padding: 8px 12px;
   color: #c8d1df;
   display: grid;
-  gap: 9px;
+  gap: 6px;
 }
 .review-toolbar-main,
 .review-toolbar-context,
 .review-result-summary {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 7px 9px;
   flex-wrap: wrap;
 }
 .review-target {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 6px;
   font-size: 9px;
   color: #a9b6c9;
   min-width: 160px;
-  max-width: 220px;
+  max-width: 260px;
 }
 .review-target select {
-  font-size: 12px;
-  padding: 7px;
-  max-width: 220px;
+  font-size: 11px;
+  padding: 5px 7px;
+  min-width: 0;
+  max-width: 200px;
 }
 .review-toolset {
   display: flex;
@@ -843,7 +845,7 @@ defineExpose({
   border: 0;
   background: transparent;
   color: #b7c3d5;
-  padding: 8px 10px;
+  padding: 6px 9px;
   font-size: 11px;
   cursor: pointer;
   white-space: nowrap;
@@ -874,8 +876,8 @@ defineExpose({
 }
 .review-toolbar .button {
   font-size: 11px;
-  padding: 8px 10px;
-  min-height: 33px;
+  padding: 6px 10px;
+  min-height: 29px;
 }
 .review-save {
   background: #cfddf2;
@@ -902,7 +904,7 @@ defineExpose({
   font-size: 10px;
   color: #c1cfe4;
   gap: 15px;
-  padding-top: 7px;
+  padding-top: 5px;
   border-top: 1px solid #303c4c;
 }
 .review-brush {

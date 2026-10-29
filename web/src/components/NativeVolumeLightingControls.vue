@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, watch } from 'vue';
+import { computed } from 'vue';
 import { freshNativeVolumeLighting, type NativeVolumeLightingSettings } from '../lib/volume-lighting';
 
 const props = defineProps<{ settings: NativeVolumeLightingSettings; disabled?: boolean }>();
-const emit = defineEmits<{ update: [settings: NativeVolumeLightingSettings]; layout: [] }>();
+const emit = defineEmits<{ update: [settings: NativeVolumeLightingSettings] }>();
 const manual = computed(() => props.settings.mode !== 'preset');
 const materials = [
   { key: 'ambient', label: 'Ambient', aria: 'Volume ambient light', min: 0, max: 1, step: 0.05 },
@@ -17,15 +17,10 @@ function number(event: Event) {
 function update(change: Partial<NativeVolumeLightingSettings>) {
   emit('update', freshNativeVolumeLighting({ ...props.settings, ...change }));
 }
-async function layout() {
-  await nextTick();
-  emit('layout');
-}
-watch(() => props.settings.mode, layout);
 </script>
 
 <template>
-  <details class="native-lighting-controls" @toggle="layout">
+  <details class="native-lighting-controls">
     <summary>
       Lighting and shadows
       <span>{{

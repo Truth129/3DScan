@@ -4,7 +4,21 @@ import AnatomyPanel from './components/AnatomyPanel.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
 import { displayStructures, normalizeStructureColor } from './lib/display-appearance';
 import WorkspacePanels from './components/WorkspacePanels.vue';
-import { readWorkspacePanels, saveWorkspacePanels, setWorkspacePanel, canHideWorkspacePanel, type WorkspacePanelId } from './lib/workspace-panels';
+import WorkspaceSplitter from './components/WorkspaceSplitter.vue';
+import {
+  readWorkspacePanels,
+  saveWorkspacePanels,
+  setWorkspacePanel,
+  canHideWorkspacePanel,
+  readWorkspaceLayout,
+  saveWorkspaceLayout,
+  defaultWorkspaceLayout,
+  clampModelShare,
+  clampSidebarWidth,
+  MODEL_SHARE_RANGE,
+  SIDEBAR_WIDTH_RANGE,
+  type WorkspacePanelId,
+} from './lib/workspace-panels';
 import ModelViewport from './components/ModelViewport.vue';
 import CTReviewRail from './components/CTReviewRail.vue';
 import CTOverlayPicker from './components/CTOverlayPicker.vue';
@@ -42,6 +56,8 @@ import { recoverCaseJob } from './lib/jobs';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
+import { useFloatingDetails } from './lib/use-floating-details';
+import { useFoldingControls } from './lib/use-folding-controls';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
 import type {
   Case,
@@ -194,10 +210,27 @@ const acquisitionTags = computed(() =>
 );
 const mobilePanel = ref<'model' | 'anatomy' | 'review'>('model'),
   inspectorTab = ref<'selection' | 'refine' | 'history'>('selection');
-const panels = ref(readWorkspacePanels());
+const panels = ref(readWorkspacePanels()),
+  layout = ref(readWorkspaceLayout());
 if (!panels.value.model) mobilePanel.value = 'review';
 const modelPanelVisible = computed(() => panels.value.model && (workspaceMode.value !== 'review' || reviewFocus.value !== 'ct'));
 const reviewPanelVisible = computed(() => panels.value.review && (workspaceMode.value !== 'review' || reviewFocus.value !== 'model'));
+const sidebarVisible = computed(() => panels.value.anatomy || panels.value.inspector);
+// Review edits on the source slices, so it keeps its own 3D/slice split.
+const shareKey = computed(() => (workspaceMode.value === 'review' ? 'reviewModelShare' : 'modelShare'));
+const modelShare = computed(() => layout.value[shareKey.value]);
+const workspaceStyle = computed(() => ({
+  '--sidebar-width': `${layout.value.sidebarWidth}px`,
+  '--stage-model': `${Math.round(modelShare.value * 1000)}fr`,
+  '--stage-review': `${Math.round((1 - modelShare.value) * 1000)}fr`,
+}));
+function setModelShare(value: number) {
+  layout.value = { ...layout.value, [shareKey.value]: clampModelShare(value) };
+}
+function setSidebarWidth(value: number) {
+  layout.value = { ...layout.value, sidebarWidth: clampSidebarWidth(value) };
+}
+watch(layout, saveWorkspaceLayout, { deep: true });
 function setPanel(id: WorkspacePanelId, visible: boolean) {
   const returnFocus =
     !visible &&
@@ -230,6 +263,11 @@ const segmentationCatalog = shallowRef<SegmentationCatalog>();
 const segmentationSettings = ref<SegmentationSettings>(restoreSegmentationSettings());
 const model = ref<InstanceType<typeof ModelViewport>>(),
   correctionInput = ref<HTMLInputElement>();
+const reviewStatus = ref<HTMLDetailsElement>(),
+  reviewStatusBody = ref<HTMLElement>();
+// Window, overlay and MPR controls can fold away so narrow slice tiles keep their images.
+const { open: ctControlsOpen, setOpen: setCTControlsOpen } = useFoldingControls('scan3d-ct-controls-open-v1', () => true);
+const { keyboard: reviewStatusKeyboard } = useFloatingDetails(reviewStatus, reviewStatusBody);
 const vtkPreview = ref(false);
 function createVolumeView() {
   return defineAsyncComponent(() => import('./components/CornerstoneVolumeView.vue'));
@@ -975,7 +1013,7 @@ onBeforeUnmount(() => {
           >
         </div>
         <div v-if="revision" class="case-actions">
-          <WorkspacePanels v-model="panels" :review-label="`${sourceLabel} review`" /><button
+          <WorkspacePanels v-model="panels" v-model:layout="layout" :review-label="`${sourceLabel} review`" /><button
             v-if="!synthetic && activeCase.series.length"
             class="button secondary compact reprocess-action"
             :disabled="busy"
@@ -996,14 +1034,21 @@ onBeforeUnmount(() => {
             class="button primary compact export-viewer-button"
             :disabled="!!exportDisabledReason"
             :title="exportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'"
+            :aria-describedby="exportDisabledReason && !busy ? 'export-disabled-note' : undefined"
             @click="openExport"
           >
-            Export viewer ↗
-          </button>
+            Export viewer ↗</button
+          ><span
+            v-if="exportDisabledReason && !busy"
+            id="export-disabled-note"
+            class="export-disabled-note"
+            role="status"
+            tabindex="0"
+            :data-reason="exportDisabledReason"
+            ><span aria-hidden="true">i</span><span class="sr-only">{{ exportDisabledReason }}</span></span
+          >
         </div>
       </div>
-
-      <p v-if="revision && exportDisabledReason && !busy" class="export-disabled-note" role="status">{{ exportDisabledReason }}</p>
 
       <div v-if="job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
         <span v-if="busyJob" class="spinner"></span>
@@ -1051,19 +1096,6 @@ onBeforeUnmount(() => {
           </table>
         </div>
       </details>
-
-      <SegmentationControls
-        v-if="segmentationOpen && revision && !prepareOpen"
-        v-model="segmentationSettings"
-        :catalog="segmentationCatalog"
-        :busy="busy"
-        :loading="segmentationLoading"
-        :error="segmentationError"
-        @run="segment"
-        @close="segmentationOpen = false"
-        @retry="loadSegmentationOptions"
-        @license-changed="loadSegmentationOptions(true)"
-      />
 
       <div v-if="!revision || prepareOpen" class="prepare-workspace">
         <section class="prepare-panel">
@@ -1135,16 +1167,19 @@ onBeforeUnmount(() => {
         :data-panels="JSON.stringify(panels)"
         :class="[
           `mobile-${mobilePanel}`,
+          `stage-${layout.arrangement}`,
           {
             'panel-anatomy-hidden': !panels.anatomy,
             'panel-model-hidden': !modelPanelVisible,
             'panel-review-hidden': !reviewPanelVisible,
             'panel-inspector-hidden': !panels.inspector,
+            'panel-sidebar-hidden': !sidebarVisible,
             'review-workspace': workspaceMode === 'review',
             'review-focus-ct': workspaceMode === 'review' && reviewFocus === 'ct',
             'review-focus-model': workspaceMode === 'review' && reviewFocus === 'model',
           },
         ]"
+        :style="workspaceStyle"
       >
         <div v-show="workspaceMode === 'review'" class="review-workspace-toolbar">
           <div class="review-workspace-tabs">
@@ -1181,117 +1216,36 @@ onBeforeUnmount(() => {
             @accept="track"
           />
         </div>
-        <aside id="workspace-anatomy-panel" v-show="panels.anatomy" class="anatomy-rail" aria-label="Anatomy panel">
-          <div v-if="ctOnly" class="ct-only-anatomy">
-            <button type="button" class="panel-hide" aria-label="Hide anatomy panel" title="Hide anatomy panel" @click="setPanel('anatomy', false)">×</button
-            ><span class="eyebrow">SOURCE {{ sourceLabel }}</span>
-            <h2>{{ sourceLabel }} ready</h2>
-            <p>Explore the scan in 3D and the linked source views. Anatomical segments will appear here after segmentation.</p>
-            <button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Choose segmentation task</button>
-            <p class="help">Opening the image does not start TotalSegmentator.</p>
-          </div>
-          <AnatomyPanel
-            v-else
-            collapsible
-            @collapse="setPanel('anatomy', false)"
-            :structures="shownStructures"
-            :display="display"
-            :selected="selected"
-            @select="select"
-            @visibility="visibility"
-            @group-visibility="groupVisibility"
-            @solo="solo"
-            @all="showAll"
-            @hide-all="hideAll"
-          />
-        </aside>
-        <section id="workspace-model-panel" v-show="modelPanelVisible" class="central-workspace" aria-label="3D view">
-          <div class="model-header">
-            <div class="view-tabs">
-              <button class="active">{{ ctOnly ? `${sourceLabel} view` : '3D anatomy' }}</button
-              ><span>{{
-                ctOnly
-                  ? `Source ${sourceLabel}`
-                  : interactiveReview?.candidate
-                    ? `Saved mask · candidate on ${sourceLabel}`
-                    : `${revision.structures.length} structures`
-              }}</span>
+        <div id="workspace-sidebar" v-show="sidebarVisible" class="workspace-sidebar">
+          <aside id="workspace-anatomy-panel" v-show="panels.anatomy" class="anatomy-rail" aria-label="Anatomy panel">
+            <div v-if="ctOnly" class="ct-only-anatomy">
+              <button type="button" class="panel-hide" aria-label="Hide anatomy panel" title="Hide anatomy panel" @click="setPanel('anatomy', false)">×</button
+              ><span class="eyebrow">SOURCE {{ sourceLabel }}</span>
+              <h2>{{ sourceLabel }} ready</h2>
+              <p>Explore the scan in 3D and the linked source views. Anatomical segments will appear here after segmentation.</p>
+              <button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Choose segmentation task</button>
+              <p class="help">Opening the image does not start TotalSegmentator.</p>
             </div>
-            <div v-if="canCompareSurfaces" class="comparison-toggle">
-              <button :class="{ active: !before }" @click="before = false">Current</button
-              ><button :class="{ active: before }" @click="before = true">Before</button>
-            </div>
-            <span class="model-scale">PATIENT RAS · mm</span
-            ><button
-              type="button"
-              class="panel-hide"
-              aria-label="Hide 3D view"
-              title="Hide 3D view"
-              :disabled="!canHideWorkspacePanel(panels, 'model')"
-              @click="setPanel('model', false)"
-            >
-              ×
-            </button>
-          </div>
-          <p
-            v-if="workspaceMode === 'review' && showingCandidate && (candidateSurfaceLoading || candidateSurfaceError)"
-            class="candidate-surface-note"
-            :role="candidateSurfaceError ? 'alert' : 'status'"
-          >
-            {{ candidateSurfaceError || 'Preparing the 3D candidate preview… Previous surfaces remain visible.'
-            }}<button v-if="candidateSurfaceError" class="text-button" @click="loadCandidateSurface">Retry preview</button>
-          </p>
-          <ModelViewport
-            v-if="shownRevision"
-            ref="model"
-            :key="modelKey"
-            :manifest-url="shownRevision.structures.length ? shownRevision.model_manifest_url || undefined : undefined"
-            :model-url="shownRevision.structures.length ? shownRevision.model_url || `${revisionUrl(activeCase.id, shownRevision.id)}/model.glb` : undefined"
-            :structures="shownStructures"
-            :mask-structures="maskStructures"
-            :display="display"
-            :selected="selected"
-            :point="point"
-            :label="activeCase.label"
-            :viewport-active="!prepareOpen && panels.model && (workspaceMode !== 'review' || reviewFocus !== 'ct')"
-            :review-active="modelPanelVisible && workspaceMode === 'review' && reviewFocus !== 'ct'"
-            :review-target="reviewStructures.find(s => s.id === selected)"
-            :review-tool="interactiveTool"
-            :review-prompts="interactivePrompts"
-            :review-disabled="interactiveDisabled || before || (interactiveTool === 'scissors' && scissorsSurfacePending)"
-            :review-include="interactiveInclude"
-            :review-radius="interactiveRadius"
-            :review-scissors-shape="interactiveScissors.shape"
-            :review-scissors-operation="interactiveScissors.operation"
-            :model-revision-id="shownRevision.id"
-            :case-id="activeCase.id"
-            :revision-id="ctRevisionId"
-            :geometry="revision.geometry"
-            :image-context="imageContext(revision.image_asset)"
-            :capabilities="sourceCapabilities"
-            :local-session="localCT"
-            :volume-view-component="CornerstoneVolumeView"
-            :local-ready="localCTReady"
-            :full-resolution="localCTFull"
-            :overlays="ctOverlayStructures"
-            :compare="compare"
-            :window="displayWindow"
-            :level="displayLevel"
-            @pick="picked"
-            @point="setPoint"
-            @gesture="interactivePanel?.addGesture($event)"
-            @opacity="allSegmentOpacity"
-            @renderer="vtkPreview = $event === 'vtk'"
-            @retry-volume-view="CornerstoneVolumeView = createVolumeView()"
-          />
-          <div v-if="before" class="before-label">Parent surface and measurements · {{ sourceLabel }} retains the active revision</div>
-          <div v-if="synthetic" class="demo-label">
-            SYNTHETIC DEMO <span>Illustrative shapes for workflow testing · no patient data or model inference</span>
-          </div>
+            <AnatomyPanel
+              v-else
+              collapsible
+              @collapse="setPanel('anatomy', false)"
+              :structures="shownStructures"
+              :display="display"
+              :selected="selected"
+              @select="select"
+              @visibility="visibility"
+              @group-visibility="groupVisibility"
+              @solo="solo"
+              @all="showAll"
+              @hide-all="hideAll"
+            />
+          </aside>
           <section id="workspace-inspector-panel" v-show="panels.inspector" class="inspector" aria-label="Selection and history">
             <header class="inspector-tabs">
               <button :class="{ active: inspectorTab === 'selection' }" @click="inspectorTab = 'selection'">
-                {{ ctOnly ? `Source ${sourceLabel}` : 'Selected structure' }}</button
+                <span class="tab-long">{{ ctOnly ? `Source ${sourceLabel}` : 'Selected structure' }}</span
+                ><span class="tab-short" aria-hidden="true">{{ ctOnly ? sourceLabel : 'Structure' }}</span></button
               ><button
                 v-if="!ctOnly"
                 :class="{ active: inspectorTab === 'refine' }"
@@ -1300,9 +1254,10 @@ onBeforeUnmount(() => {
                   before = false;
                 "
               >
-                Refinement</button
+                <span class="tab-long">Refinement</span><span class="tab-short" aria-hidden="true">Refine</span></button
               ><button :class="{ active: inspectorTab === 'history' }" @click="inspectorTab = 'history'">
-                Revision history <span>{{ revisions.length }}</span></button
+                <span class="tab-long">Revision history</span><span class="tab-short" aria-hidden="true">History</span>
+                <span class="tab-count">{{ revisions.length }}</span></button
               ><button
                 type="button"
                 class="panel-hide inspector-hide"
@@ -1390,192 +1345,333 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </section>
-        </section>
-
-        <div v-if="ctExpanded" class="ct-expanded-backdrop" @click="ctExpanded = false"></div>
-        <aside
-          id="workspace-review-panel"
-          v-show="reviewPanelVisible"
-          class="review-rail"
-          :class="{ 'ct-expanded': ctExpanded, 'interactive-review-open': interactiveOpen }"
-          :role="ctExpanded ? 'dialog' : undefined"
-          :aria-modal="ctExpanded ? true : undefined"
-          :aria-label="`Linked ${sourceLabel} review`"
-        >
-          <div class="panel-heading">
-            <div>
-              <span class="eyebrow">SOURCE IMAGES</span>
-              <h2>{{ sourceLabel }} review</h2>
-            </div>
-            <span class="pill">LINKED</span
-            ><button class="text-button ct-expand-button" :aria-expanded="ctExpanded" @click="toggleCT">
-              {{
-                workspaceMode === 'review' ? (reviewFocus === 'ct' ? `${sourceLabel} + 3D` : `Focus ${sourceLabel}`) : ctExpanded ? 'Close ×' : 'Expand ↗'
-              }}</button
-            ><button
-              type="button"
-              class="panel-hide"
-              :aria-label="`Hide ${sourceLabel} review`"
-              :title="`Hide ${sourceLabel} review`"
-              :disabled="!canHideWorkspacePanel(panels, 'review')"
-              @click="setPanel('review', false)"
-            >
-              ×
-            </button>
-          </div>
-          <div class="window-controls" :class="{ 'signal-window-controls': activeModality !== 'CT' }">
-            <label v-if="activeModality === 'CT'"
-              >Window<select aria-label="CT window preset" @change="preset">
-                <option value="400,40">Soft tissue</option>
-                <option value="1500,-600">Lung</option>
-                <option value="1800,400">Bone</option>
-                <option value="700,100">Vessels</option>
-              </select></label
-            ><button
-              v-else
-              class="text-button"
-              @click="
-                windowWidth = imageDisplay.default_window;
-                level = imageDisplay.default_level;
-              "
-            >
-              Reset signal window</button
-            ><label
-              >W<input
-                v-model.number="windowWidth"
-                :aria-label="`${sourceLabel} window width`"
-                type="number"
-                :min="activeModality === 'CT' ? 1 : undefined"
-                :max="activeModality === 'CT' ? 6000 : undefined"
-                step="any" /></label
-            ><label
-              >L<input
-                v-model.number="level"
-                :aria-label="`${sourceLabel} window level`"
-                type="number"
-                :min="activeModality === 'CT' ? -2000 : undefined"
-                :max="activeModality === 'CT' ? 4000 : undefined"
-                step="any"
-            /></label>
-          </div>
-          <label class="ct-overlay-opacity"
-            >2D overlay opacity <input v-model.number="overlayOpacity" type="range" min="0" max="1" step="0.05" aria-label="2D overlay opacity" /><output
-              >{{ Math.round(overlayOpacity * 100) }}%</output
-            ></label
-          >
-          <CTOverlayPicker
-            v-if="ctStructures.length"
-            :modality="sourceLabel"
-            :structures="ctStructures"
-            :ids="ctOverlayIds"
-            :selected="selected"
-            :following="ctFollowing"
-            @change="setCTOverlays"
-            @follow="followCTSelection"
-          />
-          <div class="ct-delivery" :data-mode="ctDeliveryMode" role="status">
-            <span v-if="ctDeliveryMode === 'loading'"
-              >Loading fast {{ sourceLabel }} navigation<span v-if="ctProgress?.stage === 'ct'"> · {{ ctPercent }}%</span>…</span
-            >
-            <span v-else-if="ctDeliveryMode === 'full'">{{ sourceLabel }} cached · local review</span>
-            <span v-else-if="ctDeliveryMode === 'progressive'">{{
-              ctCaching ? `Local navigation ready · preloading full ${sourceLabel}` : 'Local navigation · full detail after movement'
-            }}</span>
-            <span v-else>Source images unavailable</span>
-            <button
-              v-if="localCTReady && !localCTFull && !ctCaching"
-              class="text-button"
-              :title="`Download the full-resolution ${sourceLabel} to this tab for fully local scrolling and ${imageDisplay.units} inspection. Uses more bandwidth and memory.`"
-              @click="cacheFullCT"
-            >
-              Cache full {{ sourceLabel }}
-            </button>
-            <button v-if="ctCaching" class="text-button" @click="cancelFullCT">
-              Cancel {{ sourceLabel }} download<span v-if="fullCTProgress?.stage === 'ct'"> · {{ fullCTPercent }}%</span>
-            </button>
-            <p v-if="ctLocalError" class="ct-detail-error">
-              {{ ctLocalError }} <button v-if="!localCTReady" class="text-button" @click="prepareLocalCT(ctBase)">Retry</button>
-            </p>
-            <p v-if="ctOverlayError && localCTReady" class="ct-detail-error" role="status">
-              {{ ctOverlayError }}
-              <button class="text-button" :disabled="ctOverlayRetrying" @click="retryCTOverlays">
-                {{ ctOverlayRetrying ? 'Retrying overlays…' : 'Retry overlays' }}
-              </button>
-            </p>
-          </div>
-          <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate">
-            <span
-              >Reviewing
-              <strong>{{
-                prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id)
-              }}</strong>
-              · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
-            ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
-          </div>
-          <CTReviewRail
-            :overlay-opacity="overlayOpacity"
-            :modality="sourceLabel"
-            :case-id="activeCase.id"
-            :revision-id="ctRevisionId"
-            :geometry="revision.geometry"
-            :point="point"
-            :window="displayWindow"
-            :level="displayLevel"
-            :structure="selected"
-            :overlays="ctOverlayStructures"
-            :compare="compare"
-            :local-session="localCT"
-            :active="reviewPanelVisible && !prepareOpen"
-            :local-ready="localCTReady"
-            :full-resolution="localCTFull"
-            :review-tool="workspaceMode === 'review' && interactiveTool !== 'scissors' ? interactiveTool : 'navigate'"
-            :review-prompts="workspaceMode === 'review' ? interactivePrompts : []"
-            :review-disabled="interactiveDisabled"
-            :review-include="interactiveInclude"
-            :review-radius="interactiveRadius"
-            :native-review="workspaceMode === 'review' && interactiveNative"
-            @point="setPoint"
-            @prompt="interactivePanel?.addPrompt($event)"
-            @gesture="interactivePanel?.addGesture($event)"
-            @window-level="cornerstoneWindowLevel"
-          />
-          <div class="probe-readout">
-            <span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span
-            ><strong
-              >{{ formatImageValue(hu, imageDisplay.units) }} <small>{{ imageDisplay.units }}</small></strong
-            >
-          </div>
-          <label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
-            ><input v-model="compare" type="checkbox" />
-            {{ showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent` }}</label
-          >
-          <details v-if="!ctOnly" class="review-status" :open="workspaceMode !== 'review'">
-            <summary>Review status &amp; tools</summary>
-            <div class="section-title"><h3>Review & correction</h3></div>
-            <label class="field"
-              >Revision status<select :value="revision.review_status" :disabled="busy" @change="review">
-                <option value="unreviewed">Unreviewed</option>
-                <option value="reviewed">Reviewed</option>
-                <option value="corrected">Corrected</option>
-              </select></label
-            >
-            <details class="slicer-fallback">
-              <summary>External correction with Slicer</summary>
-              <div class="button-row">
-                <a class="button secondary compact" :href="`${base}/slicer.zip`" download>Slicer bundle ↓</a
-                ><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button>
+        </div>
+        <WorkspaceSplitter
+          v-show="sidebarVisible"
+          class="sidebar-splitter"
+          axis="columns"
+          mode="pixels"
+          :value="layout.sidebarWidth"
+          :min="SIDEBAR_WIDTH_RANGE[0]"
+          :max="SIDEBAR_WIDTH_RANGE[1]"
+          :step="16"
+          label="Resize sidebar"
+          controls="workspace-sidebar"
+          @update="setSidebarWidth"
+          @reset="setSidebarWidth(defaultWorkspaceLayout().sidebarWidth)"
+        />
+        <div class="workspace-stage">
+          <section id="workspace-model-panel" v-show="modelPanelVisible" class="central-workspace" aria-label="3D view">
+            <div class="model-header">
+              <div class="view-tabs">
+                <button class="active">{{ ctOnly ? `${sourceLabel} view` : '3D anatomy' }}</button
+                ><span>{{
+                  ctOnly
+                    ? `Source ${sourceLabel}`
+                    : interactiveReview?.candidate
+                      ? `Saved mask · candidate on ${sourceLabel}`
+                      : `${revision.structures.length} structures`
+                }}</span>
               </div>
-              <p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p>
-            </details>
-            <input ref="correctionInput" type="file" accept=".nrrd,.nhdr" hidden @change="correction" />
-            <div v-if="revision.qc.length" class="qc-list">
-              <details>
-                <summary>{{ revision.qc.length }} automated check {{ revision.qc.length === 1 ? 'note' : 'notes' }}</summary>
-                <p v-for="message in revision.qc" :key="message">{{ message }}</p>
-              </details>
+              <div v-if="canCompareSurfaces" class="comparison-toggle">
+                <button :class="{ active: !before }" @click="before = false">Current</button
+                ><button :class="{ active: before }" @click="before = true">Before</button>
+              </div>
+              <span class="model-scale">PATIENT RAS · mm</span
+              ><button
+                type="button"
+                class="panel-hide"
+                aria-label="Hide 3D view"
+                title="Hide 3D view"
+                :disabled="!canHideWorkspacePanel(panels, 'model')"
+                @click="setPanel('model', false)"
+              >
+                ×
+              </button>
             </div>
-          </details>
-        </aside>
+            <p
+              v-if="workspaceMode === 'review' && showingCandidate && (candidateSurfaceLoading || candidateSurfaceError)"
+              class="candidate-surface-note"
+              :role="candidateSurfaceError ? 'alert' : 'status'"
+            >
+              {{ candidateSurfaceError || 'Preparing the 3D candidate preview… Previous surfaces remain visible.'
+              }}<button v-if="candidateSurfaceError" class="text-button" @click="loadCandidateSurface">Retry preview</button>
+            </p>
+            <ModelViewport
+              v-if="shownRevision"
+              ref="model"
+              :key="modelKey"
+              :manifest-url="shownRevision.structures.length ? shownRevision.model_manifest_url || undefined : undefined"
+              :model-url="shownRevision.structures.length ? shownRevision.model_url || `${revisionUrl(activeCase.id, shownRevision.id)}/model.glb` : undefined"
+              :structures="shownStructures"
+              :mask-structures="maskStructures"
+              :display="display"
+              :selected="selected"
+              :point="point"
+              :label="activeCase.label"
+              :viewport-active="!prepareOpen && panels.model && (workspaceMode !== 'review' || reviewFocus !== 'ct')"
+              :review-active="modelPanelVisible && workspaceMode === 'review' && reviewFocus !== 'ct'"
+              :review-target="reviewStructures.find(s => s.id === selected)"
+              :review-tool="interactiveTool"
+              :review-prompts="interactivePrompts"
+              :review-disabled="interactiveDisabled || before || (interactiveTool === 'scissors' && scissorsSurfacePending)"
+              :review-include="interactiveInclude"
+              :review-radius="interactiveRadius"
+              :review-scissors-shape="interactiveScissors.shape"
+              :review-scissors-operation="interactiveScissors.operation"
+              :model-revision-id="shownRevision.id"
+              :case-id="activeCase.id"
+              :revision-id="ctRevisionId"
+              :geometry="revision.geometry"
+              :image-context="imageContext(revision.image_asset)"
+              :capabilities="sourceCapabilities"
+              :local-session="localCT"
+              :volume-view-component="CornerstoneVolumeView"
+              :local-ready="localCTReady"
+              :full-resolution="localCTFull"
+              :overlays="ctOverlayStructures"
+              :compare="compare"
+              :window="displayWindow"
+              :level="displayLevel"
+              @pick="picked"
+              @point="setPoint"
+              @gesture="interactivePanel?.addGesture($event)"
+              @opacity="allSegmentOpacity"
+              @renderer="vtkPreview = $event === 'vtk'"
+              @retry-volume-view="CornerstoneVolumeView = createVolumeView()"
+            />
+            <div v-if="before" class="before-label">Parent surface and measurements · {{ sourceLabel }} retains the active revision</div>
+            <div v-if="synthetic" class="demo-label">
+              SYNTHETIC DEMO <span>Illustrative shapes for workflow testing · no patient data or model inference</span>
+            </div>
+          </section>
+
+          <WorkspaceSplitter
+            v-show="modelPanelVisible && reviewPanelVisible"
+            class="stage-splitter"
+            :axis="layout.arrangement"
+            mode="share"
+            :value="modelShare"
+            :min="MODEL_SHARE_RANGE[0]"
+            :max="MODEL_SHARE_RANGE[1]"
+            :step="0.05"
+            :label="`Resize the 3D and ${sourceLabel} views`"
+            controls="workspace-model-panel workspace-review-panel"
+            @update="setModelShare"
+            @reset="setModelShare(defaultWorkspaceLayout()[shareKey])"
+          />
+          <div v-if="ctExpanded" class="ct-expanded-backdrop" @click="ctExpanded = false"></div>
+          <aside
+            id="workspace-review-panel"
+            v-show="reviewPanelVisible"
+            class="review-rail"
+            :class="{ 'ct-expanded': ctExpanded, 'interactive-review-open': interactiveOpen, 'ct-controls-folded': !ctControlsOpen }"
+            :role="ctExpanded ? 'dialog' : undefined"
+            :aria-modal="ctExpanded ? true : undefined"
+            :aria-label="`Linked ${sourceLabel} review`"
+          >
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">SOURCE IMAGES</span>
+                <h2>{{ sourceLabel }} review</h2>
+              </div>
+              <span class="pill">LINKED</span
+              ><button
+                type="button"
+                class="text-button ct-controls-toggle"
+                :aria-expanded="ctControlsOpen"
+                aria-controls="ct-tile-controls"
+                :title="ctControlsOpen ? 'Fold the window and overlay controls away to enlarge the slices' : 'Show window, overlay and MPR controls'"
+                @click="setCTControlsOpen(!ctControlsOpen)"
+              >
+                Display<span aria-hidden="true">{{ ctControlsOpen ? '▴' : '▾' }}</span></button
+              ><button class="text-button ct-expand-button" :aria-expanded="ctExpanded" @click="toggleCT">
+                {{
+                  workspaceMode === 'review' ? (reviewFocus === 'ct' ? `${sourceLabel} + 3D` : `Focus ${sourceLabel}`) : ctExpanded ? 'Close ×' : 'Expand ↗'
+                }}</button
+              ><button
+                type="button"
+                class="panel-hide"
+                :aria-label="`Hide ${sourceLabel} review`"
+                :title="`Hide ${sourceLabel} review`"
+                :disabled="!canHideWorkspacePanel(panels, 'review')"
+                @click="setPanel('review', false)"
+              >
+                ×
+              </button>
+            </div>
+            <div id="ct-tile-controls" class="ct-tile-toolbar">
+              <div class="window-controls" :class="{ 'signal-window-controls': activeModality !== 'CT' }">
+                <label v-if="activeModality === 'CT'"
+                  >Window<select aria-label="CT window preset" @change="preset">
+                    <option value="400,40">Soft tissue</option>
+                    <option value="1500,-600">Lung</option>
+                    <option value="1800,400">Bone</option>
+                    <option value="700,100">Vessels</option>
+                  </select></label
+                ><button
+                  v-else
+                  class="text-button"
+                  @click="
+                    windowWidth = imageDisplay.default_window;
+                    level = imageDisplay.default_level;
+                  "
+                >
+                  Reset signal window</button
+                ><label
+                  >W<input
+                    v-model.number="windowWidth"
+                    :aria-label="`${sourceLabel} window width`"
+                    type="number"
+                    :min="activeModality === 'CT' ? 1 : undefined"
+                    :max="activeModality === 'CT' ? 6000 : undefined"
+                    step="any" /></label
+                ><label
+                  >L<input
+                    v-model.number="level"
+                    :aria-label="`${sourceLabel} window level`"
+                    type="number"
+                    :min="activeModality === 'CT' ? -2000 : undefined"
+                    :max="activeModality === 'CT' ? 4000 : undefined"
+                    step="any"
+                /></label>
+              </div>
+              <label class="ct-overlay-opacity"
+                >2D overlay opacity <input v-model.number="overlayOpacity" type="range" min="0" max="1" step="0.05" aria-label="2D overlay opacity" /><output
+                  >{{ Math.round(overlayOpacity * 100) }}%</output
+                ></label
+              >
+              <CTOverlayPicker
+                v-if="ctStructures.length"
+                :modality="sourceLabel"
+                :structures="ctStructures"
+                :ids="ctOverlayIds"
+                :selected="selected"
+                :following="ctFollowing"
+                @change="setCTOverlays"
+                @follow="followCTSelection"
+              />
+              <div class="ct-delivery" :data-mode="ctDeliveryMode" role="status">
+                <span v-if="ctDeliveryMode === 'loading'"
+                  >Loading fast {{ sourceLabel }} navigation<span v-if="ctProgress?.stage === 'ct'"> · {{ ctPercent }}%</span>…</span
+                >
+                <span v-else-if="ctDeliveryMode === 'full'">{{ sourceLabel }} cached · local review</span>
+                <span v-else-if="ctDeliveryMode === 'progressive'">{{
+                  ctCaching ? `Local navigation ready · preloading full ${sourceLabel}` : 'Local navigation · full detail after movement'
+                }}</span>
+                <span v-else>Source images unavailable</span>
+                <button
+                  v-if="localCTReady && !localCTFull && !ctCaching"
+                  class="text-button"
+                  :title="`Download the full-resolution ${sourceLabel} to this tab for fully local scrolling and ${imageDisplay.units} inspection. Uses more bandwidth and memory.`"
+                  @click="cacheFullCT"
+                >
+                  Cache full {{ sourceLabel }}
+                </button>
+                <button v-if="ctCaching" class="text-button" @click="cancelFullCT">
+                  Cancel {{ sourceLabel }} download<span v-if="fullCTProgress?.stage === 'ct'"> · {{ fullCTPercent }}%</span>
+                </button>
+                <p v-if="ctLocalError" class="ct-detail-error">
+                  {{ ctLocalError }} <button v-if="!localCTReady" class="text-button" @click="prepareLocalCT(ctBase)">Retry</button>
+                </p>
+                <p v-if="ctOverlayError && localCTReady" class="ct-detail-error" role="status">
+                  {{ ctOverlayError }}
+                  <button class="text-button" :disabled="ctOverlayRetrying" @click="retryCTOverlays">
+                    {{ ctOverlayRetrying ? 'Retrying overlays…' : 'Retry overlays' }}
+                  </button>
+                </p>
+              </div>
+            </div>
+            <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate">
+              <span
+                >Reviewing
+                <strong>{{
+                  prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id)
+                }}</strong>
+                · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
+              ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
+            </div>
+            <div class="ct-slice-stage">
+              <CTReviewRail
+                :overlay-opacity="overlayOpacity"
+                :modality="sourceLabel"
+                :case-id="activeCase.id"
+                :revision-id="ctRevisionId"
+                :geometry="revision.geometry"
+                :point="point"
+                :window="displayWindow"
+                :level="displayLevel"
+                :structure="selected"
+                :overlays="ctOverlayStructures"
+                :compare="compare"
+                :local-session="localCT"
+                :active="reviewPanelVisible && !prepareOpen"
+                :local-ready="localCTReady"
+                :full-resolution="localCTFull"
+                :review-tool="workspaceMode === 'review' && interactiveTool !== 'scissors' ? interactiveTool : 'navigate'"
+                :review-prompts="workspaceMode === 'review' ? interactivePrompts : []"
+                :review-disabled="interactiveDisabled"
+                :review-include="interactiveInclude"
+                :review-radius="interactiveRadius"
+                :native-review="workspaceMode === 'review' && interactiveNative"
+                @point="setPoint"
+                @prompt="interactivePanel?.addPrompt($event)"
+                @gesture="interactivePanel?.addGesture($event)"
+                @window-level="cornerstoneWindowLevel"
+              />
+            </div>
+            <div class="probe-readout">
+              <span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span
+              ><strong
+                >{{ formatImageValue(hu, imageDisplay.units) }} <small>{{ imageDisplay.units }}</small></strong
+              >
+            </div>
+            <label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
+              ><input v-model="compare" type="checkbox" />
+              {{ showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent` }}</label
+            >
+            <details v-if="!ctOnly" ref="reviewStatus" class="review-status" @keydown="reviewStatusKeyboard">
+              <summary>Review status &amp; tools</summary>
+              <div ref="reviewStatusBody" class="review-status-body">
+                <div class="section-title"><h3>Review & correction</h3></div>
+                <label class="field"
+                  >Revision status<select :value="revision.review_status" :disabled="busy" @change="review">
+                    <option value="unreviewed">Unreviewed</option>
+                    <option value="reviewed">Reviewed</option>
+                    <option value="corrected">Corrected</option>
+                  </select></label
+                >
+                <details class="slicer-fallback">
+                  <summary>External correction with Slicer</summary>
+                  <div class="button-row">
+                    <a class="button secondary compact" :href="`${base}/slicer.zip`" download>Slicer bundle ↓</a
+                    ><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button>
+                  </div>
+                  <p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p>
+                </details>
+                <input ref="correctionInput" type="file" accept=".nrrd,.nhdr" hidden @change="correction" />
+                <div v-if="revision.qc.length" class="qc-list">
+                  <details>
+                    <summary>{{ revision.qc.length }} automated check {{ revision.qc.length === 1 ? 'note' : 'notes' }}</summary>
+                    <p v-for="message in revision.qc" :key="message">{{ message }}</p>
+                  </details>
+                </div>
+              </div>
+            </details>
+          </aside>
+        </div>
+        <SegmentationControls
+          v-if="segmentationOpen && !prepareOpen"
+          v-model="segmentationSettings"
+          :catalog="segmentationCatalog"
+          :busy="busy"
+          :loading="segmentationLoading"
+          :error="segmentationError"
+          @run="segment"
+          @close="segmentationOpen = false"
+          @retry="loadSegmentationOptions"
+          @license-changed="loadSegmentationOptions(true)"
+        />
       </div>
       <nav v-if="revision && !prepareOpen" class="mobile-navigation" aria-label="Mobile workspace panels">
         <button
@@ -1680,14 +1776,6 @@ onBeforeUnmount(() => {
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
-}
-.export-disabled-note {
-  padding: 7px 24px;
-  border-bottom: 1px solid var(--line);
-  font-size: 10px;
-  color: var(--text-secondary);
-  background: var(--surface);
-  flex-shrink: 0;
 }
 .candidate-surface-note {
   margin: 0;
