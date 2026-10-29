@@ -1,7 +1,7 @@
 import type { VolumeDescriptor } from './ct-reslice';
 import { GPU_VOLUME_SLAB_BYTES } from './gpu-volume-data';
 
-export const DESKTOP_VOLUME_MEMORY_BYTES = 2 * 1024 ** 3;
+export const DESKTOP_VOLUME_MEMORY_BYTES = 3 * 1024 ** 3;
 export const LOW_MEMORY_VOLUME_BYTES = 256 * 1024 ** 2;
 
 export interface VolumeMemoryRequest {

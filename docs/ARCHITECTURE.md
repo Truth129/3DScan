@@ -104,7 +104,7 @@ footprint and native index retained for inverse-affine gesture mapping. No
 resampled display grid becomes a source mask or measurement grid.
 
 A shared reservation budget charges the worker source once per immutable identity
-and each visible renderer's CPU/GPU copies separately. The default is 2 GiB on
+and each visible renderer's CPU/GPU copies separately. The default is 3 GiB on
 desktop and 256 MiB on explicitly low-memory devices; float32 source-copy and GPU
 estimates are conservative. Mask staging includes current and replacement copies.
 Hidden 2D/3D views abort uploads and release their owned GPU resources and
@@ -180,7 +180,7 @@ CT transfer slabs are reserved only during image-cache preparation. Surface
 admission charges all retained CPU arrays and expanded GPU triangles plus one
 largest-part upload scratch allowance; unused hardware-selection maps are
 disabled. Retained and staged revisions remain charged together until commit.
-The 2 GiB desktop / 256 MiB low-memory caps are unchanged.
+The caps are 3 GiB on desktop and 256 MiB on low-memory devices.
 
 Full orthogonal CT corrections remain in the same native 3D viewport. CPU cell
 picking is restricted to the visible locked target actor and uses the actual

@@ -477,7 +477,7 @@ available; a renderer failure offers **Retry 3D view**.
 
 Native masking reuses the CT texture and adds one cropped mask texture of at
 most 8 MiB. Camera, crop and inside/outside changes reuse resident data. The
-shared 2 GiB desktop budget includes current/staged resources; completed CT
+shared 3 GiB desktop budget includes current/staged resources; completed CT
 upload staging is released and mesh uploads share one bounded scratch allowance.
 Views that still exceed it show an error; hiding surfaces or CT review frees capacity.
 
