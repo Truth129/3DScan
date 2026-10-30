@@ -268,7 +268,7 @@ The launcher is active from `a647344` after the approved 30 October 2026
 frontend publication and independent 3DScan/Orthanc restarts; PostgreSQL was
 not restarted. See [activation evidence](VALIDATION.md).
 
-An automatic routing variant is prepared in the separate Orthanc project.
+Automatic routing is active from `b0f886c` in the separate Orthanc project.
 Explorer 2 links to a same-origin `/3dscan-launch/index.html` page through
 the official, hash-pinned ServeFolders plugin. Only a dedicated static launcher
 directory is mapped. The page selects IPv4 loopback port 9010 for loopback
@@ -276,8 +276,8 @@ archive origins or the fixed private HTTPS 3DScan URL for an explicit remote
 origin allowlist. It forwards only the validated source/series fragment and
 performs no import/API write. Local routing fetches only local launcher assets;
 it does not first contact Tailscale. Authentication remains Orthanc's existing
-HTTP authentication. This changes neither the 3DScan backend nor viewer build;
-enabling the prepared plugin/route/button requires an approved Orthanc restart.
+HTTP authentication. The approved 30 October 2026 activation restarted only
+Orthanc; the 3DScan backend, viewer build and PostgreSQL process stayed unchanged.
 
 The existing OsiriX Mac also has explicitly approved DICOM C-FIND/C-MOVE
 permissions on Orthanc, separate from 3DScan's REST adapter and outgoing sends.

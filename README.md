@@ -107,12 +107,12 @@ on 29 October 2026. Open
 with the existing Orthanc login. The legacy default UI and OHIF remain available.
 See [trial operation](docs/ORTHANC.md#explorer-2-trial).
 
-A prepared **Open in 3DScan** series button can launch directly from Explorer 2.
+The **Open in 3DScan** series button launches directly from Explorer 2.
 It reopens the same imported snapshot or shows patient/study/series details for
 an explicit import, then retains the normal **Open CT** and segmentation actions.
 The launcher is active after the approved 30 October 2026 activation.
-Automatic local/Tailscale routing is prepared and qualified, pending a separate
-approved Orthanc update. Its single cube action uses local 3DScan when Orthanc
+Automatic local/Tailscale routing is active after the approved Orthanc update
+on 30 October 2026. Its single cube action uses local 3DScan when Orthanc
 is opened on loopback and private HTTPS from configured remote addresses.
 The button configuration belongs to `~/Projects/Orthanc`; see
 [launch setup](docs/ORTHANC.md#explorer-2-launch-into-3dscan).

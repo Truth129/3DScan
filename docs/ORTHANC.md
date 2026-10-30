@@ -31,10 +31,10 @@ existing private configuration through the Orthanc project's reviewed procedure.
 Changing the backend's archive URL requires regenerating the source key.
 This source key is an archive identity check, not a secret or login token.
 
-### Automatic local and remote address selection (prepared)
+### Automatic local and remote address selection (active)
 
-The automatic variant is qualified but not yet activated. It uses one cube
-button and a same-origin launcher served by Orthanc's official ServeFolders
+The automatic variant is active after the approved 30 October 2026 Orthanc-only
+restart. It uses one cube button and a same-origin launcher served by Orthanc's official ServeFolders
 1.13.0 plugin. Opening Orthanc through `localhost` or `127.0.0.1` selects
 `http://127.0.0.1:9010/`; an approved remote archive origin selects
 `https://scan3d-host.example.ts.net:8443/`. IPv6 loopback also selects
@@ -58,9 +58,10 @@ helper `orthanc_local.scan3d_launcher`. Its dedicated runtime mapping is
 `/3dscan-launch` → `~/.local/share/orthanc/web/3dscan-launch`; never map the
 runtime root, archive, index or configuration folders. Existing auth, peers,
 PostgreSQL and listener settings are retained. Unknown origins and malformed
-links show an error without redirecting or creating work. A fresh approval
-is required to enable the prepared update and restart idle `orthanc.service`.
-No 3DScan or PostgreSQL restart is needed for this routing-only update.
+links show an error without redirecting or creating work. The running
+`orthanc.service` publishes the relative button and serves all three launcher
+files over local HTTP and private HTTPS. 3DScan and PostgreSQL were not restarted.
+Refresh Explorer 2 tabs opened before this update to receive the new button URL.
 
 ### Locate and use the cube
 
@@ -114,17 +115,17 @@ evidence; see [current Tailscale status](#tailscale-dicom-switch).
 
 ## Connection settings
 
-| Purpose | Setting |
-| --- | --- |
-| OsiriX destination name | 3DScan |
-| Destination address | `100.64.0.10` (workstation Tailscale IPv4) |
-| Destination DICOM port | `4243` |
-| Destination AE title | `SCAN3D` |
-| Allowed Mac address | `100.64.0.20` (Mac Tailscale IPv4) |
-| Mac calling AE title | `OsiriX-Mac` (case-sensitive) |
-| Orthanc API / Explorer on workstation | `http://127.0.0.1:8044` |
-| Orthanc Explorer from the Mac | `http://10.20.0.3:8044/app/explorer.html` |
-| Preferred Explorer 2 from the Mac | `https://scan3d-host.example.ts.net:8444/ui/app/` |
+| Purpose                               | Setting                                                   |
+| ------------------------------------- | --------------------------------------------------------- |
+| OsiriX destination name               | 3DScan                                                    |
+| Destination address                   | `100.64.0.10` (workstation Tailscale IPv4)             |
+| Destination DICOM port                | `4243`                                                    |
+| Destination AE title                  | `SCAN3D`                                                  |
+| Allowed Mac address                   | `100.64.0.20` (Mac Tailscale IPv4)                     |
+| Mac calling AE title                  | `OsiriX-Mac` (case-sensitive)                       |
+| Orthanc API / Explorer on workstation | `http://127.0.0.1:8044`                                   |
+| Orthanc Explorer from the Mac         | `http://10.20.0.3:8044/app/explorer.html`               |
+| Preferred Explorer 2 from the Mac     | `https://scan3d-host.example.ts.net:8444/ui/app/` |
 
 In OsiriX add that destination under its DICOM locations and verify it, then
 select a series and use **DICOM Send**. Open the usual 3DScan app on this
@@ -480,10 +481,10 @@ this report.
 `99SCAN3D` is a valid private coding scheme: DICOM private designators start
 with `99` and contain alphanumeric characters. The current SEG defines:
 
-| Code | Meaning | Use |
-| --- | --- | --- |
-| `REGION` | Image region | Segmented property category and type |
-| `SEGMENTATION` | Image segmentation | Algorithm family |
+| Code           | Meaning            | Use                                  |
+| -------------- | ------------------ | ------------------------------------ |
+| `REGION`       | Image region       | Segmented property category and type |
+| `SEGMENTATION` | Image segmentation | Algorithm family                     |
 
 Each segment uses these codes independently, so an unknown-scheme warning can
 repeat three times per segment. These are local generic definitions, not claims
