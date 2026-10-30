@@ -62,6 +62,11 @@ Read each script's `--help` before running it. Some use software rendering by de
 and pass `--native` to use a GPU. Others need a Vulkan-capable GPU unless they offer
 `--software`.
 
+A gate that starts its own server exits if a port it needs is already in use, and one
+that starts the API also checks the API echoes that run's ID. This way a shared machine
+cannot test another run's server by accident. Gates that take `--base-url` test whatever
+server you point them at.
+
 ## Project rules
 
 - **Patient data never enters the repository.** That includes tests, logs, screenshots,
