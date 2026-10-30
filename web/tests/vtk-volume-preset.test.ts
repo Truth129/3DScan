@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import vtkVolume from '@kitware/vtk.js/Rendering/Core/Volume';
 import vtkVolumeMapper from '@kitware/vtk.js/Rendering/Core/VolumeMapper';
-import { applyVTKVolumePreset } from '../src/lib/vtk-volume-preset';
+import { applyVTKVolumePreset, vtkVolumePreset } from '../src/lib/vtk-volume-preset';
 import { freshNativeVolumeLighting } from '../src/lib/volume-lighting';
 import { freshVolumeSettings } from '../src/lib/volume-presets';
 
@@ -23,6 +23,22 @@ function volume() {
 }
 
 describe('native VTK volume settings', () => {
+  it('draws multi-knot gradient recipes from their first two knots', () => {
+    const gradient = (preset: 'CT-Lung' | 'CT-Fat' | 'US-Fetal') => vtkVolumePreset(freshVolumeSettings({ preset })).gradient;
+    expect(gradient('CT-Lung')).toEqual([
+      [0, 1],
+      [985.12, 1],
+    ]);
+    expect(gradient('CT-Fat')).toEqual([
+      [0, 1],
+      [985.12, 1],
+    ]);
+    expect(gradient('US-Fetal')).toEqual([
+      [-10, 0],
+      [-1, 1],
+    ]);
+  });
+
   it('maps cinematic shadow strength and reach while retaining preset shading when shadows are off', () => {
     const source = freshVolumeSettings({ preset: 'CT-Cinematic-Heart', cinematic: { myocardiumHU: 90, bloodHU: 450, shadows: 2, shadowReach: 0.8 } });
     const original = structuredClone(source),

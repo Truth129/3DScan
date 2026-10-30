@@ -34,9 +34,18 @@ describe('complete Slicer preset catalog', () => {
     expect(createHash('sha256').update(sourceXML).digest('hex')).toBe(SLICER_PRESET_SOURCE_SHA256);
     expect(VOLUME_PRESET_IDS).toEqual(sourcePresets.map(source => source.name));
     expect(VOLUME_PRESET_IDS).toHaveLength(31);
-    expect(VOLUME_PRESET_GROUPS.filter(group => group.label !== 'Cinematic').map(group => group.ids.length)).toEqual([22, 4, 5]);
-    expect(VOLUME_PRESET_GROUPS.filter(group => group.label !== 'Cinematic').flatMap(group => group.ids)).toEqual(VOLUME_PRESET_IDS);
+    expect(VOLUME_PRESET_GROUPS.filter(group => group.label !== 'Cinematic').map(group => group.ids.length)).toEqual([22, 4, 4]);
+    expect(VOLUME_PRESET_GROUPS.filter(group => group.label !== 'Cinematic').flatMap(group => group.ids)).toEqual(
+      VOLUME_PRESET_IDS.filter(id => id !== 'uCT-Skull'),
+    );
     expect(VOLUME_PRESET_GROUPS.find(group => group.label === 'Cinematic')?.ids).toEqual([CINEMATIC_HEART_PRESET]);
+  });
+
+  it('offers only presets whose gradient opacity fits the native two-knot ramp exactly', () => {
+    for (const id of VOLUME_PRESET_GROUPS.flatMap(group => group.ids)) {
+      const knots = getVolumePreset(id).gradientOpacity;
+      expect(knots.slice(2).every(([, alpha]) => alpha === knots[1][1])).toBe(true);
+    }
   });
 
   it('preserves exact independent source knots and all appearance properties', () => {

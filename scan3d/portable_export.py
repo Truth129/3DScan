@@ -33,7 +33,8 @@ MAX_METADATA_BYTES = 8 * MIB
 _BASE64_READ_BYTES = 48 * 1024  # A multiple of three: only the last block pads.
 
 # IDs from the pinned generated Slicer preset catalog, plus the app's aliases.
-# A regression test checks this set against the generated frontend data.
+# uCT-Skull is left out because the app does not offer it. A regression test
+# checks this set against the generated frontend data.
 SUPPORTED_VOLUME_PRESETS = frozenset(
     {
         "CT-AAA",
@@ -66,7 +67,6 @@ SUPPORTED_VOLUME_PRESETS = frozenset(
         "US-Fetal",
         "uCT-Bone-8bit",
         "uCT-Bone-16bit",
-        "uCT-Skull",
         "angiography",
         "bone",
         "soft-tissue",

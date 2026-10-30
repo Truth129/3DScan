@@ -412,6 +412,7 @@ def test_supported_volume_presets_match_generated_frontend_catalog():
     generated = Path("web/src/lib/slicer-volume-presets.generated.ts").read_text()
     ids = set(re.findall(r'^  "([^"\n]+)": \{', generated, re.M))
     assert len(ids) == 31
+    ids.remove("uCT-Skull")
     assert portable_export.SUPPORTED_VOLUME_PRESETS == ids | {"angiography", "bone", "soft-tissue", "lung", "CT-Cinematic-Heart", "MR-SignalWindow"}
     for preset in portable_export.SUPPORTED_VOLUME_PRESETS:
         assert ExportRequest.model_validate({"state": {"volume": {"preset": preset}}}).state.volume.preset == preset

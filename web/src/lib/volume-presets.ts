@@ -107,11 +107,14 @@ export const VOLUME_PRESETS: Readonly<Record<CTVolumePresetId, CTVolumePreset>> 
 export const VOLUME_PRESET_LABELS = Object.fromEntries(Object.entries(VOLUME_PRESETS).map(([id, preset]) => [id, preset.label])) as Readonly<
   Record<CTVolumePresetId, string>
 >;
+// uCT-Skull's gradient-opacity curve dips, which one linear ramp cannot draw on the
+// native viewer, so it is not offered. Its data stays with the pinned Slicer source.
+const MENU_PRESET_IDS = VOLUME_PRESET_IDS.filter(id => id !== 'uCT-Skull');
 export const VOLUME_PRESET_GROUPS = [
   { label: 'Cinematic', ids: [CINEMATIC_HEART_PRESET] },
-  { label: 'CT', ids: VOLUME_PRESET_IDS.filter(id => id.startsWith('CT-')) },
-  { label: 'MR', ids: VOLUME_PRESET_IDS.filter(id => id.startsWith('MR-')) },
-  { label: 'Other modalities', ids: VOLUME_PRESET_IDS.filter(id => !id.startsWith('CT-') && !id.startsWith('MR-')) },
+  { label: 'CT', ids: MENU_PRESET_IDS.filter(id => id.startsWith('CT-')) },
+  { label: 'MR', ids: MENU_PRESET_IDS.filter(id => id.startsWith('MR-')) },
+  { label: 'Other modalities', ids: MENU_PRESET_IDS.filter(id => !id.startsWith('CT-') && !id.startsWith('MR-')) },
 ] as const;
 
 /** Relative HU/color recipe from the supplied slicer_cinematic_heart.py. */

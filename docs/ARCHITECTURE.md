@@ -340,7 +340,9 @@ order-independent transparency, and a combined volume and surface view peels fra
 between their depths. Its CT and mask atlas have a 512 MiB texture limit.
 
 Appearances in both renderers come from the 31 default 3D Slicer presets, plus a Cinematic heart preset that
-follows measured HU. The renderers differ from each other and from 3D Slicer.
+follows measured HU. The renderers differ from each other and from 3D Slicer. vtk.js draws one linear
+gradient-opacity ramp, so Cornerstone uses each preset's first two points. That is exact for the 30 presets in
+the menu. `uCT-Skull` needs more, so the app does not offer it and exports refuse it.
 
 ### Memory budget
 
