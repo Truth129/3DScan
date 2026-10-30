@@ -1,22 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1480" viewBox="0 0 1460 1480" role="img" aria-labelledby="title description">
 <title id="title">3DScan system architecture</title>
-<desc id="description">Remote browser uses Cornerstone3D and Three.js with client RAM and GPU caches. Private HTTPS connects it to FastAPI on the workstation. One locked SQLite-backed worker set runs a GPU lane for segmentation and nnInteractive corrections, one job at a time, and a CPU lane that prepares images, applies direct edits, saves corrections and builds native-mask measurements and surfaces. ROCm inference uses the workstation GPU from child processes. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG. Live deployment is CT-only; static MRI is implemented on the expansion branch.</desc>
+<desc id="description">A desktop browser uses Cornerstone3D, vtk.js and Three.js with client RAM and GPU caches. It talks over HTTP to a FastAPI server that listens on loopback by default. One locked SQLite-backed worker set runs a GPU lane for segmentation and nnInteractive corrections, one job at a time, and a CPU lane that prepares images, applies direct edits, saves corrections and builds native-mask measurements and surfaces. Inference runs in child processes on any PyTorch device. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG, and an optional connector talks to an Orthanc server over REST. CT is the default modality; static MRI is an opt-in experimental adapter.</desc>
 <defs><marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L11 6L1 11Z" fill="#9bb7db"/></marker></defs>
 <style>text{font-family:Inter,"DejaVu Sans",Arial,sans-serif}.title{fill:#edf2fc;font-weight:650;font-size:34px}.subtitle{fill:#a5b2c9;font-size:17px}.lane{font-size:14px;font-weight:650;letter-spacing:1.5px;fill:#93a8c9}.card-title{fill:#f0f4fc;font-size:20px;font-weight:650}.body{fill:#b8c4d8;font-size:16px}.edge-label{fill:#a7bddb;font-size:13px}.small{fill:#b8c4d8;font-size:14px}.edge{fill:none;stroke:#9bb7db;stroke-width:2;stroke-linejoin:round;marker-end:url(#arrow)}.both{marker-start:url(#arrow)}</style>
 <rect width="1460" height="1480" fill="#0c111a"/>
 
 <text x="40" y="63" class="title">3DScan · system architecture</text>
-<text x="40" y="99" class="subtitle">Remote interaction stays local; the workstation owns processing and durable case data.</text>
+<text x="40" y="99" class="subtitle">The browser renders locally; the server owns processing and durable case data.</text>
 <rect x="40" y="140" width="1380" height="260" rx="15" fill="#101824" stroke="#29364b"/>
-<text x="64" y="170" class="lane">REMOTE DESKTOP BROWSER  ·  CLIENT RAM + CLIENT GPU</text>
+<text x="64" y="170" class="lane">DESKTOP BROWSER  ·  CLIENT RAM + CLIENT GPU</text>
 <rect x="40" y="460" width="1380" height="430" rx="15" fill="#101824" stroke="#29364b"/>
-<text x="64" y="490" class="lane">WORKSTATION  ·  FASTAPI + GPU AND CPU WORKER LANES + ROCm INFERENCE</text>
+<text x="452" y="490" class="lane">SERVER  ·  FASTAPI + GPU AND CPU WORKER LANES + INFERENCE CHILD PROCESSES</text>
 <rect x="40" y="980" width="1380" height="170" rx="15" fill="#101824" stroke="#29364b"/>
 <text x="64" y="1010" class="lane">DURABLE STATE  ·  SQLITE + FILESYSTEM</text>
 <rect x="40" y="1210" width="1380" height="145" rx="15" fill="#101824" stroke="#29364b"/>
 <text x="64" y="1240" class="lane">EXCHANGE &amp; EXPORTS</text>
 <path d="M265 356V515" class="edge both"/>
-<text x="478" y="435" class="edge-label" text-anchor="middle">LAN / WAN · private Tailscale HTTPS</text>
+<text x="150" y="435" class="edge-label" text-anchor="middle">HTTP · loopback by default</text>
 <path d="M460 273H535" class="edge"/>
 <text x="498" y="259" class="edge-label" text-anchor="middle">linked</text>
 <path d="M925 273H1000" class="edge"/>
@@ -72,7 +72,7 @@
 <text x="89" y="546" class="card-title">FastAPI service</text>
 <text x="89" y="573" class="body">Imports, jobs, revisions and review</text>
 <text x="89" y="595" class="body">Image / mask chunks, GLB and exports</text>
-<text x="89" y="617" class="body">Local service behind private access</text>
+<text x="89" y="617" class="body">No built-in sign-in: keep it private</text>
 <rect x="535" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
 <rect x="535" y="527" width="4" height="96" rx="2" fill="#7194c4"/>
 <text x="554" y="546" class="card-title">Two worker lanes, one lock</text>
@@ -81,10 +81,10 @@
 <text x="554" y="617" class="body">Progress, cancellation and recovery</text>
 <rect x="1000" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
 <rect x="1000" y="527" width="4" height="96" rx="2" fill="#c7a16d"/>
-<text x="1019" y="546" class="card-title">ROCm inference · R9700</text>
-<text x="1019" y="573" class="body">TotalSegmentator + nnU-Net</text>
+<text x="1019" y="546" class="card-title">Inference · any PyTorch device</text>
+<text x="1019" y="573" class="body">TotalSegmentator subprocess</text>
 <text x="1019" y="595" class="body">nnInteractive in a supervised process</text>
-<text x="1019" y="617" class="body">PyTorch runs only in child processes</text>
+<text x="1019" y="617" class="body">SCAN3D_DEVICE: auto, gpu, gpu:N, cpu</text>
 <rect x="70" y="700" width="390" height="145" rx="10" fill="#172131" stroke="#3b4a62"/>
 <rect x="70" y="712" width="4" height="121" rx="2" fill="#7194c4"/>
 <text x="89" y="731" class="card-title">1. Validate and prepare source</text>
@@ -117,15 +117,18 @@
 <text x="1000" y="1094" class="body">Scalar slabs · display unions</text>
 <text x="70" y="1128" class="small">Authority: native image + voxel masks. Meshes and display unions do not change measurements.</text>
 <text x="70" y="1274" class="card-title">Offline HTML</text>
-<text x="70" y="1302" class="body">Chosen segmentation / volume / CT plane</text>
-<text x="70" y="1326" class="body">Self-contained viewer; no server needed</text>
-<text x="535" y="1274" class="card-title">Slicer correction round trip</text>
-<text x="535" y="1302" class="body">Source CT + named .seg.nrrd masks</text>
-<text x="535" y="1326" class="body">Geometry checked before a new revision</text>
-<text x="1000" y="1274" class="card-title">PNG capture</text>
-<text x="1000" y="1302" class="body">Generated by the browser renderer</text>
-<text x="1000" y="1326" class="body">Current view and presentation settings</text>
+<text x="70" y="1302" class="body">Chosen surface, volume, plane</text>
+<text x="70" y="1326" class="body">Self-contained; no server</text>
+<text x="410" y="1274" class="card-title">Slicer round trip</text>
+<text x="410" y="1302" class="body">CT + named .seg.nrrd masks</text>
+<text x="410" y="1326" class="body">Geometry checked on return</text>
+<text x="750" y="1274" class="card-title">PNG capture</text>
+<text x="750" y="1302" class="body">Rendered by the browser</text>
+<text x="750" y="1326" class="body">Current view and settings</text>
+<text x="1090" y="1274" class="card-title">DICOM SEG + Orthanc</text>
+<text x="1090" y="1302" class="body">Optional REST connector</text>
+<text x="1090" y="1326" class="body">SEG upload needs no Orthanc</text>
 <rect x="40" y="1390" width="1380" height="70" rx="10" fill="#121b28" stroke="#627390" stroke-dasharray="7 5"/>
-<text x="60" y="1418" class="small">Deployment boundary · 28 October 2026</text>
-<text x="60" y="1442" class="small">Live: CT-only. Static 3D MRI is implemented and tested on expansion; other imaging adapters remain future work.</text>
+<text x="60" y="1418" class="small">Modalities</text>
+<text x="60" y="1442" class="small">CT by default. SCAN3D_MODALITIES=CT,MR adds experimental static MRI. Other modalities have no image adapter.</text>
 </svg>

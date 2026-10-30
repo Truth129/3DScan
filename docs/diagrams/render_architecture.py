@@ -1,7 +1,7 @@
-"""Render the code-reviewed system overview as a self-contained SVG.
+"""Render the system overview as a self-contained SVG.
 
-Editable detailed flowcharts live in ../ARCHITECTURE.md. No patient/case data
-or runtime secrets are embedded in this diagram.
+The detailed flowcharts live in ../ARCHITECTURE.md. Run this script after changing
+the diagram; it writes architecture.svg beside itself.
 """
 
 from pathlib import Path
@@ -11,7 +11,7 @@ OUT = Path(__file__).with_name("architecture.svg")
 parts = [
     """<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="1480" viewBox="0 0 1460 1480" role="img" aria-labelledby="title description">
 <title id="title">3DScan system architecture</title>
-<desc id="description">Remote browser uses Cornerstone3D and Three.js with client RAM and GPU caches. Private HTTPS connects it to FastAPI on the workstation. One locked SQLite-backed worker set runs a GPU lane for segmentation and nnInteractive corrections, one job at a time, and a CPU lane that prepares images, applies direct edits, saves corrections and builds native-mask measurements and surfaces. ROCm inference uses the workstation GPU from child processes. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG. Live deployment is CT-only; static MRI is implemented on the expansion branch.</desc>
+<desc id="description">A desktop browser uses Cornerstone3D, vtk.js and Three.js with client RAM and GPU caches. It talks over HTTP to a FastAPI server that listens on loopback by default. One locked SQLite-backed worker set runs a GPU lane for segmentation and nnInteractive corrections, one job at a time, and a CPU lane that prepares images, applies direct edits, saves corrections and builds native-mask measurements and surfaces. Inference runs in child processes on any PyTorch device. SQLite, native files and derived caches persist separately. Exports include offline HTML, Slicer round trips and browser PNG, and an optional connector talks to an Orthanc server over REST. CT is the default modality; static MRI is an opt-in experimental adapter.</desc>
 <defs><marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1L11 6L1 11Z" fill="#9bb7db"/></marker></defs>
 <style>text{font-family:Inter,"DejaVu Sans",Arial,sans-serif}.title{fill:#edf2fc;font-weight:650;font-size:34px}.subtitle{fill:#a5b2c9;font-size:17px}.lane{font-size:14px;font-weight:650;letter-spacing:1.5px;fill:#93a8c9}.card-title{fill:#f0f4fc;font-size:20px;font-weight:650}.body{fill:#b8c4d8;font-size:16px}.edge-label{fill:#a7bddb;font-size:13px}.small{fill:#b8c4d8;font-size:14px}.edge{fill:none;stroke:#9bb7db;stroke-width:2;stroke-linejoin:round;marker-end:url(#arrow)}.both{marker-start:url(#arrow)}</style>
 <rect width="1460" height="1480" fill="#0c111a"/>
@@ -24,9 +24,9 @@ def text(x, y, value, cls="body", anchor=None):
     parts.append(f'<text x="{x}" y="{y}" class="{cls}"{attr}>{escape(value)}</text>')
 
 
-def region(x, y, w, h, label):
+def region(x, y, w, h, label, label_x=None):
     parts.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="15" fill="#101824" stroke="#29364b"/>')
-    text(x + 24, y + 30, label, "lane")
+    text(label_x or x + 24, y + 30, label, "lane")
 
 
 def card(x, y, w, h, title, lines, accent="#7194c4"):
@@ -44,14 +44,15 @@ def edge(path, label=None, x=0, y=0, both=False):
 
 
 text(40, 63, "3DScan · system architecture", "title")
-text(40, 99, "Remote interaction stays local; the workstation owns processing and durable case data.", "subtitle")
-region(40, 140, 1380, 260, "REMOTE DESKTOP BROWSER  ·  CLIENT RAM + CLIENT GPU")
-region(40, 460, 1380, 430, "WORKSTATION  ·  FASTAPI + GPU AND CPU WORKER LANES + ROCm INFERENCE")
+text(40, 99, "The browser renders locally; the server owns processing and durable case data.", "subtitle")
+region(40, 140, 1380, 260, "DESKTOP BROWSER  ·  CLIENT RAM + CLIENT GPU")
+# The label starts right of the two arrows that enter this region from above.
+region(40, 460, 1380, 430, "SERVER  ·  FASTAPI + GPU AND CPU WORKER LANES + INFERENCE CHILD PROCESSES", label_x=452)
 region(40, 980, 1380, 170, "DURABLE STATE  ·  SQLITE + FILESYSTEM")
 region(40, 1210, 1380, 145, "EXCHANGE & EXPORTS")
 
-# Browser-to-workstation request/data boundary, then queued processing lanes.
-edge("M265 356V515", "LAN / WAN · private Tailscale HTTPS", 478, 435, True)
+# Browser-to-server request/data boundary, then queued processing lanes.
+edge("M265 356V515", "HTTP · loopback by default", 150, 435, True)
 edge("M460 273H535", "linked", 498, 259)
 edge("M925 273H1000", "source", 963, 259)
 edge("M460 575H535", "jobs", 498, 560)
@@ -104,7 +105,12 @@ card(
     ],
 )
 card(
-    70, 515, 390, 120, "FastAPI service", ["Imports, jobs, revisions and review", "Image / mask chunks, GLB and exports", "Local service behind private access"]
+    70,
+    515,
+    390,
+    120,
+    "FastAPI service",
+    ["Imports, jobs, revisions and review", "Image / mask chunks, GLB and exports", "No built-in sign-in: keep it private"],
 )
 card(
     535,
@@ -119,8 +125,8 @@ card(
     515,
     390,
     120,
-    "ROCm inference · R9700",
-    ["TotalSegmentator + nnU-Net", "nnInteractive in a supervised process", "PyTorch runs only in child processes"],
+    "Inference · any PyTorch device",
+    ["TotalSegmentator subprocess", "nnInteractive in a supervised process", "SCAN3D_DEVICE: auto, gpu, gpu:N, cpu"],
     "#c7a16d",
 )
 card(
@@ -172,18 +178,21 @@ text(1000, 1094, "Scalar slabs · display unions", "body")
 text(70, 1128, "Authority: native image + voxel masks. Meshes and display unions do not change measurements.", "small")
 
 text(70, 1274, "Offline HTML", "card-title")
-text(70, 1302, "Chosen segmentation / volume / CT plane", "body")
-text(70, 1326, "Self-contained viewer; no server needed", "body")
-text(535, 1274, "Slicer correction round trip", "card-title")
-text(535, 1302, "Source CT + named .seg.nrrd masks", "body")
-text(535, 1326, "Geometry checked before a new revision", "body")
-text(1000, 1274, "PNG capture", "card-title")
-text(1000, 1302, "Generated by the browser renderer", "body")
-text(1000, 1326, "Current view and presentation settings", "body")
+text(70, 1302, "Chosen surface, volume, plane", "body")
+text(70, 1326, "Self-contained; no server", "body")
+text(410, 1274, "Slicer round trip", "card-title")
+text(410, 1302, "CT + named .seg.nrrd masks", "body")
+text(410, 1326, "Geometry checked on return", "body")
+text(750, 1274, "PNG capture", "card-title")
+text(750, 1302, "Rendered by the browser", "body")
+text(750, 1326, "Current view and settings", "body")
+text(1090, 1274, "DICOM SEG + Orthanc", "card-title")
+text(1090, 1302, "Optional REST connector", "body")
+text(1090, 1326, "SEG upload needs no Orthanc", "body")
 
 parts.append('<rect x="40" y="1390" width="1380" height="70" rx="10" fill="#121b28" stroke="#627390" stroke-dasharray="7 5"/>')
-text(60, 1418, "Deployment boundary · 28 October 2026", "small")
-text(60, 1442, "Live: CT-only. Static 3D MRI is implemented and tested on expansion; other imaging adapters remain future work.", "small")
+text(60, 1418, "Modalities", "small")
+text(60, 1442, "CT by default. SCAN3D_MODALITIES=CT,MR adds experimental static MRI. Other modalities have no image adapter.", "small")
 parts.append("</svg>")
 OUT.write_text("\n".join(parts) + "\n")
 print(OUT)
