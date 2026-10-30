@@ -97,7 +97,6 @@ const emit = defineEmits<{
   point: [point: Point];
   gesture: [prompt: InteractivePrompt];
   opacity: [value: number];
-  renderer: [mode: 'three' | 'vtk'];
   retryVolumeView: [];
 }>();
 interface VolumePreview {
@@ -113,8 +112,7 @@ interface VolumePreview {
 const volumePreview = ref<VolumePreview>();
 const preferCornerstone =
   !!props.volumeViewComponent && !props.initialSnapshot && (props.imageContext?.modality ?? props.localSession?.descriptor?.modality ?? 'CT') === 'CT';
-const volumeRenderer = ref<'three' | 'vtk'>(preferCornerstone ? 'vtk' : 'three'),
-  vtkReady = ref(false),
+const vtkReady = ref(false),
   vtkError = ref('');
 const vtkComponentFailed = ref(false),
   vtkComponentVersion = ref(0);
@@ -255,7 +253,8 @@ const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!pr
 const segmentationAvailable = computed(() => props.structures.length > 0 && props.availableLayers?.segmentation !== false);
 const ctVolumeAvailable = computed(() => planeAvailable.value && allows('volume_rendering') && props.availableLayers?.ct_volume !== false);
 const ctPlaneAvailable = computed(() => planeAvailable.value && allows('mpr') && props.availableLayers?.ct_plane !== false);
-const vtkAvailable = computed(
+// Cornerstone renders CT wherever it can. Three.js serves the rest: MR, sheared grids and the offline page.
+const vtkSelected = computed(
   () =>
     !!props.volumeViewComponent &&
     modality.value === 'CT' &&
@@ -265,7 +264,6 @@ const vtkAvailable = computed(
     !hasCornerstoneShear(props.geometry.affine_ras) &&
     ctVolumeAvailable.value,
 );
-const vtkSelected = computed(() => vtkAvailable.value && volumeRenderer.value === 'vtk');
 const vtkSession = computed(() => (props.localReady && props.fullResolution ? props.localSession : undefined));
 const vtkPlane = computed(() => {
   if (!props.geometry || !props.point || !showPlane.value) return undefined;
@@ -1152,13 +1150,11 @@ async function initializeThree() {
 onMounted(() => {
   if (vtkSelected.value) {
     loading.value = false;
-    emit('renderer', 'vtk');
     queueReviewPlane();
   } else initializeThree();
 });
 onBeforeUnmount(() => {
   legacyInitialization++;
-  emit('renderer', 'three');
   void setExpanded(false, false);
   disposed = true;
   reference.cancel();
@@ -1283,7 +1279,6 @@ watch(
   () => props.caseId,
   () => {
     void setExpanded(false, false);
-    volumeRenderer.value = preferCornerstone ? 'vtk' : 'three';
     pendingVolumeCamera = undefined;
     vtkCamera.value = undefined;
   },
@@ -1346,7 +1341,7 @@ watch(
       setVolumeEnabled(false);
     } else {
       showSegmentation.value = segmentationBeforeReview;
-      if (volumeRenderer.value === 'vtk') setVolumeEnabled(volumeBeforeReview);
+      if (preferCornerstone) setVolumeEnabled(volumeBeforeReview);
     }
   },
 );
@@ -1423,26 +1418,6 @@ function cameraFitFactor() {
   }
   return ((scene.camera.top - scene.camera.bottom) * 1000) / scene.captureCamera().height_mm;
 }
-function chooseRenderer(mode: 'three' | 'vtk') {
-  if (mode === volumeRenderer.value || (mode === 'vtk' && !vtkAvailable.value)) return;
-  if (mode === 'vtk' && scene) {
-    // A source can be ready in MPR before Three has fitted any anatomy.
-    // Let the volume adapter fit its physical CT bounds in that case.
-    vtkCamera.value =
-      hasModel.value || volumeReady.value || gpuActive.value
-        ? volumeCameraFromPortable(
-            scene.captureCamera(),
-            ((scene.camera.top - scene.camera.bottom) * 1000) / scene.camera.zoom,
-            scene.camera.near * 1000,
-            scene.camera.far * 1000,
-          )
-        : undefined;
-  } else if (vtkCamera.value) pendingVolumeCamera = vtkCamera.value;
-  vtkReady.value = false;
-  vtkError.value = '';
-  vtkComponentFailed.value = false;
-  volumeRenderer.value = mode;
-}
 function selectView(name: CameraView) {
   if (vtkSelected.value && vtkCamera.value) {
     vtkCamera.value = fitVolumeCameraClipping(namedVolumeCamera(vtkCamera.value, name, props.geometry?.center_ras), props.geometry!.bounds_ras);
@@ -1506,7 +1481,6 @@ watch(vtkSelected, active => {
     if (vtkCamera.value) pendingVolumeCamera = vtkCamera.value;
     initializeThree();
   }
-  emit('renderer', active ? 'vtk' : 'three');
 });
 onErrorCaptured(reason => {
   if (!vtkSelected.value) return;
@@ -1515,8 +1489,12 @@ onErrorCaptured(reason => {
   vtkError.value = reason instanceof Error ? reason.message : 'The VTK preview could not load.';
   return false;
 });
-function exportSnapshot(): PortableRenderSnapshot | undefined {
-  if (vtkSelected.value) return;
+function exportCamera() {
+  if (vtkSelected.value) return vtkCamera.value && portableCameraFromVolume(vtkCamera.value, cameraFitFactor());
+  return hasModel.value || volumeReady.value || gpuActive.value ? scene?.captureCamera() : undefined;
+}
+/** The exported page renders with Three.js, so this describes the view without needing a live scene here. */
+function exportSnapshot(): PortableRenderSnapshot {
   const plane = planeRequest.value,
     structures = availableMaskStructures.value;
   return {
@@ -1549,7 +1527,7 @@ function exportSnapshot(): PortableRenderSnapshot | undefined {
           level: props.level ?? 40,
           overlays: [...(plane?.overlays ?? [])],
         },
-        camera: hasModel.value || volumeReady.value || gpuActive.value ? scene?.captureCamera() : undefined,
+        camera: exportCamera(),
       },
       structures,
       props.geometry,
@@ -1560,7 +1538,7 @@ defineExpose({
   focus: focusView,
   screenshot,
   exportSnapshot,
-  volumeDiagnostics: () => ({ renderer: volumeRenderer.value, ...volumePreview.value?.diagnostics() }),
+  volumeDiagnostics: () => ({ renderer: vtkSelected.value ? 'vtk' : 'three', ...volumePreview.value?.diagnostics() }),
   captureVolumePNG: () => volumePreview.value?.capturePNG(),
   reviewPatientToCanvas: (ras: Point) => (vtkSelected.value ? volumePreview.value?.reviewPatientToCanvas(ras) : scene?.reviewPatientToCanvas(ras)),
 });
@@ -1692,13 +1670,6 @@ defineExpose({
     <div v-if="controlsVisible" v-show="controlsOpen" :id="controlsId" class="model-review-controls" :class="{ 'main-plane-controls': !reviewActive }">
       <section class="rendering-stack" aria-label="Rendering stack">
         <div class="rendering-stack-heading">Rendering stack <span>One aligned 3D view</span></div>
-        <label v-if="vtkAvailable" class="rendering-stack-layer"
-          >3D renderer
-          <select aria-label="3D renderer" :value="volumeRenderer" @change="chooseRenderer(($event.target as HTMLSelectElement).value as 'three' | 'vtk')">
-            <option value="vtk">Cornerstone3D</option>
-            <option value="three">Three.js (legacy)</option>
-          </select>
-        </label>
         <p v-if="vtkSelected" class="volume-preview-note" role="status">
           With CT volume visible, segmentation surfaces are solid. Turn CT volume off to adjust surface transparency. PNG captures the current view.
         </p>
@@ -1799,8 +1770,7 @@ defineExpose({
           @update:mask="setVolumeMask"
           @retry-mask="retryVolumeMask"
           :colors="volumeColors"
-          :colors-available="vtkAvailable"
-          :colors-supported="vtkSelected"
+          :colors-available="vtkSelected"
           :colors-loading="nativeColorStatus.loading"
           :colors-error="nativeColorStatus.error"
           @update:colors="setVolumeColors"

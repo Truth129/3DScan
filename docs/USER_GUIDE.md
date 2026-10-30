@@ -131,8 +131,8 @@ the screen, and **Restore ↙** or **Escape** returns. With **CT volume** visibl
 solid so that depth stays correct; turn it off to use **All segment opacity**. **CT plane** shows
 one native slice: choose **Native i**, **j** or **k**, move its slider, or use **Face plane**.
 
-**3D renderer** selects **Cornerstone3D**, the default, or **Three.js (legacy)**. Tilted-gantry
-scans and MRI use Three.js automatically, and [portable HTML](#portable-offline-html) needs it.
+CT renders with Cornerstone3D. Tilted-gantry scans, MRI and the
+[portable HTML](#portable-offline-html) page use Three.js automatically.
 Rendering shares a browser memory budget of up to 3 GiB. If a view does not fit, close CT review
 or use **Show selected only** to load fewer surfaces.
 
@@ -300,14 +300,14 @@ treat them like the study itself.
 
 ### Portable offline HTML
 
-1. Under **Layers**, set **3D renderer** to **Three.js (legacy)**. **Export viewer ↗** is disabled
-   under Cornerstone3D.
-2. Choose **Export viewer ↗**.
-3. Under **Include layers**, choose **Segmentation**, **CT volume** and **CT plane**.
-4. Choose **Download HTML**.
+1. Choose **Export viewer ↗**.
+2. Under **Include layers**, choose **Segmentation**, **CT volume** and **CT plane**.
+3. Choose **Download HTML**.
 
 The one file opens offline in a desktop browser, keeping the camera, appearances, visibility, crop,
-mask and plane position of the selected layers. Unselected data is left out. The file must stay
+mask and plane position of the selected layers. It renders with Three.js, so the image can differ
+from the app's, and native lighting and **Color segments** are not exported. Unselected data is
+left out. The file must stay
 under 512 MiB; if the CT is too large, export the segmentation alone. Editing and three-plane CT
 review stay in the app.
 

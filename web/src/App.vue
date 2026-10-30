@@ -273,7 +273,6 @@ const reviewStatus = ref<HTMLDetailsElement>(),
 // Window, overlay and MPR controls can fold away so narrow slice tiles keep their images.
 const { open: ctControlsOpen, setOpen: setCTControlsOpen } = useFoldingControls('scan3d-ct-controls-open-v1', () => true);
 const { keyboard: reviewStatusKeyboard } = useFloatingDetails(reviewStatus, reviewStatusBody);
-const vtkPreview = ref(false);
 function createVolumeView() {
   return defineAsyncComponent(() => import('./components/CornerstoneVolumeView.vue'));
 }
@@ -389,9 +388,6 @@ const segImportDisabledReason = computed(() => {
     action: 'importing masks',
   });
 });
-const exportDisabledReason = computed(() =>
-  vtkPreview.value ? 'Switch the 3D renderer to Three.js (legacy) for HTML export. PNG is available in Cornerstone3D.' : savedExportDisabledReason.value,
-);
 const workerText = computed(() => {
   const gpu = health.value.gpu;
   if (typeof gpu === 'string') return gpu;
@@ -417,7 +413,7 @@ function fail(reason: unknown) {
   error.value = reason instanceof Error ? reason.message : String(reason);
 }
 function openExport() {
-  if (!revision.value || exportDisabledReason.value) return;
+  if (!revision.value || savedExportDisabledReason.value) return;
   const snapshot = model.value?.exportSnapshot();
   if (!snapshot) {
     fail(new Error('The 3D view is still preparing. Try exporting again shortly.'));
@@ -1087,20 +1083,20 @@ onBeforeUnmount(() => {
             :disabled-reason="savedExportDisabledReason"
           /><button
             class="button primary compact export-viewer-button"
-            :disabled="!!exportDisabledReason"
-            :title="exportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'"
-            :aria-describedby="exportDisabledReason && !busy ? 'export-disabled-note' : undefined"
+            :disabled="!!savedExportDisabledReason"
+            :title="savedExportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'"
+            :aria-describedby="savedExportDisabledReason && !busy ? 'export-disabled-note' : undefined"
             @click="openExport"
           >
             Export viewer ↗</button
           ><span
-            v-if="exportDisabledReason && !busy"
+            v-if="savedExportDisabledReason && !busy"
             id="export-disabled-note"
             class="export-disabled-note"
             role="status"
             tabindex="0"
-            :data-reason="exportDisabledReason"
-            ><span aria-hidden="true">i</span><span class="sr-only">{{ exportDisabledReason }}</span></span
+            :data-reason="savedExportDisabledReason"
+            ><span aria-hidden="true">i</span><span class="sr-only">{{ savedExportDisabledReason }}</span></span
           >
         </div>
       </div>
@@ -1492,7 +1488,6 @@ onBeforeUnmount(() => {
               @point="setPoint"
               @gesture="interactivePanel?.addGesture($event)"
               @opacity="allSegmentOpacity"
-              @renderer="vtkPreview = $event === 'vtk'"
               @retry-volume-view="CornerstoneVolumeView = createVolumeView()"
             />
             <div v-if="before" class="before-label">Parent surface and measurements · {{ sourceLabel }} retains the active revision</div>

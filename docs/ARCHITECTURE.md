@@ -333,7 +333,7 @@ mismatch, so a dependency upgrade fails visibly.
 
 ### Three.js renderer
 
-Three.js loads lazily, for the **Three.js (legacy)** option, sheared grids, MRI and offline HTML.
+Three.js loads lazily, for sheared grids, MRI and offline HTML.
 `AnatomyScene` owns one WebGL context, the surfaces, a native CT plane and the prompt markers. Its ray
 marcher applies opacity correction in physical millimetres. Transparent surfaces use weighted blended
 order-independent transparency, and a combined volume and surface view peels fragments and integrates CT
@@ -371,8 +371,9 @@ session, without a CT download.
 
 **Offline HTML** is a self-contained viewer with no Cornerstone code. The reader chooses any of
 segmentation, CT volume and CT plane, and only that data is embedded. The page makes no network requests,
-and manifests use a field allowlist. The snapshot comes from the Three.js scene, so the export action needs
-that renderer, and native lighting and segment colouring are not exported.
+and manifests use a field allowlist. The app builds the snapshot from its view state and converts the
+Cornerstone camera, so exporting loads no Three.js in the app. The exported page renders with Three.js, so
+native lighting and segment colouring are not exported.
 
 ## Orthanc connector
 

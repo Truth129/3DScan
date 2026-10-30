@@ -313,7 +313,7 @@ const app = createApp({
 app.mount('#app');
 const frames = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 function selectedMode() {
-  return document.querySelector<HTMLSelectElement>('[aria-label="3D renderer"]')?.value;
+  return document.querySelector<HTMLElement>('.model-viewport')?.dataset.volumeRenderer;
 }
 const interactionEvents: Record<string, unknown>[] = [];
 for (const name of ['pointerdown', 'pointerup', 'change'] as const)

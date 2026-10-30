@@ -44,9 +44,8 @@ const props = withDefaults(
     maskMarginFixed?: boolean;
     maskSupported?: boolean;
     colors?: VolumeColorSettings;
-    /** Offered where the Cornerstone3D renderer exists; supported while it is selected. */
+    /** Segment colours need the Cornerstone3D renderer. */
     colorsAvailable?: boolean;
-    colorsSupported?: boolean;
     colorsLoading?: boolean;
     colorsError?: string;
   }>(),
@@ -271,7 +270,6 @@ watch(
         <p class="volume-preset-note">
           Crimson myocardium and ivory blood.
           <template v-if="maskSupported">For an isolated heart, enable Mask to segmentation below and choose its segments.</template>
-          <template v-else>Native scattering controls the lighting. Segmentation isolation is available in the legacy viewer.</template>
         </p>
         <div class="volume-cinematic-reference">
           <!-- prettier-ignore -->
@@ -470,23 +468,20 @@ watch(
           <label
             class="volume-toggle"
             :title="
-              !colorsSupported
-                ? 'Segment colours use the Cornerstone3D renderer.'
-                : structures.length
-                  ? `Tint the ${modalityLabel} volume inside chosen segments with their anatomy-list colours.`
-                  : 'Run segmentation first to create anatomical segments.'
+              structures.length
+                ? `Tint the ${modalityLabel} volume inside chosen segments with their anatomy-list colours.`
+                : 'Run segmentation first to create anatomical segments.'
             "
             ><input
               type="checkbox"
               :aria-label="`Color segments in the ${modalityLabel} volume`"
-              :checked="colors.enabled && colorsSupported"
-              :disabled="disabled || !structures.length || !colorsSupported"
+              :checked="colors.enabled"
+              :disabled="disabled || !structures.length"
               @change="enableColors(($event.target as HTMLInputElement).checked)"
             />Color segments</label
-          ><span v-if="!colorsSupported" class="volume-mask-help">Uses Cornerstone3D.</span
-          ><span v-else-if="!structures.length" class="volume-mask-help">Run segmentation first.</span
+          ><span v-if="!structures.length" class="volume-mask-help">Run segmentation first.</span
           ><button
-            v-if="colors.enabled && colorsSupported"
+            v-if="colors.enabled"
             type="button"
             class="text-button"
             :aria-expanded="colorsOpen"
@@ -496,7 +491,7 @@ watch(
             {{ colorsOpen ? 'Done' : 'Choose segments' }} · {{ colors.ids.length }} {{ colorsOpen ? '▴' : '▾' }}
           </button>
         </div>
-        <template v-if="colors.enabled && colorsSupported">
+        <template v-if="colors.enabled">
           <div v-if="colorsOpen" class="volume-mask-picker volume-colors-picker">
             <div class="volume-mask-actions">
               <button
