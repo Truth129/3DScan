@@ -1,17 +1,22 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 
 def main():
     from .acquisition import CARDIAC_PHASE_IDS, PROFILE_IDS
+    from .config import DEFAULT_HOST, DEFAULT_PORT, load_environment
 
+    # Case files hold patient data; everything this process writes stays private to the user.
+    os.umask(0o077)
+    load_environment()
     parser = argparse.ArgumentParser(description="3DScan local CT anatomy pipeline")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve")
-    serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=9010)
+    serve.add_argument("--host", default=os.environ.get("SCAN3D_HOST", DEFAULT_HOST))
+    serve.add_argument("--port", type=int, default=int(os.environ.get("SCAN3D_PORT", DEFAULT_PORT)))
     sub.add_parser("doctor")
     backup = sub.add_parser("backup", help="Snapshot the database and case files into DESTINATION/scan3d-<UTC time>")
     backup.add_argument("destination", type=Path)
@@ -52,6 +57,8 @@ def main():
         import uvicorn
         from .api import create_app
 
+        if args.host not in {"127.0.0.1", "::1", "localhost"}:
+            logging.warning("Listening on %s. 3DScan has no sign-in: anyone who can reach this port can read every case.", args.host)
         uvicorn.run(create_app(), host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False)
         return
     if args.command == "doctor":

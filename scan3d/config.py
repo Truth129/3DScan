@@ -4,10 +4,69 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parent.parent
-# Modalities with an installed image adapter (modalities._ADAPTERS). A deployment
-# can offer fewer through SCAN3D_MODALITIES; production stays CT-only until MRI
-# is qualified there.
+# Local, git-ignored settings; scan3d.env.example documents every variable.
+CONFIG_FILE = ROOT / "scan3d.env"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 9010
+# auto prefers a discrete GPU and uses the CPU when PyTorch sees none; see segmentation._device_info.
+DEFAULT_DEVICE = "auto"
+# Modalities with an installed image adapter (modalities._ADAPTERS).
 MODALITIES = ("CT", "MR")
+# What an installation offers unless SCAN3D_MODALITIES says otherwise. MRI is
+# implemented but experimental, so it is opt-in.
+DEFAULT_MODALITIES = ("CT",)
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """Parse KEY=VALUE lines without evaluating them, so a value is never run as shell.
+
+    The format is the subset systemd's EnvironmentFile= accepts as well: a value
+    is the rest of its line (no inline comments), with optional matching quotes.
+    Errors name the line only, because a value may be a password.
+    """
+    values = {}
+    for number, raw in enumerate(Path(path).read_text().splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        key, separator, value = line.removeprefix("export ").partition("=")
+        key = key.strip()
+        if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+            raise ValueError(f"{path}:{number} is not a KEY=VALUE line")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def load_environment(environ=None) -> Path | None:
+    """Fill unset variables from the local config file, and return the file used.
+
+    Real environment variables always win, so a service manager or a one-off shell
+    override needs no edit here. Settings arrive through the environment because
+    worker processes inherit it. SCAN3D_CONFIG names another file, and it must exist.
+    """
+    environ = os.environ if environ is None else environ
+    configured = environ.get("SCAN3D_CONFIG", "").strip()
+    path = Path(configured).expanduser() if configured else CONFIG_FILE
+    if configured and not path.is_file():
+        raise ValueError(f"SCAN3D_CONFIG does not exist: {path}")
+    loaded = path if path.is_file() else None
+    if loaded:
+        for key, value in read_env_file(path).items():
+            environ.setdefault(key, value)
+    # TotalSegmentator keeps its weights, license and telemetry choice here, and
+    # scripts/configure_totalseg.py must see the same directory as the workers.
+    environ.setdefault("TOTALSEG_HOME_DIR", str(ROOT / ".runtime" / "totalsegmentator"))
+    tools = ROOT / ".tools" / "bin"
+    if tools.is_dir():
+        environ["PATH"] = os.pathsep.join(filter(None, (str(tools), environ.get("PATH"))))
+    return loaded
+
+
+def device_request() -> str:
+    return os.environ.get("SCAN3D_DEVICE", "").strip() or DEFAULT_DEVICE
 
 
 @dataclass(frozen=True)
@@ -25,7 +84,9 @@ class Settings:
 
     @classmethod
     def from_env(cls):
-        modalities = tuple(dict.fromkeys(part.strip().upper() for part in os.environ.get("SCAN3D_MODALITIES", ",".join(MODALITIES)).split(",") if part.strip()))
+        modalities = tuple(
+            dict.fromkeys(part.strip().upper() for part in os.environ.get("SCAN3D_MODALITIES", ",".join(DEFAULT_MODALITIES)).split(",") if part.strip())
+        )
         if not modalities or set(modalities) - set(MODALITIES):
             raise ValueError(f"SCAN3D_MODALITIES must list one or more of: {', '.join(MODALITIES)}")
         destinations = tuple(dict.fromkeys(part.strip() for part in os.environ.get("SCAN3D_ORTHANC_EXPORT_DESTINATIONS", "").split(",") if part.strip()))

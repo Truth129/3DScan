@@ -10,10 +10,11 @@ from scan3d.modalities import _ADAPTERS
 REASON = "MR images are not enabled on this workstation"
 
 
-def test_modality_setting_defaults_to_every_adapter_and_rejects_unknown_names(tmp_path, monkeypatch):
+def test_modality_setting_defaults_to_ct_and_rejects_unknown_names(tmp_path, monkeypatch):
     monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("SCAN3D_MODALITIES", raising=False)
-    assert Settings.from_env().modalities == MODALITIES == tuple(modality.value for modality in _ADAPTERS)
+    assert Settings.from_env().modalities == ("CT",)
+    assert MODALITIES == tuple(modality.value for modality in _ADAPTERS)
     monkeypatch.setenv("SCAN3D_MODALITIES", " ct, MR ,ct")
     assert Settings.from_env().modalities == ("CT", "MR")
     monkeypatch.setenv("SCAN3D_MODALITIES", "CT")

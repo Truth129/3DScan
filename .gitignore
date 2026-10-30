@@ -1,3 +1,6 @@
+# Local settings and notes; scan3d.env.example is the committed template.
+scan3d.env
+AGENTS.local.md
 .venv/
 .venv-*/
 .tools/
