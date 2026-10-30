@@ -423,8 +423,7 @@ input[type='range'] {
 .selection-controls > label > span {
   color: var(--text-secondary);
 }
-.job-banner,
-.measurement-progress {
+.job-banner {
   background: #191d26;
   border-color: var(--line-strong);
 }
@@ -435,10 +434,7 @@ input[type='range'] {
 .job-banner progress {
   accent-color: var(--accent);
 }
-.measurement-progress {
-  color: var(--text-secondary);
-}
-.measurement-progress > p {
+.measurement-progress-body > p {
   color: var(--muted);
 }
 .measurement-progress th,

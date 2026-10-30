@@ -988,16 +988,63 @@ onBeforeUnmount(() => {
           <option v-for="item in cases" :key="item.id" :value="item.id">{{ item.label }}</option>
         </select>
       </div>
+      <div v-if="activeCase && job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
+        <span v-if="busyJob" class="spinner"></span>
+        <div>
+          <strong>{{
+            job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
+          }}</strong
+          ><span :title="job.error || job.stage"
+            >{{ job.error || job.stage
+            }}<template v-if="job.progress">
+              · {{ job.progress.completed }} / {{ job.progress.total }} {{ job.progress.phase === 'meshes' ? 'surfaces' : 'structures' }}</template
+            ></span
+          ><progress
+            v-if="busyJob && job.progress && job.progress.total"
+            :value="job.progress.completed"
+            :max="job.progress.total"
+            :aria-label="`${job.progress.phase} progress`"
+          ></progress>
+          <details v-if="busyJob && jobMeasurements?.structures.length" class="measurement-progress" :open="!revision">
+            <summary>{{ jobMeasurements.completed }} / {{ jobMeasurements.total }} measurements</summary>
+            <div class="measurement-progress-body">
+              <p>
+                Volumes are calculated from mask voxels.<template v-if="revision">
+                  The current result stays available while this new revision is prepared.</template
+                >
+              </p>
+              <div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Structure</th>
+                      <th>Volume (mL)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in jobMeasurements.structures" :key="item.id">
+                      <td>{{ prettyName(item.name) }}</td>
+                      <td>{{ Number(item.volume_ml).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+        </div>
+        <button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button
+        ><button v-else class="text-button" @click="job = undefined">Dismiss</button>
+      </div>
       <div class="worker-status">
         <span class="live-dot"></span><span>{{ workerText }}</span>
       </div>
       <button class="button primary compact" @click="importOpen = true"><span>+</span> Import scan</button>
+      <div v-if="error" class="error-banner" role="alert">
+        <span>⚠ {{ error }}</span
+        ><button aria-label="Dismiss error" @click="error = ''">×</button>
+      </div>
     </header>
 
-    <div v-if="error" class="error-banner" role="alert">
-      <span>⚠ {{ error }}</span
-      ><button aria-label="Dismiss error" @click="error = ''">×</button>
-    </div>
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
 
     <main v-if="!activeCase && !loading" class="welcome">
@@ -1100,53 +1147,6 @@ onBeforeUnmount(() => {
           >
         </div>
       </div>
-
-      <div v-if="job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
-        <span v-if="busyJob" class="spinner"></span>
-        <div>
-          <strong>{{
-            job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
-          }}</strong
-          ><span
-            >{{ job.error || job.stage
-            }}<template v-if="job.progress">
-              · {{ job.progress.completed }} / {{ job.progress.total }} {{ job.progress.phase === 'meshes' ? 'surfaces' : 'structures' }}</template
-            ></span
-          ><progress
-            v-if="busyJob && job.progress && job.progress.total"
-            :value="job.progress.completed"
-            :max="job.progress.total"
-            :aria-label="`${job.progress.phase} progress`"
-          ></progress>
-        </div>
-        <button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button
-        ><button v-else class="text-button" @click="job = undefined">Dismiss</button>
-      </div>
-      <details v-if="busyJob && jobMeasurements?.structures.length" class="measurement-progress" :open="!revision">
-        <summary>
-          {{ jobMeasurements.completed }} / {{ jobMeasurements.total }} measurements available ·
-          {{ job?.progress?.phase === 'meshes' ? 'building display surfaces' : 'checking masks' }}
-        </summary>
-        <p>
-          Volumes are calculated from mask voxels.<template v-if="revision"> The current result stays available while this new revision is prepared.</template>
-        </p>
-        <div>
-          <table>
-            <thead>
-              <tr>
-                <th>Structure</th>
-                <th>Volume (mL)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in jobMeasurements.structures" :key="item.id">
-                <td>{{ prettyName(item.name) }}</td>
-                <td>{{ Number(item.volume_ml).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </details>
 
       <div v-if="!revision || prepareOpen" class="prepare-workspace">
         <section class="prepare-panel">

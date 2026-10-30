@@ -67,7 +67,8 @@ image** switches between images you have opened.
 4. Choose **Run segmentation**.
 
 A task's weights download the first time it runs. AI jobs run one at a time on the device set
-by `SCAN3D_DEVICE`, and a CPU is much slower than a GPU. **Cancel job** stops a running job.
+by `SCAN3D_DEVICE`, and a CPU is much slower than a GPU. Progress appears at the top of the window,
+beside the case selector, and **Cancel job** stops a running job.
 Imports, opening a CT, direct edits and saves use a separate queue, so they do not wait behind a
 segmentation.
 
