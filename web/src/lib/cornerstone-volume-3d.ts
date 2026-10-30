@@ -219,6 +219,9 @@ export class CornerstoneVolume3D {
       await instance.render();
       return instance;
     } catch (reason) {
+      // The rejection reports this failure. onDispose means the source closed, and
+      // the view reattaches then, which here would fail again without ever yielding.
+      instance.options = { ...instance.options, onDispose: undefined };
       instance.dispose();
       throw reason;
     }

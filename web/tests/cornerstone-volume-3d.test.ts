@@ -493,14 +493,29 @@ describe('physical shared CT volume', () => {
     fake.delay = new Promise<void>(resolve => {
       release = resolve;
     });
-    const result = CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera });
+    const onDispose = vi.fn();
+    const result = CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera, onDispose });
     const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' });
     await vi.waitFor(() => expect(fixture.engine.getViewports()).toHaveLength(4));
     fixture.disposeOwner();
     release();
     await rejected;
+    expect(onDispose).toHaveBeenCalledOnce();
     expect(fixture.texture.delete).not.toHaveBeenCalled();
     expect(fixture.callbacks.size).toBe(0);
+  });
+
+  it('reports a failed attachment through its rejection alone, so the view does not reattach', async () => {
+    const fixture = setup();
+    const onDispose = vi.fn();
+    vi.spyOn(fixture.engine, 'renderViewport').mockImplementationOnce(() => {
+      throw new Error('Synthetic first frame failure');
+    });
+    await expect(CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera, onDispose })).rejects.toThrow(
+      'Synthetic first frame failure',
+    );
+    expect(onDispose).not.toHaveBeenCalled();
+    expect(fixture.engine.getViewports()).toHaveLength(3);
   });
 });
 
