@@ -17,9 +17,9 @@ describe('destroyRenderingEngine', () => {
       second = fakeContext(),
       order: string[] = [];
     first.loseContext.mockImplementation(() => order.push('lose'));
+    // The public class is a facade, so the pool sits on its implementation.
     const engine = {
-      hasBeenDestroyed: false,
-      contextPool: { getAllContexts: () => [window(first.gl), window(second.gl)] },
+      _implementation: { contextPool: { getAllContexts: () => [window(first.gl), window(second.gl)] } },
       destroy: vi.fn(() => order.push('destroy')),
     };
     destroyRenderingEngine(engine as unknown as Core.RenderingEngine);

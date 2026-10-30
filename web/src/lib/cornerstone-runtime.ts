@@ -16,13 +16,16 @@ export function cornerstoneFrameCacheStats() {
 }
 
 type RenderWindowLike = { getOpenGLRenderWindow?(): { getContext?(): WebGLRenderingContext | WebGL2RenderingContext | null } | undefined };
+type EngineContexts = { contextPool?: { getAllContexts(): RenderWindowLike[] }; offscreenMultiRenderWindow?: RenderWindowLike };
 /** Destroy an engine and free its WebGL contexts now. Cornerstone and vtk.js only
  * delete their objects; the contexts otherwise stay live until garbage collection,
  * and once the browser limit is reached it silently drops the oldest live context,
  * which can be the 3D review scene. */
 export function destroyRenderingEngine(engine: Core.RenderingEngine | undefined) {
   if (!engine || engine.hasBeenDestroyed) return;
-  const internal = engine as unknown as { contextPool?: { getAllContexts(): RenderWindowLike[] }; offscreenMultiRenderWindow?: RenderWindowLike };
+  // RenderingEngine is a facade: its contexts belong to the implementation behind it.
+  const facade = engine as unknown as EngineContexts & { _implementation?: EngineContexts },
+    internal = facade._implementation ?? facade;
   const contexts = new Set<WebGLRenderingContext | WebGL2RenderingContext>();
   for (const window of [...(internal.contextPool?.getAllContexts() ?? []), internal.offscreenMultiRenderWindow]) {
     try {
