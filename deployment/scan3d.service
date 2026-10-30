@@ -1,15 +1,13 @@
+# systemd user unit. docs/INSTALL.md shows how to install it for your checkout path;
+# settings come from scan3d.env, which the app reads itself.
 [Unit]
-Description=3DScan local CT reconstruction and review
+Description=3DScan
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/3DScan
-ExecStart=%h/Projects/3DScan/scripts/run-production.sh
-Environment=SCAN3D_HOST=127.0.0.1
-Environment=SCAN3D_PORT=9010
-Environment=SCAN3D_DEVICE=gpu
-Environment=SCAN3D_ALLOWED_HOSTS=127.0.0.1,localhost,scan3d-host.example.ts.net
+WorkingDirectory=%h/3DScan
+ExecStart=%h/3DScan/.venv/bin/scan3d serve
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
@@ -18,4 +16,3 @@ UMask=0077
 
 [Install]
 WantedBy=default.target
-

@@ -24,8 +24,6 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          # The production runtime. The Python 3.12 rollback environment is
-          # validated on the workstation, not in CI.
           python-version: "3.14"
           cache: pip
           cache-dependency-path: pyproject.toml
@@ -38,9 +36,9 @@ jobs:
         run: python -m pip install --editable ".[test,lint]"
       - name: Install TotalSegmentator's task registry without its dependencies
         # 85 tests read TotalSegmentator's task and label metadata, which is pure Python.
-        # --no-deps keeps Torch and nnU-Net out; the version follows the production pin.
+        # --no-deps keeps Torch and nnU-Net out; the version follows the tested pin.
         run: |
-          python -m pip install --no-deps "$(grep -m1 '^TotalSegmentator==' requirements/rocm10-py314.in)"
+          python -m pip install --no-deps "$(grep -m1 '^totalsegmentator==' requirements/constraints.txt)"
       - name: Lint
         run: ruff check --output-format=github
       - name: Format

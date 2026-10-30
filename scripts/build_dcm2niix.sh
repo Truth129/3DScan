@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Build the pinned native converter with compressed-DICOM decoders enabled.
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}")/env.sh"
+SCAN3D_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export SCAN3D_ROOT
 cd "$SCAN3D_ROOT"
 
 version=1.0.20250506
 expected_sha512=1954cc4229478bee69bb0382c90a5c212da4b632fd8f6a5aeb8342d1fa8ac704c83313ecae8cf7b00f6cd8614cc3826a7aefa0209c2633f8ef3c0f1c4b367e3e
 for dependency in cmake c++ pkg-config sha512sum; do
   if ! command -v "$dependency" >/dev/null; then
-    echo 'Converter build dependencies are missing. Install base-devel, cmake, pkgconf, openjpeg2 and zlib.' >&2
+    echo "Missing $dependency. Install a C++ compiler, cmake, pkg-config, and the OpenJPEG and zlib development packages." >&2
     exit 1
   fi
 done
 if ! pkg-config --exists libopenjp2 zlib; then
-  echo 'Converter decoding libraries are missing. Install openjpeg2 and zlib.' >&2
+  echo 'Converter decoding libraries are missing. Install the OpenJPEG and zlib development packages.' >&2
   exit 1
 fi
 
@@ -44,12 +45,14 @@ cmake -S "$cache/dcm2niix-$version/console" -B "$build" \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
   -DUSE_OPENJPEG=ON -DUSE_JPEGLS=ON -DUSE_STATIC_RUNTIME=OFF \
   -DZLIB_IMPLEMENTATION=System -DBATCH_VERSION=OFF
-cmake --build "$build" --parallel 8
+cmake --build "$build" --parallel "$(nproc)"
 install -m 0755 "$build/dcm2niix" "$SCAN3D_ROOT/.tools/bin/dcm2niix.writing"
 mv "$SCAN3D_ROOT/.tools/bin/dcm2niix.writing" "$SCAN3D_ROOT/.tools/bin/dcm2niix"
 
+python="$SCAN3D_ROOT/.venv/bin/python"
+[[ -x "$python" ]] || python=python3
 SOURCE_SHA512="$expected_sha512" CONVERTER_VERSION="$version" \
-  .venv/bin/python - <<'PY'
+  "$python" - <<'PY'
 from pathlib import Path
 import hashlib, json, os, subprocess
 root = Path(os.environ['SCAN3D_ROOT'])

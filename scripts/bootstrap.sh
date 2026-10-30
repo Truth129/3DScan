@@ -1,49 +1,115 @@
 #!/usr/bin/env bash
+# Set up this checkout: Python environment, AI packages, DICOM converter, viewer and config.
 set -euo pipefail
-source "$(dirname -- "${BASH_SOURCE[0]}")/env.sh"
-cd "$SCAN3D_ROOT"
-mode="${1:-full}"
-if [[ "$mode" != core && "$mode" != full ]]; then
-  echo 'Usage: scripts/bootstrap.sh [core|full]' >&2
-  exit 2
-fi
-mkdir -p .tools/bin .tools/python .cache/uv .runtime "$TOTALSEG_HOME_DIR"
-if [[ ! -x .tools/bin/uv ]]; then
+umask 077
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/bootstrap.sh [options]
+
+  --torch cpu     PyTorch for CPU-only inference (default)
+  --torch cuda    PyTorch for NVIDIA GPUs (needs a driver that supports CUDA 13)
+  --torch rocm    the hash-locked AMD stack for gfx1201 GPUs (Radeon AI PRO R9700)
+  --torch none    viewer and editing only: no PyTorch and no AI packages
+  --skip-dcm2niix use the dcm2niix already on PATH instead of building the pinned release
+  --skip-web      do not build the viewer
+USAGE
+}
+
+torch_kind=cpu
+build_converter=1
+build_web=1
+while (( $# )); do
+  case "$1" in
+    --torch)
+      torch_kind="${2:-}"
+      shift 2 || { usage >&2; exit 2; }
+      ;;
+    --skip-dcm2niix) build_converter=0; shift ;;
+    --skip-web) build_web=0; shift ;;
+    -h | --help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
+case "$torch_kind" in
+  cpu | cuda | rocm | none) ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+mkdir -p .tools/bin .cache .runtime
+export UV_CACHE_DIR="$root/.cache/uv"
+export UV_PYTHON_INSTALL_DIR="$root/.tools/python"
+export UV_PYTHON_BIN_DIR="$root/.tools/bin"
+
+# uv supplies Python 3.14 too, so the distribution's Python version does not matter.
+uv=.tools/bin/uv
+if [[ ! -x "$uv" ]]; then
   uv_version=0.9.18
-  archive="$(mktemp -d "$SCAN3D_ROOT/.cache/uv-download.XXXXXX")"
-  curl --fail --location --retry 3 \
-    "https://github.com/astral-sh/uv/releases/download/$uv_version/uv-x86_64-unknown-linux-gnu.tar.gz" \
-    --output "$archive/uv.tar.gz"
-  tar -xzf "$archive/uv.tar.gz" -C "$archive"
-  install -m 0755 "$archive/uv-x86_64-unknown-linux-gnu/uv" .tools/bin/uv
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64 | aarch64) ;;
+    *) echo "No uv release is configured for $arch." >&2; exit 1 ;;
+  esac
+  download="$(mktemp -d "$root/.cache/uv-download.XXXXXX")"
+  trap 'rm -rf "$download"' EXIT
+  curl --fail --location --retry 3 --silent --show-error \
+    "https://github.com/astral-sh/uv/releases/download/$uv_version/uv-$arch-unknown-linux-gnu.tar.gz" \
+    --output "$download/uv.tar.gz"
+  tar -xzf "$download/uv.tar.gz" -C "$download"
+  install -m 0755 "$download/uv-$arch-unknown-linux-gnu/uv" "$uv"
 fi
-.tools/bin/uv python install 3.12
-if [[ ! -x .venv/bin/python ]]; then
-  .tools/bin/uv venv --python 3.12 .venv
+
+"$uv" python install 3.14
+[[ -x .venv/bin/python ]] || "$uv" venv --python 3.14 .venv
+python=.venv/bin/python
+
+case "$torch_kind" in
+  rocm)
+    "$uv" pip sync --python "$python" --require-hashes --index-strategy unsafe-best-match requirements/rocm10-py314.lock
+    "$uv" pip install --python "$python" --no-deps --editable .
+    ;;
+  cuda)
+    # PyPI's Linux wheels are the CUDA builds and bundle their own CUDA runtime.
+    "$uv" pip install --python "$python" --constraint requirements/constraints.txt --editable ".[ai]"
+    ;;
+  cpu)
+    "$uv" pip install --python "$python" --torch-backend cpu --constraint requirements/constraints.txt --editable ".[ai]"
+    ;;
+  none)
+    "$uv" pip install --python "$python" --constraint requirements/constraints.txt --editable .
+    ;;
+esac
+if [[ "$torch_kind" != none ]]; then
+  "$python" scripts/configure_totalseg.py
 fi
-.venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12), "Recreate .venv with Python 3.12"'
-lock="requirements/$mode.lock"
-input=requirements/core.in
-[[ "$mode" == full ]] && input=requirements/segmentation.in
-if [[ ! -f "$lock" ]]; then
-  .tools/bin/uv pip compile --quiet --python .venv/bin/python "$input" --output-file "$lock"
-fi
-if [[ "$mode" == core ]]; then
-  # Add core tools without removing an already provisioned inference stack.
-  .tools/bin/uv pip install --python .venv/bin/python --requirement "$lock"
-else
-  .tools/bin/uv pip sync --python .venv/bin/python "$lock"
-fi
-.tools/bin/uv pip check --python .venv/bin/python
-.venv/bin/python scripts/configure_totalseg.py
-if [[ "$mode" == full ]]; then
+
+if (( build_converter )); then
   scripts/build_dcm2niix.sh
-  if ! .venv/bin/python -c 'import torch; assert torch.version.hip, "Expected the pinned AMD ROCm torch build"'; then
-    echo 'Python packages are installed, but native ROCm libraries are incomplete.' >&2
-    echo 'Run: sudo pacman -S --needed rocm-ml-libraries hipsparselt rocm-smi-lib' >&2
+elif ! command -v dcm2niix >/dev/null; then
+  echo 'dcm2niix is not on PATH; DICOM import will fail until it is installed.' >&2
+fi
+
+if (( build_web )); then
+  if ! command -v npm >/dev/null; then
+    echo 'npm was not found. Install Node.js 22 or newer and run this script again, or use --skip-web.' >&2
     exit 1
   fi
+  (
+    cd web
+    npm ci
+    npx vite build
+    npx vite build --config vite.offline.config.ts
+  )
 fi
-echo "Environment ready ($mode): $SCAN3D_ROOT/.venv/bin/python"
-echo 'Native GPU validation: scripts/check_gpu.sh'
 
+if [[ ! -e scan3d.env ]]; then
+  cp scan3d.env.example scan3d.env
+  chmod 600 scan3d.env
+fi
+
+echo
+echo "3DScan is installed in $root."
+echo 'Start it with:  .venv/bin/scan3d serve'
+echo 'Check it with:  .venv/bin/scan3d doctor'

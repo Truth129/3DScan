@@ -1,6 +1,4 @@
-# Qualified Python 3.14 runtime, used by production and isolated development.
-# Primary imaging changes from the retained Python 3.12 baseline:
-# NumPy 2.2.6 -> 2.3.5; SciPy 1.15.3 -> 1.16.3; VTK 9.5.2 -> 9.6.2.
+# Tested Python 3.14 stack for AMD GPUs. rocm10-py314.lock is compiled from this file.
 -r rocm10-py314-gpu.in
 numpy==2.3.5
 scipy==1.16.3

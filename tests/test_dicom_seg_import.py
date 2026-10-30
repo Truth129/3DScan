@@ -11,7 +11,7 @@ from pydicom.pixels import pack_bits
 from pydicom.uid import DeflatedExplicitVRLittleEndian, ImplicitVRLittleEndian, generate_uid
 import pytest
 
-from osirix_seg_smoke import source_fixture, native_grid
+from synthetic_dicom import source_fixture, native_grid
 from scan3d import dicom_seg, dicom_seg_import
 from scan3d.fileio import hash_file
 

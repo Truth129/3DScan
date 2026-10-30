@@ -12,7 +12,7 @@ import numpy as np
 import pydicom
 import pytest
 
-from osirix_seg_smoke import native_grid, source_fixture
+from synthetic_dicom import native_grid, source_fixture
 from scan3d import dicom, dicom_seg
 from scan3d.fileio import hash_file
 

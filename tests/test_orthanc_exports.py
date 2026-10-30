@@ -610,7 +610,7 @@ def test_uncertain_send_requires_explicit_retry_with_same_sops_and_never_autores
     rig.archive.start_error = OrthancDeliveryUnknown("Synthetic lost start response")
     failed = execute(rig, start(rig, destination="osirix"))
     directory, manifest = artifact(rig, failed)
-    assert failed["status"] == "failed" and "Check OsiriX" in failed["error"]
+    assert failed["status"] == "failed" and "Check the destination" in failed["error"]
     assert failed["result"]["dicom_seg"]["archived"] is True and failed["result"]["dicom_seg"]["sent"] is False
     receipt = json.loads((directory / "delivery.json").read_text())
     assert receipt["destinations"]["osirix"] == {"state": "unknown", "job_id": None, "attempt_id": failed["payload"]["delivery_attempt_id"]}

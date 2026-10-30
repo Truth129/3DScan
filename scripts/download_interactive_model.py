@@ -2,9 +2,11 @@
 
 import hashlib
 import os
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+from scan3d.config import ROOT, load_environment
+from scan3d.interactive import _model_path
+
+load_environment()
 os.environ.setdefault("HF_HUB_CACHE", str(ROOT / ".cache" / "huggingface"))
 from huggingface_hub import snapshot_download
 
@@ -13,9 +15,9 @@ CHECKPOINT_SHA256 = "b3ac4421f85457bbd1aa0d87f5e67bcb7bc8e2ce6b824b6ac45077cc5d6
 
 
 def main():
-    folder = ROOT / ".runtime" / "nninteractive"
-    snapshot_download(repo_id="MIC-DKFZ/nnInteractive", revision=REVISION, allow_patterns=["nnInteractive_v1.0/**"], local_dir=folder, max_workers=2)
-    checkpoint = folder / "nnInteractive_v1.0" / "fold_0" / "checkpoint_final.pth"
+    model = _model_path()
+    snapshot_download(repo_id="MIC-DKFZ/nnInteractive", revision=REVISION, allow_patterns=[f"{model.name}/**"], local_dir=model.parent, max_workers=2)
+    checkpoint = model / "fold_0" / "checkpoint_final.pth"
     sha = hashlib.sha256()
     with checkpoint.open("rb") as handle:
         for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):

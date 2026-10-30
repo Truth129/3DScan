@@ -335,7 +335,7 @@ TRANSFER_JOB = "12345678-1234-1234-1234-123456789abc"
 class ExportArchive(Archive):
     def __init__(self):
         super().__init__()
-        self.destination_rows = {"osirix": {"AET": "OsiriX-Mac", "Host": "private-host.local", "Port": 11112}, "unlisted": {"AET": "OTHER"}}
+        self.destination_rows = {"osirix": {"AET": "WORKSTATION", "Host": "private-host.local", "Port": 11112}, "unlisted": {"AET": "OTHER"}}
         self.upload_status = "Success"
         self.retained = None
         self.store_failure = None
@@ -382,7 +382,7 @@ def export_archive():
 def test_export_destinations_are_server_allowlisted_and_hide_network_details(export_archive):
     client, upstream = export_archive
     assert client.destinations(()) == [] and upstream.calls == []
-    assert client.destinations(("osirix", "missing", "osirix")) == [{"id": "osirix", "name": "osirix", "aet": "OsiriX-Mac"}]
+    assert client.destinations(("osirix", "missing", "osirix")) == [{"id": "osirix", "name": "osirix", "aet": "WORKSTATION"}]
     for bad in ("../instances", "osirix?x=y", "https://elsewhere.test", ""):
         before = len(upstream.calls)
         with pytest.raises(ValueError, match="destination"):
