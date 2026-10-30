@@ -1,4 +1,4 @@
-/** Small in-memory GLBs in the workstation's display format; no case assets. */
+/** Small in-memory GLBs in the viewer's display format; no case assets. */
 export function syntheticSurfaceGLB(
   options: {
     id?: string;
