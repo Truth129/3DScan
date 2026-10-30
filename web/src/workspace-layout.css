@@ -150,9 +150,10 @@
 /*
  * Viewer-first desktop workspace: a resizable sidebar (anatomy above details)
  * beside a stage that tiles the 3D and slice viewers. Options never take height
- * from a viewer: 3D settings float over the canvas and slice controls share one
- * wrapping toolbar. Sizes come from grid tracks, so hiding, resizing or
- * rearranging a tile never remounts a viewer.
+ * from a viewer: 3D settings float over the canvas, slice controls share one
+ * wrapping toolbar and the review toolbar keeps one height for a given width.
+ * Sizes come from grid tracks, so hiding, resizing or rearranging a tile never
+ * remounts a viewer.
  */
 @media (min-width: 1001px) {
   /* Short laptop windows keep the whole workspace on screen instead of scrolling the page. */
@@ -191,9 +192,16 @@
   .workspace.modular-workspace > .sidebar-splitter {
     grid-area: sidebar-splitter;
   }
+  /* Its panels lie over the tiles, whose own menus stop at z-index 40. */
   .workspace.modular-workspace > .review-workspace-toolbar {
     grid-area: toolbar;
+    position: relative;
+    z-index: 50;
     min-width: 0;
+  }
+  .review-workspace-toolbar .review-workspace-tabs {
+    height: 34px;
+    padding-block: 2px;
   }
   .workspace.modular-workspace > .workspace-stage {
     grid-area: stage;
@@ -528,9 +536,6 @@
     padding: 6px 14px;
     border-bottom: 0;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) > .compare-check {
-    margin: 2px 14px 8px;
-  }
   .workspace-stage > .review-rail:not(.ct-expanded) > .review-status {
     position: relative;
     padding: 4px 14px 8px;
@@ -662,6 +667,14 @@
   .workspace.modular-workspace .workspace-splitter,
   .review-rail > .panel-heading > .ct-controls-toggle {
     display: none;
+  }
+  .review-workspace-tabs,
+  .review-rail > .panel-heading {
+    flex-wrap: wrap;
+  }
+  .ct-review-active {
+    order: 1;
+    flex-basis: 100%;
   }
   .workspace.modular-workspace.mobile-anatomy > .workspace-sidebar {
     display: flex;

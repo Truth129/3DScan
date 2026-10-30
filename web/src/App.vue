@@ -1233,13 +1233,6 @@ onBeforeUnmount(() => {
         :style="workspaceStyle"
       >
         <div v-show="workspaceMode === 'review'" class="review-workspace-toolbar">
-          <div class="review-workspace-tabs">
-            <strong>Review segmentation</strong
-            ><button :class="{ active: reviewFocus === 'both' }" @click="setReviewFocus('both')">{{ sourceLabel }} + 3D</button
-            ><button :class="{ active: reviewFocus === 'ct' }" @click="setReviewFocus('ct')">Focus {{ sourceLabel }}</button
-            ><button :class="{ active: reviewFocus === 'model' }" @click="setReviewFocus('model')">Focus 3D</button
-            ><button class="text-button" @click="workspaceMode = 'model'">Exit review</button>
-          </div>
           <InteractiveReviewPanel
             ref="interactivePanel"
             :modality="sourceLabel"
@@ -1249,6 +1242,9 @@ onBeforeUnmount(() => {
             :structures="reviewStructures"
             :busy="busy"
             :active="workspaceMode === 'review'"
+            :surface-error="showingCandidate ? candidateSurfaceError : ''"
+            :surface-loading="showingCandidate && candidateSurfaceLoading"
+            @retry-surface="loadCandidateSurface"
             @state="setInteractiveReview"
             @targets="pendingStructures = $event"
             @create-target="createTarget"
@@ -1265,7 +1261,15 @@ onBeforeUnmount(() => {
             @disabled="interactiveDisabled = $event"
             @opened="interactiveOpen = $event"
             @accept="track"
-          />
+          >
+            <template #navigation>
+              <strong>Review segmentation</strong
+              ><button :class="{ active: reviewFocus === 'both' }" @click="setReviewFocus('both')">{{ sourceLabel }} + 3D</button
+              ><button :class="{ active: reviewFocus === 'ct' }" @click="setReviewFocus('ct')">Focus {{ sourceLabel }}</button
+              ><button :class="{ active: reviewFocus === 'model' }" @click="setReviewFocus('model')">Focus 3D</button>
+            </template>
+            <template #exit><button class="text-button" @click="workspaceMode = 'model'">Exit review</button></template>
+          </InteractiveReviewPanel>
         </div>
         <div id="workspace-sidebar" v-show="sidebarVisible" class="workspace-sidebar">
           <aside id="workspace-anatomy-panel" v-show="panels.anatomy" class="anatomy-rail" aria-label="Anatomy panel">
@@ -1440,14 +1444,6 @@ onBeforeUnmount(() => {
                 ×
               </button>
             </div>
-            <p
-              v-if="workspaceMode === 'review' && showingCandidate && (candidateSurfaceLoading || candidateSurfaceError)"
-              class="candidate-surface-note"
-              :role="candidateSurfaceError ? 'alert' : 'status'"
-            >
-              {{ candidateSurfaceError || 'Preparing the 3D candidate preview… Previous surfaces remain visible.'
-              }}<button v-if="candidateSurfaceError" class="text-button" @click="loadCandidateSurface">Retry preview</button>
-            </p>
             <ModelViewport
               v-if="shownRevision"
               ref="model"
@@ -1524,6 +1520,15 @@ onBeforeUnmount(() => {
               <div>
                 <span class="eyebrow">SOURCE IMAGES</span>
                 <h2>{{ sourceLabel }} review</h2>
+              </div>
+              <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate">
+                <span
+                  >Reviewing
+                  <strong>{{
+                    prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id)
+                  }}</strong>
+                  · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
+                ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
               </div>
               <span class="pill">LINKED</span
               ><button
@@ -1632,15 +1637,6 @@ onBeforeUnmount(() => {
                 </p>
               </div>
             </div>
-            <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate">
-              <span
-                >Reviewing
-                <strong>{{
-                  prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id)
-                }}</strong>
-                · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
-              ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
-            </div>
             <div class="ct-slice-stage">
               <CTReviewRail
                 :overlay-opacity="overlayOpacity"
@@ -1672,14 +1668,14 @@ onBeforeUnmount(() => {
             </div>
             <div class="probe-readout">
               <span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span
+              ><label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
+                ><input v-model="compare" type="checkbox" /><span>{{
+                  showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent`
+                }}</span></label
               ><strong
                 >{{ formatImageValue(hu, imageDisplay.units) }} <small>{{ imageDisplay.units }}</small></strong
               >
             </div>
-            <label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
-              ><input v-model="compare" type="checkbox" />
-              {{ showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent` }}</label
-            >
             <details v-if="!ctOnly" ref="reviewStatus" class="review-status" @keydown="reviewStatusKeyboard">
               <summary>Review status &amp; tools</summary>
               <div ref="reviewStatusBody" class="review-status-body">
@@ -1833,18 +1829,6 @@ onBeforeUnmount(() => {
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
-}
-.candidate-surface-note {
-  margin: 0;
-  padding: 6px 14px;
-  background: #1c2532;
-  color: #bdcce0;
-  font-size: 10px;
-  line-height: 1.5;
-}
-.candidate-surface-note .text-button {
-  margin-left: 8px;
-  font-size: 10px;
 }
 .ct-only-anatomy {
   padding: 22px 17px;
