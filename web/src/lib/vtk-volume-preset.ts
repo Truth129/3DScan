@@ -18,9 +18,11 @@ export interface VTKVolumeQuality {
 export function vtkVolumePreset(settings: CTVolumeSettings) {
   const current = freshVolumeSettings(settings);
   const preset = getVolumePreset(current.preset, current.cinematic, current.signal_window);
-  // Native vtk.js exposes one linear gradient ramp. Reject a future recipe
-  // that cannot be represented instead of silently changing its appearance.
-  if (preset.gradientOpacity.length > 2) throw new Error('Native vtk.js cannot represent a multi-knot gradient-opacity recipe.');
+  // Native vtk.js exposes one linear gradient ramp and holds it flat past the
+  // end, so later knots at the same opacity change nothing. Reject a recipe that
+  // changes again instead of silently changing its appearance.
+  if (preset.gradientOpacity.slice(2).some(([, alpha]) => alpha !== preset.gradientOpacity[1]![1]))
+    throw new Error('Native vtk.js cannot represent a multi-knot gradient-opacity recipe.');
   return {
     settings: current,
     preset,

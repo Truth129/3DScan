@@ -146,4 +146,21 @@ describe('VolView-style native lighting modes', () => {
       fixture.dispose();
     }
   });
+
+  it('accepts a gradient ramp that ends flat and refuses one that changes again', () => {
+    const fixture = volume(),
+      property = fixture.actor.getProperty(),
+      apply = (preset: 'CT-Lung' | 'CT-Fat' | 'lung' | 'US-Fetal' | 'uCT-Skull') =>
+        applyVTKVolumePreset(fixture.actor, freshVolumeSettings({ preset }), { sampleDistanceMM: 0.4 });
+    try {
+      // The shader clamps past the ramp, so these later knots change nothing.
+      for (const preset of ['CT-Lung', 'CT-Fat', 'lung'] as const) expect(apply(preset).gradientOpacity).toBe(false);
+      expect(apply('US-Fetal').gradientOpacity).toBe(true);
+      expect([property.getGradientOpacityMinimumValue(0), property.getGradientOpacityMinimumOpacity(0)]).toEqual([-10, 0]);
+      expect([property.getGradientOpacityMaximumValue(0), property.getGradientOpacityMaximumOpacity(0)]).toEqual([-1, 1]);
+      expect(() => apply('uCT-Skull')).toThrow(/multi-knot/);
+    } finally {
+      fixture.dispose();
+    }
+  });
 });
