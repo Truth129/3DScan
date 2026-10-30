@@ -15,7 +15,7 @@ import sys
 import time
 import uuid
 
-from .config import device_request
+from .config import ROOT, device_request
 from .fileio import atomic_text, hash_file as _digest
 from .imaging import _binary_nonempty, _image
 from . import segmentation_options
@@ -28,6 +28,8 @@ class SegmentationCancelled(InterruptedError):
 
 _LOBES = ("lung_lower_lobe_left", "lung_lower_lobe_right", "lung_middle_lobe_right", "lung_upper_lobe_left", "lung_upper_lobe_right")
 _LUNG = {"lung_arteries", "lung_veins", "lung_airways", "lung_airways_wall"}
+# Far longer than a cold PyTorch import should need. A hung GPU driver must not hold the serialized lane.
+DEVICE_CHECK_SECONDS = 300.0
 
 
 def _appearance(name, task=None):
@@ -96,7 +98,10 @@ def _appearance(name, task=None):
 
 
 def _device_info(device):
-    """Resolve a SCAN3D_DEVICE request. Only auto may choose the CPU: a GPU request fails instead."""
+    """Resolve a SCAN3D_DEVICE request. Only auto may choose the CPU: a GPU request fails instead.
+
+    This imports PyTorch, so the API process goes through _resolve_device.
+    """
     import torch
 
     if device == "auto":
@@ -261,6 +266,56 @@ def _stop(process):
         pass
 
 
+def _resolve_device(device, cancelled):
+    """Return _device_info(device) from a short-lived child process.
+
+    The API process runs no inference, and a GPU runtime started here would stay
+    resident in it. Exit returns the runtime, at the cost of one import per job.
+    """
+    # Import exactly this release of scan3d, as the nnInteractive worker does.
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH"))))}
+    command = [sys.executable, "-P", "-m", "scan3d.segmentation", device]
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, env=env, start_new_session=True)
+    deadline = time.monotonic() + DEVICE_CHECK_SECONDS
+    try:
+        while True:
+            try:
+                answer = process.communicate(timeout=0.2)[0]
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if cancelled():
+                raise SegmentationCancelled("Segmentation cancelled")
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"PyTorch did not report a device within {DEVICE_CHECK_SECONDS:g} s; check the GPU driver")
+    except BaseException:
+        _stop(process)
+        raise
+    finally:
+        process.stdout.close()
+    try:
+        reply = json.loads(answer)
+    except ValueError:
+        raise RuntimeError(f"The device check failed (exit {process.returncode}); inspect the service log") from None
+    if "runtime" in reply:
+        return reply["runtime"]
+    raise (ValueError if reply["invalid"] else RuntimeError)(reply["error"])
+
+
+def _report_device(device):
+    """Child entry point: python -P -m scan3d.segmentation REQUEST writes one JSON answer."""
+    # GPU runtimes can log to stdout natively, so the answer keeps its own copy of
+    # the pipe and everything else joins stderr in the service log.
+    answer = os.fdopen(os.dup(1), "w")
+    os.dup2(2, 1)
+    try:
+        reply = {"runtime": _device_info(device)}
+    except Exception as exc:
+        reply = {"error": str(exc) or type(exc).__name__, "invalid": isinstance(exc, ValueError)}
+    with answer:
+        json.dump(reply, answer)
+
+
 class _Resources:
     """Optional Linux process-tree RSS and whole-device VRAM samples.
 
@@ -337,7 +392,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
     if cancelled():
         raise SegmentationCancelled("Segmentation cancelled")
     device = device_request()
-    runtime = _device_info(device)
+    runtime = _resolve_device(device, cancelled)
     effective_device = runtime["selected_device"]
     tasks = options["tasks"]
     run_dir = output_dir / ("run-" + uuid.uuid4().hex)
@@ -502,3 +557,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
     finally:
         manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
         save_manifest()
+
+
+if __name__ == "__main__":
+    _report_device(sys.argv[1])

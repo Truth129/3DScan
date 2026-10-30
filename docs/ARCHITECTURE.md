@@ -185,11 +185,12 @@ request is rejected. `scripts/check_gpu.py` runs a small 3D convolution and writ
 `/api/health` reports without loading PyTorch. `ready` therefore means a verified GPU, and a CPU
 installation reports `ready: false` by design.
 
-The API process runs no inference. TotalSegmentator runs in a subprocess, and the nnInteractive engine and
-its PyTorch runtime load only in the worker process. The one PyTorch import in the API process is
-`segmentation._device_info`, which resolves the device at the start of a `segment` job on the GPU lane.
-Health, catalog and availability routes do not import it, and a server without AI packages still serves the
-viewer and direct editing.
+The API process runs no inference and never imports PyTorch. TotalSegmentator runs in a subprocess, and the
+nnInteractive engine and its PyTorch runtime load only in the worker process. At the start of a `segment` job,
+the GPU lane runs `python -P -m scan3d.segmentation` in its own session. That short-lived child calls
+`segmentation._device_info`, returns the result as JSON and exits, so no GPU runtime stays in the API process.
+Cancelling the job stops the child, and a child that gives no answer within 5 minutes fails the job. A server
+without AI packages still serves the viewer and direct editing.
 
 ### The nnInteractive worker
 

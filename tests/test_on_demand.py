@@ -119,7 +119,7 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(dicom, "convert_series", convert)
     monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
     monkeypatch.setattr(segmentation, "segment", segment)
-    monkeypatch.setattr(segmentation, "_device_info", no_gpu)
+    monkeypatch.setattr(segmentation, "_resolve_device", no_gpu)
     app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
     # Deliberately omit the lifespan context: claim/execute the real queue
     # synchronously so active-revision races are deterministic.
