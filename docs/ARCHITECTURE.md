@@ -264,6 +264,9 @@ Failed launch/submission connections resolve the current series again rather
 than automatically retrying a write. Preparation and inference remain separate.
 The button is ordinary Explorer 2 configuration in `~/Projects/Orthanc`;
 3DScan remains an independently operated processing service.
+The launcher is active from `a647344` after the approved 30 October 2026
+frontend publication and independent 3DScan/Orthanc restarts; PostgreSQL was
+not restarted. See [activation evidence](VALIDATION.md).
 
 The existing OsiriX Mac also has explicitly approved DICOM C-FIND/C-MOVE
 permissions on Orthanc, separate from 3DScan's REST adapter and outgoing sends.

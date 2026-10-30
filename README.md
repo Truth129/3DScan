@@ -110,7 +110,7 @@ See [trial operation](docs/ORTHANC.md#explorer-2-trial).
 A prepared **Open in 3DScan** series button can launch directly from Explorer 2.
 It reopens the same imported snapshot or shows patient/study/series details for
 an explicit import, then retains the normal **Open CT** and segmentation actions.
-This launcher is implemented locally; live activation is pending approval.
+The launcher is active after the approved 30 October 2026 activation.
 The button configuration belongs to `~/Projects/Orthanc`; see
 [launch setup](docs/ORTHANC.md#explorer-2-launch-into-3dscan).
 

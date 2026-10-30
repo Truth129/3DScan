@@ -4,7 +4,8 @@
 
 The optional **Open in 3DScan** custom button is available for individual series
 in Explorer 2 1.15.0. Implementation and synthetic qualification are recorded
-in [validation](VALIDATION.md); live activation is pending approval.
+in [validation](VALIDATION.md). It is active after the approved 30 October 2026
+frontend publication, button merge and independent service restarts.
 Orthanc is independently owned by `~/Projects/Orthanc` and runs as
 `orthanc.service`. Do not use this repository's retired receiver activation
 scripts to change it. Its live archive, credentials and configuration are
@@ -41,11 +42,22 @@ prevention apply. Opening the link does not prepare CT or run segmentation,
 and it never imports SEG automatically. Unknown declared counts retain their
 warning and need the user's acquisition-completeness check.
 
-Activation needs approval to publish the qualified 3DScan frontend/restart its
+Future activation needs approval to publish the qualified 3DScan frontend/restart its
 backend and apply the button through the separate Orthanc project's service
 procedure. Test on a generated study first; no live patient data is needed for
 qualification. Shared clinic sign-in/audit and clinical validation remain
 separate work.
+
+Active application source: `a647344`; 3DScan PID **1414632**, Orthanc PID
+**1414593**, PostgreSQL unchanged at **1016715**. All 98 served frontend files,
+the launch route, authenticated Explorer 2 button configuration, existing
+OHIF/DICOMweb authentication and private HTTPS checks pass. Aggregate counts
+are unchanged. App assets, source/health/count/hash evidence and prior frontend
+are recorded under `.runtime/explorer2-launch-20261030/` and
+`.runtime/archive/frontend-before-explorer2-launch-20261030/`. The separate
+Orthanc project's `.runtime/explorer2-launch-20261030/` retains its private
+before/after configuration and activation record; those files contain secrets
+and remain outside Git. A later rollback/restart requires fresh approval.
 
 Reference: [Explorer 2 1.15.0 custom-button configuration](https://github.com/orthanc-server/orthanc-explorer-2/blob/1.15.0/Plugin/DefaultConfiguration.json#L372-L426).
 
