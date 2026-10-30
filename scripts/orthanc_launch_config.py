@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 from scan3d.orthanc import OrthancClient
 
 
-def configuration(orthanc_url: str, scan3d_url: str) -> dict:
+def configuration(orthanc_url: str, scan3d_url: str, *, launcher_path: str | None = None) -> dict:
     """Bind the button to the backend's configured archive, without credentials."""
     try:
         parsed = urlsplit(scan3d_url)
@@ -29,6 +29,12 @@ def configuration(orthanc_url: str, scan3d_url: str) -> dict:
     if port is not None:
         host += f":{port}"
     root = urlunsplit((parsed.scheme, host, "/", "", ""))
+    if launcher_path is not None:
+        if launcher_path != "/3dscan-launch/index.html":
+            raise ValueError("Use the configured /3dscan-launch/index.html launcher path")
+        # Explorer 2 lives under /ui/app/. Keep its browser origin and port
+        # until the same-origin launcher chooses local or private HTTPS access.
+        root = "../.." + launcher_path
     with OrthancClient(orthanc_url) as client:
         source_key = client.source_key
     return {
@@ -55,9 +61,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--orthanc-url", required=True, help="Exact server-side SCAN3D_ORTHANC_URL (no credentials)")
     parser.add_argument("--scan3d-url", required=True, help="Browser-accessible 3DScan root URL")
+    parser.add_argument("--launcher-path", help="Use /3dscan-launch/index.html for automatic local/private access")
     args = parser.parse_args()
     try:
-        result = configuration(args.orthanc_url, args.scan3d_url)
+        result = configuration(args.orthanc_url, args.scan3d_url, launcher_path=args.launcher_path)
     except ValueError as error:
         parser.error(str(error))
     print(json.dumps(result, indent=2))

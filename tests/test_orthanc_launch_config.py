@@ -35,6 +35,28 @@ def test_browser_url_can_be_loopback_ipv6_for_synthetic_qualification():
     assert result["OrthancExplorer2"]["UiOptions"]["CustomButtons"]["series"][0]["Url"].startswith("http://[::1]:9033/#")
 
 
+def test_automatic_button_uses_same_archive_fragment_and_relative_launcher():
+    from urllib.parse import urljoin
+
+    result = configuration("http://127.0.0.1:8044", "https://scan.example.test:8443/", launcher_path="/3dscan-launch/index.html")
+    button = result["OrthancExplorer2"]["UiOptions"]["CustomButtons"]["series"][0]
+    absolute = configuration("http://127.0.0.1:8044", "https://scan.example.test:8443/")["OrthancExplorer2"]["UiOptions"]["CustomButtons"]["series"][0]
+    assert button["Url"].startswith("../../3dscan-launch/index.html#orthanc-series={UUID}&orthanc-source=")
+    assert urlsplit(button["Url"]).fragment == urlsplit(absolute["Url"]).fragment
+    for origin in ("http://localhost:8044", "http://127.0.0.1:8044", "https://scan.example.test:8444"):
+        for page in ("/ui/app/", "/ui/app/studies", "/ui/app/filtered-studies"):
+            destination = urlsplit(urljoin(origin + page, button["Url"]))
+            assert destination.netloc == urlsplit(origin).netloc
+            assert destination.scheme == urlsplit(origin).scheme
+            assert destination.path == "/3dscan-launch/index.html"
+
+
+@pytest.mark.parametrize("path", ["//other-host/launcher.html", "https://other-host/", "/../orthanc.json", "/3dscan-launch/index.html?target=bad"])
+def test_automatic_button_refuses_other_launcher_locations(path):
+    with pytest.raises(ValueError, match="launcher path"):
+        configuration("http://127.0.0.1:8044", "https://scan.example.test:8443/", launcher_path=path)
+
+
 @pytest.mark.parametrize(
     "value",
     [

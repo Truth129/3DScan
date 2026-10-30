@@ -31,6 +31,39 @@ existing private configuration through the Orthanc project's reviewed procedure.
 Changing the backend's archive URL requires regenerating the source key.
 This source key is an archive identity check, not a secret or login token.
 
+### Automatic local and remote address selection (prepared)
+
+The automatic variant is qualified but not yet activated. It uses one cube
+button and a same-origin launcher served by Orthanc's official ServeFolders
+1.13.0 plugin. Opening Orthanc through `localhost` or `127.0.0.1` selects
+`http://127.0.0.1:9010/`; an approved remote archive origin selects
+`https://scan3d-host.example.ts.net:8443/`. IPv6 loopback also selects
+the IPv4 app listener. Local use does not require reaching Tailscale first.
+
+The button's URL is relative to Explorer 2 and keeps the source/series in its
+fragment. Generate this variant with the additional option:
+
+```bash
+PYTHONPATH=$PWD PYTHONSAFEPATH=1 .venv-rocm10-py314/bin/python scripts/orthanc_launch_config.py \
+  --orthanc-url http://127.0.0.1:8044 \
+  --scan3d-url https://scan3d-host.example.ts.net:8443 \
+  --launcher-path /3dscan-launch/index.html
+```
+
+Enable it only together with the qualified plugin, static page and settings
+from `~/Projects/Orthanc`. That project owns
+`serve-folders-artifacts.lock.json`, `web/scan3d-launch/`,
+`config/scan3d-launch-settings.example.json` and the guarded configuration
+helper `orthanc_local.scan3d_launcher`. Its dedicated runtime mapping is
+`/3dscan-launch` → `~/.local/share/orthanc/web/3dscan-launch`; never map the
+runtime root, archive, index or configuration folders. Existing auth, peers,
+PostgreSQL and listener settings are retained. Unknown origins and malformed
+links show an error without redirecting or creating work. A fresh approval
+is required to enable the prepared update and restart idle `orthanc.service`.
+No 3DScan or PostgreSQL restart is needed for this routing-only update.
+
+### Locate and use the cube
+
 To find the action in Explorer 2:
 
 1. Click the study row to show its series.
