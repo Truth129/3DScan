@@ -5,6 +5,7 @@ import gzip
 import json
 import os
 from pathlib import Path
+import time
 import zlib
 
 import pytest
@@ -60,6 +61,21 @@ def test_concurrent_cold_requests_compress_once(source, monkeypatch):
     assert gzip.decompress(paths[0].read_bytes()) == source.read_bytes()
 
 
+def _rewrite_keeping_size_and_mtime(path, content):
+    """Leave only ctime to show the change, as a later edit would.
+
+    Linux before 6.13 stamps files once per clock tick, so a rewrite straight after
+    creation can keep the same ctime. Repeat until the clock has moved on.
+    """
+    previous = path.stat()
+    path.write_bytes(content)
+    while True:
+        os.utime(path, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        if path.stat().st_ctime_ns != previous.st_ctime_ns:
+            return
+        time.sleep(0.001)
+
+
 @pytest.mark.parametrize("damage", ["missing_metadata", "malformed_metadata", "missing_gzip", "damaged_gzip", "source_changed"])
 def test_incomplete_or_changed_entries_rebuild(source, damage):
     encoded = compressed_files.cached_gzip(source)
@@ -71,13 +87,9 @@ def test_incomplete_or_changed_entries_rebuild(source, damage):
     elif damage == "missing_gzip":
         encoded.unlink()
     elif damage == "damaged_gzip":
-        previous = encoded.stat()
-        encoded.write_bytes(b"x" * previous.st_size)
-        os.utime(encoded, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        _rewrite_keeping_size_and_mtime(encoded, b"x" * encoded.stat().st_size)
     else:
-        previous = source.stat()
-        source.write_bytes(b"new!" + source.read_bytes()[4:])
-        os.utime(source, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+        _rewrite_keeping_size_and_mtime(source, b"new!" + source.read_bytes()[4:])
     assert compressed_files.cached_gzip(source) == encoded
     assert gzip.decompress(encoded.read_bytes()) == source.read_bytes()
     assert isinstance(json.loads(metadata.read_text()), dict)
