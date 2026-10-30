@@ -292,9 +292,9 @@ def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind,
         content_description="Exported voxel masks; clinical review status is unchanged",
     )
     # Single-segment instances let highdicom share the identification macro.
-    # Keep segment discovery in the per-frame form of our accepted OsiriX
-    # prototype. Move it there without duplicating a functional
-    # group in both locations, which DICOM forbids.
+    # OsiriX finds segments through the per-frame form, so move it there
+    # without duplicating a functional group in both locations, which
+    # DICOM forbids.
     shared = result.SharedFunctionalGroupsSequence[0]
     if "SegmentIdentificationSequence" in shared:
         identification = shared.SegmentIdentificationSequence

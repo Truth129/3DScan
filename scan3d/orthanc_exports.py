@@ -492,7 +492,7 @@ class OrthancExports:
                 job.update(
                     status="failed" if active else "cancelled",
                     stage="Stopped waiting; delivery may continue" if active else "Cancelled before delivery",
-                    error="An earlier Orthanc delivery may still be active. Check OsiriX or explicitly retry to check its status." if active else None,
+                    error="An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status." if active else None,
                     completed_at=now(),
                 )
             con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job, allow_nan=False), job_id))
@@ -623,7 +623,7 @@ class OrthancExports:
                 str(exc)
                 if isinstance(exc, ExportUnavailable)
                 else (
-                    "Delivery is not confirmed. Check OsiriX before retrying; a retry reuses the exact SEG instances and checks any known Orthanc job."
+                    "Delivery is not confirmed. Check the destination before retrying; a retry reuses the exact SEG instances and checks any known Orthanc job."
                     if sending
                     else "DICOM SEG export failed. Check the original CT and saved masks, then retry."
                 )
