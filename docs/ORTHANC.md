@@ -31,8 +31,14 @@ existing private configuration through the Orthanc project's reviewed procedure.
 Changing the backend's archive URL requires regenerating the source key.
 This source key is an archive identity check, not a secret or login token.
 
-Expand the study and the selected series in Explorer 2; the custom cube button
-has the tooltip **Open in 3DScan**. It opens a new tab with a selected-series URL fragment.
+To find the action in Explorer 2:
+
+1. Click the study row to show its series.
+2. Click the CT series row to open its gray details panel.
+3. In the panel's right-hand toolbar, click the rightmost **cube icon**, after
+   the download, delete, edit and person icons. Hover shows **Open in 3DScan**.
+
+The icon has no visible text label. It opens a new tab with a selected-series URL fragment.
 Existing imports of the exact current snapshot reopen directly, including
 their current revision; pending imports resume status checks. A new series
 shows patient identity, study and series information before **Import selected
