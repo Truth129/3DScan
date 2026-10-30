@@ -721,7 +721,7 @@ def test_gpu_selection_prefers_a_discrete_gpu_and_only_auto_may_use_the_cpu(monk
 def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixture, tmp_path, monkeypatch, profile):
     ct_path, _, affine, ct, _ = fixture
     commands = []
-    monkeypatch.setattr(segmentation, "_device_info", lambda _: {"selected_device": "gpu:1"})
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "gpu:1"})
     monkeypatch.setattr(segmentation, "model_fingerprint", lambda _: {"digest": "test", "weights_complete": True})
     monkeypatch.setattr(segmentation.metadata, "version", lambda _: "test-pinned")
     monkeypatch.setenv("SCAN3D_DEVICE", "gpu")
