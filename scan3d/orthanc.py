@@ -43,6 +43,21 @@ class OrthancDeliveryUnknown(OrthancError):
     """A send may have started; callers must not silently submit another one."""
 
 
+def series_summary(snapshot: SeriesSnapshot):
+    return {
+        "id": snapshot.id,
+        "description": snapshot.description,
+        "modality": snapshot.modality,
+        "series_uid": snapshot.series_uid,
+        "instance_count": snapshot.instance_count,
+        "expected_instances": snapshot.expected_instances,
+        "stable": snapshot.stable,
+        "completeness": snapshot.completeness,
+        "snapshot": snapshot.snapshot,
+        "warnings": list(snapshot.warnings),
+    }
+
+
 def modality_id(value):
     if not isinstance(value, str) or not _MODALITY.fullmatch(value):
         raise ValueError("Invalid configured Orthanc destination identifier")
@@ -306,6 +321,13 @@ class OrthancClient:
             raise OrthancError("Orthanc returned an invalid study query response.")
         return [self._study(value) for value in result]
 
+    def study(self, study_id):
+        study_id = orthanc_id(study_id)
+        summary = self._study(self._json("GET", f"/studies/{study_id}"))
+        if summary["id"] != study_id:
+            raise OrthancError("Orthanc returned a different study than requested.")
+        return summary
+
     def study_series(self, study_id):
         study_id = orthanc_id(study_id)
         study = _record(self._json("GET", f"/studies/{study_id}"))
@@ -317,20 +339,7 @@ class OrthancClient:
             snap = self.snapshot(resource_id)
             if snap.study_id != study_id or snap.study_uid != summary["study_uid"]:
                 raise OrthancChanged("The Orthanc study changed. Refresh its series before importing.")
-            series.append(
-                {
-                    "id": snap.id,
-                    "description": snap.description,
-                    "modality": snap.modality,
-                    "series_uid": snap.series_uid,
-                    "instance_count": snap.instance_count,
-                    "expected_instances": snap.expected_instances,
-                    "stable": snap.stable,
-                    "completeness": snap.completeness,
-                    "snapshot": snap.snapshot,
-                    "warnings": list(snap.warnings),
-                }
-            )
+            series.append(series_summary(snap))
         return {"study": summary, "series": series}
 
     def snapshot(self, series_id) -> SeriesSnapshot:

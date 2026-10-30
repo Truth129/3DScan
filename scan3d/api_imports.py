@@ -5,7 +5,7 @@ import zipfile
 from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
-from .api_models import ImportLocal, ImportStart, OrthancImport, OrthancQuery, import_manifest
+from .api_models import ImportLocal, ImportStart, OrthancImport, OrthancLaunch, OrthancQuery, import_manifest
 from .fileio import extract_zip, safe_relative
 from .store import public_case, public_job
 from .uploads import Uploads
@@ -39,6 +39,10 @@ def add_routes(app, service):
     @app.post("/api/orthanc/imports")
     def orthanc_import(body: OrthancImport):
         return JSONResponse(public_job(service.orthanc.start(body.series_id, body.snapshot, body.label)), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/orthanc/launch")
+    def orthanc_launch(body: OrthancLaunch):
+        return JSONResponse(service.orthanc.launch(body.series_id, body.source_key), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/cases/import")
     def import_files(files: list[UploadFile] = File(...), label: str | None = Form(None)):

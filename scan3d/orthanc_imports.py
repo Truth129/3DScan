@@ -11,9 +11,19 @@ import pydicom
 from .config import MODALITIES
 from .errors import NotFound
 from .fileio import atomic_json
-from .orthanc import OrthancClient, OrthancChanged, OrthancError
-from .orthanc_models import DownloadedFile, DownloadManifest, SeriesSnapshot, SourceManifest, content_digest, json_record, parse_snapshot, parse_source
-from .store import identifier, now
+from .orthanc import OrthancClient, OrthancChanged, OrthancError, series_summary
+from .orthanc_models import (
+    DownloadedFile,
+    DownloadManifest,
+    SeriesSnapshot,
+    SourceManifest,
+    content_digest,
+    json_record,
+    parse_snapshot,
+    parse_source,
+    snapshot_fingerprint,
+)
+from .store import identifier, now, public_job, safe_id
 
 
 class OrthancImports:
@@ -52,6 +62,102 @@ class OrthancImports:
         if modality not in MODALITIES:
             return "This DICOM modality has no installed image adapter"
         return self.service.settings.modality_unavailable(modality)
+
+    def launch(self, series_id, source_key):
+        """Resolve a launch without importing or changing the local library."""
+        with self.client() as client:
+            if source_key != client.source_key:
+                raise ValueError("This launch link belongs to a different Orthanc archive. Open the configured archive and try again.")
+            snapshot = client.snapshot(series_id)
+            study = client.study(snapshot.study_id)
+        if snapshot.id != series_id or snapshot.source_key != source_key or study["id"] != snapshot.study_id or study["study_uid"] != snapshot.study_uid:
+            raise OrthancChanged("The Orthanc study changed. Refresh its series before opening.")
+        summary = series_summary(snapshot)
+        reason = self._modality_reason(snapshot.modality)
+        summary.update(supported=reason is None, unsupported_reason=reason)
+        result = {"study": study, "series": summary, "case_id": None, "job": None}
+        if reason or not snapshot.stable or snapshot.completeness not in {"complete", "unknown"}:
+            return result
+        key = hashlib.sha256((snapshot.source_key + snapshot.snapshot).encode()).hexdigest()
+        with self.service.store.connection() as con:
+            row = con.execute(
+                "SELECT j.data AS job_data,c.data AS case_data FROM jobs j LEFT JOIN cases c ON c.id=j.case_id "
+                "WHERE json_extract(j.data,'$.kind')='orthanc_import' AND json_extract(j.data,'$.payload.import_key')=? ORDER BY j.rowid DESC LIMIT 1",
+                (key,),
+            ).fetchone()
+        if not row:
+            return result
+        try:
+            job = json.loads(row["job_data"])
+            if not isinstance(job, dict):
+                raise ValueError()
+            if job["status"] in {"failed", "cancelled"}:
+                return result
+            if not row["case_data"]:
+                raise ValueError()
+            case = json.loads(row["case_data"])
+            if not isinstance(case, dict):
+                raise ValueError()
+            previous = parse_snapshot(job["payload"]["snapshot"])
+            if job["case_id"] != case["id"] or previous.snapshot != snapshot.snapshot or snapshot_fingerprint(previous) != snapshot.snapshot:
+                raise ValueError()
+            safe_id(case["id"])
+            safe_id(job["id"])
+            if job["status"] in {"queued", "running"}:
+                if case["status"] == "importing" and not case.get("source_dir") and not case.get("active_revision_id"):
+                    result["job"] = public_job(job)
+                else:
+                    raise ValueError()
+            elif job["status"] == "completed" and self._launch_case(case, job, previous):
+                result["case_id"] = case["id"]
+            else:
+                raise ValueError()
+        except (KeyError, OSError, TypeError, ValueError):
+            # Import deduplication would return this same job again: offering a
+            # fresh import here would bypass the rejected source binding.
+            raise OrthancChanged(
+                "The previous import cannot be verified. Restore its retained source files and import record before opening this series."
+            ) from None
+        return result
+
+    def _launch_case(self, case, job, snapshot):
+        source = parse_source(case["references"]["orthanc"])
+        provenance = case["import_source"]
+        if not isinstance(provenance, dict):
+            return False
+        root = self.service.store.directory / "cases" / case["id"]
+        directory = root / "sources" / job["id"] / "dicom"
+        manifest = directory.parent / "source-import.json"
+        expected = {item.id: (item.sop_instance_uid, item.size) for item in snapshot.instances}
+        if (
+            source.snapshot != snapshot
+            or len(source.files) != snapshot.instance_count
+            or len({item.path for item in source.files}) != len(source.files)
+            or {item.instance_id: (item.sop_instance_uid, item.size) for item in source.files} != expected
+            or source.bytes != sum(item.size for item in source.files)
+            or source.content_digest != content_digest(source.files)
+            or provenance.get("kind") != "orthanc"
+            or provenance.get("source_key") != snapshot.source_key
+            or provenance.get("snapshot") != snapshot.snapshot
+            or provenance.get("study_uid") != snapshot.study_uid
+            or provenance.get("series_uid") != snapshot.series_uid
+            or provenance.get("frame_of_reference_uid") != source.frame_of_reference_uid
+            or provenance.get("instance_count") != snapshot.instance_count
+            or provenance.get("content_digest") != source.content_digest
+            or Path(case["source_dir"]) != directory
+            or not directory.is_dir()
+            or any(item.is_symlink() for item in (root.parent, root, root / "sources", directory.parent, directory, manifest))
+            or not manifest.is_file()
+        ):
+            return False
+        for item in source.files:
+            file = directory / item.path
+            if file.is_symlink() or not file.is_file() or file.stat().st_size != item.size:
+                return False
+        # Check the small retained manifest, without rereading every CT instance
+        # or revalidating image pixels merely to open an already imported case.
+        encoded = manifest.read_bytes()
+        return hashlib.sha256(encoded).hexdigest() == provenance.get("manifest_sha256") and json.loads(encoded) == json_record(source)
 
     def recover(self):
         """Reconcile interrupted imports after the worker lock and job recovery.

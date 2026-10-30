@@ -252,6 +252,19 @@ Orthanc login and private HTTPS port `8444`, including links to the existing
 OHIF viewer. The legacy default UI, current authentication and archive/application
 boundaries remain unchanged. See [trial operation](ORTHANC.md#explorer-2-trial).
 
+An optional Explorer 2 custom series button links to a fragment-based 3DScan
+entry point. Its opaque archive source key must match the configured REST
+adapter before the read-only `/api/orthanc/launch` resolver contacts Orthanc.
+The resolver fetches a fresh snapshot and matches existing import provenance,
+returning public study/series metadata and a reusable case or pending job.
+It creates no case/job and never changes the archive. The Vue launch dialog
+suppresses ordinary remembered-case startup, reopens a matching completed case
+or follows an existing import; new imports require an explicit user action.
+Failed launch/submission connections resolve the current series again rather
+than automatically retrying a write. Preparation and inference remain separate.
+The button is ordinary Explorer 2 configuration in `~/Projects/Orthanc`;
+3DScan remains an independently operated processing service.
+
 The existing OsiriX Mac also has explicitly approved DICOM C-FIND/C-MOVE
 permissions on Orthanc, separate from 3DScan's REST adapter and outgoing sends.
 Strict calling/called AE and source-IP checks remain enforced. This enables

@@ -1,5 +1,54 @@
 # Orthanc and OsiriX incoming studies
 
+## Explorer 2 launch into 3DScan
+
+The optional **Open in 3DScan** custom button is available for individual series
+in Explorer 2 1.15.0. Implementation and synthetic qualification are recorded
+in [validation](VALIDATION.md); live activation is pending approval.
+Orthanc is independently owned by `~/Projects/Orthanc` and runs as
+`orthanc.service`. Do not use this repository's retired receiver activation
+scripts to change it. Its live archive, credentials and configuration are
+outside both repositories at `~/.local/share/orthanc`.
+
+Generate a credential-free configuration fragment using the exact
+`SCAN3D_ORTHANC_URL` configured on the 3DScan backend and the browser-accessible
+3DScan root URL:
+
+```bash
+PYTHONPATH=$PWD PYTHONSAFEPATH=1 .venv-rocm10-py314/bin/python scripts/orthanc_launch_config.py \
+  --orthanc-url http://127.0.0.1:8044 \
+  --scan3d-url https://scan3d-host.example.ts.net:8443
+```
+
+The helper prints JSON only; it does not contact Orthanc, inspect configuration
+or change a service. The matching example belongs at
+`~/Projects/Orthanc/config/scan3d-launch.example.json`. Merge its single button
+by ID into `OrthancExplorer2.UiOptions.CustomButtons.series`, preserving other
+buttons, UI options, authentication and archive settings. Avoid loading the
+example as an additional config file with duplicate keys: merge it into the
+existing private configuration through the Orthanc project's reviewed procedure.
+Changing the backend's archive URL requires regenerating the source key.
+This source key is an archive identity check, not a secret or login token.
+
+Expand the study and the selected series in Explorer 2; the custom cube button
+has the tooltip **Open in 3DScan**. It opens a new tab with a selected-series URL fragment.
+Existing imports of the exact current snapshot reopen directly, including
+their current revision; pending imports resume status checks. A new series
+shows patient identity, study and series information before **Import selected
+series**. Incomplete/receiving series, deployment-disabled modalities and missing
+resources fail visibly. Normal import snapshots, provenance and duplicate
+prevention apply. Opening the link does not prepare CT or run segmentation,
+and it never imports SEG automatically. Unknown declared counts retain their
+warning and need the user's acquisition-completeness check.
+
+Activation needs approval to publish the qualified 3DScan frontend/restart its
+backend and apply the button through the separate Orthanc project's service
+procedure. Test on a generated study first; no live patient data is needed for
+qualification. Shared clinic sign-in/audit and clinical validation remain
+separate work.
+
+Reference: [Explorer 2 1.15.0 custom-button configuration](https://github.com/orthanc-server/orthanc-explorer-2/blob/1.15.0/Plugin/DefaultConfiguration.json#L372-L426).
+
 The incoming connector is implemented, qualified with synthetic data and active
 in the main app. The incoming receiver is running. Synthetic DICOM SEG return
 passes transport and user-confirmed basic ROI display. Saved-revision export is

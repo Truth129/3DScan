@@ -107,6 +107,13 @@ on 29 October 2026. Open
 with the existing Orthanc login. The legacy default UI and OHIF remain available.
 See [trial operation](docs/ORTHANC.md#explorer-2-trial).
 
+A prepared **Open in 3DScan** series button can launch directly from Explorer 2.
+It reopens the same imported snapshot or shows patient/study/series details for
+an explicit import, then retains the normal **Open CT** and segmentation actions.
+This launcher is implemented locally; live activation is pending approval.
+The button configuration belongs to `~/Projects/Orthanc`; see
+[launch setup](docs/ORTHANC.md#explorer-2-launch-into-3dscan).
+
 An experimental standalone native OsiriX brush writer is also available for
 synthetic qualification. It creates source-linked ROI SR reports directly from
 saved binary masks. Its synthetic test sends CT plus native reports without a

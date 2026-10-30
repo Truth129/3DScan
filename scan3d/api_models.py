@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model_validator
 
 from .acquisition import CardiacPhase, StudyProfile
+from .orthanc_models import Digest, OrthancID
 
 
 class Input(BaseModel):
@@ -44,6 +45,11 @@ class OrthancImport(Input):
     series_id: str = Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{8}){4}$")
     snapshot: str = Field(pattern=r"^[0-9a-f]{64}$")
     label: str | None = Field(None, max_length=128)
+
+
+class OrthancLaunch(Input):
+    series_id: OrthancID
+    source_key: Digest
 
 
 class DicomSegExport(Input):

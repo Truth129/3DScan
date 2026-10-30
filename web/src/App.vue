@@ -23,6 +23,8 @@ import ModelViewport from './components/ModelViewport.vue';
 import CTReviewRail from './components/CTReviewRail.vue';
 import CTOverlayPicker from './components/CTOverlayPicker.vue';
 import ImportDialog from './components/ImportDialog.vue';
+import OrthancLaunchDialog from './components/OrthancLaunchDialog.vue';
+import { readOrthancLaunch, withoutOrthancLaunch } from './lib/orthanc';
 import RefinementPanel from './components/RefinementPanel.vue';
 import AgreementPanel from './components/AgreementPanel.vue';
 import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
@@ -83,6 +85,7 @@ const cases = ref<Case[]>([]),
   activeCase = ref<Case>(),
   revision = ref<Revision>(),
   revisions = ref<Revision[]>([]);
+const orthancLaunch = ref(readOrthancLaunch(window.location.hash));
 const health = ref<Record<string, unknown>>({}),
   job = ref<Job>(),
   error = ref(''),
@@ -544,6 +547,28 @@ async function imported(next: Case) {
     fail(reason);
   }
 }
+function closeOrthancLaunch() {
+  orthancLaunch.value = { kind: 'none' };
+  history.replaceState(history.state, '', window.location.pathname + window.location.search + withoutOrthancLaunch(window.location.hash));
+}
+async function openOrthancCase(id: string) {
+  closeOrthancLaunch();
+  loading.value = true;
+  try {
+    // An import may have finished while the launch panel was recovering a lost
+    // response; include that case before the workspace selects its header item.
+    await refreshCases();
+    await openCase(id);
+  } catch (reason) {
+    fail(reason);
+  } finally {
+    loading.value = false;
+  }
+}
+async function importedOrthancCase(next: Case) {
+  closeOrthancLaunch();
+  await imported(next);
+}
 async function demo() {
   importing.value = true;
   error.value = '';
@@ -924,13 +949,15 @@ onMounted(async () => {
   const results = await Promise.allSettled([api.cases(), api.health()]);
   if (results[0].status === 'fulfilled') {
     cases.value = results[0].value;
-    const saved = localStorage.getItem('scan3d-case');
-    const candidate =
-      cases.value.find(c => c.id === saved) ||
-      cases.value.find(c => c.active_revision_id && !c.synthetic) ||
-      cases.value.find(c => c.active_revision_id) ||
-      cases.value[0];
-    if (candidate) await openCase(candidate.id);
+    if (orthancLaunch.value.kind === 'none') {
+      const saved = localStorage.getItem('scan3d-case');
+      const candidate =
+        cases.value.find(c => c.id === saved) ||
+        cases.value.find(c => c.active_revision_id && !c.synthetic) ||
+        cases.value.find(c => c.active_revision_id) ||
+        cases.value[0];
+      if (candidate) await openCase(candidate.id);
+    }
   } else fail(results[0].reason);
   if (results[1].status === 'fulfilled') health.value = results[1].value;
   loading.value = false;
@@ -1738,6 +1765,13 @@ onBeforeUnmount(() => {
       </footer>
     </template>
     <ImportDialog v-if="importOpen" :busy="importing" :mr-enabled="mrEnabled" @close="importOpen = false" @imported="imported" @demo="demo" />
+    <OrthancLaunchDialog
+      v-if="orthancLaunch.kind !== 'none' && !loading"
+      :launch="orthancLaunch"
+      @close="closeOrthancLaunch"
+      @opened="openOrthancCase"
+      @imported="importedOrthancCase"
+    />
     <ExportViewerDialog
       v-if="exportSnapshot && revision && activeCase"
       :key="`${activeCase.id}:${revision.id}`"

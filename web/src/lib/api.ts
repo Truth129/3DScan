@@ -19,7 +19,15 @@ import type {
 import { presentRevision, presentStructures } from './appearance';
 import type { AgreementAggregate, RevisionAgreement } from './agreement';
 import type { ImageAsset } from './image-domain';
-import type { OrthancImportRequest, OrthancSeriesPage, OrthancStatus, OrthancStudyPage, OrthancStudyQuery } from './orthanc';
+import type {
+  OrthancImportRequest,
+  OrthancLaunchRequest,
+  OrthancLaunchResult,
+  OrthancSeriesPage,
+  OrthancStatus,
+  OrthancStudyPage,
+  OrthancStudyQuery,
+} from './orthanc';
 import type { DicomSegAvailability, DicomSegExportJob, DicomSegExportRequest } from './dicom-seg';
 
 export class ApiError extends Error {
@@ -58,6 +66,7 @@ export interface CinematicReference {
 export const api = {
   cases: () => request<Case[]>('/api/cases'),
   orthancStatus: (signal?: AbortSignal) => request<OrthancStatus>('/api/orthanc/status', { signal }),
+  orthancLaunch: (data: OrthancLaunchRequest, signal?: AbortSignal) => request<OrthancLaunchResult>('/api/orthanc/launch', { ...json('POST', data), signal }),
   orthancStudies: (query: OrthancStudyQuery, signal?: AbortSignal) =>
     request<OrthancStudyPage>('/api/orthanc/studies/query', { ...json('POST', query), signal }),
   orthancSeries: (id: string, signal?: AbortSignal) => request<OrthancSeriesPage>(`/api/orthanc/studies/${encodeURIComponent(id)}/series`, { signal }),
