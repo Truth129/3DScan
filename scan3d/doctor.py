@@ -5,12 +5,12 @@ from pathlib import Path
 import platform
 import shutil
 
-from .config import ROOT
+from .config import ROOT, device_request
 
 
-def _matching_versions(versions, required=()):
+def _matching_versions(versions):
     """Proofs belong to an exact installed package family, not a wheel label."""
-    if not isinstance(versions, dict) or any(name not in versions for name in required):
+    if not isinstance(versions, dict):
         return False
     try:
         return all(isinstance(name, str) and isinstance(version, str) and metadata.version(name) == version for name, version in versions.items())
@@ -19,30 +19,29 @@ def _matching_versions(versions, required=()):
 
 
 def diagnose(live=True):
+    """Describe the inference runtime. `ready` means a GPU, so a CPU install reports False by design."""
     result = {
         "ready": False,
-        "inference_verified": False,
-        "kfd": Path("/dev/kfd").exists(),
-        "dcm2niix": bool(shutil.which("dcm2niix")),
-        "reason": "ROCm PyTorch is not installed",
+        "device": device_request(),
+        "dcm2niix": bool(os.environ.get("SCAN3D_DCM2NIIX") or shutil.which("dcm2niix")),
+        "reason": "PyTorch is not installed",
     }
     if live:
         try:
             import torch
 
-            result.update(torch_version=torch.__version__, hip_version=torch.version.hip)
-            if not torch.version.hip:
-                result["reason"] = "The installed PyTorch build does not have ROCm support"
-            elif not torch.cuda.is_available():
-                result["reason"] = "ROCm cannot access a GPU in this process"
+            result.update(torch_version=torch.__version__, hip_version=torch.version.hip, cuda_version=torch.version.cuda)
+            if not torch.cuda.is_available():
+                result["reason"] = "PyTorch cannot access a GPU in this process, so AI tasks can only run on the CPU, which is slow"
             else:
                 devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
-                result.update(ready=True, devices=devices, reason="ROCm available; full inference must still be verified")
+                result.update(ready=True, devices=devices, reason="GPU available; full inference must still be verified")
+        except ImportError:
+            pass
         except Exception as exc:
             result["reason"] = str(exc)
     else:
-        command = "scripts/check-production-gpu.sh" if os.environ.get("SCAN3D_GPU_PROOF") else "scripts/check_gpu.sh"
-        result["reason"] = f"Run {command} to verify the native inference environment"
+        result["reason"] = "AI tasks are set to run on the CPU" if result["device"] == "cpu" else "Run scripts/check_gpu.py to verify the GPU runtime"
     proof_file = Path(os.environ.get("SCAN3D_GPU_PROOF", str(ROOT / ".runtime" / "gpu-proof.json")))
     if proof_file.exists():
         try:
@@ -65,18 +64,16 @@ def diagnose(live=True):
                 result.update(ready=ready, torch_version=current)
                 if ready:
                     result.update(
-                        hip_version=checks.get("hip_version"), devices=[d["name"] for d in checks.get("devices", [])], checked_at=proof.get("checked_at")
+                        hip_version=checks.get("hip_version"),
+                        cuda_version=checks.get("cuda_version"),
+                        devices=[d["name"] for d in checks.get("devices", [])],
+                        checked_at=proof.get("checked_at"),
                     )
-                    result["reason"] = "Native ROCm convolution verified; model inference is tracked separately"
+                    result["reason"] = "GPU convolution verified; model inference is tracked separately"
                 elif not (matches and proof_matches):
                     result["reason"] = "GPU validation proof does not match the installed runtime"
                 elif proof.get("errors"):
                     result["reason"] = "; ".join(proof["errors"])
-            versions = proof.get("versions", {})
-            matching = _matching_versions(versions, ("torch", "nnunetv2", "TotalSegmentator"))
-            result["inference_verified"] = bool(result["ready"] and proof_matches and matching and proof.get("inference_verified"))
-            if result["inference_verified"]:
-                result.update(completed_tasks=proof.get("completed_tasks", []), validated_at=proof.get("validated_at"))
         except (OSError, ValueError, KeyError, TypeError):
             pass
     return result

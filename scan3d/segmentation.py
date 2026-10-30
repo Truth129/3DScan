@@ -15,6 +15,7 @@ import sys
 import time
 import uuid
 
+from .config import device_request
 from .fileio import atomic_text, hash_file as _digest
 from .imaging import _binary_nonempty, _image
 from . import segmentation_options
@@ -95,21 +96,27 @@ def _appearance(name, task=None):
 
 
 def _device_info(device):
+    """Resolve a SCAN3D_DEVICE request. Only auto may choose the CPU: a GPU request fails instead."""
     import torch
 
+    if device == "auto":
+        device = "gpu" if torch.cuda.is_available() else "cpu"
     if device == "cpu":
-        return {"device": "cpu", "selected_device": "cpu", "torch": torch.__version__, "explicit_cpu": True}
+        return {"device": "cpu", "selected_device": "cpu", "torch": torch.__version__}
     if device != "gpu" and not (device.startswith("gpu:") and device[4:].isdigit()):
-        raise ValueError("SCAN3D_DEVICE must be gpu, gpu:N, or an explicitly selected cpu")
+        raise ValueError("SCAN3D_DEVICE must be auto, gpu, gpu:N or cpu")
     if not torch.cuda.is_available():
-        raise RuntimeError("GPU inference was requested but PyTorch cannot access a GPU; verify the ROCm/CUDA setup")
+        raise RuntimeError("GPU inference was requested but PyTorch cannot access a GPU; check the CUDA or ROCm setup, or set SCAN3D_DEVICE=cpu")
     if ":" in device:
         index = int(device[4:])
     else:
-        candidates = [i for i in range(torch.cuda.device_count()) if "R9700" in torch.cuda.get_device_name(i).upper()]
-        if not candidates:
-            raise RuntimeError("Default R9700 GPU was not enumerated; verify ROCm or explicitly configure SCAN3D_DEVICE=gpu:N")
-        index = candidates[0]
+        # PyTorch also enumerates integrated GPUs and reports their share of system RAM as
+        # total_memory, which can exceed a discrete card's real VRAM.
+        def preference(i):
+            properties = torch.cuda.get_device_properties(i)
+            return not getattr(properties, "is_integrated", False), properties.total_memory
+
+        index = max(range(torch.cuda.device_count()), key=preference)
     if index >= torch.cuda.device_count():
         raise ValueError("Requested GPU index is unavailable")
     return {
@@ -229,7 +236,7 @@ def model_fingerprint(profile: str, options: dict | None = None, *, modality: st
         "modality": modality,
         "options": options,
         "task_configuration_sha256": config_digest,
-        "device_request": os.environ.get("SCAN3D_DEVICE", "gpu"),
+        "device_request": device_request(),
         "fast": False,
         "fastest": False,
         "wrapper_sha256": _digest(Path(__file__)),
@@ -255,26 +262,31 @@ def _stop(process):
 
 
 class _Resources:
-    """Optional Linux process-tree RSS and whole-discrete-device VRAM samples."""
+    """Optional Linux process-tree RSS and whole-device VRAM samples.
 
-    def __init__(self, track_r9700=False):
+    VRAM comes from the amdgpu driver's sysfs counters, so other vendors report none.
+    """
+
+    def __init__(self, track_amd_vram=False):
         self.rss_peak = None
         self.vram_path = None
         self.vram_baseline = None
         self.vram_peak = None
         self.pci_device = None
-        if track_r9700:
+        if track_amd_vram:
+            largest = 0
             for device in sorted(Path("/sys/class/drm").glob("card[0-9]*/device")):
                 try:
-                    if (device / "device").read_text().strip().lower() == "0x7551":
-                        candidate = device / "mem_info_vram_used"
-                        value = int(candidate.read_text().strip())
-                        self.vram_path = candidate
-                        self.pci_device = device.resolve().name
-                        self.vram_baseline = self.vram_peak = value
-                        break
+                    total = int((device / "mem_info_vram_total").read_text().strip())
+                    candidate = device / "mem_info_vram_used"
+                    value = int(candidate.read_text().strip())
                 except (OSError, ValueError):
                     continue
+                if total > largest:
+                    largest = total
+                    self.vram_path = candidate
+                    self.pci_device = device.resolve().name
+                    self.vram_baseline = self.vram_peak = value
 
     def sample(self, pid=None):
         if pid is not None:
@@ -311,7 +323,7 @@ class _Resources:
             "whole_device_vram_baseline_bytes": self.vram_baseline,
             "whole_device_vram_peak_bytes": self.vram_peak,
             "whole_device_vram_peak_above_baseline_bytes": (self.vram_peak - self.vram_baseline if self.vram_peak is not None else None),
-            "vram_scope": "Sampled whole R9700 device use via AMD sysfs; includes graphics and other processes; not per-process allocation",
+            "vram_scope": "Sampled whole GPU use via amdgpu sysfs; includes graphics and other processes; not per-process allocation",
         }
 
 
@@ -324,7 +336,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
     output_dir.mkdir(parents=True, exist_ok=True)
     if cancelled():
         raise SegmentationCancelled("Segmentation cancelled")
-    device = os.environ.get("SCAN3D_DEVICE", "gpu").strip()
+    device = device_request()
     runtime = _device_info(device)
     effective_device = runtime["selected_device"]
     tasks = options["tasks"]
@@ -411,7 +423,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
             manifest["tasks"].append(record)
             save_manifest()
             started = time.monotonic()
-            resources = _Resources(track_r9700="R9700" in runtime.get("gpu_name", "").upper())
+            resources = _Resources(track_amd_vram=bool(runtime.get("hip")))
             with (run_dir / f"{task}.log").open("wb") as log:
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
                 try:

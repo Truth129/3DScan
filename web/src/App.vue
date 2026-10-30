@@ -397,7 +397,10 @@ const workerText = computed(() => {
   if (typeof gpu === 'string') return gpu;
   if (gpu && typeof gpu === 'object') {
     const status = gpu as Record<string, unknown>;
-    if (status.ready === false) return 'GPU setup required';
+    if (status.ready === false) {
+      if (status.device === 'cpu') return 'CPU worker';
+      return status.device === 'auto' ? 'Local worker' : 'GPU setup required';
+    }
     return String(status.name || status.device || (Array.isArray(status.devices) ? status.devices[0] : null) || 'Local worker');
   }
   return health.value.status === 'ok' ? 'Local workspace' : 'Connecting to local worker';
@@ -406,7 +409,7 @@ const series = computed(() => activeCase.value?.series.find(s => s.uid === serie
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
 // The bundled models are research tools without regulatory clearance.
 const researchNotice = 'Research use only · not for diagnostic use';
-// The workstation lists the modalities it offers; production stays CT-only.
+// The workstation lists the modalities it offers; MRI is opt-in through SCAN3D_MODALITIES.
 const mrEnabled = computed(() => Array.isArray(health.value.modalities) && health.value.modalities.includes('MR'));
 const sourceKinds = computed(() => (mrEnabled.value ? 'CT or static MR' : 'CT'));
 
@@ -1023,7 +1026,7 @@ onBeforeUnmount(() => {
       </div>
       <p class="eyebrow welcome-notice">{{ researchNotice }}</p>
       <div class="welcome-features">
-        <span>01 <strong>Local GPU inference</strong></span
+        <span>01 <strong>Local AI inference</strong></span
         ><span>02 <strong>Revisioned corrections</strong></span
         ><span>03 <strong>Portable 3D viewer</strong></span>
       </div>

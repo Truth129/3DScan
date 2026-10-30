@@ -68,7 +68,7 @@ def runtime_files(tmp_path, monkeypatch):
     monkeypatch.setenv("SCAN3D_NNINTERACTIVE_MODEL", str(directory))
     monkeypatch.setattr(interactive.metadata, "version", lambda name: interactive.ENGINE_VERSION)
     monkeypatch.setattr(interactive, "CHECKPOINT_SHA256", interactive._sha256(interactive._identity(directory / "fold_0/checkpoint_final.pth")))
-    device = {"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "AMD Radeon AI PRO R9700", "torch": "2.8.0+rocm7.2.4", "hip": "7.2.4"}
+    device = {"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "Test GPU", "torch": "2.8.0+rocm7.2.4", "hip": "7.2.4"}
     monkeypatch.setattr(interactive, "_device_info", lambda request: device)
     sessions = []
 
@@ -367,15 +367,28 @@ def test_cancellation_and_gpu_failure_invalidate_warm_state_without_publishing(r
     runtime.release()
 
 
-def test_integrity_or_cpu_configuration_never_falls_back(runtime_files, tmp_path, monkeypatch):
+def test_integrity_failure_never_loads_a_session(runtime_files, tmp_path, monkeypatch):
     runtime = interactive.InteractiveRuntime()
     monkeypatch.setattr(interactive, "CHECKPOINT_SHA256", "bad")
     with pytest.raises(RuntimeError, match="integrity"):
         predict(runtime, runtime_files, tmp_path, [])
     assert not runtime_files.sessions
+
+
+def test_cpu_device_loads_and_releases_without_gpu_state(runtime_files, tmp_path, monkeypatch):
+    requests = []
+
+    def cpu_only(request):
+        requests.append(request)
+        return {"device": "cpu", "selected_device": "cpu", "torch": "2.14.0+cpu"}
+
+    monkeypatch.setattr(interactive, "_device_info", cpu_only)
     monkeypatch.setenv("SCAN3D_DEVICE", "cpu")
-    with pytest.raises(RuntimeError, match="R9700"):
-        predict(runtime, runtime_files, tmp_path, [])
+    runtime = interactive.InteractiveRuntime()
+    result = predict(runtime, runtime_files, tmp_path, [])
+    assert requests == ["cpu"] and result["predictions_this_request"] == 0
+    assert runtime._model_provenance["device"] == "cpu" and runtime._model_provenance["gpu_name"] is None
+    runtime.release()
 
 
 def test_mask_geometry_and_original_path_protected(runtime_files, tmp_path):

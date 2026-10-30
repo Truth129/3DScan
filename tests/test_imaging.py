@@ -684,21 +684,37 @@ def test_dicom_fallback_is_targeted_and_failed_or_empty_retry_never_uses_primary
     assert not list(output.glob(".dicom-*"))
 
 
-def test_gpu_selection_uses_discrete_r9700_and_never_silently_falls_back(monkeypatch):
+def test_gpu_selection_prefers_a_discrete_gpu_and_only_auto_may_use_the_cpu(monkeypatch):
     available = True
-    names = ["AMD Radeon 610M", "AMD Radeon AI PRO R9700"]
+    # An integrated GPU reports a share of system RAM, which can exceed a discrete card's VRAM.
+    devices = {
+        0: SimpleNamespace(total_memory=30 * 1024**3, is_integrated=1),
+        1: SimpleNamespace(total_memory=8 * 1024**3, is_integrated=0),
+        2: SimpleNamespace(total_memory=12 * 1024**3, is_integrated=0),
+    }
     fake = SimpleNamespace(
         __version__="test",
-        version=SimpleNamespace(hip="7.2.4", cuda=None),
-        cuda=SimpleNamespace(is_available=lambda: available, device_count=lambda: len(names), get_device_name=lambda i: names[i]),
+        version=SimpleNamespace(hip=None, cuda="13.0"),
+        cuda=SimpleNamespace(
+            is_available=lambda: available,
+            device_count=lambda: len(devices),
+            get_device_name=lambda i: f"GPU {i}",
+            get_device_properties=devices.__getitem__,
+        ),
     )
     monkeypatch.setitem(sys.modules, "torch", fake)
-    assert segmentation._device_info("gpu")["selected_device"] == "gpu:1"
+    assert segmentation._device_info("gpu")["selected_device"] == "gpu:2"
+    assert segmentation._device_info("auto")["selected_device"] == "gpu:2"
     assert segmentation._device_info("gpu:0")["selected_device"] == "gpu:0"
+    del devices[1], devices[2]
+    assert segmentation._device_info("gpu")["selected_device"] == "gpu:0"
     available = False
     with pytest.raises(RuntimeError, match="cannot access"):
         segmentation._device_info("gpu")
-    assert segmentation._device_info("cpu")["explicit_cpu"] is True
+    assert segmentation._device_info("auto")["selected_device"] == "cpu"
+    assert segmentation._device_info("cpu")["selected_device"] == "cpu"
+    with pytest.raises(ValueError, match="SCAN3D_DEVICE"):
+        segmentation._device_info("cuda")
 
 
 @pytest.mark.parametrize("profile", ["abdomen", "chest", "chest_abdomen"])

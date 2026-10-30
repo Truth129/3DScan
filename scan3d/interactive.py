@@ -21,6 +21,7 @@ import time
 
 import numpy as np
 
+from .config import device_request as configured_device
 from .fileio import hash_file
 from .imaging import _binary, _image, _save_mask, _voxel
 from .segmentation import SegmentationCancelled, _device_info
@@ -95,8 +96,8 @@ def _model_files(directory: Path) -> list[Path]:
 def status() -> dict:
     """Lightweight availability, with no torch import, GPU probe, or local paths.
 
-    File presence is checked here; checkpoint integrity and the explicitly
-    selected R9700 are verified by the worker process before any prediction.
+    File presence is checked here; checkpoint integrity and the selected device
+    are verified by the worker process before any prediction.
     """
     versions = {}
     for name in ("nnInteractive", "nninteractive-client"):
@@ -134,7 +135,7 @@ def _new_session(device_info: dict):
     from nnInteractive.inference.inference_session import nnInteractiveInferenceSession
 
     session = nnInteractiveInferenceSession(
-        device=torch.device(f"cuda:{device_info['gpu_index']}"),
+        device=torch.device(f"cuda:{device_info['gpu_index']}" if "gpu_index" in device_info else "cpu"),
         use_torch_compile=False,
         verbose=False,
         torch_n_threads=min(8, os.cpu_count() or 1),
@@ -231,21 +232,17 @@ class InteractiveRuntime:
             raise RuntimeError(readiness["reason"])
         directory = _model_path()
         files = _model_files(directory)
-        device_request = os.environ.get("SCAN3D_DEVICE", "gpu")
-        if device_request == "cpu":
-            raise RuntimeError("nnInteractive corrections require the explicitly selected R9700 GPU")
+        device_request = configured_device()
         identity = (tuple(_identity(path) for path in files), device_request)
         if self._session is not None and identity == self._model_identity:
             return
         self.release()
-        progress("Loading the nnInteractive correction model on the R9700")
+        progress("Loading the nnInteractive correction model")
         hashes = {path.relative_to(directory).as_posix(): _sha256(_identity(path)) for path in files}
         checkpoint_hash = hashes["fold_0/checkpoint_final.pth"]
         if checkpoint_hash != CHECKPOINT_SHA256:
             raise RuntimeError("nnInteractive checkpoint integrity does not match the pinned official model")
         device = _device_info(device_request)
-        if "R9700" not in device.get("gpu_name", "").upper() or not device.get("hip"):
-            raise RuntimeError("nnInteractive corrections require ROCm PyTorch on the selected R9700 GPU")
         self._device = device
         self._session = _new_session(device)
         # Loading also warms the network. This runs on the same thread as prediction.
@@ -263,9 +260,10 @@ class InteractiveRuntime:
             "model_files_sha256": hashes,
             "license": MODEL_LICENSE,
             "device": device["selected_device"],
-            "gpu_name": device["gpu_name"],
+            "gpu_name": device.get("gpu_name"),
             "torch_version": device["torch"],
-            "hip_version": device["hip"],
+            "hip_version": device.get("hip"),
+            "cuda_version": device.get("cuda"),
             "compile": False,
             "autozoom": True,
             "interaction_storage": "blosc2",
@@ -462,7 +460,7 @@ class InteractiveRuntime:
             del session
             gc.collect()
         torch = sys.modules.get("torch")
-        if device is not None and torch is not None:
+        if device is not None and "gpu_index" in device and torch is not None:
             try:
                 with torch.cuda.device(device["gpu_index"]):
                     torch.cuda.empty_cache()

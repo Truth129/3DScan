@@ -1,4 +1,4 @@
-"""Exercise HIP and 3D convolution. This does not certify model inference."""
+"""Exercise a GPU with a 3D convolution. This does not certify model inference."""
 
 import argparse
 from datetime import datetime, timezone
@@ -13,22 +13,17 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--output", type=Path, default=Path(os.environ.get("SCAN3D_GPU_PROOF", str(Path(__file__).resolve().parents[1] / ".runtime/gpu-proof.json")))
     )
     args = parser.parse_args()
     result = {
         "gpu_ready": False,
-        "inference_verified": False,
-        "model_inference_proven": False,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "python_version": platform.python_version(),
         "checks": {},
         "errors": [],
     }
-    result["checks"]["kfd"] = Path("/dev/kfd").exists()
-    result["checks"]["render_nodes"] = [str(p) for p in Path("/dev/dri").glob("renderD*")]
     try:
         import torch
 
@@ -36,28 +31,27 @@ def main():
             torch_version=torch.__version__,
             torch_distribution_version=metadata.version("torch"),
             hip_version=torch.version.hip,
+            cuda_version=torch.version.cuda,
             gpu_available=torch.cuda.is_available(),
         )
         runtime_versions = {"torch": metadata.version("torch")}
-        for package in ("rocm", "rocm-sdk-core", "rocm-sdk-libraries", "rocm-sdk-device-gfx1201"):
+        for package in ("rocm", "rocm-sdk-core", "rocm-sdk-libraries"):
             try:
                 runtime_versions[package] = metadata.version(package)
             except metadata.PackageNotFoundError:
                 pass
         result["checks"]["runtime_versions"] = runtime_versions
-        if not torch.version.hip:
-            raise RuntimeError("This environment does not contain a ROCm PyTorch build.")
         if not torch.cuda.is_available():
-            raise RuntimeError("ROCm PyTorch cannot access an AMD GPU. Check host device access and runtime.")
+            raise RuntimeError("PyTorch cannot access a GPU. Check the driver, device permissions and PyTorch build.")
         devices = [
             {"index": i, "name": torch.cuda.get_device_name(i), "memory_bytes": torch.cuda.get_device_properties(i).total_memory}
             for i in range(torch.cuda.device_count())
         ]
         result["checks"]["devices"] = devices
-        discrete = next((d for d in devices if "R9700" in d["name"]), None)
-        if discrete is None:
-            raise RuntimeError("R9700 not found; refusing to validate on the integrated GPU.")
-        device = torch.device(f"cuda:{discrete['index']}")
+        from scan3d.segmentation import _device_info
+
+        selected = _device_info("gpu")["gpu_index"]
+        device = torch.device(f"cuda:{selected}")
         started = time.monotonic()
         with torch.inference_mode():
             conv = torch.nn.Conv3d(1, 4, 3, padding=1).to(device)
@@ -69,21 +63,15 @@ def main():
             if not bool(torch.isfinite(full).all()) or not bool(torch.isfinite(mixed).all()):
                 raise RuntimeError("3D convolution produced nonfinite values.")
         result["checks"]["conv3d_seconds"] = round(time.monotonic() - started, 3)
-        result["checks"]["recommended_device"] = f"gpu:{discrete['index']}"
+        result["checks"]["recommended_device"] = f"gpu:{selected}"
         result["gpu_ready"] = True
     except Exception as exc:
         result["errors"].append(str(exc))
-        if isinstance(exc, ImportError) and ".so" in str(exc):
-            result["native_dependency_action"] = "sudo pacman -S --needed rocm-ml-libraries hipsparselt rocm-smi-lib"
     args.output.parent.mkdir(parents=True, exist_ok=True)
     pending = args.output.with_suffix(".json.writing")
     pending.write_text(json.dumps(result, indent=2) + "\n")
     pending.replace(args.output)
-    if args.json:
-        print(json.dumps(result, indent=2))
-    else:
-        print(json.dumps(result, indent=2))
-        print("Model inference remains unproven until a representative CT completes segmentation and QC.")
+    print(json.dumps(result, indent=2))
     return 0 if result["gpu_ready"] else 1
 
 

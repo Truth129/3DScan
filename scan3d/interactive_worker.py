@@ -1,10 +1,10 @@
 """Supervised nnInteractive worker process, owned by the GPU lane.
 
 The warm engine, `interactive.InteractiveRuntime`, lives in one long-lived
-child process that the first prediction starts. A ROCm fault or hung kernel
+child process that the first prediction starts. A GPU driver fault or hung kernel
 then fails one job instead of the web server, and the next request starts a
 fresh child. Process exit is also the only way to return every byte of VRAM:
-emptying caches leaves the HIP context and allocator pools resident. The API
+emptying caches leaves the GPU context and allocator pools resident. The API
 process never imports torch; the child imports it inside the engine.
 
 The child is a plain subprocess in its own session rather than a
@@ -50,7 +50,7 @@ ENGINE = "scan3d.interactive:InteractiveRuntime"
 # The engine checks cancellation between model steps, each lasting seconds.
 CANCEL_GRACE_SECONDS = 10.0
 # A hang shows as silence, not elapsed time. A cold model load is the longest
-# step without progress and takes far less than this on the R9700.
+# step without progress and takes far less than this on a GPU.
 STALL_SECONDS = 600.0
 STOP_SECONDS = 5.0
 _ERRORS = {"cancelled": SegmentationCancelled, "invalid": ValueError, "failed": RuntimeError}
@@ -275,7 +275,7 @@ class InteractiveWorker:
                     if event == "result":
                         return message["provenance"]
                     if message.get("kind") == "failed":
-                        # A GPU fault can poison the HIP context; start the next one clean.
+                        # A GPU fault can poison the driver context; start the next one clean.
                         self._stop()
                     raise _ERRORS.get(message.get("kind"), RuntimeError)(message.get("message") or "nnInteractive correction failed")
         finally:
@@ -291,7 +291,7 @@ class InteractiveWorker:
         """Stop the child before TotalSegmentator runs and at shutdown.
 
         The engine releases its session, then process exit returns all VRAM,
-        including the HIP context. The next prediction starts a fresh child.
+        including the GPU context. The next prediction starts a fresh child.
         """
         with self._lock:
             child, self._child = self._child, None
