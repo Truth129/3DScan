@@ -4,12 +4,74 @@ import { api, type CinematicReference } from '../src/lib/api';
 import { freshVolumeSettings } from '../src/lib/volume-presets';
 import { useCinematicReference } from '../src/lib/use-cinematic-reference';
 import { useExpandedViewport } from '../src/lib/use-expanded-viewport';
+import { useFoldingControls, useReviewFoldingControls } from '../src/lib/use-folding-controls';
 import { useStructureDisplay } from '../src/lib/use-structure-display';
 import type { Structure } from '../src/types';
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('floating controls during review', () => {
+  function controls(saved: string | null, reviewing = false) {
+    const stored = new Map(saved === null ? [] : [['key', saved]]);
+    vi.stubGlobal('localStorage', { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value) });
+    const review = ref(reviewing);
+    const folding = effectScope().run(() =>
+      useReviewFoldingControls(
+        useFoldingControls('key', () => true),
+        () => review.value,
+      ),
+    )!;
+    return { ...folding, review, stored };
+  }
+
+  it('starts every review folded over a saved open preference, and restores that preference after', async () => {
+    const { open, setOpen, review } = controls('true');
+    expect(open.value).toBe(true);
+    review.value = true;
+    await nextTick();
+    expect(open.value).toBe(false);
+    setOpen(true);
+    expect(open.value).toBe(true);
+    review.value = false;
+    await nextTick();
+    expect(open.value).toBe(true);
+    review.value = true;
+    await nextTick();
+    expect(open.value).toBe(false);
+  });
+
+  it('starts folded when the viewer mounts during a review', () => {
+    expect(controls(null, true).open.value).toBe(false);
+  });
+
+  it('never saves a choice made during review', async () => {
+    const { open, setOpen, review, stored } = controls('false');
+    review.value = true;
+    await nextTick();
+    setOpen(true);
+    expect(stored.get('key')).toBe('false');
+    setOpen(false);
+    review.value = false;
+    await nextTick();
+    expect(open.value).toBe(false);
+    setOpen(true);
+    expect(stored.get('key')).toBe('true');
+  });
+
+  it('lets an error reveal the controls in either mode without saving a choice', async () => {
+    const { open, review, stored } = controls('false');
+    open.value = true;
+    expect(open.value).toBe(true);
+    open.value = false;
+    review.value = true;
+    await nextTick();
+    open.value = true;
+    expect(open.value).toBe(true);
+    expect(stored.get('key')).toBe('false');
+  });
 });
 
 describe('cinematic measurement ownership', () => {

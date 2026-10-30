@@ -211,6 +211,11 @@ picking to the target, or **CT plane**, which supports all the drawing tools on 
 Right drag rotates while marking, and a 3D point moves the linked CT crosshair so that you can
 confirm it.
 
+**Mark on** and the other 3D controls are under **Review tools**, which starts folded in each
+review so that nothing covers the view you mark on. Choosing a drawing tool already switches to
+the CT plane and faces it. While **Review tools** is open a mark cannot start underneath it, so
+fold it again to reach that part of the view.
+
 ### Compare and save
 
 Applying creates a candidate. It does not change accepted masks.

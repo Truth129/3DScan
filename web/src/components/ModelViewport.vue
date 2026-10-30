@@ -47,7 +47,7 @@ import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, f
 import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
 import { useExpandedViewport } from '../lib/use-expanded-viewport';
-import { COMPACT_SCREEN_QUERY, useFoldingControls } from '../lib/use-folding-controls';
+import { COMPACT_SCREEN_QUERY, useFoldingControls, useReviewFoldingControls } from '../lib/use-folding-controls';
 import { cardiacCamera } from '../lib/cardiac-camera';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
@@ -144,10 +144,10 @@ const viewportId = useId();
 const { expanded, setExpanded } = useExpandedViewport(viewport, expandButton);
 const surface = ref<HTMLElement>();
 const controlsId = useId();
-// Rendering controls float over the canvas; short screens start with them folded away.
-const { open: controlsOpen, setOpen: setControlsOpen } = useFoldingControls(
-  'scan3d-3d-controls-open-v1',
-  () => !globalThis.matchMedia?.(COMPACT_SCREEN_QUERY).matches,
+// Rendering controls float over the canvas; short screens and review start with them folded away.
+const { open: controlsOpen, setOpen: setControlsOpen } = useReviewFoldingControls(
+  useFoldingControls('scan3d-3d-controls-open-v1', () => !globalThis.matchMedia?.(COMPACT_SCREEN_QUERY).matches),
+  () => !!props.reviewActive,
 );
 const loading = ref(true),
   error = ref(''),
@@ -1835,10 +1835,10 @@ defineExpose({
         />
         <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
       </div>
-      <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
-        {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
-      </p>
     </div>
+    <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
+      {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
+    </p>
     <p v-if="!vtkSelected && transparencyWarning && !error" class="render-notice" role="status">{{ transparencyWarning }}</p>
     <svg v-if="!vtkSelected" class="orientation-gizmo" viewBox="0 0 78 78" role="img" aria-label="Patient RAS orientation axes">
       <circle cx="39" cy="39" r="30" />
@@ -2156,17 +2156,28 @@ defineExpose({
   white-space: nowrap;
   color: #9aaac0;
 }
+/* Guidance and plane errors stay readable with the controls folded. It lies over the canvas, so only its Retry button takes input. */
 .model-review-hint {
+  position: absolute;
+  top: 48px;
+  left: 12px;
+  z-index: 3;
+  max-width: min(240px, calc(100% - 24px));
+  margin: 0;
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: #171d27b3;
   font-size: 10px;
   line-height: 1.4;
   color: #a2b2c8;
-  margin: 7px 0 0;
+  pointer-events: none;
 }
 .model-review-error {
   color: #f2ba9c;
 }
 .model-review-hint .text-button {
   font-size: 10px;
+  pointer-events: auto;
 }
 .model-review .viewport-caption {
   top: 14px;
