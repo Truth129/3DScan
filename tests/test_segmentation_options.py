@@ -205,7 +205,7 @@ def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, mo
     nib.save(nib.Nifti1Image(np.full(shape, 123, np.int16), affine), ct_path)
     commands = []
     fingerprints = []
-    monkeypatch.setattr(segmentation, "_device_info", lambda _: {"selected_device": "gpu:1"})
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "gpu:1"})
     monkeypatch.setenv("SCAN3D_DEVICE", "gpu")
 
     def fingerprint(profile, options):

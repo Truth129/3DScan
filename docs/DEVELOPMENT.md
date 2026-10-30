@@ -77,8 +77,8 @@ and pass `--native` to use a GPU. Others need a Vulkan-capable GPU unless they o
 - **Jobs.** Work that never touches the GPU runs on the CPU lane. TotalSegmentator and
   nnInteractive share the serialized GPU lane. Both run their models outside the API
   process: TotalSegmentator as a subprocess, and nnInteractive in the supervised child
-  `scan3d/interactive_worker.py`. The API process imports PyTorch only to resolve the
-  device for a segmentation.
+  `scan3d/interactive_worker.py`. The API process never imports PyTorch, so a segmentation
+  job resolves its device in a short-lived child, `segmentation._resolve_device`.
 - **Vue templates.** Vue drops a space between two inline elements once Prettier breaks
   them onto separate lines. Keep such markup behind `<!-- prettier-ignore -->`.
 - **Docs.** Describe behaviour changes in [API.md](API.md) and

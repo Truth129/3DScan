@@ -50,7 +50,7 @@ def acquisition_case(tmp_path, monkeypatch):
 
     monkeypatch.setattr(dicom, "convert_series", convert)
     monkeypatch.setattr(segmentation, "segment", lambda *args, **kwargs: pytest.fail("Acquisition labels ran inference"))
-    monkeypatch.setattr(segmentation, "_device_info", lambda *args, **kwargs: pytest.fail("Acquisition labels initialized GPU"))
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *args, **kwargs: pytest.fail("Acquisition labels initialized GPU"))
     http = TestClient(app, base_url="http://127.0.0.1")
     yield http, service, case, source, values, affine, calls
     http.close()

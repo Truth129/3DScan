@@ -186,7 +186,7 @@ def history(tmp_path, monkeypatch):
 
     monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
     monkeypatch.setattr(segmentation, "segment", segment)
-    monkeypatch.setattr(segmentation, "_device_info", lambda device: pytest.fail("Agreement tests never use a GPU"))
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: pytest.fail("Agreement tests never use a GPU"))
     monkeypatch.setattr(service, "_interactive", lambda: pytest.fail("Direct edits need no AI runtime"))
 
     def image_case(label):

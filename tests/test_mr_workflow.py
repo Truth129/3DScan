@@ -34,7 +34,7 @@ def mr_rig(tmp_path, monkeypatch):
     def no_model(*args, **kwargs):
         pytest.fail("Static MR preparation must not access a model or GPU")
 
-    monkeypatch.setattr(segmentation, "_device_info", no_model)
+    monkeypatch.setattr(segmentation, "_resolve_device", no_model)
     monkeypatch.setattr(segmentation, "model_fingerprint", no_model)
     monkeypatch.setattr(segmentation, "segment", no_model)
     app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "web"))

@@ -49,7 +49,7 @@ def test_mr_catalog_and_defaults_are_modality_specific_without_torch_import():
     ],
 )
 def test_wrong_modality_and_ignored_mr_crop_flags_fail_before_runtime(tmp_path, monkeypatch, modality, options):
-    monkeypatch.setattr(segmentation, "_device_info", lambda *args: pytest.fail("Invalid options touched GPU"))
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *args: pytest.fail("Invalid options touched GPU"))
     with pytest.raises(ValueError):
         segmentation.segment(tmp_path / "unused.nii.gz", tmp_path / "output", "other", lambda _: None, lambda: False, options, modality=modality)
     assert not (tmp_path / "output").exists()
@@ -126,7 +126,7 @@ def test_mr_native_worker_uses_selected_task_and_preserves_reference_geometry(tm
     nib.save(nib.Nifti1Image(values, affine), path)
     original = path.read_bytes()
     commands, fingerprints = [], []
-    monkeypatch.setattr(segmentation, "_device_info", lambda _: {"selected_device": "gpu:1"})
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "gpu:1"})
     monkeypatch.setenv("SCAN3D_DEVICE", "gpu:1")
 
     def fingerprint(profile, options, *, modality):

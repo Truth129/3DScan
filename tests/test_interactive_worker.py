@@ -221,6 +221,64 @@ print("parent stayed torch-free")
     assert completed.stdout.strip() == "parent stayed torch-free"
 
 
+def test_segmentation_job_never_imports_torch_in_the_api_process(tmp_path, monkeypatch):
+    # The device check runs for real, in a child that imports the fake PyTorch.
+    # TotalSegmentator is the only subprocess replaced.
+    script = """
+import builtins, json, subprocess, sys
+from pathlib import Path
+original = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name.partition(".")[0] == "torch":
+        raise AssertionError("The API process imported " + name)
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+import nibabel as nib, numpy as np
+from scan3d import imaging, segmentation
+from scan3d.config import Settings
+from scan3d.demo import create_demo
+from scan3d.service import Service
+commands = []
+class TotalSegmentator:
+    pid, returncode = None, 0
+    def __init__(self, command):
+        commands.append(command)
+        reference = nib.load(command[command.index("-i") + 1])
+        mask = np.zeros(reference.shape, np.uint8)
+        mask[10:20, 10:20, 10:20] = 1
+        imaging._save_mask(mask, reference, Path(command[command.index("-o") + 1]) / "liver.nii.gz")
+        Path(command[command.index("--report") + 1]).write_text(json.dumps({"device": "gpu", "classes": {"1": "liver"}}))
+    def poll(self):
+        return 0
+run = subprocess.Popen
+def popen(command, **kwargs):
+    return TotalSegmentator(command) if "totalsegmentator.bin.TotalSegmentator" in command else run(command, **kwargs)
+subprocess.Popen = popen
+def fingerprint(profile, options=None, **source):
+    return dict(versions={}, device_request="auto", wrapper_sha256="fake", weights_complete=True, digest="fake")
+segmentation.model_fingerprint = fingerprint
+service = Service(Settings(Path(sys.argv[1]) / "data", (Path(sys.argv[1]),)))
+case = create_demo(service)
+job = service.segment_case(case["id"], case["active_revision_id"], task="total")
+service.execute(service.store.claim())
+job = service.store.get("jobs", job["id"])
+assert job["status"] == "completed", job
+assert commands[0][commands[0].index("--device") + 1] == "gpu:0"
+inference = next(Path(sys.argv[1], "data").rglob("inference.json"))
+runtime = json.loads(inference.read_text())["runtime"]
+assert (runtime["gpu_name"], runtime["torch"]) == ("Test GPU", "0.0+fake"), runtime
+assert "torch" not in sys.modules
+print("parent stayed torch-free")
+"""
+    paths = (str(TESTS / "fake_torch"), os.environ.get("PYTHONPATH"))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, paths)))
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", '[["Test GPU", 1024, 0]]')
+    monkeypatch.delenv("SCAN3D_DEVICE", raising=False)
+    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "parent stayed torch-free"
+
+
 def test_review_predictions_use_the_child_and_segmentation_releases_it(example, child_environment, monkeypatch):
     service, case, base, prompt = example
     service.interactive_runtime = runtime = InteractiveWorker(ENGINE)
