@@ -233,7 +233,9 @@ def _default_row():
 
     A Python patch bump makes a proof stale on a rolling distribution, and that must never
     block or displace the card that is working. It earns a caution, and the job-start device
-    check still decides. A proof that cannot be parsed names no card and blocks nothing either.
+    check still decides. A proof that cannot be parsed names no card and blocks nothing either,
+    and nor does one taken before this vendor's cards changed, whose card may have left. A
+    proof with no census predates it and is not compared.
     """
     if device_request() == "cpu":
         return _row(DEFAULT, "CPU", None, None)
@@ -243,6 +245,9 @@ def _default_row():
         card = _default_card(checks)
         kind = "cuda" if checks.get("cuda_version") else "rocm" if checks.get("hip_version") else None
         stale = not doctor.diagnose(live=False)["ready"]
+        hardware = checks.get("hardware")
+        if hardware is not None and list(hardware) != gpu_cards(kind):
+            card, stale = {}, True
     except _BAD_RECORD:
         card, kind, stale = {}, None, proof.exists()
     return _row(DEFAULT, card.get("name") or "Default device", card.get("memory_bytes"), kind, _DEFAULT_STALE if stale else None)

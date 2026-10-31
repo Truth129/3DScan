@@ -200,6 +200,54 @@ def test_a_malformed_default_proof_names_no_card_and_blocks_nothing(tmp_path, ma
     assert (row["available"], row["reason"], row["label"], row["memory_gib"]) == (True, CAUTION, "Default device", None)
 
 
+AMD_CARD, NVIDIA_CARD = ("0x1002", "0x7551"), ("0x10de", "0x2c05")
+
+
+def test_a_default_proof_that_still_describes_this_machine_keeps_its_card(tmp_path, fresh, sysfs):
+    build_sysfs(sysfs, {"card1": AMD_CARD})
+    default_proof(tmp_path, hardware=["1002:7551"])
+    assert rows()[0] == {"id": "default", "label": "Test Default GPU", "memory_gib": 32, "shares_display": False, "available": True, "reason": None}
+    build_sysfs(sysfs, {"card2": NVIDIA_CARD})  # Another vendor's card is another build's census.
+    assert (rows()[0]["label"], rows()[0]["reason"]) == ("Test Default GPU", None)
+
+
+@pytest.mark.parametrize(
+    "cards, proven",
+    [
+        pytest.param({"card1": ("0x1002", "0x7552")}, ["1002:7551"], id="replaced"),
+        pytest.param({"card1": AMD_CARD, "card2": ("0x1002", "0x7552")}, ["1002:7551"], id="added"),
+        pytest.param({"card1": AMD_CARD}, ["1002:7551", "1002:7551"], id="one-of-a-twin-removed"),
+        pytest.param({"card2": NVIDIA_CARD}, ["1002:7551"], id="the-last-one-removed"),
+    ],
+)
+def test_a_changed_card_costs_the_default_row_its_name_and_never_its_availability(tmp_path, fresh, sysfs, cards, proven):
+    build_sysfs(sysfs, cards)
+    default_proof(tmp_path, hardware=proven)
+    assert rows()[0] == {"id": "default", "label": "Default device", "memory_gib": None, "shares_display": False, "available": True, "reason": CAUTION}
+    # A job's label is frozen from the row, so it stops naming a card that has left.
+    assert binding("default") == {"id": "default", "label": "Default device", "identity": "default"}
+    assert require(binding("default")) is None
+
+
+def test_a_changed_card_keeps_the_default_rows_vendor(tmp_path, fresh, sysfs):
+    build_sysfs(sysfs, {"card1": ("0x1002", "0x7552")}, {"card1-DP-1": "connected"})
+    default_proof(tmp_path, hardware=["1002:7551"])
+    assert (rows()[0]["label"], rows()[0]["shares_display"]) == ("Default device", True)
+
+
+def test_a_default_proof_from_before_the_census_is_not_compared(tmp_path, fresh, sysfs):
+    build_sysfs(sysfs, {"card1": ("0x1002", "0x7552")})
+    assert "hardware" not in default_proof(tmp_path)["checks"]
+    assert (rows()[0]["label"], rows()[0]["reason"]) == ("Test Default GPU", None)
+
+
+def test_a_census_that_is_not_a_list_names_no_card_and_blocks_nothing(tmp_path, fresh, sysfs):
+    build_sysfs(sysfs, {"card1": AMD_CARD})
+    default_proof(tmp_path, hardware=7)
+    assert rows()[0] == {"id": "default", "label": "Default device", "memory_gib": None, "shares_display": False, "available": True, "reason": CAUTION}
+    assert binding("default")["identity"] == "default"
+
+
 def test_a_proven_path_gets_its_own_row(stub):
     assert rows()[1:] == [{"id": "nvidia", "label": GPU_NAME, "memory_gib": 16, "shares_display": False, "available": True, "reason": None}]
 
