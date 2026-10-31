@@ -16,7 +16,7 @@ import subprocess
 from fastapi.testclient import TestClient
 import pytest
 
-from inference_path_stub import FAMILIES, GPU_NAME, MEMORY_BYTES, TORCH, activate, add_package, stand_in
+from inference_path_stub import ENGINES, FAMILIES, GPU_NAME, MEMORY_BYTES, TORCH, activate, add_package, stand_in
 from scan3d import doctor, inference_paths
 from scan3d.api import create_app
 from scan3d.config import ROOT, Settings
@@ -366,7 +366,7 @@ def test_each_failed_check_disables_its_row_with_one_fixed_sentence(stub, tmp_pa
         binding("nvidia")
 
 
-@pytest.mark.parametrize("engine", ["TotalSegmentator", "nnunetv2", "nnInteractive", "nninteractive-client"])
+@pytest.mark.parametrize("engine", ENGINES)
 def test_an_engine_pin_that_differs_from_the_api_disables_the_path(stub, monkeypatch, engine):
     assert rows()[1]["available"]
     version = doctor.metadata.version
@@ -375,6 +375,17 @@ def test_an_engine_pin_that_differs_from_the_api_disables_the_path(stub, monkeyp
         return "9.9.9" if package == engine else version(package)
 
     monkeypatch.setattr(doctor.metadata, "version", api)
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, ENGINE_DIFFERS)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_an_engine_the_path_lacks_disables_it(stub, monkeypatch, engine):
+    # Patched so the API has it on any machine: two absences would match.
+    version = doctor.metadata.version
+    monkeypatch.setattr(doctor.metadata, "version", lambda package: "9.9.9" if package == engine else version(package))
+    drop_package(stub, engine)
+    with pytest.raises(doctor.metadata.PackageNotFoundError):
+        inference_paths.installed(stub.site_packages, engine)
     assert (rows()[1]["available"], rows()[1]["reason"]) == (False, ENGINE_DIFFERS)
 
 
@@ -650,7 +661,20 @@ def test_a_path_is_a_frozen_value_compared_in_full(stub):
     path = require(binding("nvidia"))
     assert (path.label, path.identity, path.kind, path.gpu_name, path.memory_bytes) == (GPU_NAME, f"nvidia|gpu|{GPU_NAME}", "cuda", GPU_NAME, MEMORY_BYTES)
     assert path == require(binding("nvidia")) and hash(path) == hash(require(binding("nvidia")))
-    assert dataclasses.replace(path, python="/another/python") != path
+    changed = {
+        "id": "another",
+        "python": "/another/python",
+        "site_packages": "/another/site-packages",
+        "device": "gpu:1",
+        "kind": "rocm",
+        "gpu_name": "Test Another GPU",
+        "memory_bytes": MEMORY_BYTES + 1,
+        "packages": (("torch", "9.9.9"),),
+        "hardware": ("10de:2204",),
+    }
+    assert set(changed) == {field.name for field in dataclasses.fields(path)}
+    for name, value in changed.items():
+        assert dataclasses.replace(path, **{name: value}) != path, name
     with pytest.raises(dataclasses.FrozenInstanceError):
         path.device = "gpu:1"
 
@@ -715,7 +739,7 @@ def test_a_device_request_on_a_path_reaches_its_children(tmp_path, monkeypatch):
 
 
 def drop_package(stub, name):
-    for info in stub.site_packages.glob(f"{name}-*.dist-info"):
+    for info in stub.site_packages.glob(f"{name.replace('-', '_')}-*.dist-info"):
         shutil.rmtree(info)
 
 
@@ -876,6 +900,28 @@ def test_a_rocm_runtime_records_its_own_family(check, tmp_path, monkeypatch):
     assert record["path"]["kind"] == "rocm" and record["checks"]["runtime_versions"] == {"torch": TORCH, **FAMILIES["rocm"]}
 
 
+@pytest.mark.parametrize("kind, census", [("cuda", ["10de:2c05"]), ("rocm", ["1002:7551"])])
+def test_a_proof_counts_only_its_own_vendors_cards(check, sysfs, tmp_path, monkeypatch, kind, census):
+    # A built sysfs, patched inside the script's process: on a machine with one vendor or none,
+    # real sysfs could not tell the two censuses apart.
+    build_sysfs(sysfs, {"card1": ("0x1002", "0x7551"), "card2": ("0x10de", "0x2c05")})
+    built = stand_in(tmp_path, "proven", proofs=check.stub.proof.parent, kind=kind)
+    built.proof.unlink()
+    activate(monkeypatch, built)
+    code = f"""
+from pathlib import Path
+import runpy, sys
+sys.path.insert(0, {str(ROOT)!r})
+from scan3d import inference_paths
+inference_paths.SYS_DRM = Path({str(sysfs)!r})
+sys.argv = ["check_gpu.py", "--path", "proven"]
+runpy.run_path({str(CHECK_GPU)!r}, run_name="__main__")
+"""
+    completed = subprocess.run([built.python, "-c", code], capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    assert built.record()["checks"]["hardware"] == census and rows()[1]["available"]
+
+
 def test_a_failed_check_still_lists_the_path_with_a_fixed_reason(check, monkeypatch):
     monkeypatch.setenv("SCAN3D_FAKE_GPUS", "[]")
     completed = check("--path", "nvidia")
@@ -963,6 +1009,15 @@ def test_a_default_check_writes_to_the_setting_and_adds_a_census_but_no_path(che
     record = json.loads((tmp_path / "gpu-proof.json").read_text())
     assert record["gpu_ready"] is True and "path" not in record and record["checks"]["hardware"] == gpu_cards("cuda")
     assert not check.stub.proof.exists()
+
+
+@pytest.mark.parametrize("module", ["totalsegmentator.python_api", "nnInteractive.inference.inference_session"])
+def test_a_default_check_does_not_need_the_engines(check, tmp_path, module):
+    # The [ai] engines are optional on a default install, and this check certifies a convolution.
+    check.stub.shadow(module, "raise ImportError('this install has no engines')")
+    completed = check()
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads((tmp_path / "gpu-proof.json").read_text())["gpu_ready"] is True
 
 
 def test_output_outranks_the_setting(check, tmp_path):
