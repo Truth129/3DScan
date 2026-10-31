@@ -144,7 +144,7 @@ const pendingMarks = computed(() => {
   void tick.value;
   return current.value?.pendingMarks ?? 0;
 });
-const runPath = computed(() => reviewRunPath(method.value, runtime.value, reviewPath.value, view.value));
+const runPath = computed(() => reviewRunPath(method.value, runtime.value, reviewPath.value, view.value, current.value?.working));
 const pathLine = computed(() =>
   pathStatus(
     runPath.value.paths.find(row => row.id === reviewPath.value),
@@ -157,6 +157,7 @@ const pathLabel = computed(() => {
 });
 // Never part of `disabled`: marking, Direct edit and relationship-only Apply need no card.
 const pathStopsRun = (full: boolean) => pathRun(runPath.value, pendingMarks.value, full).stopped;
+const staleHint = (apply?: string) => staleResultHint(runPath.value.locked, pending.value, current.value?.working, pathStopsRun(false), apply);
 const canRerun = computed(() => runPath.value.canRerun && !disabled.value && policyValid.value);
 const saveEnabled = computed(
   () =>
@@ -583,7 +584,7 @@ defineExpose({
               ? 'This segment will be empty when saved.'
               : 'The candidate is empty. Paint or add include hints before saving.'
           }}</span
-          ><span v-else-if="current?.dirty">{{ staleResultHint(runPath.locked, pending, current.working) }}</span
+          ><span v-else-if="current?.dirty">{{ staleHint() }}</span
           ><span v-else>Inspect the result, then save a new revision.</span>
         </div>
         <p v-for="warning in candidate?.warnings || []" :key="warning" class="review-alert" role="status">{{ warning }}</p>
@@ -810,7 +811,7 @@ defineExpose({
           <span
             >{{
               current?.dirty
-                ? 'Previous preview. Apply the latest edits and relationship before saving.'
+                ? `Previous preview. ${staleHint('Apply the latest edits and relationship before saving.')}`
                 : 'These mask and relationship changes will be saved together.'
             }}<template v-if="candidate?.relationship_changed"> Relationships updated.</template></span
           ><button class="text-button" @click="previewAffected">Show affected in {{ modalityLabel }}</button>

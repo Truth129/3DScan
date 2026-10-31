@@ -224,6 +224,11 @@ describe('path text', () => {
     expect(pathBlock(broken, broken.label, false)).toContain('Choose another GPU in Options +.');
     expect(pathBlock(undefined, 'Old Test GPU', true)).toContain('Old Test GPU is no longer set up on this workstation. Re-run this draft');
   });
+  it('tells a running job only the cause, because the rest is off until it ends', () => {
+    expect(pathBlock(nvidia, nvidia.label, true, true)).toBe('');
+    expect(pathBlock(broken, broken.label, false, true)).toBe('Broken Test GPU is unavailable: Its last GPU check failed.');
+    expect(pathBlock(undefined, 'Old Test GPU', true, true)).toBe('Old Test GPU is no longer set up on this workstation.');
+  });
 });
 
 describe('the remembered key', () => {
@@ -340,6 +345,15 @@ describe('the card Run AI uses', () => {
     const state = reviewRunPath([row('default', 'Default device'), nvidia], 'default', { batches: [batch], inference_path: bound(amd) });
     expect(state).toMatchObject({ label: 'AMD Test GPU', block: '', canRerun: false });
   });
+  it('drops what a block offers while a job runs, keeping the cause', () => {
+    const working = (rows: InferencePathRow[], selected: string, review?: Parameters<typeof reviewRunPath>[2]) =>
+      runPathFor('nninteractive', status(rows), selected, review, true).block;
+    expect(working([amd, broken], 'broken')).toBe('Broken Test GPU is unavailable: Its last GPU check failed.');
+    const gone = { batches: [batch], inference_path: bound(row('second', 'Old Test GPU')) };
+    expect(working([amd, nvidia], 'default', gone)).toBe('Old Test GPU is no longer set up on this workstation.');
+    expect(working([amd], 'default', gone)).toBe('Old Test GPU is no longer set up on this workstation.');
+    expect(working([amd, nvidia], 'nvidia', { batches: [batch], inference_path: bound(amd) })).toBe('');
+  });
 
   describe('after the last added card was removed', () => {
     const gone = { batches: [batch], inference_path: bound(nvidia) };
@@ -422,6 +436,17 @@ describe('what a stale result needs', () => {
     expect(staleResultHint(true, 0, true)).toBe('Apply pending changes before saving.');
     // Unlocked covers Direct edit and one path, where a card can never be the answer.
     expect(staleResultHint(false, 0)).toBe('Apply pending changes before saving.');
+  });
+  it('sends a mark that a card has stopped to the re-run, because Apply cannot run it', () => {
+    expect(staleResultHint(true, 1, false, true)).toBe('Re-run this draft from Options + before saving.');
+    // That re-run may be the one running, and an unlocked draft can still choose another card.
+    expect(staleResultHint(true, 1, true, true)).toBe('Apply pending changes before saving.');
+    expect(staleResultHint(false, 1, false, true)).toBe('Apply pending changes before saving.');
+  });
+  it('asks for Apply in the words of the place that shows it', () => {
+    const words = 'Apply the latest edits and relationship before saving.';
+    expect(staleResultHint(true, 1, false, false, words)).toBe(words);
+    expect(staleResultHint(true, 0, false, false, words)).toBe('Re-run this draft from Options + before saving.');
   });
 });
 

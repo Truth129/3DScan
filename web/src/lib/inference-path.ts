@@ -92,10 +92,15 @@ export function pathStatus(row: InferencePathRow | undefined, notice: string) {
   return row.reason ? `${row.label}: ${row.reason}` : row.shares_display ? SHARES_DISPLAY : '';
 }
 
-/** Why Run AI cannot use its card, for the message list. `row` is undefined when the card has gone. */
-export function pathBlock(row: InferencePathRow | undefined, label: string, locked: boolean) {
+/**
+ * Why Run AI cannot use its card, for the message list. `row` is undefined when the card has gone.
+ * While a job runs only the cause stays: what the rest offers is off until the job ends, and the
+ * job may be the re-run it would ask for.
+ */
+export function pathBlock(row: InferencePathRow | undefined, label: string, locked: boolean, working?: boolean) {
   if (row?.available) return '';
   const cause = row ? unavailable(row) : `${label} is no longer set up on this workstation.`;
+  if (working) return cause;
   return `${cause} ${locked ? 'Re-run this draft on another GPU in Options +, or discard it.' : 'Choose another GPU in Options +.'} Marking still works.`;
 }
 
@@ -122,6 +127,7 @@ export function reviewRunPath(
   status: InteractiveStatus | undefined,
   selected: string,
   review?: Pick<InteractiveReview, 'batches' | 'inference_path' | 'dirty'>,
+  working?: boolean,
 ) {
   const paths = status?.inference_paths ?? [];
   if (method !== 'nninteractive' || (paths.length < 2 && !stranded(paths, review)))
@@ -130,7 +136,7 @@ export function reviewRunPath(
   const usable = (block: string) => (status?.available ? block : ''),
     chosen = paths.find(row => row.id === selected);
   if (!review?.batches?.length)
-    return { paths, locked: false, id: selected, label: chosen?.label ?? '', block: usable(pathBlock(chosen, '', false)), canRerun: false };
+    return { paths, locked: false, id: selected, label: chosen?.label ?? '', block: usable(pathBlock(chosen, '', false, working)), canRerun: false };
   const bound = review.inference_path,
     id = bound?.id ?? DEFAULT_PATH,
     named = paths.find(row => row.id === id);
@@ -141,7 +147,7 @@ export function reviewRunPath(
   // A current result on this card would only be repeated. A stale one cannot be saved, and a
   // failed or cancelled re-run leaves it stale, so then the draft's own card must be offered.
   const canRerun = !!chosen?.available && (id !== selected || !row || !!review.dirty);
-  return { paths, locked: true, id, label, block: usable(pathBlock(row, label, true)), canRerun };
+  return { paths, locked: true, id, label, block: usable(pathBlock(row, label, true, working)), canRerun };
 }
 
 /**
@@ -151,9 +157,12 @@ export function reviewRunPath(
  */
 export const pathInUse = (label: string, working?: boolean, job?: Pick<Job, 'inference_path'>) => (label && working && job?.inference_path?.label) || label;
 
-/** What a stale result needs before it can be saved. On a locked draft with nothing pending or running, only a re-run can help. */
-export const staleResultHint = (locked: boolean, pending: number, working?: boolean) =>
-  locked && !pending && !working ? 'Re-run this draft from Options + before saving.' : 'Apply pending changes before saving.';
+/**
+ * What a stale result needs before it can be saved. On a locked draft only a re-run can help when
+ * nothing is pending, and when a card has `stopped` what is. A running job may be that re-run.
+ */
+export const staleResultHint = (locked: boolean, pending: number, working?: boolean, stopped?: boolean, apply = 'Apply pending changes before saving.') =>
+  locked && !working && (!pending || stopped) ? 'Re-run this draft from Options + before saving.' : apply;
 
 /**
  * What a card means for one Run AI or Refine. Pending relationship edits are not marks: they

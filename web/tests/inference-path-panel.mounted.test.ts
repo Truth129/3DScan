@@ -20,6 +20,7 @@ const nvidia = row('nvidia', 'NVIDIA Test GPU');
 const broken = row('broken', 'Broken Test GPU', { available: false, reason: 'Its last GPU check failed.' });
 const status = (inference_paths: InferencePathRow[]): InteractiveStatus => ({ installed: true, model_available: true, available: true, inference_paths });
 const summary = { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5, after_voxels: 2 };
+const affected = { id: 'liver', name: 'liver', role: 'target' as const, summary };
 const point: Point = [1, 2, 3];
 const stroke: InteractivePrompt = {
   id: 'stroke',
@@ -389,6 +390,7 @@ describe('a draft with a result', () => {
     panel.value.addPrompt(point);
     await settled();
     expect(root.named('review-apply')?.props.disabled).toBe(true);
+    expect(root.named('review-messages')?.content, 'Run AI cannot run this mark').toContain(rerunHint);
     await press(root.button('Options +'));
     await press(root.button('Re-run on this GPU'));
     expect(server.predict).toHaveBeenCalledExactlyOnceWith('case', 'draft', 2, false, { inference_path: 'default', replay: true });
@@ -457,9 +459,11 @@ describe('a re-run that failed', () => {
     expect(root.named('review-messages')?.content).not.toContain(rerunHint);
   });
   it("keeps today's words with one path, which has nothing to re-run on", async () => {
-    workstation([amd], afterFailedRerun(resultOn(amd, { inference_path: null })));
+    const candidate = { generation: 1, revision_id: 'review-draft-1', summary, affected_structures: [affected] };
+    workstation([amd], afterFailedRerun(resultOn(amd, { inference_path: null, candidate })));
     const { root } = await openAI();
     expect(root.named('review-messages')?.content).toContain('Apply pending changes before saving.');
+    expect(root.named('review-impact')?.content).toContain('Previous preview. Apply the latest edits and relationship before saving.');
     expect(root.named('review-ai-path')).toBeUndefined();
   });
 });
@@ -494,6 +498,35 @@ describe('a draft whose card has gone', () => {
     expect(root.button('Refine whole mask')?.props.disabled).toBe(true);
     await clickAnyway(root.button('Refine whole mask'));
     expect(server.predict).not.toHaveBeenCalled();
+  });
+  it('sends a pending mark to the re-run, because Run AI cannot run it', async () => {
+    workstation([amd], stranded());
+    const { root, panel } = await openAI();
+    panel.value.addPrompt(point);
+    await settled();
+    expect(root.named('review-apply')?.props.disabled).toBe(true);
+    expect(message(root)).toContain(rerunHint);
+    expect(message(root)).not.toContain('Apply pending changes');
+  });
+  it('asks for the same thing in the impact preview', async () => {
+    const candidate = { generation: 1, revision_id: 'review-draft-1', summary, affected_structures: [affected] };
+    workstation([amd], resultOn(nvidia, { candidate }));
+    const { root, panel } = await openAI();
+    panel.value.addPrompt(point);
+    await settled();
+    expect(root.named('review-impact')?.content).toContain(`Previous preview. ${rerunHint}`);
+  });
+  it('asks for nothing that is under way while the re-run runs, and asks again if it fails', async () => {
+    const server = workstation([amd], stranded());
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    server.acceptRerun();
+    await press(root.button('Re-run on this GPU'));
+    expect(message(root)).toContain('NVIDIA Test GPU is no longer set up on this workstation.');
+    expect(message(root)).not.toContain('Re-run this draft');
+    expect(message(root)).not.toContain('Marking still works.');
+    server.setRemote(afterFailedRerun(stranded()));
+    await vi.waitFor(() => expect(message(root)).toContain('Re-run this draft on another GPU in Options +, or discard it. Marking still works.'), nextPoll);
   });
   it('offers the one row left, with the re-run enabled', async () => {
     workstation([amd], stranded());
@@ -577,6 +610,8 @@ describe('a draft whose card has gone', () => {
     const server = workstation([amd], resultOn(nvidia, { relationship, candidate: saved }));
     const { root } = await openAI();
     expect(message(root)).toContain('no longer set up');
+    expect(message(root), 'what is pending can still be applied').toContain('Apply pending changes before saving.');
+    expect(message(root)).not.toContain(rerunHint);
     await press(root.named('review-apply'));
     expect(server.predict).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false);
   });
