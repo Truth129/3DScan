@@ -96,7 +96,7 @@ def installed(site, name):
 
 @dataclass(frozen=True)
 class InferencePath:
-    """One proven added path. Equality is full identity, so a re-issued proof is a new path.
+    """One proven added path. Equality is full identity, so a proof that changes a field is a new path.
 
     `python` is what sys.executable reported inside that venv. It is never resolved: a venv's
     interpreter is a symlink, and its target would run outside the venv.

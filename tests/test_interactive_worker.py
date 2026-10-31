@@ -387,13 +387,20 @@ def test_leaving_a_path_for_the_default_replaces_the_child_too(worker, tmp_path,
     assert predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"] != default["pid"]
 
 
-def test_a_reissued_proof_is_a_new_path_to_a_running_child(worker, tmp_path, added):
+def test_a_proof_that_changes_a_field_is_a_new_path_to_a_running_child(worker, tmp_path, added):
     first, _ = added
     pid = predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"]
     first.change(lambda record: record["path"].update(memory_bytes=record["path"]["memory_bytes"] + 1))
     reissued = path_named("nvidia")
     assert predict(worker, tmp_path, inference_path=reissued)["pid"] != pid
     assert worker._child.inference_path == reissued
+
+
+def test_a_proof_repeated_unchanged_keeps_the_running_child(worker, tmp_path, added):
+    first, _ = added
+    pid = predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"]
+    first.change(lambda record: record.update(checked_at="a later check"))  # Not a field of the path.
+    assert predict(worker, tmp_path, name="second.nii.gz", inference_path=path_named("nvidia"))["pid"] == pid
 
 
 def test_a_first_child_or_one_that_died_needs_no_switch(worker, tmp_path, added):

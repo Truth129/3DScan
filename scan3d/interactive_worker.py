@@ -207,8 +207,8 @@ class InteractiveWorker:
             if self._child is not None and self._child.process.poll() is not None:
                 self._stop()  # It ended while idle; this request starts afresh.
             if self._child is not None and self._child.inference_path != inference_path:
-                # Equality is full identity, so a re-issued proof is another path, and the
-                # default is None, so leaving an added path takes this branch too.
+                # Equality is full identity, so a proof that changes a field is another path, and
+                # the default is None, so leaving an added path takes this branch too.
                 label = inference_path.label if inference_path else inference_paths.binding(inference_paths.DEFAULT)["label"]
                 progress(f"Switching the AI worker to {label}")
                 self._shutdown()
