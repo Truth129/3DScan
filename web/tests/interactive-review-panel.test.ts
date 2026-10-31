@@ -23,4 +23,8 @@ describe('review toolbar', () => {
     expect(loading).toContain('Preparing the 3D candidate preview');
     expect(loading).not.toContain('role="alert"');
   });
+  it('has no card control or attribute in Direct edit', async () => {
+    const html = await renderToString(createSSRApp(InteractiveReviewPanel, props));
+    for (const text of ['Inference path', 'Run on', 'Re-run', 'AI ·', 'data-inference-path']) expect(html).not.toContain(text);
+  });
 });

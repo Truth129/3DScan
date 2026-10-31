@@ -4,12 +4,14 @@ import { api } from '../lib/api';
 import { InteractiveController } from '../lib/interactive-controller';
 import { newReviewPrompt, normalizeRelationship, pendingReviewTargets, reviewCandidateHasChanges, reviewMethod } from '../lib/interactive-review';
 import { prettyName } from '../lib/geometry';
+import { choosePath, pathOptionText, pathRun, pathStatus, readPath, REVIEW_PATH_KEY, reviewRunPath, writePath } from '../lib/inference-path';
 import SegmentRelationshipEditor from './SegmentRelationshipEditor.vue';
 import type {
   InteractiveMethod,
   InteractiveOptions,
   InteractivePrompt,
   InteractiveReview,
+  InteractiveRunChoice,
   InteractiveStatus,
   InteractiveTool,
   Job,
@@ -78,11 +80,14 @@ const policyOpen = ref(false),
   policyValid = ref(true),
   newPolicyValid = ref(true),
   newRelationship = ref(normalizeRelationship());
+const reviewPath = ref(''),
+  reviewPathNotice = ref('');
 const controllers = new Map<string, InteractiveController>();
 const draftMethods = new Map<string, InteractiveMethod>();
 let disposed = false,
   identityVersion = 0,
   targetVersion = 0,
+  runtimeRequest = 0,
   discoveryScope = '';
 const current = computed(() => {
   void tick.value;
@@ -127,6 +132,20 @@ const pending = computed(() => {
   void tick.value;
   return current.value?.pendingCount ?? 0;
 });
+const pendingMarks = computed(() => {
+  void tick.value;
+  return current.value?.pendingMarks ?? 0;
+});
+const runPath = computed(() => reviewRunPath(method.value, runtime.value, reviewPath.value, view.value));
+const pathLine = computed(() =>
+  pathStatus(
+    runPath.value.paths.find(row => row.id === reviewPath.value),
+    reviewPathNotice.value,
+  ),
+);
+// Never part of `disabled`: marking, Direct edit and relationship-only Apply need no card.
+const pathStopsRun = (full: boolean) => pathRun(runPath.value, pendingMarks.value, full).stopped;
+const canRerun = computed(() => runPath.value.canRerun && !disabled.value && policyValid.value);
 const saveEnabled = computed(
   () =>
     policyValid.value &&
@@ -307,11 +326,24 @@ async function ensureController() {
 }
 async function checkRuntime() {
   if (method.value !== 'nninteractive') return;
+  const request = ++runtimeRequest;
+  let status: InteractiveStatus;
   try {
-    runtime.value = await api.interactiveStatus();
+    status = await api.interactiveStatus();
   } catch (reason) {
-    runtime.value = { installed: false, model_available: false, available: false, reason: reason instanceof Error ? reason.message : String(reason) };
+    status = { installed: false, model_available: false, available: false, reason: reason instanceof Error ? reason.message : String(reason) };
   }
+  // Opening review asks twice, and the chooser must not settle on the older reply.
+  if (request !== runtimeRequest) return;
+  runtime.value = status;
+  const choice = choosePath(status.inference_paths ?? [], readPath(REVIEW_PATH_KEY) || reviewPath.value);
+  reviewPath.value = choice.selected;
+  reviewPathNotice.value = choice.notice;
+}
+function selectPath(event: Event) {
+  reviewPath.value = (event.target as HTMLSelectElement).value;
+  reviewPathNotice.value = '';
+  writePath(REVIEW_PATH_KEY, reviewPath.value);
 }
 function chooseMethod(value: InteractiveMethod) {
   if (value === method.value || methodDisabled.value) return;
@@ -340,16 +372,24 @@ function chooseTool(value: InteractiveTool) {
 function addGesture(prompt: InteractivePrompt) {
   if (!disabled.value) current.value?.append(prompt);
 }
-async function apply(full = false) {
-  if (disabled.value || !policyValid.value) return;
+async function run(full: boolean, choice?: InteractiveRunChoice) {
   const value = current.value,
     identity = identityVersion,
     caseId = props.caseId,
     revisionId = props.revisionId;
   showCandidate.value = true;
-  await value?.apply(full);
+  await value?.apply(full, choice);
   if (value?.job && !disposed && identity === identityVersion && current.value === value && props.caseId === caseId && props.revisionId === revisionId)
     policyOpen.value = false;
+}
+async function apply(full = false) {
+  const { stopped, choice } = pathRun(runPath.value, pendingMarks.value, full);
+  if (!disabled.value && policyValid.value && !stopped) await run(full, choice);
+}
+// apply() saves unsaved marks first. reload() would clear their timer and drop them, and
+// it would reset undo history, so a re-run goes through the same request as Run AI.
+function rerun() {
+  if (canRerun.value) void run(false, { inference_path: reviewPath.value, replay: true });
 }
 async function accept() {
   if (!saveEnabled.value) return;
@@ -436,7 +476,9 @@ watch(method, value => {
   if (value === 'nninteractive') void checkRuntime();
 });
 // Errors lead the message list; one that arrives while it is scrolled must not stay out of view.
-watch([() => current.value?.error, createError, methodError, () => props.surfaceError], () => messages.value?.scrollTo({ top: 0 }), { flush: 'post' });
+watch([() => current.value?.error, createError, methodError, () => runPath.value.block, () => props.surfaceError], () => messages.value?.scrollTo({ top: 0 }), {
+  flush: 'post',
+});
 watch(tool, value => emit('tool', value), { immediate: true });
 watch(include, value => emit('polarity', value), { immediate: true });
 watch(
@@ -500,6 +542,7 @@ defineExpose({
     :data-policy-dirty="current?.relationshipDirty || false"
     :data-relationship="relationship.kind"
     :data-affected-count="candidate?.affected_structures?.length || 0"
+    :data-inference-path="runPath.id || undefined"
   >
     <div class="review-workspace-tabs">
       <slot name="navigation" />
@@ -517,6 +560,11 @@ defineExpose({
           {{ runtime.reason || 'nnInteractive is unavailable on the workstation.' }} Direct paint and erase remain available.
           <button class="text-button" @click="checkRuntime">Check again</button>
         </p>
+        <p v-if="runPath.block" class="review-alert" role="status">
+          {{ runPath.block }}
+          <button class="text-button" @click="checkRuntime">Check again</button>
+        </p>
+        <p v-else-if="runPath.id && reviewPathNotice" class="review-progress" role="status">{{ reviewPathNotice }}</p>
         <div v-if="candidate" class="review-result-summary">
           <span v-if="candidate.relationship_changed && (candidate.total_changed_voxels ?? candidate.summary.changed_voxels) === 0"
             >Relationships updated · masks unchanged</span
@@ -528,6 +576,7 @@ defineExpose({
             ></span
           ><span>Target +{{ candidate.summary.added_voxels.toLocaleString() }} / −{{ candidate.summary.removed_voxels.toLocaleString() }}</span
           ><span>{{ candidate.summary.before_volume_ml.toFixed(1) }} → {{ candidate.summary.after_volume_ml.toFixed(1) }} mL</span
+          ><span v-if="candidate.gpu_name">AI result from {{ candidate.gpu_name }}</span
           ><span v-if="candidate.summary.after_voxels === 0">{{
             method === 'direct' && !view?.new_structure
               ? 'This segment will be empty when saved.'
@@ -645,7 +694,7 @@ defineExpose({
           ><button class="button secondary compact" :disabled="discarding || !current?.canRedo" @click="current?.redo()">↷ Redo</button>
         </div>
         <div class="review-primary-actions">
-          <button class="button primary compact review-apply" :disabled="disabled || !pending || !policyValid" @click="apply()">
+          <button class="button primary compact review-apply" :disabled="disabled || !pending || !policyValid || pathStopsRun(false)" @click="apply()">
             {{ method === 'direct' ? 'Apply edits' : 'Run AI' }}<template v-if="pending"> · {{ pending }}</template></button
           ><button class="button primary compact review-save" :disabled="!saveEnabled" @click="accept">
             {{ view?.new_structure ? 'Save new segment' : 'Save correction' }}
@@ -677,6 +726,7 @@ defineExpose({
         }}</span>
         <span v-if="view?.new_structure" class="review-new-target-note">New segment · starts empty</span>
         <span v-if="policyOpen && policyLoading">Loading saved relationship…</span>
+        <span v-if="runPath.label" class="review-ai-path" :title="runPath.label">AI · {{ runPath.label }}</span>
         <div class="review-context-actions">
           <button
             v-if="!addOpen"
@@ -816,11 +866,29 @@ defineExpose({
         <button
           v-if="method === 'nninteractive'"
           class="button secondary compact"
-          :disabled="disabled || !policyValid || (current.options.start_empty && !current.prompts.length)"
+          :disabled="disabled || !policyValid || (current.options.start_empty && !current.prompts.length) || pathStopsRun(true)"
           @click="apply(true)"
         >
           Refine whole mask
         </button>
+        <template v-if="runPath.id">
+          <label
+            >{{ runPath.locked ? 'Re-run draft on' : 'Run on'
+            }}<select aria-label="Inference path" :value="reviewPath" :disabled="current.working || discarding" @change="selectPath">
+              <option v-for="row in runPath.paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
+            </select></label
+          >
+          <button v-if="runPath.locked" class="button secondary compact review-rerun" :disabled="!canRerun" @click="rerun">Re-run on this GPU</button>
+          <p v-if="runPath.locked">
+            This draft's AI results came from {{ runPath.label }}, and Run AI stays on it so each step builds on the last. Re-running on another GPU repeats
+            every Apply step from the original mask and replaces the current result when it finishes. The new result can differ, including where no marks were
+            made, so inspect it before saving. If the re-run fails, the old result stays visible as the previous result but cannot be saved; re-run again or
+            discard. Marks are never lost.
+          </p>
+          <p v-else>The first AI result keeps this draft on this GPU.</p>
+          <p>One AI job runs at a time across GPUs.</p>
+          <p v-if="pathLine" role="status">{{ pathLine }}</p>
+        </template>
         <p v-if="method === 'direct'">
           Paint and erase affect one native slice. Scissors cuts through the selected segment in the captured 3D view direction. Edits run in gesture order.
           Save a correction before switching to optional AI assist. Apply edits previews the mask and surface; Save creates a revision.
@@ -845,11 +913,13 @@ defineExpose({
   position: relative;
   color: #c8d1df;
 }
+/* An auto track would size to its nowrap spans, leaving them nothing to shrink against. */
 .review-toolbar-rows {
   background: #171c24;
   border-block: 1px solid #354052;
   padding: 8px 12px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 .review-toolbar-main,
@@ -1055,6 +1125,12 @@ defineExpose({
 }
 .review-advanced input {
   margin: 0;
+}
+.review-advanced select {
+  min-width: 0;
+  max-width: 280px;
+  font-size: 11px;
+  padding: 5px 7px;
 }
 .review-advanced small {
   color: #8696ad;

@@ -182,6 +182,88 @@ describe('optimistic interactive draft queue', () => {
   });
 });
 
+describe('running on a chosen card', () => {
+  const summary = { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5 };
+  const locked = (prompts = [point('applied')]): InteractiveReview => ({
+    ...base(),
+    generation: 1,
+    status: 'ready',
+    prompts,
+    applied_prompt_count: prompts.length,
+    batches: [{ end: prompts.length, autozoom: true, full_refine: !prompts.length }],
+    dirty: false,
+    candidate: { generation: 1, revision_id: 'review-draft-1', summary },
+  });
+
+  it('sends a fifth argument only when there is a choice', async () => {
+    const { controller, reader } = fixture();
+    await controller.load();
+    controller.append(point('mark'));
+    await controller.apply(false, { inference_path: 'nvidia' });
+    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia' });
+  });
+  it('sends a whole-mask refine with its card too', async () => {
+    const { controller, reader } = fixture();
+    await controller.load();
+    await controller.apply(true, { inference_path: 'nvidia' });
+    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 0, true, { inference_path: 'nvidia' });
+  });
+  it('re-runs a draft with nothing pending, which Run AI would not', async () => {
+    const { controller, reader } = fixture(locked());
+    await controller.load();
+    expect(controller.pendingCount).toBe(0);
+    await controller.apply();
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+    await controller.apply(false, { inference_path: 'nvidia', replay: true });
+    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia', replay: true });
+  });
+  it('re-runs a full refine that has no marks at all', async () => {
+    const { controller, reader } = fixture(locked([]));
+    await controller.load();
+    await controller.apply(false, { inference_path: 'nvidia', replay: true });
+    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia', replay: true });
+  });
+  it('saves unsaved marks before a re-run and keeps them and their undo history', async () => {
+    const { controller, reader } = fixture(locked());
+    await controller.load();
+    controller.append(point('unsaved'));
+    expect(controller.unsaved).toBe(true);
+    await controller.apply(false, { inference_path: 'nvidia', replay: true });
+    expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['applied', 'unsaved']);
+    expect(reader.interactivePrompts.mock.invocationCallOrder[0]).toBeLessThan(reader.predictInteractive.mock.invocationCallOrder[0]);
+    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 2, false, { inference_path: 'nvidia', replay: true });
+    expect(controller.prompts.map(item => item.id)).toEqual(['applied', 'unsaved']);
+    expect(reader.interactiveReviews).toHaveBeenCalledTimes(1);
+    controller.working = false;
+    expect(controller.canUndo).toBe(true);
+  });
+  it('asks for nothing when saving frees the draft and leaves nothing to run', async () => {
+    const { controller, reader } = fixture(locked([]));
+    await controller.load();
+    reader.interactivePrompts.mockImplementationOnce(async () => ({
+      ...locked([]),
+      generation: 2,
+      status: 'draft' as const,
+      batches: [],
+      candidate: undefined,
+    }));
+    controller.edit([], { ...options, autozoom: false });
+    await controller.apply(false, { inference_path: 'nvidia', replay: true });
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+    expect(controller.working).toBe(false);
+  });
+  it('counts a relationship edit as pending work but not as marks, because it needs no card', async () => {
+    const { controller } = fixture();
+    await controller.load();
+    controller.editRelationship({ kind: 'subregion', parent_id: 'parent', exclusive_with: [] });
+    expect(controller.pendingCount).toBe(1);
+    expect(controller.pendingMarks).toBe(0);
+    controller.append(point('mark'));
+    expect(controller.pendingCount).toBe(2);
+    expect(controller.pendingMarks).toBe(1);
+  });
+});
+
 describe('direct paint and erase drafts', () => {
   const stroke = (id: string, include = true): InteractivePrompt => ({
     id,

@@ -1,5 +1,5 @@
 import { api, ApiError } from './api';
-import type { InteractiveMethod, InteractiveOptions, InteractivePrompt, InteractiveReview, Job, SegmentRelationship } from '../types';
+import type { InteractiveMethod, InteractiveOptions, InteractivePrompt, InteractiveReview, InteractiveRunChoice, Job, SegmentRelationship } from '../types';
 import { normalizeRelationship, reviewMethod } from './interactive-review';
 
 interface Snapshot {
@@ -97,8 +97,12 @@ export class InteractiveController {
     if (value?.candidate) return signature(this.relationship) !== signature(normalizeRelationship(value.candidate.relationship ?? value.relationship));
     return !!value?.relationship_dirty || signature(this.relationship) !== signature(normalizeRelationship(value?.relationship ?? this.initialRelationship));
   }
+  /** Marks waiting for a model. A relationship edit alone needs no card, so it is counted apart. */
+  get pendingMarks() {
+    return this.candidate ? Math.max(0, this.prompts.length - this.appliedCount) : this.prompts.length;
+  }
   get pendingCount() {
-    return (this.candidate ? Math.max(0, this.prompts.length - this.appliedCount) : this.prompts.length) + Number(this.relationshipDirty);
+    return this.pendingMarks + Number(this.relationshipDirty);
   }
   get dirty() {
     return this.unsaved || !!this.review?.dirty || !this.candidate || this.pendingCount > 0;
@@ -316,7 +320,7 @@ export class InteractiveController {
     this.error = '';
     await this.load();
   }
-  async apply(fullRefine = false) {
+  async apply(fullRefine = false, choice?: InteractiveRunChoice) {
     if (this.working || this.conflict) return;
     if (this.method === 'direct' && fullRefine) {
       this.error = 'Whole-mask refinement is available in AI assist.';
@@ -331,12 +335,18 @@ export class InteractiveController {
     try {
       await this.flush();
       if (fullRefine && !this.review) await this.createReview();
-      if (!this.review || (this.pendingCount === 0 && !fullRefine)) {
+      // A re-run has nothing pending by design, and saving may just have freed the draft.
+      const replay = !!choice?.replay && !!this.review?.batches?.length;
+      if (!this.review || (this.pendingCount === 0 && !fullRefine && !replay)) {
         this.working = false;
         this.notify();
         return;
       }
-      this.job = await this.reader.predictInteractive(this.caseId, this.review.id, this.review.generation, fullRefine);
+      const { id, generation } = this.review;
+      // One path sends no fifth argument at all, so it stays today's request.
+      this.job = await (choice
+        ? this.reader.predictInteractive(this.caseId, id, generation, fullRefine, choice)
+        : this.reader.predictInteractive(this.caseId, id, generation, fullRefine));
       this.review = { ...this.review, status: 'predicting', job_id: this.job.id };
       this.notify();
       if (this.cancelRequested) await this.reader.cancel(this.job.id);
