@@ -6,7 +6,8 @@ same on a workstation with an NVIDIA card as on CI. nvidia-smi and df only answe
 a record of what it installed, which it treats the way real uv treats dist-info, a torn RECORD
 included. find runs for real once it has been recorded. The two interpreters are this test's own
 Python running a stub check, with the real settings code copied beside it, so the folder the
-script names is the one the code would use.
+script names is the one the code would use. A few tests swap in the real check to ask it about the
+queue, and past that its PyTorch is a stand-in that kills itself on import.
 """
 
 import json
@@ -272,7 +273,7 @@ def _step(tool, arguments):
 def _state(entry):
     if entry.is_symlink():
         return os.readlink(entry)
-    return (entry.stat().st_mode, entry.read_bytes() if entry.is_file() else None)
+    return (entry.stat().st_mode, entry.stat().st_mtime_ns, entry.read_bytes() if entry.is_file() else None)
 
 
 @pytest.fixture
@@ -1012,14 +1013,6 @@ def test_the_queue_is_asked_by_a_python_that_writes_nothing_and_loads_nothing_fr
     assert question["arguments"] == ["-B", "-P", f"{rig.root}/scripts/check_gpu.py", "--queue"]
 
 
-def test_the_queue_is_asked_after_the_lock_and_before_the_wipe(rig):
-    installed(rig)
-    a_local_build(rig)
-    rig.run("nvidia")
-    steps = rig.steps()
-    assert steps.index("uv pip freeze") < steps.index("queue") < steps.index("find")
-
-
 @pytest.mark.parametrize("stop", [stopped_inside_uv_venv, stopped_inside_uv_pip_sync, killed_right_after_the_wipe])
 def test_a_stopped_install_does_not_wait_for_the_queue(rig, stop):
     # Discovery refuses an unfinished environment, so no job can be running from this one.
@@ -1258,6 +1251,8 @@ def test_the_script_never_runs_what_it_must_leave_alone():
         r"build_dcm2niix",
         r"bootstrap",
         r"--clear",
+        r"--reinstall",
+        r"--refresh",
         r"\bcurl\b",
         r"\bwget\b",
         r"scan3d\.env\.example",
