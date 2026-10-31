@@ -267,7 +267,8 @@ class InteractiveRuntime:
             "compile": False,
             "autozoom": True,
             "interaction_storage": "blosc2",
-            "miopen_find_mode": MIOPEN_FIND_MODE,
+            # MIOpen is ROCm's. Other builds never read the setting, so it did not shape their result.
+            "miopen_find_mode": MIOPEN_FIND_MODE if device.get("hip") else None,
             "convolution_benchmark": False,
             "torch_threads": min(8, os.cpu_count() or 1),
             "axis_order": "native_i_j_k",

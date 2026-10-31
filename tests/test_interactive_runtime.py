@@ -391,6 +391,22 @@ def test_cpu_device_loads_and_releases_without_gpu_state(runtime_files, tmp_path
     runtime.release()
 
 
+@pytest.mark.parametrize(
+    "device, recorded",
+    [
+        ({"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "Test GPU", "torch": "2.14.0+rocm7.2", "hip": "7.2.4", "cuda": None}, "FAST"),
+        ({"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "Test GPU", "torch": "2.14.0+cu130", "hip": None, "cuda": "13.0"}, None),
+        ({"device": "cpu", "selected_device": "cpu", "torch": "2.14.0+cpu"}, None),
+    ],
+    ids=["hip", "cuda", "cpu"],
+)
+def test_the_miopen_setting_is_recorded_only_where_a_build_reads_it(runtime_files, tmp_path, monkeypatch, device, recorded):
+    monkeypatch.setattr(interactive, "_device_info", lambda request: device)
+    runtime = interactive.InteractiveRuntime()
+    assert predict(runtime, runtime_files, tmp_path, [])["miopen_find_mode"] == recorded
+    runtime.release()
+
+
 def test_mask_geometry_and_original_path_protected(runtime_files, tmp_path):
     fixture, runtime = runtime_files, interactive.InteractiveRuntime()
     with pytest.raises(ValueError, match="new candidate"):
