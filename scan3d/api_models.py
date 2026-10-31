@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model_validator
 
 from .acquisition import CardiacPhase, StudyProfile
+from .inference_paths import ID_PATTERN
 from .orthanc_models import Digest, OrthancID
 
 
@@ -72,6 +73,7 @@ class Segment(Input):
     robust_crop: bool = False
     body_seg: bool = False
     remove_small_blobs: bool = False
+    inference_path: str | None = Field(default=None, max_length=32, pattern=ID_PATTERN)
 
 
 class TotalSegmentatorLicense(Input):

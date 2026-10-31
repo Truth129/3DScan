@@ -12,10 +12,12 @@ import time
 from fastapi.testclient import TestClient
 import pytest
 
+from inference_path_stub import GPU_NAME, activate, stand_in
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.inference_paths import binding
 from scan3d.service import Service
-from scan3d.store import Store, identifier
+from scan3d.store import Store, identifier, job_lane
 
 from test_interactive_review import FakeRuntime, example  # noqa: F401 (fixture)
 
@@ -252,3 +254,122 @@ def test_concurrent_revision_builds_share_one_preparation_budget(example, monkey
     assert peak[0] == 1
     assert [len(revision["structures"]) for revision in revisions] == [2, 2]
     assert revisions[0]["structures"][0]["volume_ml"] == base["structures"][0]["volume_ml"]
+
+
+# Inference paths share the one GPU lane
+
+
+@pytest.fixture
+def added_paths(tmp_path, monkeypatch):
+    first = stand_in(tmp_path)
+    second = stand_in(tmp_path, "second", proofs=first.proof.parent, kind="rocm", gpu_name="Test Second GPU")
+    activate(monkeypatch, first)
+    return first, second
+
+
+def test_gpu_jobs_never_overlap_across_paths(example, monkeypatch, added_paths):
+    service, case, base, prompt = example
+    guard, active, peak, ran = threading.Lock(), [0], [0], []
+
+    def gpu_work(name):
+        with guard:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+            ran.append(name)
+        time.sleep(0.05)
+        with guard:
+            active[0] -= 1
+
+    fake_engine_only(service, monkeypatch, FakeRuntime(during=lambda: gpu_work("review")))
+
+    def segmentation(job):
+        gpu_work(job.get("inference_path", {}).get("id"))
+        return {**base, "id": identifier()}
+
+    monkeypatch.setattr(service, "_segment", segmentation)
+    jobs = [service.segment_case(case["id"], base["id"], "total", inference_path=name) for name in ("nvidia", "second", None, "nvidia", "default")]
+    draft = service.reviews.create(case["id"], base["id"], "total:liver")
+    draft = service.reviews.update(case["id"], draft["id"], 0, [prompt])
+    jobs.append(service.reviews.predict(case["id"], draft["id"], draft["generation"]))
+    service.start()
+    try:
+        for job in jobs:
+            finished(service, job)
+    finally:
+        service.stop()
+    assert peak[0] == 1
+    assert ran == ["review", "nvidia", "second", None, "nvidia", "default"]
+
+
+def test_a_chosen_path_changes_no_jobs_lane(example, added_paths):
+    service, case, base, _ = example
+    bound = binding("nvidia")
+    assert job_lane({"kind": "segment", "payload": None, "inference_path": bound}) == "gpu"
+    assert job_lane({"kind": "refine", "payload": None, "inference_path": bound}) == "cpu"
+    assert job_lane({"kind": "review_predict", "payload": {"method": "direct"}, "inference_path": bound}) == "cpu"
+    # A malformed row stays claimable on its lane, and the lane still classifies everything.
+    malformed = service.store.enqueue(case["id"], "segment", None, inference_path=bound)
+    assert service.store.claim("cpu") is None
+    assert service.store.claim("gpu")["id"] == malformed["id"]
+
+
+def test_a_queued_choice_survives_a_restart_and_reaches_its_job(example, monkeypatch, added_paths):
+    service, case, base, _ = example
+    queued = service.segment_case(case["id"], base["id"], "total", inference_path="nvidia")
+    restarted = Service(service.settings)
+    seen = []
+
+    def segmentation(job):
+        seen.append(job["inference_path"])
+        return {**base, "id": identifier()}
+
+    monkeypatch.setattr(restarted, "_segment", segmentation)
+    assert restarted.store.get("jobs", queued["id"]) == queued
+    restarted.start()
+    try:
+        assert finished(restarted, queued)["status"] == "completed"
+    finally:
+        restarted.stop()
+    assert seen == [binding("nvidia")]
+
+
+@pytest.mark.parametrize(
+    "change, error",
+    [
+        (
+            lambda stub: stub.proof.unlink(),
+            f"{GPU_NAME} is no longer available: This GPU is not set up on this workstation. Nothing ran and no other GPU was tried.",
+        ),
+        (
+            lambda stub: stub.change(lambda record: record.update(gpu_ready=False)),
+            f"{GPU_NAME} is no longer available: Its last GPU check failed. Nothing ran and no other GPU was tried.",
+        ),
+        (
+            lambda stub: stub.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU")),
+            f"{GPU_NAME} changed after this job was queued. Nothing ran and no other GPU was tried. Start it again.",
+        ),
+    ],
+    ids=["removed", "went-bad", "changed"],
+)
+def test_a_queued_job_whose_path_changed_fails_by_name_and_does_not_strand(example, monkeypatch, added_paths, change, error):
+    service, case, base, _ = example
+    first, _ = added_paths
+    fake_engine_only(service, monkeypatch)
+
+    def no_model(*args, **kwargs):
+        raise AssertionError("A job whose path changed reached the engine")
+
+    from scan3d import segmentation
+
+    monkeypatch.setattr(segmentation, "segment", no_model)
+    monkeypatch.setattr(segmentation, "model_fingerprint", no_model)
+    queued = service.segment_case(case["id"], base["id"], "total", inference_path="nvidia")
+    change(first)
+    service.start()
+    try:
+        result = finished(service, queued)
+    finally:
+        service.stop()
+    assert (result["status"], result["stage"], result["error"]) == ("failed", "Failed", error)
+    assert result["inference_path"]["id"] == "nvidia"
+    assert service.store.claim() is None

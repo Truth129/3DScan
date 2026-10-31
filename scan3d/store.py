@@ -511,7 +511,7 @@ class Store:
             revision["model_manifest_url"] = f"/api/cases/{case_id}/revisions/{revision_id}/model-manifest"
         return revision
 
-    def enqueue(self, case_id, kind, payload):
+    def enqueue(self, case_id, kind, payload, **fields):
         self.get("cases", case_id)
         job = dict(
             id=identifier(),
@@ -524,6 +524,7 @@ class Store:
             created_at=now(),
             payload=payload,
             cancel_requested=False,
+            **fields,
         )
         return self.save("jobs", job)
 

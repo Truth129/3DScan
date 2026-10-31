@@ -105,6 +105,16 @@ def test_invalid_operations_and_cross_origin_fail_before_job(client):
     assert http.get("/api/health", headers={"host": "review.example:8443"}).status_code == 200
 
 
+def test_an_inference_path_is_checked_before_a_job_exists(client):
+    http, service = client
+    case = http.post("/api/cases/demo").json()
+    route, body = f"/api/cases/{case['id']}/segment", {"revision_id": case["active_revision_id"], "task": "total"}
+    assert http.post(route, json={**body, "inference_path": "Not A Path"}).status_code == 422
+    refused = http.post(route, json={**body, "inference_path": "absent"})
+    assert (refused.status_code, refused.json()["detail"]) == (400, "This GPU is not set up on this workstation.")
+    assert service.store.list("jobs") == []
+
+
 def test_png_slice_routes_are_retired(client):
     http, _ = client
     case = http.post("/api/cases/demo").json()

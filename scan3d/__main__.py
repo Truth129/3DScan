@@ -44,6 +44,7 @@ def main():
     segment.add_argument("--robust-crop", action="store_true")
     segment.add_argument("--body-seg", action="store_true")
     segment.add_argument("--remove-small-blobs", action="store_true")
+    segment.add_argument("--inference-path", help="An inference path id from doctor (default: the default path)")
     refine = sub.add_parser("refine")
     refine.add_argument("case")
     refine.add_argument("--revision", required=True)
@@ -95,7 +96,7 @@ def main():
             revision_id = args.revision or service.store.get("cases", args.case).get("active_revision_id")
             if not revision_id:
                 raise ValueError("Prepare a CT with process before requesting segmentation")
-            job = service.segment_case(args.case, revision_id, args.task, args.robust_crop, args.body_seg, args.remove_small_blobs)
+            job = service.segment_case(args.case, revision_id, args.task, args.robust_crop, args.body_seg, args.remove_small_blobs, args.inference_path)
         elif args.command == "include-all":
             job = service.include_all_outputs(args.case)
         else:

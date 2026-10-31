@@ -82,7 +82,7 @@ def portable_case(tmp_path):
         source="PRIVATE-SOURCE-NAME",
         qc=["PRIVATE-QC"],
         acquisition={"series_uid": "PRIVATE-SERIES-UID", "phase": "PRIVATE-PHASE"},
-        operation={"secret": "PRIVATE-OPERATION"},
+        operation={"secret": "PRIVATE-OPERATION", "runtime": {"inference_path": "PRIVATE-PATH", "gpu_name": "PRIVATE-VENDOR", "reused": True}},
         source_dir=str(source),
         label="PRIVATE-CASE-NAME",
         inference_manifest={
@@ -91,7 +91,9 @@ def portable_case(tmp_path):
             "resolution": "standard_full",
             "license_number": "PRIVATE-LICENSE-NUMBER",
             "runtime": {"gpu_name": "PRIVATE-VENDOR"},
-            "tasks": [{"task": "total", "secret": "PRIVATE-TASK-SECRET"}],
+            "inference_path": "PRIVATE-PATH",
+            "model_fingerprint": {"device_request": "PRIVATE-PATH|gpu|PRIVATE-VENDOR", "versions": {"PRIVATE-PACKAGE": "1"}},
+            "tasks": [{"task": "total", "secret": "PRIVATE-TASK-SECRET", "results_moved_to_cpu": True}],
         },
         pipeline_version="test",
     )

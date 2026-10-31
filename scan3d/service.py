@@ -13,7 +13,7 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import __version__
+from . import __version__, inference_paths
 from .config import Settings
 from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
 from .store import LANES, Store, identifier, job_lane, now
@@ -212,7 +212,7 @@ class Service:
         acquisition = acquisition_labels(series_uid, profile, phase, cardiac_phase=cardiac_phase, rr_percent=rr_percent)
         return self.store.enqueue(case_id, "process", acquisition)
 
-    def segment_case(self, case_id, revision_id, task=None, robust_crop=False, body_seg=False, remove_small_blobs=False):
+    def segment_case(self, case_id, revision_id, task=None, robust_crop=False, body_seg=False, remove_small_blobs=False, inference_path=None):
         from .segmentation_options import default_task, normalize_options
 
         parent = self.store.revision(case_id, revision_id)
@@ -230,7 +230,9 @@ class Service:
             dict(tasks=[task or default_task(reference["modality"])], robust_crop=robust_crop, body_seg=body_seg, remove_small_blobs=remove_small_blobs),
             modality=reference["modality"],
         )
-        return self.store.enqueue(case_id, "segment", dict(revision_id=revision_id, options=options, reference_image_id=reference["id"]))
+        # Top-level and public, so the card is still named once a failure overwrites the stage.
+        fields = {} if inference_path is None else {"inference_path": inference_paths.binding(inference_path)}
+        return self.store.enqueue(case_id, "segment", dict(revision_id=revision_id, options=options, reference_image_id=reference["id"]), **fields)
 
     def include_all_outputs(self, case_id):
         """Restore saved model outputs omitted by the former anatomy filter."""
@@ -537,6 +539,10 @@ class Service:
         case_dir = self.store.case_dir(job["case_id"])
         self.stage(job, "Checking selected task, settings and reusable model outputs")
         source_options = {"modality": reference["modality"]} if reference["modality"] != "CT" else {}
+        # Before the lookup, because a hit never reaches the device check. The default path passes
+        # no keyword, so what it fingerprints and runs is what it always was.
+        if inference_path := inference_paths.require(job.get("inference_path")):
+            source_options["inference_path"] = inference_path
         fingerprint = segmentation.model_fingerprint(profile, options=options, **source_options)
         cache_parameters = {
             "input_sha256": segmentation._digest(ct),
@@ -566,7 +572,8 @@ class Service:
                     run_manifest = cache_record["manifest"]
             except (ValueError, KeyError, TypeError):
                 cached.unlink()
-        if not cached.exists():
+        reused = cached.exists()
+        if not reused:
             inference.mkdir(parents=True, exist_ok=True)
             structures = segmentation.segment(
                 ct, inference, profile, lambda name: self.stage(job, name), lambda: self.cancelled(job), options=options, **source_options
@@ -578,6 +585,9 @@ class Service:
         from .segmentation_merge import merge_task_outputs
 
         merged, replacement = merge_task_outputs(parent["structures"], structures, options["tasks"], reference_image_id=reference["id"])
+        operation = {"type": "segment", "input_revision_id": parent["id"], "options": options, **replacement}
+        if bound := job.get("inference_path"):
+            operation["runtime"] = self._run_record(bound, run_manifest, reused)
         result = self.build_revision(
             job["case_id"],
             ct,
@@ -587,7 +597,7 @@ class Service:
             acquisition=acquisition,
             job=job,
             extra_qc=run_manifest.get("qc", []),
-            operation={"type": "segment", "input_revision_id": parent["id"], "options": options, **replacement},
+            operation=operation,
             inference_manifest=run_manifest,
         )
         result["segmentation_settings"] = options
@@ -603,6 +613,27 @@ class Service:
         ]
         atomic_json(Path(result["directory"]) / "revision.json", result)
         return result
+
+    @staticmethod
+    def _run_record(bound, manifest, reused):
+        """What ran a segment revision, publicly, under nnInteractive's provenance names.
+
+        It sits on the operation because children do not inherit that, and a later revision can
+        merge masks from several runs. The manifest stays as the run left it, because
+        include-all compares it with the run's own file. On a reused result the values are the
+        original run's, which `reused` explains.
+        """
+        measured = manifest.get("runtime", {})
+        return {
+            "inference_path": bound["id"],
+            "gpu_name": measured.get("gpu_name"),
+            "device": measured.get("selected_device"),
+            "torch_version": measured.get("torch"),
+            "hip_version": measured.get("hip"),
+            "cuda_version": measured.get("cuda"),
+            "reused": reused,
+            "results_moved_to_cpu": any(task.get("results_moved_to_cpu") for task in manifest.get("tasks", [])),
+        }
 
     def build_revision(
         self,

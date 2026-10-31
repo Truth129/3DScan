@@ -16,6 +16,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 
+from inference_path_stub import GPU_NAME, stand_in
 from scan3d import dicom, imaging, segmentation, surfaces
 from scan3d.api import create_app
 from scan3d.config import Settings
@@ -475,3 +476,141 @@ def test_invalid_explicit_task_fails_before_job_or_model_access(rig):
     assert response.status_code in (400, 422), response.text
     assert rig.service.store.list("jobs", case["id"]) == jobs
     assert not rig.calls.segments and not rig.calls.fingerprints
+
+
+# Inference paths, through the same queue and doubles
+
+
+@pytest.fixture
+def two_paths(rig, tmp_path, monkeypatch):
+    """`rig` whose doubles differ by path as the real ones do, with one added path."""
+    stub = stand_in(tmp_path)
+    monkeypatch.setenv("SCAN3D_INFERENCE_PATH_DIR", str(stub.proof.parent))
+    plain_fingerprint, plain_segment = segmentation.model_fingerprint, segmentation.segment
+
+    def fingerprint(profile, options=None, *, inference_path=None):
+        result = plain_fingerprint(profile, options)
+        if inference_path:
+            result.update(versions=inference_path.versions(), device_request=inference_path.identity)
+            result["digest"] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
+        return result
+
+    def segment(ct_path, output_dir, profile, progress, cancelled, options=None, *, inference_path=None):
+        structures = plain_segment(ct_path, output_dir, profile, progress, cancelled, options=options)
+        rig.calls.segments[-1]["inference_path"] = inference_path
+        manifest = Path(output_dir) / "inference.json"
+        record = json.loads(manifest.read_text())
+        record["model_fingerprint"] = fingerprint(profile, options, inference_path=inference_path)
+        if inference_path:
+            record.update(
+                inference_path=inference_path.id, runtime={"selected_device": "gpu:0", "gpu_name": GPU_NAME, "torch": "2.0", "hip": None, "cuda": "13.0"}
+            )
+        manifest.write_text(json.dumps(record))
+        return structures
+
+    monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
+    monkeypatch.setattr(segmentation, "segment", segment)
+    return rig
+
+
+def test_each_path_keeps_its_own_results_and_naming_default_changes_nothing(two_paths):
+    rig = two_paths
+    case, ct = prepared(rig)
+    default = execute(rig, requested(rig, case, ct))
+    added = execute(rig, requested(rig, case, default, inference_path="nvidia"))
+    assert len(rig.calls.segments) == 2 and rig.calls.segments[0]["inference_path"] is None
+    assert rig.calls.segments[1]["inference_path"].id == "nvidia"
+    default_again = execute(rig, requested(rig, case, added))
+    added_again = execute(rig, requested(rig, case, default_again, inference_path="nvidia"))
+    named_default = execute(rig, requested(rig, case, added_again, inference_path="default"))
+    assert len(rig.calls.segments) == 2
+    assert default_again["inference_manifest"] == named_default["inference_manifest"] == default["inference_manifest"]
+    assert added_again["inference_manifest"] == added["inference_manifest"] != default["inference_manifest"]
+    assert added["inference_manifest"]["inference_path"] == "nvidia" and "inference_path" not in default["inference_manifest"]
+
+
+def test_a_revision_records_what_ran_it_only_when_a_path_was_named(two_paths):
+    rig = two_paths
+    case, ct = prepared(rig)
+    default = execute(rig, requested(rig, case, ct))
+    assert "runtime" not in default["operation"]
+    added = execute(rig, requested(rig, case, default, inference_path="nvidia"))
+    measured = {"device": "gpu:0", "gpu_name": GPU_NAME, "torch_version": "2.0", "hip_version": None, "cuda_version": "13.0", "results_moved_to_cpu": False}
+    assert added["operation"]["runtime"] == {"inference_path": "nvidia", "reused": False, **measured}
+    reused = execute(rig, requested(rig, case, added, inference_path="nvidia"))
+    assert reused["operation"]["runtime"] == {"inference_path": "nvidia", "reused": True, **measured}
+    named_default = execute(rig, requested(rig, case, reused, inference_path="default"))
+    assert named_default["operation"]["runtime"]["inference_path"] == "default" and named_default["operation"]["runtime"]["reused"] is True
+    public = rig.http.get(f"/api/cases/{case['id']}/revisions/{reused['id']}").json()
+    assert public["operation"]["runtime"] == reused["operation"]["runtime"]
+    assert "runtime" not in execute(rig, requested(rig, case, named_default))["operation"]
+
+
+def test_the_card_stays_off_everything_a_later_revision_inherits(two_paths):
+    # A revision can hold masks from several runs, and DICOM SEG imports copy these lists too.
+    rig = two_paths
+    case, ct = prepared(rig)
+    added = execute(rig, requested(rig, case, ct, inference_path="nvidia"))
+    public = rig.http.get(f"/api/cases/{case['id']}/revisions/{added['id']}").json()
+    child = rig.service.build_revision(
+        case["id"], Path(ct["ct_file"]), added["structures"], source="interactive_correction", parent=added["id"], acquisition=added["acquisition"]
+    )
+    assert child["operation"] is None and child["segmentation_runs"] == added["segmentation_runs"]
+    assert GPU_NAME not in json.dumps(added["segmentation_runs"]) and "nvidia" not in json.dumps(added["segmentation_runs"])
+    assert GPU_NAME not in json.dumps(public["model_provenance"]) and "nvidia" not in json.dumps(public["model_provenance"])
+
+
+def test_a_chosen_path_is_a_frozen_public_field_and_stays_out_of_the_payload(two_paths):
+    rig = two_paths
+    case, ct = prepared(rig)
+    bound = {"id": "nvidia", "label": GPU_NAME, "identity": f"nvidia|gpu|{GPU_NAME}"}
+    response = requested(rig, case, ct, inference_path="nvidia")
+    assert response.json()["inference_path"] == bound
+    stored = rig.service.store.get("jobs", response.json()["id"])
+    assert set(stored["payload"]) == {"revision_id", "options", "reference_image_id"} and "inference_path" not in stored["payload"]["options"]
+    execute(rig, response)
+    finished = rig.http.get(f"/api/jobs/{stored['id']}").json()
+    assert finished["inference_path"] == bound and "payload" not in finished
+
+
+def test_no_choice_leaves_a_job_as_it_was(two_paths):
+    rig = two_paths
+    case, ct = prepared(rig)
+    job = requested(rig, case, ct).json()
+    assert "inference_path" not in job and "inference_path" not in rig.service.store.get("jobs", job["id"])
+
+
+def test_naming_default_is_recorded_with_its_constant_identity(two_paths):
+    rig = two_paths
+    case, ct = prepared(rig)
+    assert requested(rig, case, ct, inference_path="default").json()["inference_path"] == {"id": "default", "label": "Default device", "identity": "default"}
+
+
+def test_a_path_that_cannot_run_is_refused_with_no_job_or_model_access(two_paths, tmp_path):
+    rig = two_paths
+    case, ct = prepared(rig)
+    jobs = rig.service.store.list("jobs", case["id"])
+    unknown = requested(rig, case, ct, inference_path="absent")
+    assert (unknown.status_code, unknown.json()["detail"]) == (400, "This GPU is not set up on this workstation.")
+    proof = tmp_path / "paths" / "nvidia.json"
+    record = json.loads(proof.read_text())
+    proof.write_text(json.dumps({**record, "gpu_ready": False}))
+    unavailable = requested(rig, case, ct, inference_path="nvidia")
+    assert (unavailable.status_code, unavailable.json()["detail"]) == (400, f"{GPU_NAME} is unavailable: Its last GPU check failed.")
+    assert rig.service.store.list("jobs", case["id"]) == jobs
+    assert not rig.calls.segments and not rig.calls.fingerprints
+
+
+def test_an_empty_name_is_refused_rather_than_read_as_no_choice(two_paths):
+    # The command line reaches this with no schema in front of it.
+    rig = two_paths
+    case, ct = prepared(rig)
+    with pytest.raises(ValueError, match="not set up"):
+        rig.service.segment_case(case["id"], ct["id"], "total", inference_path="")
+
+
+@pytest.mark.parametrize("value", ["", "Upper", "-dash", "has space", "../nvidia", "nvidia\n", "x" * 33, 7])
+def test_a_malformed_path_is_a_schema_error(two_paths, value):
+    rig = two_paths
+    case, ct = prepared(rig)
+    assert requested(rig, case, ct, inference_path=value).status_code == 422

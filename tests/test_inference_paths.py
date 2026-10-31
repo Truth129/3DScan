@@ -12,14 +12,17 @@ import platform
 import shutil
 import sqlite3
 import subprocess
+import sys
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
 
-from inference_path_stub import ENGINES, FAMILIES, GPU_NAME, MEMORY_BYTES, TORCH, activate, add_package, stand_in
-from scan3d import doctor, inference_paths
+from inference_path_stub import ENGINES, FAMILIES, GPU_NAME, MEMORY_BYTES, TORCH, activate, add_package, child_path, stand_in
+from scan3d import doctor, inference_paths, segmentation
 from scan3d.api import create_app
 from scan3d.config import ROOT, Settings
+from scan3d.demo import create_demo
 from scan3d.inference_paths import InferencePath, binding, gpu_cards, identity, public_error, require, rows
 from scan3d.store import Store
 from scripts.check_gpu import jobs_waiting
@@ -830,6 +833,275 @@ def test_absolute_paths_leave_a_public_error(message, expected):
 
 def test_an_empty_error_still_says_something():
     assert public_error(RuntimeError()) == "RuntimeError"
+
+
+# Whole segmentation jobs, in real children of the stand-in
+
+TOTALSEGMENTATOR = """
+import json, os, signal, sys
+from pathlib import Path
+
+import nibabel as nib
+import numpy as np
+import torch
+
+plan = json.loads(os.environ["SCAN3D_FAKE_TOTALSEG"])
+option = lambda name: sys.argv[sys.argv.index(name) + 1]
+with open(os.environ["SCAN3D_FAKE_TOTALSEG_RUNS"], "a") as runs:
+    print(json.dumps({"prefix": sys.prefix, "executable": sys.executable, "arguments": sys.argv[1:], "environment": dict(os.environ)}), file=runs)
+print(plan.get("log", "Running"))
+if plan.get("kill"):
+    os.kill(os.getpid(), signal.SIGKILL)
+if plan.get("exit"):
+    sys.exit(plan["exit"])
+reference = nib.load(option("-i"))
+mask = np.zeros(reference.shape, np.uint8)
+mask[10:20, 10:20, 10:20] = 1
+nib.save(nib.Nifti1Image(mask, reference.affine, reference.header.copy()), Path(option("-o")) / "liver.nii.gz")
+report = {"device": "gpu", "torch_version": torch.__version__, "classes": {"1": "liver"}, **plan.get("report", {})}
+Path(option("--report")).write_text(json.dumps(report))
+"""
+
+
+@pytest.fixture
+def segmenting(tmp_path, monkeypatch):
+    """A demo case whose jobs start real children: the device check and a shadow TotalSegmentator.
+
+    The stand-in sits under a PRIVATE- folder, so any public text that names its interpreter
+    or site-packages shows up. The default path's child finds the shadow too, on PYTHONPATH.
+    No weights exist here, so the fingerprint is told they are complete. Its digest stays the
+    real one, which is what the job's call and the run's call must agree on.
+    """
+    stub = stand_in(tmp_path / "PRIVATE-home")
+    stub.shadow("totalsegmentator.bin.TotalSegmentator", TOTALSEGMENTATOR)
+    activate(monkeypatch, stub)
+    runs = tmp_path / "totalsegmentator-runs"
+    monkeypatch.setenv("SCAN3D_FAKE_TOTALSEG_RUNS", str(runs))
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH_PREFIXES", str(tmp_path / "prefixes"))
+    real = segmentation.model_fingerprint
+    monkeypatch.setattr(segmentation, "model_fingerprint", lambda *args, **kwargs: {**real(*args, **kwargs), "weights_complete": True})
+    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
+    service = app.state.service
+    case = create_demo(service)
+
+    def queue(name=None, **plan):
+        monkeypatch.setenv("SCAN3D_FAKE_TOTALSEG", json.dumps(plan))
+        return service.segment_case(case["id"], service.store.get("cases", case["id"])["active_revision_id"], "total", inference_path=name)
+
+    def finish(queued):
+        service.execute(service.store.claim())
+        return service.store.get("jobs", queued["id"])
+
+    fixture = SimpleNamespace(
+        stub=stub,
+        service=service,
+        case=case,
+        http=TestClient(app, base_url="http://127.0.0.1"),
+        queue=queue,
+        finish=finish,
+        run=lambda name=None, **plan: finish(queue(name, **plan)),
+        revision=lambda job: service.store.revision(case["id"], job["revision_id"]),
+        runs=lambda: [json.loads(line) for line in runs.read_text().splitlines()] if runs.exists() else [],
+        prefixes=lambda: (tmp_path / "prefixes").read_text().split() if (tmp_path / "prefixes").exists() else [],
+    )
+    yield fixture
+    fixture.http.close()
+
+
+def venv_of(stub):
+    return str(Path(stub.python).parents[1])
+
+
+def saved_runs(segmenting):
+    return list(segmenting.service.store.case_dir(segmenting.case["id"]).glob("inference/*/run-*"))
+
+
+def test_a_job_on_a_path_runs_in_that_interpreter_with_that_environment(segmenting, monkeypatch):
+    other_stack = {"CUDA_VISIBLE_DEVICES": "GPU-other", "LD_LIBRARY_PATH": "/opt/other-stack/lib", "TORCHINDUCTOR_CACHE_DIR": "/opt/other-stack/cache"}
+    for name, value in other_stack.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:7")  # The default path's own choice.
+    monkeypatch.setenv("TOTALSEG_HOME_DIR", "/shared/totalsegmentator")
+    job = segmenting.run("nvidia")
+    assert job["status"] == "completed", job
+    (run,) = segmenting.runs()
+    assert (run["prefix"], run["executable"]) == (venv_of(segmenting.stub), segmenting.stub.python)
+    assert segmenting.prefixes() == [venv_of(segmenting.stub)] * 2  # The device check, then the run.
+    assert "--verbose" in run["arguments"] and run["arguments"][run["arguments"].index("--device") + 1] == "gpu:0"
+    assert not set(other_stack) & set(run["environment"])
+    assert run["environment"]["SCAN3D_DEVICE"] == "gpu"
+    assert run["environment"]["TOTALSEG_HOME_DIR"] == "/shared/totalsegmentator"
+    assert run["environment"]["XDG_CACHE_HOME"] == str(ROOT / ".cache" / "inference-paths" / "nvidia")
+    assert run["environment"]["PATH"].startswith(f"{Path(segmenting.stub.python).parent}{os.pathsep}")
+
+
+def test_the_default_paths_children_keep_todays_interpreter_and_environment(segmenting, monkeypatch):
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/this-stack/lib")
+    monkeypatch.setenv("XDG_CACHE_HOME", "/opt/this-stack/cache")
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:0")
+    job = segmenting.run()
+    assert job["status"] == "completed", job
+    (run,) = segmenting.runs()
+    assert (run["prefix"], run["executable"]) == (sys.prefix, sys.executable)
+    assert segmenting.prefixes() == [sys.prefix] * 2
+    assert "--verbose" not in run["arguments"]
+    assert {name: run["environment"].get(name) for name in ("LD_LIBRARY_PATH", "XDG_CACHE_HOME", "SCAN3D_DEVICE")} == {
+        "LD_LIBRARY_PATH": "/opt/this-stack/lib",
+        "XDG_CACHE_HOME": "/opt/this-stack/cache",
+        "SCAN3D_DEVICE": "gpu:0",
+    }
+
+
+def test_each_path_reuses_only_its_own_saved_result(segmenting):
+    measured = {
+        "gpu_name": GPU_NAME,
+        "device": "gpu:0",
+        "torch_version": TORCH,
+        "hip_version": None,
+        "cuda_version": "13.0.fake",
+        "results_moved_to_cpu": False,
+    }
+    added = segmenting.run("nvidia")
+    first = segmenting.revision(added)
+    assert first["operation"]["runtime"] == {"inference_path": "nvidia", "reused": False, **measured}
+    # Without both fingerprints agreeing, this run would miss and rerun, forever and silently.
+    again = segmenting.revision(segmenting.run("nvidia"))
+    assert len(segmenting.runs()) == 1 and again["operation"]["runtime"] == {"inference_path": "nvidia", "reused": True, **measured}
+    assert again["inference_manifest"] == first["inference_manifest"]
+    default = segmenting.revision(segmenting.run("default"))
+    assert [run["prefix"] for run in segmenting.runs()] == [venv_of(segmenting.stub), sys.prefix]
+    assert default["operation"]["runtime"] == {"inference_path": "default", "reused": False, **measured}
+    assert default["inference_manifest"]["run_id"] != first["inference_manifest"]["run_id"]
+    absent = segmenting.revision(segmenting.run())  # The same key as naming default.
+    assert len(segmenting.runs()) == 2 and absent["inference_manifest"] == default["inference_manifest"]
+    assert "runtime" not in absent["operation"]
+    assert segmenting.revision(segmenting.run("nvidia"))["inference_manifest"] == first["inference_manifest"]
+    assert len(segmenting.runs()) == 2
+
+
+def test_a_replaced_card_never_reuses_the_old_cards_result(segmenting, monkeypatch):
+    first = segmenting.revision(segmenting.run("nvidia"))
+    segmenting.stub.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU"))
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", json.dumps([["Test Replacement GPU", MEMORY_BYTES, 0]]))
+    second = segmenting.revision(segmenting.run("nvidia"))
+    assert len(segmenting.runs()) == 2
+    assert second["inference_manifest"]["runtime"]["gpu_name"] == "Test Replacement GPU" != first["inference_manifest"]["runtime"]["gpu_name"]
+
+
+def test_an_upgraded_stack_on_the_same_card_does_not_reuse_the_old_result(segmenting):
+    # Its identity has not changed, so only the versions it reports can tell these runs apart.
+    assert segmenting.run("nvidia")["status"] == "completed"
+    stub, before = segmenting.stub, binding("nvidia")
+    shutil.rmtree(stub.site_packages / f"cuda_toolkit-{FAMILIES['cuda']['cuda-toolkit']}.dist-info")
+    add_package(stub.site_packages, "cuda-toolkit", "13.2.1")
+    stub.change(lambda record: record["checks"]["runtime_versions"].update({"cuda-toolkit": "13.2.1"}))
+    assert binding("nvidia") == before
+    assert segmenting.run("nvidia")["status"] == "completed"
+    assert len(segmenting.runs()) == 2
+
+
+def test_a_saved_result_is_not_reachable_from_a_path_that_went_bad(segmenting):
+    assert segmenting.run("nvidia")["status"] == "completed"
+    queued = segmenting.queue("nvidia")
+    Path(segmenting.stub.python).unlink()
+    job = segmenting.finish(queued)
+    assert (job["status"], job["error"]) == ("failed", f"{GPU_NAME} is no longer available: {NO_PYTHON} Nothing ran and no other GPU was tried.")
+    assert len(segmenting.runs()) == 1
+
+
+def test_the_saved_run_stays_byte_for_byte_what_include_all_compares(segmenting):
+    job = segmenting.run("nvidia")
+    revision = segmenting.revision(job)
+    (run,) = saved_runs(segmenting)
+    assert json.loads((run / "inference.json").read_text()) == revision["inference_manifest"]
+    included = segmenting.service.include_all_outputs(segmenting.case["id"])
+    assert segmenting.finish(included)["status"] == "completed"
+
+
+def test_a_failed_check_and_a_wrong_report_leave_nothing_to_reuse(segmenting, monkeypatch):
+    def nothing_saved():
+        return not list(segmenting.service.store.case_dir(segmenting.case["id"]).rglob("complete.json"))
+
+    good = json.dumps([[GPU_NAME, MEMORY_BYTES, 0]])
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", json.dumps([["Test Other GPU", MEMORY_BYTES, 0]]))
+    wrong_card = segmenting.run("nvidia")
+    assert wrong_card["status"] == "failed", wrong_card
+    assert wrong_card["error"] == (f"Expected {GPU_NAME}, but the GPU check found Test Other GPU (gpu:0, CUDA). No result was kept and no other GPU was tried.")
+    assert segmenting.runs() == [] and saved_runs(segmenting) == [] and nothing_saved()
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", good)
+    wrong_torch = segmenting.run("nvidia", report={"torch_version": "9.9.9"})
+    assert wrong_torch["status"] == "failed" and f"ran on PyTorch 9.9.9, not the {TORCH} that {GPU_NAME} was checked on" in wrong_torch["error"], wrong_torch
+    assert len(segmenting.runs()) == 1 and nothing_saved()
+    fell_back = segmenting.run("nvidia", report={"device": "cpu"})
+    assert (
+        fell_back["status"] == "failed" and fell_back["error"] == "TotalSegmentator did not complete on the requested GPU; CPU fallback results were rejected"
+    )
+    assert len(segmenting.runs()) == 2 and nothing_saved()
+    assert segmenting.run("nvidia")["status"] == "completed" and len(segmenting.runs()) == 3
+
+
+def test_a_job_on_a_path_leaves_the_api_process_free_of_torch(tmp_path, monkeypatch):
+    # As test_segmentation_job_never_imports_torch_in_the_api_process, with no child replaced.
+    script = """
+import builtins, json, os, subprocess, sys
+from pathlib import Path
+original = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name.partition(".")[0] == "torch":
+        raise AssertionError("The API process imported " + name)
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+os.environ["PYTHONPATH"] = sys.argv[2]  # For its children: this process's own path is settled.
+from scan3d import segmentation
+from scan3d.config import Settings
+from scan3d.demo import create_demo
+from scan3d.service import Service
+commands = []
+run = subprocess.Popen
+def popen(command, **kwargs):
+    commands.append(command)
+    return run(command, **kwargs)
+subprocess.Popen = popen
+real = segmentation.model_fingerprint
+segmentation.model_fingerprint = lambda *args, **kwargs: {**real(*args, **kwargs), "weights_complete": True}
+service = Service(Settings(Path(sys.argv[1]) / "data", (Path(sys.argv[1]),)))
+case = create_demo(service)
+job = service.segment_case(case["id"], case["active_revision_id"], task="total", inference_path="nvidia")
+service.execute(service.store.claim())
+job = service.store.get("jobs", job["id"])
+assert job["status"] == "completed", job
+assert "torch" not in sys.modules
+print(json.dumps(commands))
+"""
+    parent_path = os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH"))))
+    stub = stand_in(tmp_path)
+    stub.shadow("totalsegmentator.bin.TotalSegmentator", TOTALSEGMENTATOR)
+    activate(monkeypatch, stub)
+    monkeypatch.setenv("SCAN3D_FAKE_TOTALSEG", "{}")
+    monkeypatch.setenv("SCAN3D_FAKE_TOTALSEG_RUNS", str(tmp_path / "runs"))
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH_PREFIXES", str(tmp_path / "prefixes"))
+    environment = {**os.environ, "PYTHONPATH": parent_path}
+    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path), child_path(stub)], env=environment, capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    check, run = json.loads(completed.stdout.splitlines()[-1])
+    assert check == [stub.python, "-P", "-m", "scan3d.segmentation", "gpu"]
+    assert run[:4] == [stub.python, "-u", "-m", "totalsegmentator.bin.TotalSegmentator"] and "--verbose" in run
+    assert Path(run[0]).is_symlink()  # As the venv reported it: its target would run outside the venv.
+    assert (tmp_path / "prefixes").read_text().split() == [venv_of(stub)] * 2
+
+
+def test_the_command_line_can_name_a_path_and_is_refused_like_the_api(tmp_path, monkeypatch):
+    (tmp_path / "no-settings.env").touch()
+    monkeypatch.setenv("SCAN3D_CONFIG", str(tmp_path / "no-settings.env"))
+    settings = Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist")
+    monkeypatch.setenv("SCAN3D_DATA_DIR", str(settings.data_dir))
+    app = create_app(settings)
+    case = create_demo(app.state.service)
+    command = [sys.executable, "-m", "scan3d", "segment", case["id"], "--task", "total", "--inference-path", "absent"]
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH"))))}
+    completed = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=60)
+    assert completed.returncode != 0 and UNSET_UP in completed.stderr
+    assert app.state.service.store.list("jobs") == []
 
 
 # Proofs, from scripts/check_gpu.py on the fake PyTorch
