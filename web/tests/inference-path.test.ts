@@ -341,6 +341,42 @@ describe('the card Run AI uses', () => {
     expect(state.block).toContain('NVIDIA Test GPU is no longer set up');
     expect(state.canRerun).toBe(true);
   });
+  describe('when the bound card is listed as unavailable', () => {
+    const named = (label: string, reason: string) => row('nvidia', label, { available: false, reason });
+    const draft = { batches: [batch], inference_path: bound(nvidia) };
+
+    it('keeps the true reason when a failed check left the id as its label', () => {
+      expect(reviewRunPath([amd, named('nvidia', 'Its last GPU check failed.')], 'default', draft)).toMatchObject({
+        locked: true,
+        id: 'nvidia',
+        label: 'NVIDIA Test GPU',
+        block: 'NVIDIA Test GPU is unavailable: Its last GPU check failed. Re-run this draft on another GPU in Options +, or discard it. Marking still works.',
+      });
+    });
+    it('keeps the true reason of a proof that cannot be read, which also has no card name', () => {
+      const state = reviewRunPath([amd, named('nvidia', 'Its GPU check record cannot be read.')], 'default', draft);
+      expect(state.block).toContain('NVIDIA Test GPU is unavailable: Its GPU check record cannot be read.');
+    });
+    it('keeps its own label when the row still names the card', () => {
+      expect(reviewRunPath([amd, named('NVIDIA Test GPU', 'Its last GPU check failed.')], 'default', draft).block).toContain(
+        'NVIDIA Test GPU is unavailable: Its last GPU check failed.',
+      );
+    });
+    it('never says the card has gone, or names it by its id', () => {
+      const { block } = reviewRunPath([amd, named('nvidia', 'Its last GPU check failed.')], 'default', draft);
+      expect(block).not.toContain('no longer set up');
+      expect(block).not.toMatch(/^nvidia/);
+    });
+    it('gives a running job the same cause and nothing else', () => {
+      const rows = [amd, named('nvidia', 'Its last GPU check failed.')];
+      expect(runPathFor('nninteractive', status(rows), 'default', draft, true).block).toBe('NVIDIA Test GPU is unavailable: Its last GPU check failed.');
+    });
+    it('offers the re-run only on another card that works', () => {
+      const rows = [amd, named('nvidia', 'Its last GPU check failed.')];
+      expect(reviewRunPath(rows, 'default', draft).canRerun).toBe(true);
+      expect(reviewRunPath(rows, 'nvidia', draft).canRerun).toBe(false);
+    });
+  });
   it('does not block the default card over a new label, because its identity holds no card', () => {
     const state = reviewRunPath([row('default', 'Default device'), nvidia], 'default', { batches: [batch], inference_path: bound(amd) });
     expect(state).toMatchObject({ label: 'AMD Test GPU', block: '', canRerun: false });

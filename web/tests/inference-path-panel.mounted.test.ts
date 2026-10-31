@@ -395,6 +395,27 @@ describe('a draft with a result', () => {
     await press(root.button('Re-run on this GPU'));
     expect(server.predict).toHaveBeenCalledExactlyOnceWith('case', 'draft', 2, false, { inference_path: 'default', replay: true });
   });
+  it('keeps the true reason of a bound card whose failed check named no card', async () => {
+    const server = workstation([amd, row('nvidia', 'nvidia', { available: false, reason: 'Its last GPU check failed.' })], resultOn(nvidia), 'default');
+    const { root, panel } = await openAI();
+    const messages = () => root.named('review-messages')?.content;
+    expect(messages()).toContain('NVIDIA Test GPU is unavailable: Its last GPU check failed.');
+    expect(messages()).not.toContain('no longer set up');
+    expect(messages()).not.toContain('nvidia is unavailable');
+    expect(root.named('review-messages')?.button('Check again')).toBeDefined();
+    expect(root.named('review-ai-path')?.content).toBe('AI · NVIDIA Test GPU');
+    panel.value.addPrompt(point);
+    await settled();
+    await clickAnyway(root.named('review-apply'));
+    expect(root.named('review-apply')?.props.disabled).toBe(true);
+    expect(server.predict).not.toHaveBeenCalled();
+  });
+  it('reports an available row under another name as a card that has gone', async () => {
+    workstation([amd, row('nvidia', 'Replacement Test GPU')], resultOn(nvidia), 'default');
+    const { root } = await openAI();
+    expect(root.named('review-messages')?.content).toContain('NVIDIA Test GPU is no longer set up on this workstation.');
+    expect(root.named('review-messages')?.content).not.toContain('Replacement Test GPU');
+  });
   it('names the running job in the toolbar, and goes back to the binding when it ends', async () => {
     const server = workstation([amd, nvidia], resultOn(amd), 'nvidia');
     const { root, section } = await openAI();

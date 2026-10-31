@@ -141,13 +141,14 @@ export function reviewRunPath(
     id = bound?.id ?? DEFAULT_PATH,
     named = paths.find(row => row.id === id);
   // A re-issued proof can reuse an id for another card, which must not continue this draft.
-  // The default path's identity has no card in it, so only an added path can change this way.
-  const row = id === DEFAULT_PATH || named?.label === bound?.label ? named : undefined,
+  // The default path's identity has no card in it, so only an added path can change this way,
+  // and only an available row can show it: a failed check can name no card, so its label is the id.
+  const row = id === DEFAULT_PATH || !named?.available || named.label === bound?.label ? named : undefined,
     label = bound?.label ?? row?.label ?? '';
   // A current result on this card would only be repeated. A stale one cannot be saved, and a
   // failed or cancelled re-run leaves it stale, so then the draft's own card must be offered.
   const canRerun = !!chosen?.available && (id !== selected || !row || !!review.dirty);
-  return { paths, locked: true, id, label, block: usable(pathBlock(row, label, true, working)), canRerun };
+  return { paths, locked: true, id, label, block: usable(pathBlock(row && { ...row, label }, label, true, working)), canRerun };
 }
 
 /**
