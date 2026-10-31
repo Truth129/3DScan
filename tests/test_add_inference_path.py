@@ -2,7 +2,8 @@
 
 Nothing real can run here. The script is copied into a temporary root, PATH holds only the
 fakes below and a few coreutils, and every fake records its call, so these tests behave the
-same on a workstation with an NVIDIA card as on CI. uv, nvidia-smi and df only answer. The two
+same on a workstation with an NVIDIA card as on CI. nvidia-smi and df only answer, and uv keeps
+a record of what it installed, which it treats the way real uv treats dist-info. The two
 interpreters are this test's own Python running a stub check, with the real settings code
 copied beside it, so the folder the script names is the one the code would use.
 """
@@ -23,19 +24,36 @@ from scan3d.config import ROOT
 SCRIPT = ROOT / "scripts" / "add_inference_path.sh"
 SETTINGS_CODE = ("__init__.py", "config.py", "doctor.py", "inference_paths.py")
 GIB = 1024**3
-COREUTILS = ("bash", "cat", "dirname", "mkdir", "realpath", "stat", "tail")
+LOCKED = {"alpha": {"version": "1.0", "complete": True}, "beta": {"version": "2.0.post1", "complete": True}}
+COREUTILS = ("bash", "cat", "dirname", "grep", "mkdir", "realpath", "rm", "sort", "stat", "tail")
 PREFLIGHT = ["uv python find", "nvidia-smi", "df", "df", "system-python"]
 FIRST_RUN = [*PREFLIGHT, "uv venv", "uv pip sync", "venv-python"]
 LATER_PREFLIGHT = ["uv python find", "nvidia-smi", "system-python"]  # A later run needs no room.
-RE_RUN = [*LATER_PREFLIGHT, "uv pip sync", "venv-python"]
-REBUILT = [*LATER_PREFLIGHT, "uv venv", "uv pip sync", "venv-python"]
+RE_RUN = [*LATER_PREFLIGHT, "uv pip freeze", "venv-python"]  # It equals the lock: no index.
+CARRIED_ON = [*LATER_PREFLIGHT, "uv pip sync", "venv-python"]  # No install has finished.
+REPAIRED = [*LATER_PREFLIGHT, "uv pip freeze", "uv pip sync", "venv-python"]
 MARKER = ".scan3d-inference-path"
+FINISHED = ".scan3d-inference-path-finished"
+# In the real lock's format, with what the script must read past, and in an order uv does not
+# print, so that the comparison cannot rest on one.
+STUB_LOCK = """# A stub: only the fake uv installs from this.
+--only-binary alpha
+
+beta==2.0.post1 \\
+    --hash=sha256:bbbb \\
+    --hash=sha256:cccc
+    # via -r requirements/cuda-py314.in
+alpha==1.0 \\
+    --hash=sha256:aaaa
+    # via beta
+"""
 
 # Every tool the script can reach. Its first two arguments come from the shim that starts it.
 FAKE_TOOL = r"""
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 
@@ -65,12 +83,30 @@ if arguments[0] == "venv":
     (target / "bin").mkdir(parents=True, exist_ok=True)
     shutil.copy(rig / "venv-python", target / "bin" / "python")
     (target / "pyvenv.cfg").write_text("home = fake\n")
+if arguments[0] == "pip":
+    environment = Path(arguments[arguments.index("--python") + 1]).parents[1]
+    record = environment / "installed.json"
+    packages = json.loads(record.read_text()) if record.exists() else {}
+if arguments[:2] == ["pip", "freeze"]:
+    print("".join(f"{name}=={package['version']}\n" for name, package in sorted(packages.items())), end="")
 if arguments[:2] == ["pip", "sync"]:
     if scenario["sync_status"]:
         sys.exit(scenario["sync_status"])
     # With no pyvenv.cfg the link is the Python it points at, and uv acts on that.
-    if not (Path(arguments[arguments.index("--python") + 1]).parents[1] / "pyvenv.cfg").is_file():
+    if not (environment / "pyvenv.cfg").is_file():
         (rig / "base-python-changed").touch()
+    locked = dict(re.findall(r"^([A-Za-z0-9][\w.-]*)(?:\[[^\]]*\])?==([^\s;\\]+)", Path(arguments[-1]).read_text(), re.M))
+    packages = {name: package for name, package in packages.items() if name in locked}
+    # What real uv does: a dist-info is an installed package however few files are beside it, and
+    # ==1.0 accepts 1.0+cu126.
+    accepted = {name for name, package in packages.items() if package["version"].partition("+")[0] == locked[name]}
+    linked = [name for name in locked if "--reinstall" in arguments or name not in accepted]
+    packages |= {name: {"version": locked[name], "complete": True} for name in linked}
+    # Stopped on the last package: every dist-info is there, so the versions alone look right.
+    if scenario["sync_stops"]:
+        packages[linked[-1]]["complete"] = False
+    record.write_text(json.dumps(packages))
+    sys.exit(130 if scenario["sync_stops"] else 0)
 """
 
 # Writes its proof the way scripts/check_gpu.py does, by replacing the file.
@@ -122,11 +158,12 @@ class Rig:
             "free_at": {},
             "venv_status": 0,
             "sync_status": 0,
+            "sync_stops": False,
             "check": "passed",
         }
         shutil.copy2(SCRIPT, self.root / "scripts")
         (self.root / "scripts" / "check_gpu.py").write_text(STUB_CHECK)
-        (self.root / "requirements" / "cuda-py314.lock").write_text("# A stub: only the fake uv reads this.\n")
+        (self.root / "requirements" / "cuda-py314.lock").write_text(STUB_LOCK)
         for name in SETTINGS_CODE:
             shutil.copy(ROOT / "scan3d" / name, self.root / "scan3d")
         for name in (".venv", ".venv-rocm10-py314"):  # What the script must never adopt.
@@ -168,6 +205,13 @@ class Rig:
         """The one call of a step."""
         (call,) = [call for call, step in zip(self.calls(), self.steps()) if step == name]
         return call
+
+    def packages(self):
+        """What the fake uv left installed."""
+        return json.loads((self.venv / "installed.json").read_text())
+
+    def set_packages(self, packages):
+        (self.venv / "installed.json").write_text(json.dumps(packages))
 
     def snapshot(self):
         """Everything a run could have changed, so a test can show that it changed nothing."""
@@ -344,6 +388,7 @@ def test_a_dry_run_prints_the_plan_and_changes_nothing(rig):
     for words in (
         "about 3.3 GiB",
         "about 9 GiB",
+        "needs no network",
         "acvl-utils",
         "without hashes",
         "will not touch",
@@ -444,7 +489,7 @@ def test_a_link_to_this_scripts_own_environment_is_followed(rig):
     link = rig.elsewhere / "link"
     link.symlink_to(rig.venv)
     assert rig.run("nvidia", "--venv", f"{link}/").returncode == 0
-    assert rig.step("uv pip sync")["arguments"][3] == f"{rig.venv}/bin/python"
+    assert rig.step("uv pip freeze")["arguments"][3] == f"{rig.venv}/bin/python"
     assert "uv venv" not in rig.steps()
 
 
@@ -457,7 +502,15 @@ def test_a_first_run_builds_syncs_and_checks_and_registers_the_path(rig):
     assert rig.steps() == FIRST_RUN
     python = f"{rig.venv}/bin/python"
     assert rig.step("uv venv")["arguments"] == ["venv", "--python", str(rig.fakes / "system-python"), "--allow-existing", str(rig.venv)]
-    assert rig.step("uv pip sync")["arguments"] == ["pip", "sync", "--python", python, "--require-hashes", f"{rig.root}/requirements/cuda-py314.lock"]
+    assert rig.step("uv pip sync")["arguments"] == [
+        "pip",
+        "sync",
+        "--python",
+        python,
+        "--require-hashes",
+        "--reinstall",
+        f"{rig.root}/requirements/cuda-py314.lock",
+    ]
     assert rig.step("venv-python")["arguments"] == [f"{rig.root}/scripts/check_gpu.py", "--path", "nvidia"]
     assert json.loads(rig.proof.read_text()) == {"gpu_ready": True}
     assert (rig.venv / MARKER).is_file()
@@ -481,6 +534,16 @@ def test_a_run_stays_inside_the_rig(rig):
         "scan3d",
         "scripts",
     }
+
+
+def test_only_a_finished_install_is_marked(rig):
+    rig.scenario["sync_status"] = 1
+    rig.run("nvidia")
+    assert not (rig.venv / FINISHED).exists()
+    rig.scenario["sync_status"] = 0
+    rig.run("nvidia")
+    assert (rig.venv / FINISHED).is_file()
+    assert (rig.venv / FINISHED).stat().st_mode & 0o777 == 0o600
 
 
 def test_every_uv_call_is_barred_from_fetching_a_python(rig):
@@ -548,6 +611,7 @@ def test_a_re_run_keeps_the_environment_and_repeats_the_check(rig):
     assert rig.steps() == RE_RUN
     assert package.exists() and (rig.venv / "bin" / "python").stat().st_ino == interpreter.st_ino
     assert "from an earlier run, kept" in completed.stdout
+    assert "nothing was installed" in completed.stdout
 
 
 def test_a_re_run_repairs_a_failed_check(rig):
@@ -569,7 +633,7 @@ def test_a_run_stopped_inside_uv_venv_leaves_a_directory_the_next_run_owns(rig):
     rig.forget_calls()
     rig.scenario["venv_status"] = 0
     assert rig.run("nvidia").returncode == 0
-    assert rig.steps() == REBUILT
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv venv", "uv pip sync", "venv-python"]
 
 
 def test_a_failed_sync_runs_no_check_and_the_next_run_carries_on(rig):
@@ -579,6 +643,81 @@ def test_a_failed_sync_runs_no_check_and_the_next_run_carries_on(rig):
     assert "venv-python" not in rig.steps() and not rig.proof.exists()
     rig.forget_calls()
     rig.scenario["sync_status"] = 0
+    assert rig.run("nvidia").returncode == 0
+    assert rig.steps() == CARRIED_ON
+
+
+def test_a_stopped_install_is_finished_by_the_next_run(rig):
+    # uv links a dist-info beside the files with no finish mark, so its next sync would say
+    # "Audited" and leave the package with what it had.
+    rig.scenario["sync_stops"] = True
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1 and "did not finish" in completed.stderr
+    assert "venv-python" not in rig.steps()
+    assert rig.packages() == {**LOCKED, "alpha": {"version": "1.0", "complete": False}}
+    rig.forget_calls()
+    rig.scenario["sync_stops"] = False
+    assert rig.run("nvidia").returncode == 0
+    assert rig.steps() == CARRIED_ON
+    assert rig.packages() == LOCKED
+
+
+def test_a_repair_stopped_halfway_is_not_taken_for_a_finished_install(rig):
+    installed(rig)
+    a_local_build(rig)
+    rig.scenario["sync_stops"] = True
+    assert rig.run("nvidia").returncode == 1
+    rig.forget_calls()
+    rig.scenario["sync_stops"] = False
+    assert rig.run("nvidia").returncode == 0
+    assert rig.steps() == CARRIED_ON
+    assert rig.packages() == LOCKED
+
+
+def a_local_build(rig):
+    # The app says its packages changed, and PEP 440 lets this satisfy alpha==1.0.
+    rig.set_packages({**rig.packages(), "alpha": {"version": "1.0+cu126", "complete": True}})
+
+
+def another_version(rig):
+    rig.set_packages({**rig.packages(), "alpha": {"version": "0.9", "complete": True}})
+
+
+def a_package_gone(rig):
+    rig.set_packages({"beta": rig.packages()["beta"]})
+
+
+def a_package_the_lock_does_not_list(rig):
+    rig.set_packages({**rig.packages(), "cupy": {"version": "14.0", "complete": True}})
+
+
+@pytest.mark.parametrize("change", [a_local_build, another_version, a_package_gone, a_package_the_lock_does_not_list])
+def test_a_re_run_puts_any_difference_back_to_the_lock(rig, change):
+    installed(rig)
+    change(rig)
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert rig.steps() == REPAIRED
+    assert rig.packages() == LOCKED
+
+
+def test_a_re_run_that_equals_the_lock_reaches_the_check_with_no_index(rig):
+    # The driver is fixed or the queue is empty, and the index cannot be reached: uv would fail.
+    rig.scenario["check"] = "failed"
+    rig.run("nvidia")
+    rig.forget_calls()
+    rig.scenario.update(check="passed", sync_status=2)
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert rig.steps() == RE_RUN
+    assert "The GPU check passed" in completed.stdout
+
+
+def test_the_real_lock_reads_the_way_uv_prints_what_it_installed(rig):
+    # A marker, an extra or another spelling on a pin would make every re-run reinstall everything.
+    shutil.copy(ROOT / "requirements" / "cuda-py314.lock", rig.root / "requirements")
+    installed(rig)
+    assert len(rig.packages()) > 100
     assert rig.run("nvidia").returncode == 0
     assert rig.steps() == RE_RUN
 
@@ -604,7 +743,7 @@ def test_an_environment_that_lost_pyvenv_cfg_gets_it_back(rig):
     package.touch()
     (rig.venv / "pyvenv.cfg").unlink()
     assert rig.run("nvidia").returncode == 0
-    assert rig.steps()[-3:] == ["uv venv", "uv pip sync", "venv-python"]
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv venv", "uv pip freeze", "venv-python"]
     assert package.exists()
     assert not (rig.fakes / "base-python-changed").exists()
 
@@ -619,7 +758,7 @@ def test_an_environment_that_lost_its_interpreter_gets_one_back(rig):
     rig.scenario["free"] = 10 * GIB
     completed = rig.run("nvidia")
     assert completed.returncode == 0, completed.stderr
-    assert rig.steps() == REBUILT
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv venv", "uv pip freeze", "venv-python"]
     assert package.exists()
 
 

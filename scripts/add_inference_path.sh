@@ -43,6 +43,16 @@ has_environment() {
   [[ -x "$python" && -f "$venv/pyvenv.cfg" ]]
 }
 
+# Whether the last install finished and left exactly what the lock pins. It reads no index, and
+# what uv prints for an installed package is what it writes for a pin, so the two compare as text.
+matches_lock() {
+  [[ -f "$finished" ]] || return 1
+  local pins packages
+  pins="$(grep -oE '^[a-z0-9][^ ]*==[^ ]+' "$lock" | sort)"
+  packages="$("$uv" pip freeze --python "$python" 2>/dev/null | sort)"
+  [[ "$packages" == "$pins" ]]
+}
+
 chosen=
 venv="$root/.venv-nvidia-py314"
 dry_run=0
@@ -73,6 +83,8 @@ named="$(realpath --canonicalize-missing --no-symlinks -- "$venv")"
 venv="$(realpath --canonicalize-missing -- "$venv")"
 python="$venv/bin/python"
 marker="$venv/.scan3d-inference-path"
+finished="$venv/.scan3d-inference-path-finished"
+lock="$root/requirements/cuda-py314.lock"
 cd "$root"
 
 # The marker alone lets this script use a directory that exists, whatever its name or however
@@ -146,12 +158,14 @@ Adding the NVIDIA inference path.
   Environment  $venv$kept
   Python       $interpreter
   Driver       $driver
-  Lock         $root/requirements/cuda-py314.lock
+  Lock         $lock
   Proof        $proof
 
-A first install downloads about 3.3 GiB and takes about 9 GiB on disk. A re-run changes only
-what differs from the lock. Every package is checked against a hash, with one gap: acvl-utils
-is published only as source, and the tools that build it are fetched without hashes.
+A first install downloads about 3.3 GiB and takes about 9 GiB on disk. A re-run leaves an
+environment that equals the lock alone, and needs no network to do so. Anything else, such as
+an install that did not finish, is installed again in full, from what uv has already fetched
+where it can. Every package is checked against a hash, with one gap: acvl-utils is published
+only as source, and the tools that build it are fetched without hashes.
 
 It will not touch any other Python environment, the viewer, the DICOM converter,
 TotalSegmentator's settings, scan3d.env or the running app, and it does not install a Python.
@@ -174,11 +188,22 @@ if ! has_environment; then
   "$uv" venv --python "$interpreter" --allow-existing "$venv" ||
     fail 'The environment could not be created. Fix what uv reported, then run this again.'
 fi
-# Each run, because this is what repairs an environment that changed. It does nothing to one
-# that matches the lock. --require-hashes covers what is installed, and acvl-utils's build
-# requirements are outside it: it has no wheel, and they come from the index unhashed.
-"$uv" pip sync --python "$python" --require-hashes "$root/requirements/cuda-py314.lock" ||
-  fail 'The install did not finish, so no GPU check ran. Run this again to carry on.'
+# `uv pip sync` alone cannot tell when an environment is right. It counts a package as installed
+# once its dist-info is there, which it links beside the package's files with no sign they all
+# arrived, so a stopped install would pass as complete. It reads a pin by PEP 440, so ==2.14.0
+# accepts an installed 2.14.0+cu126, the wheel the lock exists to keep out. And it asks the index
+# even when nothing differs, so a re-run could not reach the check offline. --reinstall replaces
+# both of the first two, and the mark goes first so that a stopped repair reads as unfinished too.
+if matches_lock; then
+  echo 'Every package already equals the lock, so nothing was installed.'
+else
+  rm -f -- "$finished"
+  # --require-hashes covers what is installed, and acvl-utils's build requirements are outside
+  # it: it has no wheel, and they come from the index unhashed.
+  "$uv" pip sync --python "$python" --require-hashes --reinstall "$lock" ||
+    fail 'The install did not finish, so no GPU check ran. Run this again to carry on.'
+  echo 'The last install finished.' >"$finished"
+fi
 
 before="$(proof_state)"
 status=0
