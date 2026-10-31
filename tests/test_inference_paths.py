@@ -981,6 +981,32 @@ def test_each_path_reuses_only_its_own_saved_result(segmenting):
     assert len(segmenting.runs()) == 2
 
 
+def lose_a_mask(saved):
+    Path(json.loads(saved.read_text())["structures"][0]["mask_file"]).unlink()
+
+
+def change_the_digest(saved):
+    record = json.loads(saved.read_text())
+    record["model_fingerprint"]["digest"] = "another"
+    saved.write_text(json.dumps(record))
+
+
+def truncate(saved):
+    saved.write_text(saved.read_text()[:20])
+
+
+@pytest.mark.parametrize("damage", [lose_a_mask, change_the_digest, truncate])
+def test_a_saved_result_that_fails_its_checks_is_run_again_and_not_called_reused(segmenting, damage):
+    first = segmenting.revision(segmenting.run("nvidia"))
+    (saved,) = segmenting.service.store.case_dir(segmenting.case["id"]).rglob("complete.json")
+    damage(saved)
+    job = segmenting.run("nvidia")
+    assert job["status"] == "completed", job
+    again = segmenting.revision(job)
+    assert len(segmenting.runs()) == 2 and again["operation"]["runtime"]["reused"] is False
+    assert again["inference_manifest"]["run_id"] != first["inference_manifest"]["run_id"]
+
+
 def test_a_replaced_card_never_reuses_the_old_cards_result(segmenting, monkeypatch):
     first = segmenting.revision(segmenting.run("nvidia"))
     segmenting.stub.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU"))
