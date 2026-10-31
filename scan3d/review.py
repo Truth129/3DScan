@@ -17,7 +17,7 @@ import shutil
 import numpy as np
 
 from .fileio import atomic_json, code_fingerprint, hash_file as _digest
-from . import __version__, imaging
+from . import __version__, imaging, inference_paths
 from .errors import NotFound
 from .interactive_prompts import normalize_options, normalize_prompts
 from .relationships import (
@@ -158,6 +158,7 @@ def public_review(record):
                 "relationship_changed",
                 "preview_3d_ready",
                 "model_manifest_url",
+                "gpu_name",
             )
             if key in candidate
         }
@@ -175,6 +176,8 @@ def public_review(record):
         pending_count=max(0, len(record["prompts"]) - applied),
         dirty=not candidate or candidate["generation"] != record["generation"],
     )
+    # Only `batches` decides, because undoing every step leaves a binding that no longer means anything.
+    result["inference_path"] = record.get("inference_path") if record.get("batches") else None
     result["relationship_dirty"] = relationship_dirty(record)
     result["new_structure"] = bool(record.get("new_structure"))
     if record.get("new_structure"):
@@ -372,13 +375,13 @@ class ReviewManager:
             relationship=chosen,
         )
 
-    def predict(self, case_id, session_id, generation, full_refine=False):
+    def predict(self, case_id, session_id, generation, full_refine=False, inference_path=None):
         review = self.get(case_id, session_id)
         if not isinstance(full_refine, bool):
             raise ValueError("Whole-object refinement must be a boolean")
         if review.get("method") == "direct" and full_refine:
             raise ValueError("Whole-object AI refinement is unavailable in direct editing")
-        return self.store.enqueue_review(case_id, session_id, _generation(generation), "review_predict", full_refine=full_refine)
+        return self.store.enqueue_review(case_id, session_id, _generation(generation), "review_predict", full_refine=full_refine, inference_path=inference_path)
 
     def accept(self, case_id, session_id, generation):
         self.get(case_id, session_id)
@@ -600,6 +603,9 @@ class ReviewManager:
 
     def run_predict(self, job, runtime):
         review = self._running(job, "predicting")
+        # Before anything is created, because a queued job can outlive its proof. Direct and
+        # relationship-only jobs name no path, so this reads no file for them.
+        inference_path = inference_paths.require(job.get("inference_path"))
         base, selected = self._base(review)
         directory = self.store.case_dir(job["case_id"]) / "reviews" / review["id"] / "candidates" / job["id"]
         directory.mkdir(parents=True, exist_ok=True)
@@ -656,7 +662,14 @@ class ReviewManager:
                 session_key=f"{review['id']}:{review['revision_id']}:{before_digest}",
                 options=job["payload"]["options"],
                 batches=job["payload"]["batches"],
+                # Only when set, so the default path's request is exactly today's.
+                **({"inference_path": inference_path} if inference_path else {}),
             )
+            if inference_path:
+                # The engine measures its card as it loads, so this can only follow the run.
+                inference_path.confirm(provenance.get("device"), provenance.get("gpu_name"), provenance.get("cuda_version"))
+            if bound := job.get("inference_path"):
+                provenance["inference_path"] = bound["id"]
         self._running(job, "predicting")
         self.service.stage(job, "Checking the candidate on the reference CT grid")
         if decoded is None:
@@ -706,6 +719,9 @@ class ReviewManager:
             **overlap,
             **preview,
         )
+        # From provenance, because a relationship-only Apply reuses this card's mask and names no path.
+        if "inference_path" in provenance and provenance.get("gpu_name"):
+            candidate["gpu_name"] = provenance["gpu_name"]
         atomic_json(directory / "candidate.json", candidate)
         self.service.check_cancel(job)
         return self.store.publish_review_candidate(job, candidate)

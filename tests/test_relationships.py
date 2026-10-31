@@ -8,11 +8,14 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from inference_path_stub import GPU_NAME
 from scan3d import imaging
 from scan3d.api import create_app
+from scan3d.inference_paths import binding
 from scan3d.relationships import INDEPENDENT, effective_relationship, normalize_relationship, reciprocal_updates, relationship_suggestions
 from scan3d.review import public_review
-from test_interactive_review import example, execute_next
+from scan3d.store import job_lane
+from test_interactive_review import example, execute_next, paths
 
 
 class InsideLiver:
@@ -261,3 +264,65 @@ def test_http_relationship_preview_recovery_stale_save_and_affected_mask_transpo
         assert current.status_code == 200, current.text
         assert current.json()["current"]["key"] != current.json()["parent"]["key"]
         assert str(service.settings.data_dir) not in str(candidate) and "mask_file" not in str(candidate)
+
+
+# Inference paths: changing a relationship runs no model on any card
+
+
+def on_a_card(example, name="nvidia"):
+    service, case, base, prompt = example
+    draft = service.reviews.create_structure(case["id"], base["id"], "Accessory region")
+    draft = service.reviews.update(case["id"], draft["id"], 0, [{**prompt, "include": True}])
+    job = execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=name))
+    assert job["status"] == "completed", job
+    return service.reviews.get(case["id"], draft["id"])
+
+
+def test_a_relationship_only_apply_leaves_the_draft_on_its_card(example, paths):
+    service, case, _, _ = example
+    draft = on_a_card(example)
+    applied = apply_relationship(service, case, draft, {"kind": "subregion", "parent_id": "total:liver", "exclusive_with": []})
+    assert applied["candidate"]["revision_id"] != draft["candidate"]["revision_id"]
+    assert applied["inference_path"] == binding("nvidia") and public_review(applied)["inference_path"] == binding("nvidia")
+    assert len(service.interactive_runtime.calls) == 1  # No model ran.
+    # It reuses that card's mask, and the record says so.
+    assert applied["candidate"]["gpu_name"] == GPU_NAME and applied["candidate"]["provenance"]["inference_path"] == "nvidia"
+    assert applied["candidate"]["provenance"]["reused_prediction"]
+
+
+@pytest.mark.parametrize("name", ["second", "default", "absent"])
+def test_a_stale_client_cannot_break_a_relationship_only_apply(example, paths, name):
+    # It runs no model, so a choice it ignores can neither conflict nor be refused.
+    service, case, _, _ = example
+    draft = on_a_card(example)
+    choice = {"kind": "subregion", "parent_id": "total:liver", "exclusive_with": []}
+    draft = service.reviews.update(case["id"], draft["id"], draft["generation"], draft["prompts"], relationship=choice)
+    job = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=name)
+    assert job["payload"]["relationship_only"] and "inference_path" not in job and job_lane(job) == "cpu"
+    assert service.store.claim("gpu") is None
+    assert execute_next(service, job)["status"] == "completed"
+    assert service.reviews.get(case["id"], draft["id"])["inference_path"] == binding("nvidia")
+
+
+def test_a_relationship_only_apply_on_a_free_draft_binds_nothing(example, paths):
+    service, case, base, _ = example
+    draft = service.reviews.create(case["id"], base["id"], "total:liver")
+    draft = service.reviews.update(case["id"], draft["id"], 0, [], relationship={"kind": "subregion", "parent_id": "total:kidney_left", "exclusive_with": []})
+    job = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="nvidia")
+    assert job["payload"]["relationship_only"] and "inference_path" not in job
+    assert execute_next(service, job)["status"] == "completed"
+    ready = service.reviews.get(case["id"], draft["id"])
+    assert ready["inference_path"] is None and "gpu_name" not in ready["candidate"] and service.interactive_runtime.calls == []
+
+
+def test_a_relationship_change_needing_the_model_still_keeps_the_lock(example, paths):
+    # Pending marks make this a model run, so here a choice counts.
+    service, case, _, prompt = example
+    draft = on_a_card(example)
+    marks = [*draft["prompts"], {**prompt, "id": "point-2", "include": True}]
+    choice = {"kind": "subregion", "parent_id": "total:liver", "exclusive_with": []}
+    draft = service.reviews.update(case["id"], draft["id"], draft["generation"], marks, relationship=choice)
+    with pytest.raises(ValueError, match="came from"):
+        service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="second")
+    job = service.reviews.predict(case["id"], draft["id"], draft["generation"])
+    assert not job["payload"].get("relationship_only") and job["inference_path"] == binding("nvidia")

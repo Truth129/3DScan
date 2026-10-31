@@ -4,6 +4,7 @@ A deterministic engine runs in a real child process; nothing imports torch or
 touches a GPU. Review jobs then drive the same child through the service.
 """
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -14,7 +15,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-from inference_path_stub import GPU_NAME, activate, stand_in
+from inference_path_stub import GPU_NAME, activate, child_path, stand_in
 from scan3d import imaging, interactive_worker
 from scan3d.config import ROOT, Settings
 from scan3d.inference_paths import binding, require
@@ -467,3 +468,122 @@ def test_the_paths_own_device_reaches_its_engine_past_the_defaults(worker, tmp_p
     worker.engine = MEASURED
     result = predict(worker, tmp_path, inference_path=path_named("pair"))
     assert (result["device"], result["gpu_name"], result["cuda_version"]) == ("gpu:1", SECOND, "13.0.fake")
+
+
+@pytest.fixture
+def measured(example, added):
+    runtime = InteractiveWorker(MEASURED, stall_seconds=30.0)
+    example[0].interactive_runtime = runtime
+    yield runtime
+    runtime.release()
+
+
+def draft_for(example):
+    service, case, base, prompt = example
+    draft = service.reviews.create(case["id"], base["id"], "total:liver")
+    return service.reviews.update(case["id"], draft["id"], 0, [prompt])
+
+
+def test_a_review_job_runs_in_its_paths_interpreter_and_keeps_its_card(example, added, measured):
+    service, case, base, _ = example
+    first, _ = added
+    draft = draft_for(example)
+    job = execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="nvidia"))
+    assert job["status"] == "completed", job
+    ready = service.reviews.get(case["id"], draft["id"])
+    provenance = ready["candidate"]["provenance"]
+    assert provenance["prefix"] == venv_of(first) and provenance["pid"] == measured.pid != os.getpid()
+    assert (provenance["inference_path"], provenance["gpu_name"], provenance["cuda_version"]) == ("nvidia", GPU_NAME, "13.0.fake")
+    assert ready["candidate"]["gpu_name"] == GPU_NAME and ready["inference_path"] == job["inference_path"] == binding("nvidia")
+    accepted = execute_next(service, service.reviews.accept(case["id"], draft["id"], ready["generation"]))
+    assert accepted["status"] == "completed", accepted
+    assert service.store.revision(case["id"], accepted["revision_id"])["operation"]["runtime"]["inference_path"] == "nvidia"
+
+
+def test_jobs_on_different_paths_take_turns_in_one_worker_and_default_is_a_turn(example, added, measured, child_environment):
+    service, case, base, _ = example
+    first, second = added
+    prefixes = []
+    for chosen in ("nvidia", "second", None, "default", "nvidia"):
+        draft = draft_for(example)
+        job = execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=chosen))
+        assert job["status"] == "completed", job
+        prefixes.append(service.reviews.get(case["id"], draft["id"])["candidate"]["provenance"]["prefix"])
+    assert prefixes == [venv_of(first), venv_of(second), sys.prefix, sys.prefix, venv_of(first)]
+    # The default and naming the default are one path, so that pair shares a child.
+    assert len(child_environment.read_text().split()) == 3
+
+
+@pytest.mark.parametrize(
+    "setting, value, found",
+    [
+        ("SCAN3D_FAKE_GPUS", json.dumps([["Another GPU", 1024, 0]]), "Another GPU (gpu:0, CUDA)"),
+        ("SCAN3D_FAKE_TORCH_BUILD", "rocm", f"{GPU_NAME} (gpu:0, no CUDA)"),
+    ],
+    ids=["card", "build"],
+)
+def test_a_child_that_measured_something_else_publishes_nothing(example, measured, monkeypatch, setting, value, found):
+    service, case, base, _ = example
+    draft = draft_for(example)
+    monkeypatch.setenv(setting, value)
+    job = execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="nvidia"))
+    assert (job["status"], job["error"]) == ("failed", f"Expected {GPU_NAME}, but the GPU check found {found}. No result was kept and no other GPU was tried.")
+    current = service.reviews.get(case["id"], draft["id"])
+    assert current["status"] == "draft" and current["error"] == job["error"]
+    assert current["candidate"] is None and current["candidates"] == {} and current["batches"] == []  # A failed first run never locks.
+
+
+def test_segmentation_stops_a_child_on_a_path_as_it_stops_the_default_one(example, measured, monkeypatch):
+    service, case, base, _ = example
+    draft = draft_for(example)
+    assert execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="nvidia"))["status"] == "completed"
+    pid = measured.pid
+
+    def segmentation(job):
+        assert measured.pid is None and not alive(pid)
+        return {**base, "id": identifier()}
+
+    monkeypatch.setattr(service, "_segment", segmentation)
+    assert execute_next(service, service.segment_case(case["id"], base["id"], "total", inference_path="second"))["status"] == "completed"
+
+
+def test_a_correction_on_a_path_leaves_the_api_process_free_of_torch(tmp_path, monkeypatch):
+    # As test_api_process_never_imports_torch, through the path's own interpreter.
+    script = """
+import builtins, json, os, sys
+from pathlib import Path
+original = builtins.__import__
+def guarded(name, *args, **kwargs):
+    if name.partition(".")[0] in ("torch", "nnInteractive"):
+        raise AssertionError("The API process imported " + name)
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+os.environ["PYTHONPATH"] = sys.argv[2]  # For its children: this process's own path is settled.
+from scan3d.config import Settings
+from scan3d.demo import create_demo
+from scan3d.interactive_worker import InteractiveWorker
+from scan3d.service import Service
+service = Service(Settings(Path(sys.argv[1]) / "data", (Path(sys.argv[1]),)))
+case = create_demo(service)
+service.interactive_runtime = InteractiveWorker("fake_interactive_engine:MeasuredEngine", stall_seconds=30.0)
+revision = service.store.revision(case["id"], case["active_revision_id"])
+draft = service.reviews.create(case["id"], revision["id"], revision["structures"][0]["id"])
+prompt = dict(id="point-1", kind="point", ras=[0.0, 0.0, 0.0], include=True)
+draft = service.reviews.update(case["id"], draft["id"], 0, [prompt])
+job = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="nvidia")
+service.execute(service.store.claim())
+job = service.store.get("jobs", job["id"])
+assert job["status"] == "completed", job
+print(service.interactive_runtime._child.process.args[0])
+service._release_interactive()
+assert not {"torch", "nnInteractive"} & set(sys.modules)
+print("parent stayed torch-free")
+"""
+    parent_path = os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH"))))
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(filter(None, (str(TESTS), os.environ.get("PYTHONPATH")))))
+    stub = stand_in(tmp_path)
+    activate(monkeypatch, stub)
+    environment = {**os.environ, "PYTHONPATH": parent_path}
+    completed = subprocess.run([sys.executable, "-c", script, str(tmp_path), child_path(stub)], env=environment, capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines()[-2:] == [stub.python, "parent stayed torch-free"]

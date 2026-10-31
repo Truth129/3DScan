@@ -14,12 +14,18 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from inference_path_stub import GPU_NAME, activate, stand_in
 from scan3d import imaging
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.inference_paths import binding
 from scan3d.review import public_review
 from scan3d.service import Service
-from scan3d.store import Store, identifier
+from scan3d.store import ReviewConflict, Store, identifier, public_job, public_revision
+
+
+DEFAULT_GPU = "Test Default GPU"
+SECOND_GPU = "Test Second GPU"
 
 
 class FakeRuntime:
@@ -43,6 +49,17 @@ class FakeRuntime:
 
     def release(self):
         self.released = True
+
+
+class MeasuringRuntime(FakeRuntime):
+    """Reports the card a real child would measure on the path it was sent."""
+
+    def predict(self, *args, **kwargs):
+        provenance = super().predict(*args, **kwargs)
+        chosen = kwargs.get("inference_path")
+        if chosen is None:
+            return {**provenance, "device": "gpu:0", "gpu_name": DEFAULT_GPU, "cuda_version": None}
+        return {**provenance, "device": "gpu:0", "gpu_name": chosen.gpu_name, "cuda_version": "13.0.fake" if chosen.kind == "cuda" else None}
 
 
 @pytest.fixture
@@ -636,3 +653,301 @@ def test_concurrent_new_targets_bound_dense_baseline_generation(example, monkeyp
         drafts = [future.result() for future in futures]
     assert peak == 1 and drafts[0]["structure_id"] != drafts[1]["structure_id"]
     assert all(not imaging._binary(Path(draft["target"]["mask_file"]))[0].any() for draft in drafts)
+
+
+# Inference paths: a draft keeps the card of its first result
+
+
+@pytest.fixture
+def paths(example, tmp_path, monkeypatch):
+    """Two added paths beside the default, and a runtime that can answer for all three."""
+    first = stand_in(tmp_path)
+    second = stand_in(tmp_path, "second", proofs=first.proof.parent, kind="rocm", gpu_name=SECOND_GPU)
+    activate(monkeypatch, first)
+    monkeypatch.setenv("SCAN3D_GPU_PROOF", str(tmp_path / "no-proof.json"))
+    monkeypatch.delenv("SCAN3D_DEVICE", raising=False)
+    example[0].interactive_runtime = MeasuringRuntime()
+    return first, second
+
+
+def unmarked(example):
+    service, case, base, _ = example
+    return service.reviews.create(case["id"], base["id"], "total:liver")
+
+
+def marked(example):
+    """A new draft with one mark waiting for its first Run AI."""
+    service, case, _, prompt = example
+    return service.reviews.update(case["id"], unmarked(example)["id"], 0, [prompt])
+
+
+def current(example, draft):
+    return example[0].reviews.get(example[1]["id"], draft["id"])
+
+
+def queue(example, draft, **choice):
+    return example[0].reviews.predict(example[1]["id"], draft["id"], current(example, draft)["generation"], **choice)
+
+
+def run(example, draft, **choice):
+    job = execute_next(example[0], queue(example, draft, **choice))
+    return job, current(example, draft)
+
+
+def ran(example, draft, **choice):
+    job, state = run(example, draft, **choice)
+    assert job["status"] == "completed", job
+    return state
+
+
+def add_mark(example, draft, identity="point-2"):
+    state = current(example, draft)
+    mark = dict(example[3], id=identity, include=True)
+    return example[0].reviews.update(example[1]["id"], draft["id"], state["generation"], [*state["prompts"], mark])
+
+
+def sent(example):
+    """What the engine was asked to do last."""
+    (_, _, prompts, _, kwargs) = example[0].interactive_runtime.calls[-1]
+    return prompts, kwargs
+
+
+def fail_next_run(example):
+    def failure():
+        example[0].interactive_runtime.during = None
+        raise RuntimeError("Synthetic GPU failure")
+
+    example[0].interactive_runtime.during = failure
+
+
+def test_only_a_published_result_binds_a_draft_to_its_card(example, paths):
+    service, case, _, _ = example
+    draft = marked(example)
+    assert public_review(draft)["inference_path"] is None
+    queued = queue(example, draft, inference_path="nvidia")
+    assert queued["inference_path"] == binding("nvidia") == public_job(queued)["inference_path"]
+    assert "inference_path" not in queued["payload"]
+    assert public_review(current(example, draft))["inference_path"] is None
+    assert execute_next(service, queued)["status"] == "completed"
+    view = public_review(current(example, draft))
+    assert view["inference_path"] == binding("nvidia") and view["candidate"]["gpu_name"] == GPU_NAME
+    assert sent(example)[1]["inference_path"].id == "nvidia"
+    assert current(example, draft)["candidate"]["provenance"]["inference_path"] == "nvidia"
+
+
+def test_a_saved_correction_records_its_card_publicly(example, paths):
+    service, case, base, _ = example
+    ready = ran(example, marked(example), inference_path="nvidia")
+    accepted = execute_next(service, service.reviews.accept(case["id"], ready["id"], ready["generation"]))
+    assert accepted["status"] == "completed", accepted
+    assert "inference_path" not in accepted
+    runtime = public_revision(service.store.revision(case["id"], accepted["revision_id"]))["operation"]["runtime"]
+    assert (runtime["inference_path"], runtime["gpu_name"]) == ("nvidia", GPU_NAME)
+
+
+@pytest.mark.parametrize("choice", [{}, {"inference_path": "default"}], ids=["unnamed", "named"])
+def test_the_default_path_sends_the_engine_todays_request(example, paths, choice):
+    ready = ran(example, marked(example), **choice)
+    assert "inference_path" not in sent(example)[1]
+    assert ("inference_path" in ready["candidate"]["provenance"]) == bool(choice)
+
+
+def test_one_path_keeps_todays_records(example, paths):
+    draft = marked(example)
+    queued = queue(example, draft)
+    assert "inference_path" not in queued and "inference_path" not in public_job(queued)
+    assert execute_next(example[0], queued)["status"] == "completed"
+    state = current(example, draft)
+    assert "inference_path" not in state["candidate"]["provenance"]
+    view = public_review(state)
+    assert view["inference_path"] is None and "gpu_name" not in view["candidate"]
+
+
+def test_naming_the_default_gives_the_draft_a_card_to_show(example, paths):
+    state = ran(example, marked(example), inference_path="default")
+    view = public_review(state)
+    assert view["inference_path"] == binding("default") and view["candidate"]["gpu_name"] == DEFAULT_GPU
+
+
+def test_another_card_is_refused_once_a_draft_has_a_result(example, paths):
+    service, case, _, _ = example
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    before, jobs = current(example, draft), service.store.list("jobs", case["id"])
+    conflict = f"This draft's AI results came from {GPU_NAME}. Re-run its steps to use another GPU."
+    for other in ("second", "default"):
+        with pytest.raises(ReviewConflict) as refused:
+            queue(example, draft, inference_path=other)
+        assert str(refused.value) == conflict
+    assert current(example, draft) == before and service.store.list("jobs", case["id"]) == jobs
+
+
+def test_an_unnamed_default_draft_is_locked_too(example, paths):
+    draft = ran(example, marked(example))
+    add_mark(example, draft)
+    with pytest.raises(ReviewConflict, match=f"came from {binding('default')['label']}\\."):
+        queue(example, draft, inference_path="nvidia")
+    assert ran(example, draft, inference_path="default")["inference_path"] == binding("default")
+
+
+@pytest.mark.parametrize("choice", [{}, {"inference_path": "nvidia"}], ids=["old-tab", "matching"])
+def test_a_locked_draft_stays_on_its_card_with_no_path_or_the_same_one(example, paths, choice):
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    queued = queue(example, draft, **choice)
+    assert queued["inference_path"] == binding("nvidia")
+    assert execute_next(example[0], queued)["status"] == "completed"
+    assert sent(example)[1]["inference_path"].id == "nvidia"
+    assert current(example, draft)["inference_path"] == binding("nvidia")
+    assert current(example, draft)["candidate"]["provenance"]["inference_path"] == "nvidia"
+
+
+def test_a_failed_first_run_leaves_the_draft_free(example, paths):
+    draft = marked(example)
+    fail_next_run(example)
+    job, state = run(example, draft, inference_path="nvidia")
+    assert job["status"] == "failed" and job["error"] == "Synthetic GPU failure" == state["error"]
+    assert job["inference_path"] == binding("nvidia")
+    assert state["batches"] == [] and state["candidate"] is None and public_review(state)["inference_path"] is None
+    assert ran(example, draft, inference_path="second")["inference_path"] == binding("second")
+
+
+def test_a_cancelled_first_run_leaves_the_draft_free(example, paths):
+    service, case, _, _ = example
+    draft = marked(example)
+    queued = queue(example, draft, inference_path="nvidia")
+    service.interactive_runtime.during = lambda: service.store.update_job(queued["id"], cancel_requested=True)
+    assert execute_next(service, queued)["status"] == "cancelled"
+    service.interactive_runtime.during = None
+    state = current(example, draft)
+    assert state["batches"] == [] and public_review(state)["inference_path"] is None
+    assert ran(example, draft, inference_path="second")["inference_path"] == binding("second")
+
+
+def test_undoing_every_step_frees_the_draft(example, paths):
+    service, case, _, _ = example
+    draft = ran(example, marked(example), inference_path="nvidia")
+    undone = service.reviews.update(case["id"], draft["id"], draft["generation"], [])
+    assert undone["batches"] == [] and public_review(undone)["inference_path"] is None
+    redone = service.reviews.update(case["id"], draft["id"], undone["generation"], draft["prompts"])
+    assert ran(example, redone, inference_path="second")["inference_path"] == binding("second")
+
+
+def test_changing_an_option_frees_the_draft(example, paths):
+    service, case, _, _ = example
+    draft = ran(example, marked(example), inference_path="nvidia")
+    changed = service.reviews.update(case["id"], draft["id"], draft["generation"], draft["prompts"], options={"autozoom": False, "start_empty": False})
+    assert changed["batches"] == [] and public_review(changed)["inference_path"] is None
+    assert ran(example, draft, inference_path="second")["inference_path"] == binding("second")
+
+
+def test_a_freed_draft_with_no_path_is_the_default_and_not_its_old_card(example, paths):
+    service, case, _, _ = example
+    draft = ran(example, marked(example), inference_path="nvidia")
+    undone = service.reviews.update(case["id"], draft["id"], draft["generation"], [])
+    redone = service.reviews.update(case["id"], draft["id"], undone["generation"], draft["prompts"])
+    queued = queue(example, redone)
+    assert "inference_path" not in queued
+    assert execute_next(service, queued)["status"] == "completed"
+    assert "inference_path" not in sent(example)[1] and current(example, draft)["inference_path"] is None
+
+
+def test_undoing_only_some_steps_keeps_the_lock(example, paths):
+    service, case, _, _ = example
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    draft = ran(example, draft)
+    assert len(draft["batches"]) == 2
+    undone = service.reviews.update(case["id"], draft["id"], draft["generation"], draft["prompts"][:1])
+    assert len(undone["batches"]) == 1 and public_review(undone)["inference_path"] == binding("nvidia")
+    add_mark(example, draft, "point-3")
+    with pytest.raises(ReviewConflict, match="came from"):
+        queue(example, draft, inference_path="second")
+
+
+def test_a_full_refine_with_no_marks_locks_though_it_applied_no_prompts(example, paths):
+    service, case, _, _ = example
+    draft = unmarked(example)
+    ready = ran(example, draft, full_refine=True, inference_path="nvidia")
+    view = public_review(ready)
+    assert view["applied_prompt_count"] == 0 and ready["batches"] == [{"end": 0, "autozoom": True, "full_refine": True}]
+    assert view["inference_path"] == binding("nvidia")
+    undone = service.reviews.update(case["id"], draft["id"], ready["generation"], [])
+    assert public_review(undone)["inference_path"] == binding("nvidia")  # It has a result, so undo cannot free it.
+    with pytest.raises(ReviewConflict, match="came from"):
+        queue(example, draft, full_refine=True, inference_path="second")
+
+
+def test_a_path_that_cannot_run_is_refused_with_no_job(example, paths):
+    service, case, _, _ = example
+    first, _ = paths
+    draft = marked(example)
+    with pytest.raises(ValueError, match="This GPU is not set up on this workstation."):
+        queue(example, draft, inference_path="absent")
+    first.change(lambda record: record.update(gpu_ready=False))
+    with pytest.raises(ValueError, match=f"{GPU_NAME} is unavailable: Its last GPU check failed."):
+        queue(example, draft, inference_path="nvidia")
+    state = current(example, draft)
+    assert service.store.list("jobs", case["id"]) == [] and (state["status"], state["job_id"]) == ("draft", None)
+
+
+def test_a_locked_draft_whose_card_went_away_fails_by_name_and_never_moves(example, paths):
+    first, _ = paths
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    first.proof.unlink()
+    job, state = run(example, draft)  # An old tab names no card, so this reaches the job's own check.
+    assert job["status"] == "failed"
+    assert job["error"] == f"{GPU_NAME} is no longer available: This GPU is not set up on this workstation. Nothing ran and no other GPU was tried."
+    assert state["inference_path"] == job["inference_path"] and len(example[0].interactive_runtime.calls) == 1
+
+
+def test_a_card_swapped_under_a_locked_draft_is_not_treated_as_the_same_card(example, paths):
+    first, _ = paths
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    first.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU"))
+    with pytest.raises(ReviewConflict, match=f"came from {GPU_NAME}"):
+        queue(example, draft, inference_path="nvidia")
+    job, _ = run(example, draft)
+    assert (
+        job["status"] == "failed" and job["error"] == f"{GPU_NAME} changed after this job was queued. Nothing ran and no other GPU was tried. Start it again."
+    )
+
+
+def test_a_session_and_a_job_saved_before_paths_existed_run_as_the_default(example, paths):
+    service, case, _, _ = example
+    draft = ran(example, marked(example))
+    add_mark(example, draft)
+    service.store.save("review_sessions", {key: value for key, value in current(example, draft).items() if key != "inference_path"})
+    assert public_review(current(example, draft))["inference_path"] is None  # Its batches lock it, to no named card.
+    with pytest.raises(ReviewConflict, match="came from"):
+        queue(example, draft, inference_path="nvidia")
+    queued = queue(example, draft)
+    service.store.save("jobs", {key: value for key, value in queued.items() if key != "inference_path"})
+    assert execute_next(service, queued)["status"] == "completed"
+    assert "inference_path" not in sent(example)[1]
+
+
+def test_http_predict_takes_a_path_and_says_why_it_will_not(example, paths):
+    service, case, _, _ = example
+    http = TestClient(create_app(service.settings), base_url="http://127.0.0.1")
+    url = f"/api/cases/{case['id']}/reviews/{marked(example)['id']}"
+    predict = lambda **body: http.post(url + "/predict", json={"generation": http.get(url).json()["generation"], **body})
+    for malformed in ("Not-Lower", "-leading", "a" * 33, "../nvidia", 7):
+        assert predict(inference_path=malformed).status_code == 422
+    assert predict(unknown=True).status_code == 422
+    assert predict(path="nvidia").status_code == 422
+    refused = predict(inference_path="absent")
+    assert (refused.status_code, refused.json()["detail"]) == (400, "This GPU is not set up on this workstation.")
+    assert http.get(f"/api/cases/{case['id']}/jobs").json() == []
+    accepted = predict(inference_path="nvidia")
+    assert accepted.status_code == 200 and accepted.json()["inference_path"] == binding("nvidia"), accepted.text
+    assert execute_next(service, accepted.json())["status"] == "completed"
+    state = http.get(url).json()
+    assert state["inference_path"] == binding("nvidia") and state["candidate"]["gpu_name"] == GPU_NAME
+    patched = http.patch(url, json={"expected_generation": state["generation"], "prompts": [*state["prompts"], dict(example[3], id="point-2", include=True)]})
+    assert patched.status_code == 200, patched.text
+    conflict = predict(inference_path="second")
+    assert (conflict.status_code, conflict.json()["detail"]) == (409, f"This draft's AI results came from {GPU_NAME}. Re-run its steps to use another GPU.")
+    assert predict().json()["inference_path"] == binding("nvidia")

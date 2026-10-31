@@ -19,7 +19,7 @@ from scan3d.inference_paths import binding
 from scan3d.service import Service
 from scan3d.store import Store, identifier, job_lane
 
-from test_interactive_review import FakeRuntime, example  # noqa: F401 (fixture)
+from test_interactive_review import FakeRuntime, MeasuringRuntime, SECOND_GPU, example, execute_next, paths  # noqa: F401 (fixture)
 
 
 def erase(identity="erase", *, index=4, vertices=((2.0, 2.0), (5.0, 5.0))):
@@ -373,3 +373,108 @@ def test_a_queued_job_whose_path_changed_fails_by_name_and_does_not_strand(examp
     assert (result["status"], result["stage"], result["error"]) == ("failed", "Failed", error)
     assert result["inference_path"]["id"] == "nvidia"
     assert service.store.claim() is None
+
+
+def model_draft(service, case, base, prompt, structure="total:liver"):
+    draft = service.reviews.create(case["id"], base["id"], structure)
+    return service.reviews.update(case["id"], draft["id"], 0, [prompt])
+
+
+def test_corrections_never_overlap_across_paths_or_with_segmentation(example, monkeypatch, paths):
+    service, case, base, prompt = example
+    guard, active, peak = threading.Lock(), [0], [0]
+
+    def gpu_work():
+        with guard:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.05)
+        with guard:
+            active[0] -= 1
+
+    runtime = fake_engine_only(service, monkeypatch, MeasuringRuntime(during=gpu_work))
+
+    def segmentation(job):
+        gpu_work()
+        return {**base, "id": identifier()}
+
+    monkeypatch.setattr(service, "_segment", segmentation)
+    jobs = [service.segment_case(case["id"], base["id"], "total", inference_path="second")]
+    for name in ("nvidia", "second", None, "default", "nvidia"):
+        draft = model_draft(service, case, base, prompt)
+        jobs.append(service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=name))
+    service.start()
+    try:
+        results = [finished(service, job) for job in jobs]
+    finally:
+        service.stop()
+    assert [result["status"] for result in results] == ["completed"] * 6, results
+    assert peak[0] == 1 and len(runtime.calls) == 5
+
+
+def test_direct_edit_ignores_a_stale_choice_and_stays_off_the_gpu(example, paths):
+    service, case, base, _ = example
+    draft = direct_draft(service, case, base)
+    for name in ("nvidia", "absent"):
+        job = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=name)
+        assert "inference_path" not in job and job_lane(job) == "cpu"
+        assert service.store.claim("gpu") is None
+        assert execute_next(service, job)["status"] == "completed"
+        ready = service.reviews.get(case["id"], draft["id"])
+        assert ready["inference_path"] is None and "gpu_name" not in ready["candidate"]
+        draft = service.reviews.update(case["id"], draft["id"], ready["generation"], [*ready["prompts"], erase(f"again-{name}", index=3)])
+    assert service.interactive_runtime.calls == []
+
+
+def test_a_queued_correction_survives_a_restart_on_its_card(example, monkeypatch, paths):
+    service, case, base, prompt = example
+    draft = model_draft(service, case, base, prompt)
+    queued = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="second")
+    restarted = Service(service.settings)
+    runtime = fake_engine_only(restarted, monkeypatch, service.interactive_runtime)
+    assert restarted.store.get("jobs", queued["id"]) == queued
+    restarted.start()
+    try:
+        assert finished(restarted, queued)["status"] == "completed"
+    finally:
+        restarted.stop()
+    assert runtime.calls[-1][-1]["inference_path"].id == "second"
+    assert restarted.reviews.get(case["id"], draft["id"])["inference_path"] == binding("second")
+
+
+@pytest.mark.parametrize(
+    "change, error",
+    [
+        (
+            lambda stub: stub.proof.unlink(),
+            f"{SECOND_GPU} is no longer available: This GPU is not set up on this workstation. Nothing ran and no other GPU was tried.",
+        ),
+        (
+            lambda stub: stub.change(lambda record: record.update(gpu_ready=False)),
+            f"{SECOND_GPU} is no longer available: Its last GPU check failed. Nothing ran and no other GPU was tried.",
+        ),
+        (
+            lambda stub: stub.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU")),
+            f"{SECOND_GPU} changed after this job was queued. Nothing ran and no other GPU was tried. Start it again.",
+        ),
+    ],
+    ids=["removed", "went-bad", "changed"],
+)
+def test_a_queued_correction_whose_path_changed_fails_by_name_and_does_not_strand(example, monkeypatch, paths, change, error):
+    service, case, base, prompt = example
+    _, second = paths
+    runtime = fake_engine_only(service, monkeypatch)
+    draft = model_draft(service, case, base, prompt)
+    queued = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="second")
+    change(second)
+    service.start()
+    try:
+        result = finished(service, queued)
+    finally:
+        service.stop()
+    assert (result["status"], result["stage"], result["error"]) == ("failed", "Failed", error)
+    assert result["inference_path"]["id"] == "second" and runtime.calls == []
+    state = service.reviews.get(case["id"], draft["id"])
+    assert state["status"] == "draft" and state["error"] == error and state["prompts"] == draft["prompts"]
+    assert state["batches"] == [] and service.store.claim() is None
+    assert not list(service.store.case_dir(case["id"]).glob("reviews/*/candidates/*"))  # Nothing ran, so nothing was begun.

@@ -24,7 +24,9 @@ from scan3d.api import create_app
 from scan3d.config import ROOT, Settings
 from scan3d.demo import create_demo
 from scan3d.inference_paths import InferencePath, binding, gpu_cards, identity, public_error, require, rows
+from scan3d.interactive_worker import InteractiveWorker
 from scan3d.store import Store, public_job, public_revision
+from scan3d.review import public_review
 from scripts.check_gpu import jobs_waiting
 
 CHECK_GPU = ROOT / "scripts" / "check_gpu.py"
@@ -1154,6 +1156,53 @@ def test_no_public_surface_names_the_interpreter(segmenting, tmp_path, monkeypat
         http.get(f"{route}/jobs").text,
         http.get("/api/segmentation-options").text,
         http.get("/api/interactive/status").text,
+    ]
+    for surface in surfaces:
+        assert "PRIVATE" not in surface and str(tmp_path) not in surface
+
+
+def test_no_public_surface_of_a_correction_names_the_interpreter(segmenting, tmp_path, monkeypatch):
+    service, case, http = segmenting.service, segmenting.case, segmenting.http
+    tests = str(Path(__file__).resolve().parent)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join((tests, os.environ["PYTHONPATH"])))
+    service.interactive_runtime = runtime = InteractiveWorker("fake_interactive_engine:ReportingEngine", stall_seconds=30.0)
+    base = service.store.revision(case["id"], case["active_revision_id"])
+    draft = service.reviews.create(case["id"], base["id"], "synthetic:liver")
+    mark = dict(id="point-1", kind="point", ras=[0.0, 0.0, 0.0], include=True)
+    draft = service.reviews.update(case["id"], draft["id"], 0, [mark])
+    route = f"/api/cases/{case['id']}"
+
+    def predict():
+        queued = service.reviews.predict(case["id"], draft["id"], service.reviews.get(case["id"], draft["id"])["generation"], inference_path="nvidia")
+        service.execute(service.store.claim())
+        return service.store.get("jobs", queued["id"])
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(inference_paths, "require", lambda bound: gone(tmp_path))
+            failed = predict()
+        assert (failed["status"], failed["error"]) == ("failed", "[Errno 2] No such file or directory: <local path>")
+        assert service.reviews.get(case["id"], draft["id"])["error"] == failed["error"]
+        completed = predict()
+        assert completed["status"] == "completed", completed
+        ready = service.reviews.get(case["id"], draft["id"])
+        saved = service.reviews.accept(case["id"], draft["id"], ready["generation"])
+        service.execute(service.store.claim())
+    finally:
+        runtime.release()
+    accepted = service.store.get("jobs", saved["id"])
+    assert accepted["status"] == "completed", accepted
+    public = http.get(f"{route}/revisions/{accepted['revision_id']}")
+    assert public.json()["operation"]["runtime"]["gpu_name"] == GPU_NAME
+    surfaces = [
+        public.text,
+        json.dumps(public_review(ready)),
+        http.get(f"{route}/reviews/{draft['id']}").text,
+        http.get(f"{route}/reviews").text,
+        http.get(f"{route}/revisions/{ready['candidate']['revision_id']}").text,
+        http.get(f"/api/jobs/{failed['id']}").text,
+        http.get(f"/api/jobs/{completed['id']}").text,
+        http.get(f"{route}/jobs").text,
     ]
     for surface in surfaces:
         assert "PRIVATE" not in surface and str(tmp_path) not in surface

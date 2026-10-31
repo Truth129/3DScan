@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import sqlite3
 
+from . import inference_paths
 from .errors import NotFound
 from .fileio import atomic_json
 from .identifiers import identifier
@@ -267,6 +268,7 @@ class Store:
         review.setdefault("relationship", dict(INDEPENDENT))
         review.setdefault("initial_relationship", dict(INDEPENDENT))
         review.setdefault("method", "nninteractive")
+        review.setdefault("inference_path", None)
         return review
 
     @staticmethod
@@ -359,7 +361,24 @@ class Store:
             con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
         return review
 
-    def enqueue_review(self, case_id, session_id, generation, kind, full_refine=False):
+    @staticmethod
+    def _review_path(review, requested):
+        """The path a model run uses, frozen as {id, label, identity}, or None for an unnamed default.
+
+        A draft is free until its first published result, then stays on that card, so every
+        step of a saved correction ran on one card. A new child is never a warm prefix, so one
+        added mark on another card would silently rebuild reviewed work from the original mask.
+        The lock is non-empty `batches`, which only a published result writes, so a failed
+        first run never locks. Absent means the draft's card, which keeps an old tab working.
+        """
+        bound = review["inference_path"] if review["batches"] else None
+        chosen = bound if requested is None else inference_paths.binding(requested)
+        if review["batches"] and inference_paths.identity(chosen) != inference_paths.identity(bound):
+            label = (bound or inference_paths.binding(inference_paths.DEFAULT))["label"]
+            raise ReviewConflict(f"This draft's AI results came from {label}. Re-run its steps to use another GPU.")
+        return chosen
+
+    def enqueue_review(self, case_id, session_id, generation, kind, full_refine=False, inference_path=None):
         if kind not in ("review_predict", "review_accept"):
             raise ValueError("Unknown interactive review operation")
         with self.connection() as con:
@@ -377,6 +396,7 @@ class Store:
                 row = con.execute("SELECT status FROM jobs WHERE id=?", (review["job_id"],)).fetchone()
                 if row and row["status"] in ("queued", "running"):
                     raise ReviewConflict("This correction session already has a queued or running job")
+            chosen = None
             if kind == "review_predict":
                 applied = review["batches"][-1]["end"] if review["batches"] else 0
                 direct_replay = review["method"] == "direct" and bool(review["prompts"]) and not review.get("candidate")
@@ -398,6 +418,10 @@ class Store:
                     raise ReviewConflict("Add or edit a prompt before applying again")
                 if not review["prompts"] and not full_refine and not policy_only:
                     raise ValueError("Add a positive or negative prompt before applying")
+                # Decided here because `policy_only` is. Direct and relationship-only Apply run no
+                # model on any card, so they ignore the choice, and a stale client cannot break them.
+                if review["method"] != "direct" and not policy_only:
+                    chosen = self._review_path(review, inference_path)
                 if str(generation) in review.get("candidates", {}):
                     generation += 1
                     review["generation"] = generation
@@ -438,6 +462,7 @@ class Store:
                 payload=payload,
                 cancel_requested=False,
                 review_session_id=session_id,
+                **({"inference_path": chosen} if chosen else {}),
             )
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
             review.update(status="predicting" if kind == "review_predict" else "accepting", job_id=job["id"], error=None, updated_at=now())
@@ -459,6 +484,9 @@ class Store:
                 raise ValueError("A candidate already exists for this immutable generation")
             review.setdefault("candidates", {})[generation] = candidate
             review.update(candidate=candidate, batches=job["payload"]["batches"], status="ready", error=None, updated_at=now())
+            # A relationship-only Apply ran nothing, so it says nothing about which card made this.
+            if not job["payload"].get("relationship_only"):
+                review["inference_path"] = current.get("inference_path")
             current.update(status="completed", stage="Candidate ready for review", completed_at=now(), revision_id=None)
             con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), review["id"]))
             con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (current["status"], json.dumps(current), current["id"]))

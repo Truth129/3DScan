@@ -303,7 +303,10 @@ class InteractiveWorker:
             log.error("nnInteractive worker process %s did not exit; its GPU memory may remain in use", child.process.pid)
 
     def _shutdown(self):
-        """Stop the child gracefully and verify its exit. The caller holds the lock."""
+        """Stop the child gracefully and verify its exit.
+
+        This takes no lock, because predict replaces a child while holding the one release takes.
+        """
         child, self._child = self._child, None
         if child is not None and not child.stop(graceful=True):
             raise RuntimeError("The nnInteractive worker process did not exit; its GPU memory may still be in use")

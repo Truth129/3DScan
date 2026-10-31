@@ -95,6 +95,13 @@ class MeasuredEngine(Engine):
         }
 
 
+class ReportingEngine(MeasuredEngine):
+    """Says no more about itself than the real engine does, so a leak test sees only the code's own."""
+
+    def refine(self, prompts, progress, cancelled, session_key):
+        return {**super().refine(prompts, progress, cancelled, session_key), "prefix": None}
+
+
 class PointwiseEngine(Engine):
     """Reports pointwise refinement and prefix reuse as the real runtime does,
     with a cancellable step per new point, for the validation harness."""
