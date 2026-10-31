@@ -866,15 +866,16 @@ OVERFLOW_QC = f"Part of total re-ran with results in system memory on {GPU_NAME}
 
 
 @pytest.fixture
-def segmenting(tmp_path, monkeypatch):
+def segmenting(request, tmp_path, monkeypatch):
     """A demo case whose jobs start real children: the device check and a shadow TotalSegmentator.
 
     The stand-in sits under a PRIVATE- folder, so any public text that names its interpreter
     or site-packages shows up. The default path's child finds the shadow too, on PYTHONPATH.
     No weights exist here, so the fingerprint is told they are complete. Its digest stays the
-    real one, which is what the job's call and the run's call must agree on.
+    real one, which is what the job's call and the run's call must agree on. Indirect
+    parametrization passes other `stand_in` keywords, and the build they name is process-wide.
     """
-    stub = stand_in(tmp_path / "PRIVATE-home")
+    stub = stand_in(tmp_path / "PRIVATE-home", **getattr(request, "param", {}))
     stub.shadow("totalsegmentator.bin.TotalSegmentator", TOTALSEGMENTATOR)
     activate(monkeypatch, stub)
     runs = tmp_path / "totalsegmentator-runs"
@@ -979,6 +980,25 @@ def test_each_path_reuses_only_its_own_saved_result(segmenting):
     assert "runtime" not in absent["operation"]
     assert segmenting.revision(segmenting.run("nvidia"))["inference_manifest"] == first["inference_manifest"]
     assert len(segmenting.runs()) == 2
+
+
+@pytest.mark.parametrize("segmenting", [{"name": "amd", "kind": "rocm"}], indirect=True)
+def test_a_rocm_build_records_its_hip_version_and_no_cuda_version(segmenting, monkeypatch):
+    # The other jobs here measure CUDA, yet naming default on a ROCm workstation gives this.
+    sample = segmentation._Resources
+    monkeypatch.setattr(segmentation, "_Resources", lambda track_amd_vram: sample())  # A HIP build would read this machine's real card.
+    measured = {
+        "gpu_name": GPU_NAME,
+        "device": "gpu:0",
+        "torch_version": TORCH,
+        "hip_version": "7.2.fake",
+        "cuda_version": None,
+        "results_moved_to_cpu": False,
+    }
+    for name in ("amd", "default"):
+        job = segmenting.run(name)
+        assert job["status"] == "completed", job
+        assert segmenting.revision(job)["operation"]["runtime"] == {"inference_path": name, "reused": False, **measured}
 
 
 def lose_a_mask(saved):
