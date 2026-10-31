@@ -38,7 +38,7 @@ proof_state() {
 }
 
 # The link alone is not an environment. uv writes pyvenv.cfg after it, and without that file the
-# link is the Python it points at, which `uv pip sync --python` would then change.
+# link is the Python it points at, so what uv says about it would be about that Python.
 has_environment() {
   [[ -x "$python" && -f "$venv/pyvenv.cfg" ]]
 }
@@ -46,7 +46,7 @@ has_environment() {
 # Whether the last install finished and left exactly what the lock pins. It reads no index, and
 # what uv prints for an installed package is what it writes for a pin, so the two compare as text.
 matches_lock() {
-  [[ -f "$finished" ]] || return 1
+  [[ -f "$finished" ]] && has_environment || return 1
   local pins packages
   pins="$(grep -oE '^[a-z0-9][^ ]*==[^ ]+' "$lock" | sort)"
   packages="$("$uv" pip freeze --python "$python" 2>/dev/null | sort)"
@@ -124,7 +124,7 @@ driver="${driver%%$'\n'*}"
 
 # Only the run that starts an install needs the room. What it leaves in the environment and the
 # cache counts against the free space from then on, so asking again would refuse the re-run that
-# finishes or repairs it. The cache holds a second copy when it is on another disk.
+# rebuilds it. The cache holds a second copy when it is on another disk.
 if [[ ! -f "$marker" ]]; then
   for place in "$venv" "$UV_CACHE_DIR"; do
     free="$(free_bytes "$place")"
@@ -180,28 +180,32 @@ if (( dry_run )); then
   exit 0
 fi
 
-if ! has_environment; then
-  # Marker first: a run stopped inside `uv venv` must leave a directory the next run still
-  # owns, because running this again is the one remedy.
-  mkdir -p "$venv"
-  echo "Made by scripts/add_inference_path.sh $chosen." >"$marker"
-  "$uv" venv --python "$interpreter" --allow-existing "$venv" ||
-    fail 'The environment could not be created. Fix what uv reported, then run this again.'
-fi
-# `uv pip sync` alone cannot tell when an environment is right. It counts a package as installed
-# once its dist-info is there, which it links beside the package's files with no sign they all
-# arrived, so a stopped install would pass as complete. It reads a pin by PEP 440, so ==2.14.0
-# accepts an installed 2.14.0+cu126, the wheel the lock exists to keep out. And it asks the index
-# even when nothing differs, so a re-run could not reach the check offline. --reinstall replaces
-# both of the first two, and the mark goes first so that a stopped repair reads as unfinished too.
+# `uv pip sync` cannot decide this. It reads a pin by PEP 440, so ==2.14.0 accepts an installed
+# 2.14.0+cu126, the wheel the lock exists to keep out. And it asks the index even when nothing
+# differs, so a re-run could not reach the check offline.
+#
+# Nor can uv repair what a stop leaves. It trusts a dist-info, with no sign that the package's
+# files all arrived, and a stop inside a package's RECORD leaves a state it refuses forever
+# ('RECORD file is invalid'), so running this again could never work. An empty environment gives
+# it nothing to trust or refuse. --reinstall would not help, and it implies --refresh, so it would
+# fetch again what uv already holds. The cache is outside the environment and stays.
 if matches_lock; then
   echo 'Every package already equals the lock, so nothing was installed.'
 else
+  # The marker stays through the wipe, so that a stop at any point leaves a directory this script
+  # still owns. The finished mark goes first, so that discovery withdraws the path before anything
+  # changes.
+  mkdir -p "$venv"
+  echo "Made by scripts/add_inference_path.sh $chosen." >"$marker"
   rm -f -- "$finished"
+  find "$venv" -mindepth 1 -maxdepth 1 ! -name "${marker##*/}" -exec rm -rf -- {} + ||
+    fail 'The old environment could not be cleared. Fix what was reported above, then run this again.'
+  "$uv" venv --python "$interpreter" --allow-existing "$venv" ||
+    fail 'The environment could not be created. Fix what uv reported, then run this again.'
   # --require-hashes covers what is installed, and acvl-utils's build requirements are outside
   # it: it has no wheel, and they come from the index unhashed.
-  "$uv" pip sync --python "$python" --require-hashes --reinstall "$lock" ||
-    fail 'The install did not finish, so no GPU check ran. Run this again to carry on.'
+  "$uv" pip sync --python "$python" --require-hashes "$lock" ||
+    fail 'The install did not finish, so no GPU check ran. Run this again.'
   echo 'The last install finished.' >"$finished"
 fi
 
