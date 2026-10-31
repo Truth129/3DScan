@@ -1,19 +1,26 @@
 """Stands in for PyTorch in device-check children, so those tests never reach a GPU.
 
 A test puts this directory on PYTHONPATH. SCAN3D_FAKE_GPUS is a JSON list of
-[name, total_memory, is_integrated], SCAN3D_FAKE_TORCH selects a failure, and
-SCAN3D_FAKE_TORCH_BUILD=cuda reports a CUDA build instead of a ROCm one.
+[name, total_memory, is_integrated], SCAN3D_FAKE_TORCH selects a failure,
+SCAN3D_FAKE_TORCH_BUILD=cuda reports a CUDA build instead of a ROCm one, and
+SCAN3D_FAKE_TORCH_PREFIXES names a file that gets this interpreter's sys.prefix, which
+proves where a child ran when its argv only shows what was asked for.
 """
 
 from contextlib import nullcontext
 import json
 import os
 import signal
+import sys
 import time
 from types import SimpleNamespace
 
 # Native runtimes log straight to the descriptor, past Python's sys.stdout.
 os.write(1, b"fake native runtime log\n")
+
+if prefixes := os.environ.get("SCAN3D_FAKE_TORCH_PREFIXES"):
+    with open(prefixes, "a") as file:
+        file.write(f"{sys.prefix}\n")
 
 failure = os.environ.get("SCAN3D_FAKE_TORCH")
 if failure == "missing":

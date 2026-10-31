@@ -1,15 +1,22 @@
 """Task selection, native flags and checkpoint provenance without real inference."""
 
+from dataclasses import replace
+from importlib import metadata
 from pathlib import Path
 import json
+import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import nibabel as nib
 import numpy as np
 import pytest
 
+from inference_path_stub import FAMILIES, GPU_NAME, MEMORY_BYTES, TORCH, activate, add_package, stand_in
 from scan3d import segmentation
+from scan3d.config import device_request
+from scan3d.inference_paths import InferencePath, binding, require
 from scan3d.segmentation_options import normalize_options, segmentation_catalog
 
 
@@ -256,3 +263,189 @@ def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, mo
     assert manifest["options"] == normalize_options("chest", options)
     assert manifest["tasks"][0]["effective_options"]["remove_small_blobs_mm3"] == (200 if flags.get("remove_small_blobs") else None)
     assert fingerprints == [("chest", normalize_options("chest", options))]
+
+
+# Identity on an added inference path
+
+
+def test_a_paths_fingerprint_is_its_own_and_stable_and_names_nothing_local(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOTALSEG_WEIGHTS_PATH", str(tmp_path / "weights"))
+    activate(monkeypatch, stand_in(tmp_path))
+    path = require(binding("nvidia"))
+    options = {"tasks": ["total"]}
+    default = segmentation.model_fingerprint("chest", options)
+    added = segmentation.model_fingerprint("chest", options, inference_path=path)
+    assert added["digest"] != default["digest"]
+    assert added == segmentation.model_fingerprint("chest", options, inference_path=path)
+    assert set(added) == set(default)  # The cache layout and its readers see the same shape.
+    assert added["device_request"] == f"nvidia|gpu|{GPU_NAME}"
+    assert added["versions"] == path.versions()
+    assert {name: added["versions"][name] for name in ("torch", *FAMILIES["cuda"])} == {"torch": TORCH, **FAMILIES["cuda"]}
+    assert str(tmp_path) not in json.dumps(added)
+
+
+def test_the_default_paths_fingerprint_does_not_move(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOTALSEG_WEIGHTS_PATH", str(tmp_path / "weights"))
+    before = segmentation.model_fingerprint("chest", {"tasks": ["total"]})
+    activate(monkeypatch, stand_in(tmp_path))
+    assert segmentation.model_fingerprint("chest", {"tasks": ["total"]}) == before
+    assert before["device_request"] == device_request()
+    assert set(before["versions"]) == {"TotalSegmentator", "nnunetv2", "torch"}
+
+
+def test_a_replaced_card_or_upgraded_stack_is_a_different_fingerprint(tmp_path, monkeypatch):
+    stub = stand_in(tmp_path)
+    activate(monkeypatch, stub)
+    path = require(binding("nvidia"))
+    options = {"tasks": ["total"]}
+    first = segmentation.model_fingerprint("chest", options, inference_path=path)
+    assert segmentation.model_fingerprint("chest", options, inference_path=replace(path, gpu_name="Test Replacement GPU"))["digest"] != first["digest"]
+    shutil.rmtree(stub.site_packages / f"torch-{TORCH}.dist-info")
+    add_package(stub.site_packages, "torch", "9.9.9")
+    assert segmentation.model_fingerprint("chest", options, inference_path=path)["digest"] != first["digest"]
+
+
+# Running a task on an added inference path, with both children replaced in this process
+
+ADDED = InferencePath("nvidia", "/venv/bin/python", "/venv/lib/python/site-packages", "gpu", "cuda", GPU_NAME, MEMORY_BYTES, (("torch", "2.0"),))
+
+
+@pytest.fixture
+def run(tmp_path, monkeypatch):
+    """segment() with a scripted device check, log, exit code and report."""
+    ct_path = tmp_path / "ct.nii.gz"
+    nib.save(nib.Nifti1Image(np.full((8, 9, 10), 123, np.int16), np.eye(4)), ct_path)
+    state = SimpleNamespace(
+        output=tmp_path / "output",
+        spawned=[],
+        log=b"",
+        returncode=0,
+        report={"device": "gpu", "torch_version": "2.0", "classes": {"1": "liver"}},
+        measured={"device": "gpu", "selected_device": "gpu:0", "torch": "2.0", "gpu_index": 0, "gpu_name": GPU_NAME, "hip": None, "cuda": "13.0"},
+    )
+
+    class Worker:
+        pid = None
+
+        def __init__(self, command, stdout, **options):
+            state.spawned.append((command, options))
+            self.returncode = state.returncode
+            stdout.write(state.log)
+            directory = Path(command[command.index("-o") + 1])
+            mask = np.zeros((8, 9, 10), np.uint8)
+            mask[2:5, 3:6, 4:7] = 1
+            nib.save(nib.Nifti1Image(mask, np.eye(4)), directory / "liver.nii.gz")
+            Path(command[command.index("--report") + 1]).write_text(json.dumps(state.report))
+
+        def poll(self):
+            return self.returncode
+
+    def fingerprint(profile, options=None, **source):
+        state.fingerprinted_with = source
+        return {"digest": "fixture", "weights_complete": True}
+
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: state.measured)
+    monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
+    monkeypatch.setattr(segmentation.subprocess, "Popen", Worker)
+
+    def segment(inference_path=ADDED, task="total"):
+        source = {"inference_path": inference_path} if inference_path else {}
+        return segmentation.segment(ct_path, state.output, "chest", lambda _: None, lambda: False, {"tasks": [task]}, **source)
+
+    state.segment = segment
+    state.manifest = lambda: json.loads((state.output / "inference.json").read_text())
+    return state
+
+
+def test_a_path_spawns_its_own_interpreter_with_its_own_environment(run):
+    run.segment()
+    ((command, options),) = run.spawned
+    assert command[:4] == [ADDED.python, "-u", "-m", "totalsegmentator.bin.TotalSegmentator"]
+    assert "--verbose" in command and command[command.index("--device") + 1] == "gpu:0"
+    assert options["env"] == ADDED.environment()
+    assert run.fingerprinted_with == {"inference_path": ADDED}
+
+
+def test_the_default_path_spawns_exactly_what_it_did(run):
+    run.report.pop("torch_version")
+    run.segment(None)
+    ((command, options),) = run.spawned
+    assert command[0] == sys.executable and "--verbose" not in command and "env" not in options
+    assert run.fingerprinted_with == {} and "inference_path" not in run.manifest()
+
+
+def test_the_manifest_names_the_path_from_its_first_save_in_both_copies_and_never_the_interpreter(run, monkeypatch):
+    saves, write = [], segmentation.atomic_text
+
+    def recorded(destination, content):
+        saves.append(json.loads(content))
+        write(destination, content)
+
+    monkeypatch.setattr(segmentation, "atomic_text", recorded)
+    run.segment()
+    assert saves[0]["tasks"] == [] and {save["inference_path"] for save in saves} == {"nvidia"}
+    manifest = run.manifest()
+    assert manifest["inference_path"] == "nvidia" and manifest["runtime"] == run.measured
+    assert json.loads(next(run.output.glob("run-*/inference.json")).read_text()) == manifest
+    assert ADDED.python not in json.dumps(manifest) and ADDED.site_packages not in json.dumps(manifest)
+
+
+def nothing_ran(run):
+    assert run.spawned == [] and list(run.output.glob("run-*")) == [] and not (run.output / "inference.json").exists()
+
+
+@pytest.mark.parametrize(
+    "measured, found",
+    [
+        ({"gpu_name": "Test Other GPU"}, r"Test Other GPU \(gpu:0, CUDA\)"),
+        ({"cuda": None}, rf"{GPU_NAME} \(gpu:0, no CUDA\)"),
+        ({"selected_device": "cpu", "gpu_name": None, "cuda": None}, r"no GPU \(cpu, no CUDA\)"),
+    ],
+)
+def test_a_wrong_card_or_build_stops_before_a_run_exists(run, measured, found):
+    run.measured.update(measured)
+    with pytest.raises(RuntimeError, match=f"Expected {GPU_NAME}, but the GPU check found {found}. No result was kept and no other GPU was tried."):
+        run.segment()
+    nothing_ran(run)
+
+
+def test_a_crop_model_task_is_refused_off_the_first_card_because_upstream_drops_the_index(run):
+    run.measured.update(selected_device="gpu:1", gpu_index=1)
+    with pytest.raises(ValueError) as error:
+        run.segment(task="teeth")
+    assert (
+        str(error.value)
+        == f"TotalSegmentator would run part of teeth on the first GPU, so it cannot run on {GPU_NAME}. Nothing ran and no other GPU was tried."
+    )
+    nothing_ran(run)
+
+
+@pytest.mark.parametrize(
+    "inference_path, device, task",
+    [(ADDED, "gpu:0", "teeth"), (ADDED, "gpu:1", "total"), (None, "gpu:1", "teeth")],
+    ids=["first-card", "no-crop-model", "default-path-unchanged"],
+)
+def test_only_a_crop_model_off_the_first_card_is_refused(run, inference_path, device, task):
+    run.measured.update(selected_device=device, gpu_index=int(device[4:]))
+    run.segment(inference_path, task)
+    assert len(run.spawned) == 1
+
+
+def test_a_report_from_another_torch_is_rejected(run):
+    run.report["torch_version"] = "9.9.9"
+    with pytest.raises(RuntimeError, match=f"ran on PyTorch 9.9.9, not the 2.0 that {GPU_NAME} was checked on. No result was kept and no other GPU was tried."):
+        run.segment()
+    assert run.manifest()["status"] == "failed"
+
+
+def test_a_report_without_a_torch_version_is_rejected_on_a_path(run):
+    run.report.pop("torch_version")
+    with pytest.raises(RuntimeError, match="ran on PyTorch None"):
+        run.segment()
+
+
+@pytest.mark.parametrize("inference_path", [ADDED, None], ids=["added", "default"])
+def test_a_run_that_fell_back_to_the_cpu_is_rejected(run, inference_path):
+    run.report["device"] = "cpu"
+    with pytest.raises(RuntimeError, match="did not complete on the requested GPU; CPU fallback results were rejected"):
+        run.segment(inference_path)

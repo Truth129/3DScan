@@ -173,21 +173,28 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
     return configurations
 
 
-def model_fingerprint(profile: str, options: dict | None = None, *, modality: str = "CT") -> dict:
+def model_fingerprint(profile: str, options: dict | None = None, *, modality: str = "CT", inference_path=None) -> dict:
     """Resolved model/checkpoint identity for provenance and safe cache reuse.
 
     This does not download or import a model or initialize a GPU. An incomplete
     fingerprint cannot authorize a cache hit. Recompute after the first run,
     once TotalSegmentator has downloaded its model files.
+
+    An inference path changes `versions` and `device_request` and adds no key, so each
+    card keeps its own results, the default path's identity never moves, and both the
+    cache key and the digest change together.
     """
     options = normalize_options(profile, options, modality=modality)
 
-    versions = {}
-    for package in ("TotalSegmentator", "nnunetv2", "torch"):
-        try:
-            versions[package] = metadata.version(package)
-        except metadata.PackageNotFoundError:
-            versions[package] = "unavailable"
+    if inference_path:
+        versions = inference_path.versions()
+    else:
+        versions = {}
+        for package in ("TotalSegmentator", "nnunetv2", "torch"):
+            try:
+                versions[package] = metadata.version(package)
+            except metadata.PackageNotFoundError:
+                versions[package] = "unavailable"
     if os.environ.get("TOTALSEG_WEIGHTS_PATH"):
         base = Path(os.environ["TOTALSEG_WEIGHTS_PATH"]).expanduser()
     else:
@@ -241,7 +248,7 @@ def model_fingerprint(profile: str, options: dict | None = None, *, modality: st
         "modality": modality,
         "options": options,
         "task_configuration_sha256": config_digest,
-        "device_request": device_request(),
+        "device_request": inference_path.identity if inference_path else device_request(),
         "fast": False,
         "fastest": False,
         "wrapper_sha256": _digest(Path(__file__)),
@@ -266,15 +273,17 @@ def _stop(process):
         pass
 
 
-def _resolve_device(device, cancelled):
+def _resolve_device(device, cancelled, inference_path=None):
     """Return _device_info(device) from a short-lived child process.
 
     The API process runs no inference, and a GPU runtime started here would stay
     resident in it. Exit returns the runtime, at the cost of one import per job.
+    An inference path answers from its own interpreter, the only one that can see its card.
     """
+    inherited = inference_path.environment() if inference_path else os.environ
     # Import exactly this release of scan3d, as the nnInteractive worker does.
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH"))))}
-    command = [sys.executable, "-P", "-m", "scan3d.segmentation", device]
+    env = {**inherited, "PYTHONPATH": os.pathsep.join(filter(None, (str(ROOT), inherited.get("PYTHONPATH"))))}
+    command = [inference_path.python if inference_path else sys.executable, "-P", "-m", "scan3d.segmentation", device]
     process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, env=env, start_new_session=True)
     deadline = time.monotonic() + DEVICE_CHECK_SECONDS
     try:
@@ -382,7 +391,20 @@ class _Resources:
         }
 
 
-def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, options: dict | None = None, *, modality: str = "CT") -> list[dict]:
+def _confirm_card(inference_path, runtime, tasks):
+    """Stop before a run exists unless all of it would happen on this path's proven card."""
+    inference_path.confirm(runtime["selected_device"], runtime.get("gpu_name"), runtime.get("cuda"))
+    for task in tasks:
+        # Upstream starts a crop model with only "gpu" from gpu:N, which is the first card.
+        if runtime.get("gpu_index") and resolved_task_config(task).get("crop_model"):
+            raise ValueError(
+                f"TotalSegmentator would run part of {task} on the first GPU, so it cannot run on {inference_path.label}. Nothing ran and no other GPU was tried."
+            )
+
+
+def segment(
+    ct_path: Path, output_dir: Path, profile: str, progress, cancelled, options: dict | None = None, *, modality: str = "CT", inference_path=None
+) -> list[dict]:
     legacy_options = options is None
     options = normalize_options(profile, options, modality=modality)
     ct_path = Path(ct_path).resolve()
@@ -391,10 +413,12 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
     output_dir.mkdir(parents=True, exist_ok=True)
     if cancelled():
         raise SegmentationCancelled("Segmentation cancelled")
-    device = device_request()
-    runtime = _resolve_device(device, cancelled)
+    device = inference_path.device if inference_path else device_request()
+    runtime = _resolve_device(device, cancelled, inference_path)
     effective_device = runtime["selected_device"]
     tasks = options["tasks"]
+    if inference_path:
+        _confirm_card(inference_path, runtime, tasks)
     run_dir = output_dir / ("run-" + uuid.uuid4().hex)
     run_dir.mkdir()
     manifest = {
@@ -415,6 +439,8 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
         "empty_labels": [],
         "qc": [],
     }
+    if inference_path:
+        manifest["inference_path"] = inference_path.id
     manifest_path = output_dir / "inference.json"
 
     def save_manifest():
@@ -424,6 +450,8 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
 
     save_manifest()
     structures = []
+    # The default path's child keeps inheriting this process's environment, exactly as before.
+    spawn_options = {"env": inference_path.environment()} if inference_path else {}
     try:
         for task in tasks:
             if cancelled():
@@ -438,7 +466,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
             # restore the original stream. Unbuffered output also makes tail -F
             # report each stage promptly instead of delaying it until exit.
             command = [
-                sys.executable,
+                inference_path.python if inference_path else sys.executable,
                 "-u",
                 "-m",
                 "totalsegmentator.bin.TotalSegmentator",
@@ -456,6 +484,8 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
             for option in ("robust_crop", "body_seg", "remove_small_blobs"):
                 if options[option]:
                     command.append("--" + option)
+            if inference_path:
+                command.append("--verbose")  # Only prints more, and upstream hides nnU-Net's output without it.
             capabilities = task_capabilities(task)
             effective = {
                 "robust_crop": options["robust_crop"] and capabilities["robust_crop_supported"],
@@ -480,7 +510,7 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
             started = time.monotonic()
             resources = _Resources(track_amd_vram=bool(runtime.get("hip")))
             with (run_dir / f"{task}.log").open("wb") as log:
-                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, **spawn_options)
                 try:
                     while process.poll() is None:
                         resources.sample(process.pid)
@@ -505,6 +535,13 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
             native = json.loads(report_path.read_text())
             if effective_device.startswith("gpu") and native.get("device") != "gpu":
                 raise RuntimeError("TotalSegmentator did not complete on the requested GPU; CPU fallback results were rejected")
+            if inference_path:
+                # The child's own measurement, so this shows the spawn used the chosen interpreter.
+                if native.get("torch_version") != runtime["torch"]:
+                    raise RuntimeError(
+                        f"TotalSegmentator {task} ran on PyTorch {native.get('torch_version')}, not the {runtime['torch']} that {inference_path.label} was checked on. "
+                        "No result was kept and no other GPU was tried."
+                    )
             if native.get("fast") or native.get("fastest") or native.get("save_lowres"):
                 raise RuntimeError("TotalSegmentator returned an unexpected reduced-resolution result")
             record["native_report"] = report_path.name
@@ -542,6 +579,8 @@ def segment(ct_path: Path, output_dir: Path, profile: str, progress, cancelled, 
             raise RuntimeError("No nonempty structures were found in the requested task outputs")
         progress("Recording model checkpoint checksums")
         source_options = {"modality": modality} if modality != "CT" else {}
+        if inference_path:
+            source_options["inference_path"] = inference_path
         manifest["model_fingerprint"] = (
             model_fingerprint(profile, **source_options) if legacy_options else model_fingerprint(profile, options, **source_options)
         )
