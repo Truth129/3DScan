@@ -192,6 +192,12 @@ fi
 if matches_lock; then
   echo 'Every package already equals the lock, so nothing was installed.'
 else
+  # A job can run from a finished environment and never from an unfinished one, which discovery
+  # refuses, so a first or a stopped install does not wait for the queue.
+  if [[ -f "$finished" ]]; then
+    "$interpreter" -B -P "$root/scripts/check_gpu.py" --queue ||
+      fail 'This environment needs a rebuild and a job may be using it, so nothing was changed. Run this again when the queue is empty.'
+  fi
   # The marker stays through the wipe, so that a stop at any point leaves a directory this script
   # still owns. The finished mark goes first, so that discovery withdraws the path before anything
   # changes.

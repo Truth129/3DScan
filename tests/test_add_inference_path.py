@@ -22,6 +22,7 @@ import sys
 import pytest
 
 from scan3d.config import ROOT
+from scan3d.store import Store
 
 SCRIPT = ROOT / "scripts" / "add_inference_path.sh"
 SETTINGS_CODE = ("__init__.py", "config.py", "doctor.py", "inference_paths.py")
@@ -33,7 +34,7 @@ FIRST_RUN = [*PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]
 LATER_PREFLIGHT = ["uv python find", "nvidia-smi", "system-python"]  # A later run needs no room.
 RE_RUN = [*LATER_PREFLIGHT, "uv pip freeze", "venv-python"]  # It equals the lock: no index.
 RESTARTED = [*LATER_PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]  # No install has finished.
-REBUILT = [*LATER_PREFLIGHT, "uv pip freeze", "find", "uv venv", "uv pip sync", "venv-python"]
+REBUILT = [*LATER_PREFLIGHT, "uv pip freeze", "queue", "find", "uv venv", "uv pip sync", "venv-python"]
 MARKER = ".scan3d-inference-path"
 FINISHED = ".scan3d-inference-path-finished"
 # In the real lock's format, with what the script must read past, and in an order uv does not
@@ -148,6 +149,8 @@ load_environment()
 outcome = json.loads((root.parent / "rig" / "scenario.json").read_text())["check"]
 if outcome == "refused":
     sys.exit("Jobs are queued or running, so no GPU check ran. Run it again when the queue is empty.")
+if "--queue" in sys.argv:
+    sys.exit(0)
 if outcome == "crashed":
     raise RuntimeError("the check stopped before it wrote anything")
 if outcome == "silent":
@@ -243,12 +246,25 @@ class Rig:
     def set_packages(self, packages):
         (self.venv / "installed.json").write_text(json.dumps(packages))
 
+    def with_a_real_check(self):
+        """What a run needs once the real check replaces the stub. Past its queue guard the real
+        check imports PyTorch, and here that is a stand-in that records the import and kills its
+        own process, so no test can reach a real runtime."""
+        return {
+            "SCAN3D_DATA_DIR": str(self.top / "data"),
+            "PYTHONPATH": str(ROOT / "tests" / "fake_torch"),
+            "SCAN3D_FAKE_TORCH": "crash",
+            "SCAN3D_FAKE_TORCH_PREFIXES": str(self.top / "torch-imports"),
+        }
+
     def snapshot(self):
         """Everything a run could have changed, so a test can show that it changed nothing."""
         return {str(entry): _state(entry) for folder in (self.root, self.elsewhere) for entry in sorted(folder.rglob("*"))}
 
 
 def _step(tool, arguments):
+    if "--queue" in arguments:
+        return "queue"
     return " ".join((tool, *(word for word in arguments[:2] if not word.startswith("-")))) if tool.endswith("uv") else tool
 
 
@@ -921,7 +937,7 @@ def test_an_environment_that_lost_pyvenv_cfg_gets_it_back(rig):
     (rig.venv / "pyvenv.cfg").unlink()
     assert rig.run("nvidia").returncode == 0
     # Not a freeze: without that file the link is the Python it points at.
-    assert rig.steps() == RESTARTED
+    assert rig.steps() == [*LATER_PREFLIGHT, "queue", "find", "uv venv", "uv pip sync", "venv-python"]
     assert not package.exists()
     assert (rig.venv / "pyvenv.cfg").is_file() and rig.packages() == LOCKED
     assert not (rig.fakes / "base-python-changed").exists()
@@ -937,7 +953,7 @@ def test_an_environment_that_lost_its_interpreter_gets_one_back(rig):
     rig.scenario["free"] = 10 * GIB
     completed = rig.run("nvidia")
     assert completed.returncode == 0, completed.stderr
-    assert rig.steps() == RESTARTED
+    assert rig.steps() == [*LATER_PREFLIGHT, "queue", "find", "uv venv", "uv pip sync", "venv-python"]
     assert not package.exists()
     assert (rig.venv / "bin" / "python").is_file() and rig.packages() == LOCKED
 
@@ -952,6 +968,122 @@ def test_a_stopped_install_is_rebuilt_in_the_room_it_left(rig, stopped):
     completed = rig.run("nvidia")
     assert completed.returncode == 0, completed.stderr
     assert "df" not in rig.steps()
+
+
+# The job queue
+
+
+def busy_queue(rig):
+    rig.scenario["check"] = "refused"  # The real check's guard answers both of its questions.
+
+
+def test_a_busy_queue_stops_a_rebuild_before_anything_changes(rig):
+    installed(rig)
+    a_local_build(rig)
+    busy_queue(rig)
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1
+    assert "Jobs are queued or running" in completed.stderr
+    assert "nothing was changed" in completed.stderr and "Run this again when the queue is empty" in completed.stderr
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]
+    assert rig.snapshot() == before
+    assert (rig.venv / FINISHED).is_file()
+
+
+def test_the_queue_is_asked_by_a_python_that_writes_nothing_and_loads_nothing_from_here(rig):
+    installed(rig)
+    a_local_build(rig)
+    assert rig.run("nvidia").returncode == 0
+    question = rig.step("queue")
+    assert question["tool"] == "system-python"
+    assert question["arguments"] == ["-B", "-P", f"{rig.root}/scripts/check_gpu.py", "--queue"]
+
+
+def test_the_queue_is_asked_after_the_lock_and_before_the_wipe(rig):
+    installed(rig)
+    a_local_build(rig)
+    rig.run("nvidia")
+    steps = rig.steps()
+    assert steps.index("uv pip freeze") < steps.index("queue") < steps.index("find")
+
+
+@pytest.mark.parametrize("stop", [stopped_inside_uv_venv, stopped_inside_uv_pip_sync, killed_right_after_the_wipe])
+def test_a_stopped_install_does_not_wait_for_the_queue(rig, stop):
+    # Discovery refuses an unfinished environment, so no job can be running from this one.
+    installed(rig)
+    a_local_build(rig)
+    calm = dict(rig.scenario)
+    stop(rig)
+    rig.run("nvidia")
+    rig.forget_calls()
+    rig.scenario = calm
+    busy_queue(rig)
+    completed = rig.run("nvidia")
+    assert rig.steps() == RESTARTED
+    assert rig.packages() == LOCKED and (rig.venv / FINISHED).is_file()
+    assert completed.returncode == 1 and "recorded nothing" in completed.stderr  # The check's own guard.
+
+
+def test_a_first_install_does_not_wait_for_the_queue(rig):
+    busy_queue(rig)
+    completed = rig.run("nvidia")
+    assert rig.steps() == FIRST_RUN
+    assert rig.packages() == LOCKED and (rig.venv / FINISHED).is_file()
+    assert completed.returncode == 1 and "recorded nothing" in completed.stderr  # The check's own guard.
+
+
+def test_an_environment_that_equals_the_lock_goes_straight_to_the_check_and_its_guard(rig):
+    installed(rig)
+    busy_queue(rig)
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert rig.steps() == RE_RUN
+    assert completed.returncode == 1 and "recorded nothing" in completed.stderr
+    assert rig.snapshot() == before
+
+
+def a_library(rig, statuses):
+    """A real job table outside the checkout, or a file that is not a database when `statuses` is None."""
+    data = rig.top / "data"
+    if statuses is None:
+        data.mkdir()
+        (data / "scan3d.sqlite3").write_text("this is not a database, and it is long enough to be read as one")
+        return
+    with Store(data).connection() as connection:
+        for number, status in enumerate(statuses):
+            connection.execute("INSERT INTO jobs(id, case_id, status, data) VALUES (?, ?, ?, ?)", (f"{number:032x}", "0" * 32, status, "{}"))
+
+
+@pytest.mark.parametrize(
+    "statuses, reply",
+    [
+        (("queued",), "Jobs are queued or running"),
+        (("completed", "running"), "Jobs are queued or running"),
+        (None, "Could not read the job queue"),
+    ],
+    ids=["queued", "running", "unreadable"],
+)
+def test_the_real_check_answers_for_a_rebuild(rig, statuses, reply):
+    installed(rig)
+    a_local_build(rig)
+    a_library(rig, statuses)
+    shutil.copy2(ROOT / "scripts" / "check_gpu.py", rig.root / "scripts")
+    before = rig.snapshot()
+    completed = rig.run("nvidia", env=rig.with_a_real_check())
+    assert completed.returncode == 1 and reply in completed.stderr and "nothing was changed" in completed.stderr
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]
+    assert rig.snapshot() == before
+
+
+def test_the_real_check_lets_a_rebuild_through_when_all_work_has_finished(rig):
+    installed(rig)
+    a_local_build(rig)
+    a_library(rig, ("completed", "failed", "cancelled"))
+    shutil.copy2(ROOT / "scripts" / "check_gpu.py", rig.root / "scripts")
+    rig.run("nvidia", env=rig.with_a_real_check())
+    assert rig.steps() == REBUILT
+    assert rig.packages() == LOCKED and (rig.top / "torch-imports").is_file()
 
 
 # What the result says
