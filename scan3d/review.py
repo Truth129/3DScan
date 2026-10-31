@@ -375,13 +375,17 @@ class ReviewManager:
             relationship=chosen,
         )
 
-    def predict(self, case_id, session_id, generation, full_refine=False, inference_path=None):
+    def predict(self, case_id, session_id, generation, full_refine=False, inference_path=None, replay=False):
         review = self.get(case_id, session_id)
         if not isinstance(full_refine, bool):
             raise ValueError("Whole-object refinement must be a boolean")
         if review.get("method") == "direct" and full_refine:
             raise ValueError("Whole-object AI refinement is unavailable in direct editing")
-        return self.store.enqueue_review(case_id, session_id, _generation(generation), "review_predict", full_refine=full_refine, inference_path=inference_path)
+        if replay and full_refine:
+            raise ValueError("A re-run repeats the draft's own steps, so it cannot add a whole-object refinement")
+        return self.store.enqueue_review(
+            case_id, session_id, _generation(generation), "review_predict", full_refine=full_refine, inference_path=inference_path, replay=replay
+        )
 
     def accept(self, case_id, session_id, generation):
         self.get(case_id, session_id)

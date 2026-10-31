@@ -362,7 +362,7 @@ class Store:
         return review
 
     @staticmethod
-    def _review_path(review, requested):
+    def _review_path(review, requested, step_replay):
         """The path a model run uses, frozen as {id, label, identity}, or None for an unnamed default.
 
         A draft is free until its first published result, then stays on that card, so every
@@ -370,15 +370,17 @@ class Store:
         added mark on another card would silently rebuild reviewed work from the original mask.
         The lock is non-empty `batches`, which only a published result writes, so a failed
         first run never locks. Absent means the draft's card, which keeps an old tab working.
+        Only a replay may leave that card, because it repeats every step there on purpose, and
+        the binding then moves at publish, so a failed replay leaves the draft where it was.
         """
         bound = review["inference_path"] if review["batches"] else None
         chosen = bound if requested is None else inference_paths.binding(requested)
-        if review["batches"] and inference_paths.identity(chosen) != inference_paths.identity(bound):
+        if review["batches"] and not step_replay and inference_paths.identity(chosen) != inference_paths.identity(bound):
             label = (bound or inference_paths.binding(inference_paths.DEFAULT))["label"]
             raise ReviewConflict(f"This draft's AI results came from {label}. Re-run its steps to use another GPU.")
         return chosen
 
-    def enqueue_review(self, case_id, session_id, generation, kind, full_refine=False, inference_path=None):
+    def enqueue_review(self, case_id, session_id, generation, kind, full_refine=False, inference_path=None, replay=False):
         if kind not in ("review_predict", "review_accept"):
             raise ValueError("Unknown interactive review operation")
         with self.connection() as con:
@@ -400,7 +402,10 @@ class Store:
             if kind == "review_predict":
                 applied = review["batches"][-1]["end"] if review["batches"] else 0
                 direct_replay = review["method"] == "direct" and bool(review["prompts"]) and not review.get("candidate")
-                policy_only = relationship_dirty(review) and len(review["prompts"]) <= applied and not full_refine
+                # Repeat the draft's exact Apply steps, usually to change card. Nothing need be
+                # pending, and a full refine with no marks is a step too, which must not become two.
+                step_replay = replay and review["method"] != "direct" and bool(review["batches"])
+                policy_only = relationship_dirty(review) and len(review["prompts"]) <= applied and not full_refine and not step_replay
                 reusable = review.get("candidate")
                 if (
                     policy_only
@@ -414,14 +419,14 @@ class Store:
                     reusable = None
                 if policy_only and not reusable and review["prompts"]:
                     policy_only = False
-                if len(review["prompts"]) <= applied and not full_refine and not policy_only and not direct_replay:
+                if len(review["prompts"]) <= applied and not full_refine and not policy_only and not direct_replay and not step_replay:
                     raise ReviewConflict("Add or edit a prompt before applying again")
-                if not review["prompts"] and not full_refine and not policy_only:
+                if not review["prompts"] and not full_refine and not policy_only and not step_replay:
                     raise ValueError("Add a positive or negative prompt before applying")
                 # Decided here because `policy_only` is. Direct and relationship-only Apply run no
                 # model on any card, so they ignore the choice, and a stale client cannot break them.
                 if review["method"] != "direct" and not policy_only:
-                    chosen = self._review_path(review, inference_path)
+                    chosen = self._review_path(review, inference_path, step_replay)
                 if str(generation) in review.get("candidates", {}):
                     generation += 1
                     review["generation"] = generation
@@ -444,7 +449,7 @@ class Store:
                 else:
                     payload["batches"] = (
                         review["batches"]
-                        if direct_replay and len(review["prompts"]) <= applied
+                        if (direct_replay or step_replay) and len(review["prompts"]) <= applied
                         else [*review["batches"], dict(end=len(review["prompts"]), autozoom=review["options"]["autozoom"], full_refine=full_refine)]
                     )
             payload["session_id"] = session_id

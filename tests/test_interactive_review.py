@@ -19,6 +19,7 @@ from scan3d import imaging
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.inference_paths import binding
+from scan3d.interactive import _batches
 from scan3d.review import public_review
 from scan3d.service import Service
 from scan3d.store import ReviewConflict, Store, identifier, public_job, public_revision
@@ -951,3 +952,181 @@ def test_http_predict_takes_a_path_and_says_why_it_will_not(example, paths):
     conflict = predict(inference_path="second")
     assert (conflict.status_code, conflict.json()["detail"]) == (409, f"This draft's AI results came from {GPU_NAME}. Re-run its steps to use another GPU.")
     assert predict().json()["inference_path"] == binding("nvidia")
+
+
+# Inference paths: re-running a draft on another card
+
+
+def bound_draft(example, name="nvidia"):
+    """A result on `name` from two Apply steps, with nothing pending."""
+    draft = ran(example, marked(example), inference_path=name)
+    add_mark(example, draft)
+    return ran(example, draft)
+
+
+def test_a_replay_repeats_the_exact_steps_on_the_new_card_and_moves_the_draft_at_publish(example, paths):
+    service, case, _, _ = example
+    draft = bound_draft(example)
+    calls = len(service.interactive_runtime.calls)
+    old = draft["candidate"]
+    queued = queue(example, draft, inference_path="second", replay=True)
+    assert queued["payload"]["batches"] == draft["batches"] and queued["inference_path"] == binding("second")
+    assert queued["payload"]["generation"] == draft["generation"] + 1
+    waiting = current(example, draft)
+    assert waiting["inference_path"] == binding("nvidia") and waiting["candidate"] == old  # Nothing moved yet.
+    assert public_review(waiting)["dirty"]
+    assert execute_next(service, queued)["status"] == "completed"
+    prompts, request = sent(example)
+    assert len(service.interactive_runtime.calls) == calls + 1
+    assert prompts == draft["prompts"] and request["batches"] == draft["batches"] and request["inference_path"].id == "second"
+    state = current(example, draft)
+    assert state["batches"] == draft["batches"] and state["prompts"] == draft["prompts"]
+    assert state["inference_path"] == binding("second") and state["candidate"]["gpu_name"] == SECOND_GPU
+    assert state["candidate"]["provenance"]["inference_path"] == "second"
+
+
+def test_a_replay_gets_its_own_alias_and_the_old_result_stays_readable(example, paths):
+    service, case, _, _ = example
+    draft = bound_draft(example)
+    alias = draft["candidate"]["revision_id"]
+    state = ran(example, draft, inference_path="second", replay=True)
+    assert state["candidate"]["revision_id"] != alias and state["candidate"]["generation"] == draft["generation"] + 1
+    assert service.reviews.candidate_revision(case["id"], alias)["id"] == alias
+    assert not public_review(state)["dirty"] and state["status"] == "ready"
+    accepted = execute_next(service, service.reviews.accept(case["id"], draft["id"], state["generation"]))
+    assert accepted["status"] == "completed", accepted
+    operation = service.store.revision(case["id"], accepted["revision_id"])["operation"]
+    assert operation["runtime"]["inference_path"] == "second" and operation["batches"] == draft["batches"]
+
+
+def test_pending_marks_become_one_more_step_after_the_replayed_ones(example, paths):
+    draft = bound_draft(example)
+    add_mark(example, draft, "point-3")
+    add_mark(example, draft, "point-4")
+    state = ran(example, draft, inference_path="second", replay=True)
+    assert state["batches"] == [*draft["batches"], {"end": 4, "autozoom": True, "full_refine": False}]
+    assert sent(example)[1]["batches"] == state["batches"] and state["inference_path"] == binding("second")
+
+
+def test_a_full_refine_only_draft_replays_one_refine_and_not_two(example, paths):
+    draft = unmarked(example)
+    ready = ran(example, draft, full_refine=True, inference_path="nvidia")
+    assert len(ready["batches"]) == 1
+    state = ran(example, draft, inference_path="second", replay=True)
+    assert state["batches"] == ready["batches"] and sent(example)[1]["batches"] == ready["batches"]
+    assert state["inference_path"] == binding("second")
+
+
+def test_the_replayed_steps_satisfy_the_engines_own_validation(example, paths):
+    draft = bound_draft(example)
+    state = ran(example, draft, inference_path="second", replay=True)
+    assert _batches(sent(example)[1]["batches"], len(state["prompts"]))
+    full = unmarked(example)
+    ran(example, full, full_refine=True, inference_path="nvidia")
+    ran(example, full, inference_path="second", replay=True)
+    assert _batches(sent(example)[1]["batches"], 0) == [{"end": 0, "autozoom": True, "full_refine": True, "legacy": False}]
+
+
+def test_a_replay_with_no_named_path_stays_on_the_draft_card(example, paths):
+    draft = bound_draft(example)
+    assert queue(example, draft, replay=True)["inference_path"] == binding("nvidia")
+
+
+def test_a_replay_can_return_to_the_draft_card_after_a_failure_elsewhere(example, paths):
+    draft = bound_draft(example)
+    fail_next_run(example)
+    assert run(example, draft, inference_path="second", replay=True)[0]["status"] == "failed"
+    state = ran(example, draft, inference_path="nvidia", replay=True)
+    assert state["inference_path"] == binding("nvidia") and not public_review(state)["dirty"]
+
+
+def test_a_failed_replay_keeps_the_old_result_and_card_and_cannot_be_saved(example, paths):
+    service, case, _, _ = example
+    draft = bound_draft(example)
+    fail_next_run(example)
+    job, state = run(example, draft, inference_path="second", replay=True)
+    assert job["status"] == "failed" and state["error"] == "Synthetic GPU failure"
+    assert state["status"] == "ready" and state["candidate"] == draft["candidate"]
+    assert state["inference_path"] == binding("nvidia") and state["batches"] == draft["batches"] and state["prompts"] == draft["prompts"]
+    view = public_review(state)
+    assert view["dirty"] and view["candidate"]["revision_id"] == draft["candidate"]["revision_id"]
+    assert service.reviews.candidate_revision(case["id"], draft["candidate"]["revision_id"])
+    with pytest.raises(ReviewConflict, match="Generate and inspect"):
+        service.reviews.accept(case["id"], draft["id"], state["generation"])
+    assert ran(example, draft, inference_path="second", replay=True)["inference_path"] == binding("second")
+
+
+def test_a_cancelled_replay_keeps_the_old_result_and_card(example, paths):
+    service, case, _, _ = example
+    draft = bound_draft(example)
+    queued = queue(example, draft, inference_path="second", replay=True)
+    service.interactive_runtime.during = lambda: service.store.update_job(queued["id"], cancel_requested=True)
+    assert execute_next(service, queued)["status"] == "cancelled"
+    state = current(example, draft)
+    assert state["status"] == "ready" and state["candidate"] == draft["candidate"] and state["inference_path"] == binding("nvidia")
+
+
+def test_a_replay_on_a_card_that_went_away_keeps_the_old_result_and_card(example, paths):
+    _, second = paths
+    draft = bound_draft(example)
+    queued = queue(example, draft, inference_path="second", replay=True)
+    second.proof.unlink()
+    job = execute_next(example[0], queued)
+    assert job["error"] == f"{SECOND_GPU} is no longer available: This GPU is not set up on this workstation. Nothing ran and no other GPU was tried."
+    state = current(example, draft)
+    assert state["candidate"] == draft["candidate"] and state["inference_path"] == binding("nvidia") and state["error"] == job["error"]
+
+
+def test_a_replay_runs_the_model_even_with_a_relationship_change_waiting(example, paths):
+    service, case, _, _ = example
+    draft = bound_draft(example)
+    choice = {"kind": "subregion", "parent_id": "total:kidney_left", "exclusive_with": []}
+    service.reviews.update(case["id"], draft["id"], draft["generation"], draft["prompts"], relationship=choice)
+    queued = queue(example, draft, inference_path="second", replay=True)
+    assert "relationship_only" not in queued["payload"]
+    assert execute_next(service, queued)["status"] == "completed"
+    state = current(example, draft)
+    assert state["inference_path"] == binding("second") and state["candidate"]["relationship"]["parent_id"] == "total:kidney_left"
+    assert not public_review(state)["relationship_dirty"]
+
+
+def test_a_replay_with_nothing_to_repeat_is_an_ordinary_run(example, paths):
+    draft = marked(example)
+    assert ran(example, draft, inference_path="nvidia", replay=True)["batches"] == [{"end": 1, "autozoom": True, "full_refine": False}]
+    empty = unmarked(example)
+    with pytest.raises(ReviewConflict, match="Add or edit a prompt"):
+        queue(example, empty, inference_path="nvidia", replay=True)
+
+
+def test_without_replay_a_draft_with_nothing_pending_is_still_refused(example, paths):
+    draft = bound_draft(example)
+    with pytest.raises(ReviewConflict, match="Add or edit a prompt"):
+        queue(example, draft, inference_path="nvidia")
+
+
+def test_a_replay_cannot_also_refine_the_whole_mask(example, paths):
+    service, case, _, _ = example
+    draft = bound_draft(example)
+    jobs = service.store.list("jobs", case["id"])
+    with pytest.raises(ValueError, match="cannot add a whole-object refinement"):
+        queue(example, draft, inference_path="second", replay=True, full_refine=True)
+    http = TestClient(create_app(service.settings), base_url="http://127.0.0.1")
+    url = f"/api/cases/{case['id']}/reviews/{draft['id']}/predict"
+    refused = http.post(url, json={"generation": draft["generation"], "inference_path": "second", "replay": True, "full_refine": True})
+    assert refused.status_code == 400, refused.text
+    assert service.store.list("jobs", case["id"]) == jobs and current(example, draft)["generation"] == draft["generation"]
+
+
+def test_http_replay_needs_a_boolean_and_runs_on_the_existing_route(example, paths):
+    service, case, _, _ = example
+    draft = bound_draft(example)
+    http = TestClient(create_app(service.settings), base_url="http://127.0.0.1")
+    url = f"/api/cases/{case['id']}/reviews/{draft['id']}"
+    body = {"generation": draft["generation"], "inference_path": "second"}
+    assert http.post(url + "/predict", json={**body, "replay": "soon"}).status_code == 422
+    assert http.post(url + "/predict", json=body).status_code == 409
+    queued = http.post(url + "/predict", json={**body, "replay": True})
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["inference_path"] == binding("second") and "replay" not in queued.text
+    assert execute_next(service, queued.json())["status"] == "completed"
+    assert http.get(url).json()["inference_path"] == binding("second")
