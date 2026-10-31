@@ -163,6 +163,11 @@ const pathStopsRun = (full: boolean) => pathRun(runPath.value, pendingMarks.valu
 const staleHint = (apply?: string) =>
   staleResultHint(runPath.value.locked, pending.value, current.value?.working, pathStopsRun(false), current.value?.unsaved, apply);
 const canRerun = computed(() => runPath.value.canRerun && !disabled.value && policyValid.value);
+const runFailed = computed(() => {
+  void tick.value;
+  const job = current.value?.job;
+  return job?.kind === 'review_predict' && job.status === 'failed';
+});
 const saveEnabled = computed(
   () =>
     policyValid.value &&
@@ -351,6 +356,14 @@ const readRuntime = statusReader(
 async function checkRuntime() {
   if (method.value === 'nninteractive') await readRuntime();
 }
+/**
+ * A refusal or a failed job is the only news a page gets that its list may be out of date, and
+ * settling on a fresh one brings the notice, or the block and its Check again. Without a card in
+ * play a failure says nothing about one, so one path asks for nothing it did not before.
+ */
+function recheckCards() {
+  if (runPath.value.id) void readRuntime();
+}
 function chooseMethod(value: InteractiveMethod) {
   if (value === method.value || methodDisabled.value) return;
   if (current.value?.hasDraftChanges) {
@@ -385,8 +398,9 @@ async function run(full: boolean, choice?: InteractiveRunChoice) {
     revisionId = props.revisionId;
   showCandidate.value = true;
   await value?.apply(full, choice);
-  if (value?.job && !disposed && identity === identityVersion && current.value === value && props.caseId === caseId && props.revisionId === revisionId)
-    policyOpen.value = false;
+  if (disposed || identity !== identityVersion || current.value !== value || props.caseId !== caseId || props.revisionId !== revisionId) return;
+  if (value?.job) policyOpen.value = false;
+  else if (value?.error) recheckCards();
 }
 async function apply(full = false) {
   const { stopped, choice } = pathRun(runPath.value, pendingMarks.value, full);
@@ -480,6 +494,10 @@ watch(method, value => {
   include.value = true;
   chooseTool(value === 'direct' ? 'scribble' : 'point');
   if (value === 'nninteractive') void checkRuntime();
+});
+// A job fails long after apply() has returned, so run() never sees it. As there, only this draft counts.
+watch([runFailed, controller], ([failed, value], [, before]) => {
+  if (failed && value === before && value?.caseId === props.caseId && value.revisionId === props.revisionId) recheckCards();
 });
 // Errors lead the message list; one that arrives while it is scrolled must not stay out of view.
 watch([() => current.value?.error, createError, methodError, () => runPath.value.block, () => props.surfaceError], () => messages.value?.scrollTo({ top: 0 }), {

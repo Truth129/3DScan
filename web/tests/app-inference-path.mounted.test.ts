@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { h, type ComponentInternalInstance } from 'vue';
 import App from '../src/App.vue';
-import { api } from '../src/lib/api';
+import { api, ApiError } from '../src/lib/api';
 import { SEGMENT_PATH_KEY } from '../src/lib/inference-path';
 import type { Case, InferencePathRow, Job, Revision, SegmentationCatalog } from '../src/types';
 import { choose, createApp, FakeElement, press, settled } from './fake-dom';
@@ -244,6 +244,78 @@ describe('a card that cannot be picked', () => {
     const lone = await openPanel();
     expect(form(lone).button('Check again')).toBeUndefined();
     expect(statusLines(lone)).toEqual([]);
+  });
+});
+
+describe('a segmentation that is refused', () => {
+  const refusal = 'This GPU is not set up on this workstation.';
+  const second = row('second', 'Second Test GPU');
+
+  it('reads the list again and reports the card that has gone', async () => {
+    const server = workstation([amd, nvidia, second], { remembered: 'nvidia' });
+    const root = await openPanel();
+    const options = vi.mocked(api.segmentationOptions);
+    options.mockClear();
+    options.mockImplementation(async () => catalog([amd, second]));
+    server.segment.mockRejectedValueOnce(new ApiError(400, refusal));
+    await submit(root);
+    expect(options).toHaveBeenCalledOnce();
+    expect(root.select('Inference path')?.props.value).toBe('default');
+    expect(root.named('segmentation-status')?.content).toContain('no longer set up on this workstation, so AMD Test GPU is selected.');
+    expect(root.named('segmentation-panel'), 'it stays open for the next try').toBeDefined();
+    expect(root.content).toContain(refusal);
+  });
+  it('stops the card that a refusal found unavailable, with its Check again', async () => {
+    const server = workstation([amd, nvidia], { remembered: 'nvidia' });
+    const root = await openPanel();
+    vi.mocked(api.segmentationOptions).mockImplementation(async () => catalog([amd, { ...nvidia, available: false, reason: 'Its last GPU check failed.' }]));
+    server.segment.mockRejectedValueOnce(new ApiError(400, 'NVIDIA Test GPU is unavailable: Its last GPU check failed.'));
+    await submit(root);
+    expect(runButton(root)?.props.disabled).toBe(true);
+    expect(root.named('segmentation-status')?.content).toContain('NVIDIA Test GPU is unavailable: Its last GPU check failed.');
+    expect(form(root).button('Check again')).toBeDefined();
+  });
+  it('keeps what the person set', async () => {
+    const server = workstation([amd, nvidia]);
+    const root = await openPanel();
+    const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
+    (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
+    await settled();
+    server.segment.mockRejectedValueOnce(new ApiError(400, refusal));
+    await submit(root);
+    expect(robustCrop().props.checked).toBe(true);
+  });
+  it('asks for nothing new with one path, which named no card', async () => {
+    const server = workstation([amd]);
+    const root = await openPanel();
+    const options = vi.mocked(api.segmentationOptions);
+    options.mockClear();
+    server.segment.mockRejectedValueOnce(new ApiError(400, 'Refused'));
+    await submit(root);
+    expect(root.content).toContain('Refused');
+    expect(options).not.toHaveBeenCalled();
+  });
+  it('reads nothing for a refusal that arrives after the case was opened again', async () => {
+    const server = workstation([amd, nvidia]);
+    const root = await openPanel();
+    let refuse!: (reason: Error) => void;
+    server.segment.mockReturnValueOnce(new Promise<Job>((_, reject) => (refuse = reject)));
+    await submit(root);
+    await choose(root.select('Select case'), 'case');
+    const options = vi.mocked(api.segmentationOptions);
+    options.mockClear();
+    refuse(new ApiError(400, refusal));
+    await settled();
+    expect(options).not.toHaveBeenCalled();
+    expect(root.content).not.toContain(refusal);
+  });
+  it('reads nothing when the run is accepted', async () => {
+    workstation([amd, nvidia]);
+    const root = await openPanel();
+    const options = vi.mocked(api.segmentationOptions);
+    options.mockClear();
+    await submit(root);
+    expect(options).not.toHaveBeenCalled();
   });
 });
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { h, ref } from 'vue';
 import InteractiveReviewPanel from '../src/components/InteractiveReviewPanel.vue';
-import { api } from '../src/lib/api';
+import { api, ApiError } from '../src/lib/api';
 import { REVIEW_PATH_KEY } from '../src/lib/inference-path';
 import type { InferencePathRow, InteractivePrompt, InteractiveReview, InteractiveStatus, Job, Point } from '../src/types';
 import { choose, createApp, FakeElement, press, settled } from './fake-dom';
@@ -71,6 +71,9 @@ const afterFailedRerun = (review: InteractiveReview, error = 'Ran out of GPU mem
   job_id: 'prediction',
 });
 const rerunHint = 'Re-run this draft from Options + before saving.';
+const applied: InteractivePrompt = { id: 'applied', kind: 'point', include: true, ras: point };
+// A saved mark and no result, which a page sees until it hears of a result from another tab.
+const free = (extra: Partial<InteractiveReview> = {}) => draft({ prompts: [applied], ...extra });
 // The review poll waits 900 ms, and these assertions wait for what follows it.
 const nextPoll = { timeout: 3000, interval: 20 };
 
@@ -91,7 +94,7 @@ function workstation(paths: InferencePathRow[], initial?: InteractiveReview, rem
   });
   const job: Job = { id: 'prediction', case_id: 'case', kind: 'review_predict', status: 'queued', stage: 'Queued', created_at: '' };
   const predict = vi.spyOn(api, 'predictInteractive').mockImplementation(async () => job);
-  vi.spyOn(api, 'interactiveReviews').mockImplementation(async () => (remote ? [remote] : []));
+  vi.spyOn(api, 'interactiveReviews').mockImplementation(async id => (remote?.case_id === id ? [remote] : []));
   vi.spyOn(api, 'interactiveReview').mockImplementation(async () => remote!);
   vi.spyOn(api, 'job').mockImplementation(async () => job);
   vi.spyOn(api, 'interactivePrompts').mockImplementation(async (_case, _session, generation, prompts, options, relationship) => {
@@ -120,27 +123,51 @@ function workstation(paths: InferencePathRow[], initial?: InteractiveReview, rem
 async function open() {
   const root = new FakeElement('root'),
     active = ref(true),
+    caseId = ref('case'),
+    revisionId = ref('base'),
+    selected = ref('liver'),
     panel = ref<{ addPrompt(ras: Point): void; addGesture(prompt: InteractivePrompt): void; show(): Promise<void> }>(),
     app = createApp({
       render: () =>
-        h(InteractiveReviewPanel, { caseId: 'case', revisionId: 'base', selected: 'liver', structures: [], busy: false, active: active.value, ref: panel }),
+        h(InteractiveReviewPanel, {
+          caseId: caseId.value,
+          revisionId: revisionId.value,
+          selected: selected.value,
+          structures: [],
+          busy: false,
+          active: active.value,
+          ref: panel,
+        }),
     });
   app.mount(root);
   opened.push(app);
   await settled();
-  return { root, active, panel: panel as unknown as { value: NonNullable<typeof panel.value> }, section: () => root.named('interactive-review')! };
+  return {
+    root,
+    active,
+    caseId,
+    revisionId,
+    selected,
+    panel: panel as unknown as { value: NonNullable<typeof panel.value> },
+    section: () => root.named('interactive-review')!,
+  };
 }
 async function openAI() {
   const view = await open();
   await press(view.root.button('AI assist'));
   return view;
 }
+// The documented rollback removes the last added card, which leaves one row and this draft.
+const stranded = () => resultOn(nvidia);
 /** The status lines of Options +, in the order they read. */
 const statusLines = (root: FakeElement) =>
   root
     .named('review-advanced')!
     .all.filter(node => node.tag === 'p' && node.props.role === 'status')
     .map(node => node.content);
+/** The job a poll reads next, which the review alone does not say. */
+const jobEnds = (server: ReturnType<typeof workstation>, status: Job['status'], kind = server.job.kind) =>
+  vi.mocked(api.job).mockImplementation(async () => ({ ...server.job, kind, status }));
 /** Past the disabled attribute, for the guard behind it: a click can land before a re-render. */
 async function clickAnyway(button: FakeElement | undefined) {
   (button!.props.onClick as () => void)();
@@ -426,6 +453,236 @@ describe('a card that cannot be picked', () => {
   });
 });
 
+describe('a run that ends badly', () => {
+  const refusal = 'This GPU is not set up on this workstation.';
+  const second = row('second', 'Second Test GPU');
+  /** A predict that answers when told, so that the page can change first. */
+  const heldPredict = (server: ReturnType<typeof workstation>) => {
+    let refuse!: (reason: Error) => void;
+    server.predict.mockReturnValueOnce(new Promise<Job>((_, reject) => (refuse = reject)));
+    return (reason: Error = new ApiError(400, refusal)) => refuse(reason);
+  };
+  const reads = (server: ReturnType<typeof workstation>) => server.interactiveStatus.mock.calls.length;
+
+  it('reads the list again after a refusal, and reports the card that has gone', async () => {
+    const server = workstation([amd, nvidia, second], free(), 'nvidia');
+    const { root, section } = await openAI();
+    server.interactiveStatus.mockClear();
+    server.predict.mockRejectedValueOnce(new ApiError(400, refusal));
+    server.interactiveStatus.mockImplementation(async () => status([amd, second]));
+    await press(root.button('Run AI'));
+    expect(server.interactiveStatus).toHaveBeenCalledOnce();
+    expect(root.named('review-messages')?.content).toContain(refusal);
+    expect(root.named('review-messages')?.content).toContain('no longer set up on this workstation, so AMD Test GPU is selected.');
+    expect(section().props['data-inference-path']).toBe('default');
+    expect(root.named('review-ai-path')?.content).toBe('AI · AMD Test GPU');
+  });
+  it('stops the card that a refusal found unavailable, with its Check again', async () => {
+    const server = workstation([amd, nvidia], free(), 'nvidia');
+    const { root } = await openAI();
+    server.predict.mockRejectedValueOnce(new ApiError(400, 'NVIDIA Test GPU is unavailable: Its last GPU check failed.'));
+    server.interactiveStatus.mockImplementation(async () => status([amd, { ...nvidia, available: false, reason: 'Its last GPU check failed.' }]));
+    await press(root.button('Run AI'));
+    expect(root.named('review-messages')?.button('Check again')).toBeDefined();
+    expect(root.named('review-apply')?.props.disabled).toBe(true);
+  });
+  it('reads the list again after a job that failed, once', async () => {
+    const server = workstation([amd, nvidia], free(), 'nvidia');
+    const { root } = await openAI();
+    const before = reads(server);
+    server.acceptRerun();
+    await press(root.button('Run AI'));
+    expect(reads(server), 'a run that was taken is no news').toBe(before);
+    jobEnds(server, 'failed');
+    server.setRemote(free({ error: 'Failed on NVIDIA Test GPU. No other GPU was tried.', job_id: 'prediction' }));
+    server.interactiveStatus.mockImplementation(async () => status([amd, { ...nvidia, available: false, reason: 'Its last GPU check failed.' }]));
+    await vi.waitFor(() => expect(root.named('review-messages')?.content).toContain('NVIDIA Test GPU is unavailable'), nextPoll);
+    expect(reads(server)).toBe(before + 1);
+    await settled();
+    expect(reads(server)).toBe(before + 1);
+  });
+  it('reads again for a second job that fails', async () => {
+    const server = workstation([amd, nvidia], free(), 'nvidia');
+    const { root } = await openAI();
+    const ended = free({ error: 'Failed', job_id: 'prediction' });
+    server.acceptRerun();
+    jobEnds(server, 'failed');
+    await press(root.button('Run AI'));
+    const before = reads(server);
+    server.setRemote(ended);
+    await vi.waitFor(() => expect(reads(server)).toBe(before + 1), nextPoll);
+    server.acceptRerun({ ...server.job, id: 'prediction-2' });
+    await press(root.button('Run AI'));
+    server.setRemote({ ...ended, job_id: 'prediction-2' });
+    vi.mocked(api.job).mockImplementation(async () => ({ ...server.job, id: 'prediction-2', status: 'failed' }));
+    await vi.waitFor(() => expect(reads(server)).toBe(before + 2), nextPoll);
+  });
+  it('does not read for a job that finished or was cancelled', async () => {
+    for (const ending of ['completed', 'cancelled'] as const) {
+      const server = workstation([amd, nvidia], free(), 'nvidia');
+      const { root } = await openAI();
+      const before = reads(server);
+      server.acceptRerun();
+      await press(root.button('Run AI'));
+      jobEnds(server, ending);
+      server.setRemote(ending === 'completed' ? resultOn(nvidia, { job_id: 'prediction' }) : free({ error: 'Cancelled', job_id: 'prediction' }));
+      await vi.waitFor(() => expect(root.named('review-working')).toBeUndefined(), nextPoll);
+      expect(reads(server), ending).toBe(before);
+      opened.splice(0).forEach(app => app.unmount());
+      vi.restoreAllMocks();
+    }
+  });
+  it('does not read for a Save that failed, which no card ran', async () => {
+    const server = workstation([amd, nvidia], resultOn(nvidia), 'nvidia');
+    const { root } = await openAI();
+    const before = reads(server);
+    vi.spyOn(api, 'acceptInteractive').mockImplementation(async () => ({ ...server.job, kind: 'review_accept' }));
+    jobEnds(server, 'failed', 'review_accept');
+    await press(root.named('review-save'));
+    server.setRemote(resultOn(nvidia, { error: 'Could not save', job_id: 'prediction' }));
+    await vi.waitFor(() => expect(root.named('review-working')).toBeUndefined(), nextPoll);
+    expect(reads(server)).toBe(before);
+  });
+  it('asks for nothing new with one path, refused or failed', async () => {
+    const server = workstation([amd], free());
+    const { root } = await openAI();
+    const before = reads(server);
+    server.predict.mockRejectedValueOnce(new ApiError(400, 'Refused'));
+    await press(root.button('Run AI'));
+    expect(reads(server)).toBe(before);
+    server.acceptRerun();
+    await press(root.button('Run AI'));
+    jobEnds(server, 'failed');
+    server.setRemote(free({ error: 'Failed', job_id: 'prediction' }));
+    await vi.waitFor(() => expect(root.named('review-working')).toBeUndefined(), nextPoll);
+    expect(root.named('review-messages')?.content).toContain('Failed');
+    expect(reads(server)).toBe(before);
+  });
+  it('still reads for a stranded draft on one row, where the card is the question', async () => {
+    const server = workstation([amd], stranded());
+    const { root } = await openAI();
+    const before = reads(server);
+    await press(root.button('Options +'));
+    server.predict.mockRejectedValueOnce(new ApiError(400, refusal));
+    await press(root.button('Re-run on this GPU'));
+    expect(reads(server)).toBe(before + 1);
+  });
+  it('reads nothing in Direct edit, which never asked', async () => {
+    const server = workstation([amd, nvidia], free({ method: 'direct', prompts: [stroke] }));
+    const { root } = await open();
+    server.predict.mockRejectedValueOnce(new ApiError(400, 'Refused'));
+    await press(root.button('Apply edits'));
+    expect(root.named('review-messages')?.content).toContain('Refused');
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+  it('reads nothing for a run that ended with neither a job nor an error', async () => {
+    const refined = resultOn(nvidia, { prompts: [], applied_prompt_count: 0, batches: [{ end: 0, autozoom: true, full_refine: true }] });
+    const server = workstation([amd, nvidia], refined, 'default');
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    // Saving this change frees the draft, which leaves a re-run nothing to repeat.
+    vi.mocked(api.interactivePrompts).mockImplementationOnce(async (_case, _session, generation, prompts, options, relationship) =>
+      draft({ generation: generation + 1, prompts, options, relationship }),
+    );
+    const autozoom = root.named('review-advanced')!.all.find(node => node.tag === 'label' && node.content.includes('Automatically focus'))!;
+    (autozoom.all.find(node => node.tag === 'input')!.props.onChange as (event: unknown) => void)({ target: { checked: false } });
+    await settled();
+    const before = reads(server);
+    await press(root.button('Re-run on this GPU'));
+    expect(api.interactivePrompts).toHaveBeenCalledOnce();
+    expect(server.predict).not.toHaveBeenCalled();
+    expect(root.named('review-working')).toBeUndefined();
+    expect(reads(server)).toBe(before);
+  });
+  it.each([
+    ['case', (view: Awaited<ReturnType<typeof open>>) => void (view.caseId.value = 'other')],
+    ['revision', (view: Awaited<ReturnType<typeof open>>) => void (view.revisionId.value = 'newer')],
+    ['structure', (view: Awaited<ReturnType<typeof open>>) => void (view.selected.value = 'spleen')],
+  ])('reads nothing for a refusal that arrives after the %s changed', async (_name, change) => {
+    const server = workstation([amd, nvidia], free());
+    const view = await openAI();
+    const refuse = heldPredict(server);
+    await press(view.root.button('Run AI'));
+    change(view);
+    await settled();
+    server.interactiveStatus.mockClear();
+    refuse();
+    await settled();
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+  it('reads nothing for a refusal that arrives after a visit to another case and back', async () => {
+    const server = workstation([amd, nvidia], free());
+    const view = await openAI();
+    const refuse = heldPredict(server);
+    await press(view.root.button('Run AI'));
+    view.caseId.value = 'other';
+    await settled();
+    view.caseId.value = 'case';
+    await settled();
+    server.interactiveStatus.mockClear();
+    refuse();
+    await settled();
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+  it('reads nothing for a refusal that arrives after the panel has gone', async () => {
+    const server = workstation([amd, nvidia], free());
+    const { root } = await openAI();
+    const refuse = heldPredict(server);
+    await press(root.button('Run AI'));
+    opened.splice(0).forEach(app => app.unmount());
+    server.interactiveStatus.mockClear();
+    refuse();
+    await settled();
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+  it('reads nothing for a job that fails after the case changed', async () => {
+    const server = workstation([amd, nvidia], free());
+    const view = await openAI();
+    server.acceptRerun();
+    await press(view.root.button('Run AI'));
+    view.caseId.value = 'other';
+    await settled();
+    server.interactiveStatus.mockClear();
+    jobEnds(server, 'failed');
+    server.setRemote(free({ error: 'Failed', job_id: 'prediction' }));
+    await vi.waitFor(() => expect(api.job).toHaveBeenCalled(), nextPoll);
+    await settled();
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+  it('reads nothing on coming back to a draft whose job failed while it was away', async () => {
+    const server = workstation([amd, nvidia], free());
+    const view = await openAI();
+    server.acceptRerun();
+    await press(view.root.button('Run AI'));
+    view.caseId.value = 'other';
+    await settled();
+    jobEnds(server, 'failed');
+    server.setRemote(free({ error: 'Failed', job_id: 'prediction' }));
+    await vi.waitFor(() => expect(api.job).toHaveBeenCalled(), nextPoll);
+    await settled();
+    server.interactiveStatus.mockClear();
+    view.caseId.value = 'case';
+    await settled();
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+  it('reads nothing for a job that fails with review closed on another case', async () => {
+    const server = workstation([amd, nvidia], free());
+    const view = await openAI();
+    server.acceptRerun();
+    await press(view.root.button('Run AI'));
+    view.active.value = false;
+    await settled();
+    view.caseId.value = 'other';
+    await settled();
+    server.interactiveStatus.mockClear();
+    jobEnds(server, 'failed');
+    server.setRemote(free({ error: 'Failed', job_id: 'prediction' }));
+    await vi.waitFor(() => expect(api.job).toHaveBeenCalled(), nextPoll);
+    await settled();
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+});
+
 describe('a draft with a result', () => {
   it('keeps Run AI on the bound card, whatever the select shows', async () => {
     const server = workstation([amd, nvidia], resultOn(nvidia));
@@ -620,8 +877,6 @@ describe('a re-run that failed', () => {
 });
 
 describe('a draft whose card has gone', () => {
-  // The documented rollback removes the last added card, which leaves one row and this draft.
-  const stranded = () => resultOn(nvidia);
   const message = (root: FakeElement) => root.named('review-messages')?.content ?? '';
 
   it('shows why, and stops what cannot run, instead of failing every retry', async () => {

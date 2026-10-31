@@ -742,7 +742,11 @@ async function segment() {
       before.value = false;
     }
   } catch (reason) {
-    if (generation === caseGeneration) fail(reason);
+    if (generation === caseGeneration) {
+      fail(reason);
+      // A refusal can mean the list is out of date. One row named no card, so it asks for nothing.
+      if (segmentationPaths.value.length > 1) void loadSegmentationOptions(true);
+    }
   } finally {
     actionBusy.value = false;
   }
