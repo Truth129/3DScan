@@ -71,7 +71,11 @@ _NOTHING_RAN = "Nothing ran and no other GPU was tried."
 # gives up on deep nesting.
 _BAD_RECORD = (AttributeError, KeyError, OSError, RecursionError, TypeError, ValueError)
 
-_LOCAL_PATH = re.compile(r"""'/[^']*'|"/[^"]*"|(?<![\w.~-])/[^\s'"`,;:()<>\[\]{}]+""")
+# ImportError and dlopen text leaves paths unquoted, and a directory can hold a space, so a space
+# ends a path only when no later word on its line has a slash. What follows a path's last slash
+# cannot be told from prose, and stays.
+_PATH_CHAR = r"""[^\s'"`,;:()<>\[\]{}]"""
+_LOCAL_PATH = re.compile(rf"""'/[^']*'|"/[^"]*"|(?<![\w.~-])/{_PATH_CHAR}+(?:(?: +{_PATH_CHAR}+)* +{_PATH_CHAR}*/{_PATH_CHAR}*)?""")
 
 
 def installed(site, name):

@@ -792,6 +792,11 @@ def test_a_timeout_never_shows_its_command_line():
         ("TotalSegmentator wrote /tmp/run-1/total.log before exit", "TotalSegmentator wrote <local path> before exit"),
         ("search path /opt/a/lib:/opt/b/lib was empty", "search path <local path>:<local path> was empty"),
         ("failed at --output=/tmp/x, retry", "failed at --output=<local path>, retry"),
+        ("unable to open /home/some user/venv/bin/python", "unable to open <local path>"),
+        ("/home/some user/.venv/lib/foo.so: undefined symbol: x", "<local path>: undefined symbol: x"),
+        ("cannot find /home/some long name/venv/bin/python in the path", "cannot find <local path> in the path"),
+        ("cannot read /home/some user/ct.nii.gz (line 3)", "cannot read <local path> (line 3)"),
+        ("first /tmp/a b/c\nsecond line /tmp/d", "first <local path>\nsecond line <local path>"),
         ("CUDA out of memory and/or 1/2 of ./relative/file", "CUDA out of memory and/or 1/2 of ./relative/file"),
     ],
 )
