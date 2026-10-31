@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
-import { dicomSegExportSummary, nonemptySavedStructures } from '../lib/dicom-seg';
+import { defaultOverlapOrder, dicomSegExportSummary, moveOverlapRank, nonemptySavedStructures, unfinishedOverlapRanking } from '../lib/dicom-seg';
 import { prettyName } from '../lib/geometry';
 import { useDicomSegExport } from '../lib/use-dicom-seg-export';
 import type { Revision, ReviewStatus } from '../types';
 
 const props = defineProps<{ caseId: string; revision: Revision; disabledReason: string }>();
 const dialog = ref<HTMLDialogElement>(),
+  rankingList = ref<HTMLOListElement>(),
   opened = ref(false),
   selected = ref<string[]>([]),
-  destination = ref('');
+  destination = ref(''),
+  resolveOverlaps = ref(false),
+  overlapOrder = ref<string[]>([]);
 const structures = computed(() => nonemptySavedStructures(props.revision.structures));
 const { availability, job, checking, submitting, pending, locked, error, statusError, needsRefresh, alreadySent, load, resume, start } = useDicomSegExport({
   source: () => ({ caseId: props.caseId, revisionId: props.revision.id }),
@@ -18,24 +21,50 @@ const { availability, job, checking, submitting, pending, locked, error, statusE
 const disabled = computed(() => props.disabledReason || (!structures.value.length ? 'This saved revision has no nonempty masks to export.' : ''));
 const actionDisabled = computed(() => !!disabled.value || locked.value || !!statusError.value || !availability.value?.available || !selected.value.length);
 const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
-const repeatDelivery = computed(() => !!target.value && alreadySent(selected.value, target.value.id));
+const ranked = computed(() => overlapOrder.value.filter(id => selected.value.includes(id)));
+const overlapPriority = computed(() => (resolveOverlaps.value && ranked.value.length > 1 ? ranked.value : undefined));
+const repeatDelivery = computed(() => !!target.value && alreadySent(selected.value, target.value.id, overlapPriority.value));
+const unfinishedRanking = computed(() => unfinishedOverlapRanking(job.value));
+const retryMatches = computed(() => JSON.stringify(unfinishedRanking.value) === JSON.stringify(overlapPriority.value));
 const summary = computed(() => (job.value ? dicomSegExportSummary(job.value) : ''));
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
+const structureName = (id: string) => prettyName(structures.value.find(item => item.id === id)?.name ?? id);
 let previousFocus: HTMLElement | undefined;
 
 async function open() {
   if (disabled.value) return;
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-  if (!opened.value) selected.value = structures.value.map(item => item.id);
+  const first = !opened.value;
+  if (first) {
+    selected.value = structures.value.map(item => item.id);
+    overlapOrder.value = defaultOverlapOrder(structures.value);
+  }
   opened.value = true;
   dialog.value?.showModal();
   await nextTick();
   dialog.value?.querySelector<HTMLButtonElement>('[aria-label="Close DICOM SEG export"]')?.focus();
   await load();
+  if (first) restoreUnfinishedRanking();
+}
+/** The job's retry text promises its exact SEG, which a reset panel would not request. */
+function restoreUnfinishedRanking() {
+  const ranking = unfinishedRanking.value;
+  if (!ranking?.every(id => structures.value.some(item => item.id === id))) return;
+  selected.value = [...ranking];
+  overlapOrder.value = [...new Set([...ranking, ...overlapOrder.value])];
+  resolveOverlaps.value = true;
 }
 function close() {
   dialog.value?.close();
   if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+}
+async function moveRank(id: string, offset: -1 | 1) {
+  overlapOrder.value = moveOverlapRank(overlapOrder.value, selected.value, id, offset);
+  await nextTick();
+  // A keyed reorder can drop focus, and reaching an end disables the pressed button.
+  const buttons = rankingList.value?.children[ranked.value.indexOf(id)]?.querySelectorAll('button'),
+    pressed = buttons?.[offset < 0 ? 0 : 1];
+  (pressed?.disabled ? buttons?.[offset < 0 ? 1 : 0] : pressed)?.focus();
 }
 onBeforeUnmount(() => dialog.value?.close());
 </script>
@@ -85,6 +114,32 @@ onBeforeUnmount(() => dialog.value?.close());
       <p class="help">
         <template v-if="structures.length !== revision.structures.length">Empty masks are excluded. </template>Viewer visibility does not change this selection.
       </p>
+      <div v-if="selected.length > 1" class="overlap-options">
+        <label class="overlap-toggle"><input v-model="resolveOverlaps" type="checkbox" /><span>Resolve overlaps in this export</span></label>
+        <template v-if="resolveOverlaps">
+          <p class="help">
+            Where masks overlap, the higher mask keeps those voxels and lower masks lose them, in this export only. Saved masks and measurements stay as they
+            are.
+          </p>
+          <ol ref="rankingList" class="overlap-ranking" aria-label="Overlap ranking, highest first">
+            <li v-for="(id, index) in ranked" :key="id">
+              <span class="overlap-rank">{{ index + 1 }}</span
+              ><span class="overlap-name">{{ structureName(id) }}</span
+              ><button type="button" class="icon-button" :disabled="index === 0" :aria-label="`Move ${structureName(id)} up`" @click="moveRank(id, -1)">
+                ↑</button
+              ><button
+                type="button"
+                class="icon-button"
+                :disabled="index === ranked.length - 1"
+                :aria-label="`Move ${structureName(id)} down`"
+                @click="moveRank(id, 1)"
+              >
+                ↓
+              </button>
+            </li>
+          </ol>
+        </template>
+      </div>
       <label class="destination-field"
         >Send destination<select v-model="destination">
           <option value="">Choose a destination…</option>
@@ -110,6 +165,9 @@ onBeforeUnmount(() => dialog.value?.close());
     </div>
     <p v-if="pending" class="help">You may close this panel. Closing does not cancel an archive or send already in progress.</p>
     <p v-else-if="repeatDelivery" class="help">This selection has already been sent. Send again starts a new delivery of the same DICOM instances.</p>
+    <p v-else-if="unfinishedRanking" class="help">
+      {{ retryMatches ? 'A retry repeats this ranking and reuses the same SEG.' : 'These settings differ from the unfinished export, so they make a new SEG.' }}
+    </p>
     <p v-if="error" class="export-error" role="alert">{{ error }}</p>
     <p v-if="statusError" class="export-error" role="alert">{{ statusError }}</p>
     <button
@@ -124,9 +182,14 @@ onBeforeUnmount(() => dialog.value?.close());
     <footer>
       <button class="button secondary" type="button" @click="close">Close</button>
       <div class="export-actions">
-        <button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null)">
+        <button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null, false, overlapPriority)">
           {{ submitting ? 'Queuing…' : 'Archive in Orthanc' }}</button
-        ><button class="button primary" type="button" :disabled="actionDisabled || !target" @click="target && start(selected, target.id, repeatDelivery)">
+        ><button
+          class="button primary"
+          type="button"
+          :disabled="actionDisabled || !target"
+          @click="target && start(selected, target.id, repeatDelivery, overlapPriority)"
+        >
           {{ target ? `${repeatDelivery ? 'Send again' : 'Send'} to ${target.name}` : 'Send to viewer' }}
         </button>
       </div>
@@ -210,6 +273,45 @@ legend {
 }
 .segment-options input {
   flex-shrink: 0;
+}
+.overlap-options {
+  margin-top: 14px;
+}
+.overlap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.overlap-ranking {
+  display: grid;
+  gap: 6px;
+  max-height: 210px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.overlap-ranking li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.overlap-rank {
+  min-width: 2ch;
+  color: var(--muted);
+  text-align: right;
+}
+.overlap-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .destination-field {
   display: grid;
