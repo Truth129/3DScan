@@ -43,9 +43,10 @@ function fixture(initial?: InteractiveReview, method: InteractiveMethod = 'nnint
     cancel: vi.fn(async () => ({ ...job, status: 'cancelled' as const })),
     job: vi.fn(async () => job),
   };
-  const controller = new InteractiveController('case', 'base', 'liver', vi.fn(), reader, undefined, method);
+  const changed = vi.fn();
+  const controller = new InteractiveController('case', 'base', 'liver', changed, reader, undefined, method);
   controllers.push(controller);
-  return { controller, reader };
+  return { controller, reader, changed };
 }
 const controllers: InteractiveController[] = [];
 afterEach(() => {
@@ -274,6 +275,260 @@ describe('running on a chosen card', () => {
     controller.append(point('mark'));
     expect(controller.pendingCount).toBe(2);
     expect(controller.pendingMarks).toBe(1);
+  });
+});
+
+describe('a 409 from predict', () => {
+  const summary = { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5 };
+  const refusal = "This draft's AI results came from NVIDIA. Re-run its steps to use another GPU.";
+  const saved = (generation = 1): InteractiveReview => ({ ...base(), generation, prompts: [point('saved')] });
+  // What another tab's result leaves: publishing moves no generation.
+  const published = (review = saved()): InteractiveReview => ({
+    ...review,
+    status: 'ready',
+    dirty: false,
+    applied_prompt_count: review.prompts.length,
+    batches: [{ end: review.prompts.length, autozoom: true, full_refine: false }],
+    inference_path: { id: 'nvidia', label: 'NVIDIA', identity: 'nvidia|gpu|NVIDIA' },
+    candidate: { generation: review.generation, revision_id: 'review-draft-1', summary },
+  });
+  const held = () => {
+    let release!: (value: InteractiveReview) => void, fail!: (reason: Error) => void;
+    const reply = new Promise<InteractiveReview>((resolve, reject) => ((release = resolve), (fail = reject)));
+    return { reply, release, fail };
+  };
+  /** A loaded page whose next predict is refused, with a run started if a reply is held. */
+  async function refused(review = saved()) {
+    const { controller, reader, changed } = fixture(review);
+    await controller.load();
+    reader.interactiveReview.mockClear();
+    reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, refusal));
+    return { controller, reader, changed };
+  }
+  async function refusedAndWaiting(review = saved()) {
+    const { controller, reader } = await refused(review);
+    const waiting = held();
+    reader.interactiveReview.mockReturnValueOnce(waiting.reply);
+    const run = controller.apply(true);
+    await vi.waitFor(() => expect(reader.interactiveReview).toHaveBeenCalledOnce());
+    expect(controller.error).toBe(refusal);
+    return { controller, reader, run, ...waiting };
+  }
+
+  it('brings in the lock and the binding that another tab published', async () => {
+    const { controller, reader } = await refused();
+    reader.interactiveReview.mockResolvedValueOnce(published());
+    await controller.apply(true, { inference_path: 'default' });
+    expect(reader.interactiveReview).toHaveBeenCalledExactlyOnceWith('case', 'draft');
+    expect(controller.review?.batches).toHaveLength(1);
+    expect(controller.review?.inference_path?.id).toBe('nvidia');
+    expect(controller.candidate?.revision_id).toBe('review-draft-1');
+    expect([controller.error, controller.conflict, controller.working]).toEqual([refusal, false, false]);
+  });
+  it('says so when it has caught up, or asked for a reload, because App hears nothing else', async () => {
+    const lock = await refused();
+    const locked: boolean[] = [];
+    lock.changed.mockImplementation(() => locked.push(!!lock.controller.review?.batches?.length));
+    lock.reader.interactiveReview.mockResolvedValueOnce(published());
+    await lock.controller.apply(true);
+    expect(locked.at(-1)).toBe(true);
+    const moved = await refused();
+    const conflicts: boolean[] = [];
+    moved.changed.mockImplementation(() => conflicts.push(moved.controller.conflict));
+    moved.reader.interactiveReview.mockResolvedValueOnce(saved(2));
+    await moved.controller.apply(true);
+    expect(conflicts.at(-1)).toBe(true);
+  });
+  it('shows the Re-run the refusal pointed at', async () => {
+    const card = (id: string) => ({ id, label: `${id} card`, memory_gib: 16, shares_display: false, available: true, reason: null });
+    const status = { installed: true, model_available: true, available: true, inference_paths: [card('default'), card('nvidia')] };
+    const { controller, reader } = await refused();
+    expect(reviewRunPath('nninteractive', status, 'default', controller.publicReview)).toMatchObject({ locked: false, canRerun: false });
+    reader.interactiveReview.mockResolvedValueOnce(published());
+    await controller.apply(true, { inference_path: 'default' });
+    expect(reviewRunPath('nninteractive', status, 'default', controller.publicReview)).toMatchObject({ locked: true, id: 'nvidia', canRerun: true });
+  });
+  it('keeps the marks and their undo history, which install() and adopt() reset', async () => {
+    const { controller, reader } = await refused();
+    controller.append(point('later'));
+    await controller.flush();
+    reader.interactiveReview.mockResolvedValueOnce(published({ ...saved(2), prompts: [point('saved'), point('later')] }));
+    await controller.apply(true);
+    expect(controller.review?.batches).toHaveLength(1);
+    expect(controller.prompts.map(item => item.id)).toEqual(['saved', 'later']);
+    expect(controller.canUndo).toBe(true);
+    controller.undo();
+    expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
+  });
+  it("gets past base's own refusal, whose marks another tab has already run", async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    expect(controller.pendingCount).toBe(1);
+    reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, 'Add or edit a prompt before applying again'));
+    reader.interactiveReview.mockResolvedValueOnce(published());
+    await controller.apply();
+    expect(controller.pendingCount).toBe(0);
+    expect(controller.conflict).toBe(false);
+  });
+  it("follows another tab's running job as load() does, and ends with what it left", async () => {
+    vi.useFakeTimers();
+    try {
+      const { controller, reader } = await refused();
+      reader.interactiveReview.mockResolvedValueOnce({ ...saved(), status: 'predicting', job_id: 'prediction' });
+      await controller.apply(true);
+      expect(controller.working).toBe(true);
+      expect(controller.review?.status).toBe('predicting');
+      reader.interactiveReview.mockResolvedValueOnce({ ...saved(), status: 'predicting', job_id: 'prediction' });
+      await vi.advanceTimersByTimeAsync(900);
+      expect(controller.working).toBe(true);
+      reader.interactiveReview.mockResolvedValueOnce({ ...published(), job_id: 'prediction' });
+      await vi.advanceTimersByTimeAsync(900);
+      expect([controller.working, controller.error]).toEqual([false, '']);
+      expect(reader.job).toHaveBeenCalledTimes(2);
+      expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("shows another tab's Save running too, which no chooser could have told it", async () => {
+    const { controller, reader } = await refused();
+    reader.interactiveReview.mockResolvedValueOnce({ ...saved(), status: 'accepting', job_id: 'saving' });
+    await controller.apply(true);
+    expect(controller.working).toBe(true);
+  });
+  it('asks for a reload over a newer generation, and takes none of it on', async () => {
+    const { controller, reader } = await refused();
+    reader.interactiveReview.mockResolvedValueOnce({ ...saved(2), prompts: [point('other-tab')] });
+    await controller.apply(true);
+    expect(controller.conflict).toBe(true);
+    expect(controller.error).toBe(refusal);
+    expect(controller.review?.generation).toBe(1);
+    expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
+    controller.append(point('blocked'));
+    await controller.flush();
+    expect(reader.interactivePrompts).not.toHaveBeenCalled();
+  });
+  it('lets Reload saved work clear that conflict', async () => {
+    const { controller, reader } = await refused();
+    reader.interactiveReview.mockResolvedValueOnce(saved(2));
+    await controller.apply(true);
+    reader.interactiveReviews.mockResolvedValueOnce([{ ...saved(2), prompts: [point('other-tab')] }]);
+    await controller.reload();
+    expect([controller.conflict, controller.error]).toEqual([false, '']);
+    expect(controller.prompts.map(item => item.id)).toEqual(['other-tab']);
+  });
+  it.each(['accepted', 'discarded'] as const)('asks for a reload of a draft that was %s at this generation', async status => {
+    const { controller, reader } = await refused();
+    reader.interactiveReview.mockResolvedValueOnce({ ...saved(), status });
+    await controller.apply(true);
+    expect(controller.conflict).toBe(true);
+    expect(controller.review?.status).toBe('draft');
+  });
+  it('leaves the refusal as it is when the review cannot be read', async () => {
+    const { controller, reader } = await refused();
+    reader.interactiveReview.mockRejectedValueOnce(new Error('Workstation offline'));
+    await controller.apply(true);
+    expect([controller.error, controller.conflict, controller.working]).toEqual([refusal, false, false]);
+    expect(controller.review?.generation).toBe(1);
+  });
+  it('ignores the reply once the controller has stopped', async () => {
+    const { controller, reader, run, release } = await refusedAndWaiting();
+    controller.dispose();
+    release({ ...saved(), status: 'predicting', job_id: 'prediction' });
+    await run;
+    expect(controller.working).toBe(false);
+    expect(controller.review?.status).toBe('draft');
+    expect(reader.interactiveReview).toHaveBeenCalledOnce();
+  });
+  it('ignores the reply once another run has started', async () => {
+    const { controller, reader, run, release } = await refusedAndWaiting();
+    let answer!: (job: Awaited<ReturnType<typeof reader.predictInteractive>>) => void;
+    reader.predictInteractive.mockReturnValueOnce(new Promise(resolve => (answer = resolve)));
+    const second = controller.apply(true);
+    await vi.waitFor(() => expect(reader.predictInteractive).toHaveBeenCalledTimes(2));
+    release(saved(2));
+    await run;
+    expect(controller.conflict).toBe(false);
+    expect(controller.review?.generation).toBe(1);
+    answer({ id: 'prediction', case_id: 'case', kind: 'review_predict', status: 'queued', stage: 'Queued', created_at: '' });
+    await second;
+  });
+  it('ignores the reply once a save has moved the review on', async () => {
+    const { controller, run, release } = await refusedAndWaiting();
+    controller.append(point('later'));
+    await controller.flush();
+    expect(controller.review?.generation).toBe(2);
+    release(published());
+    await run;
+    expect(controller.review?.batches).toBeUndefined();
+    expect(controller.conflict).toBe(false);
+  });
+  it('does not read a save still on its way as another tab, because the reply can hold it already', async () => {
+    const { controller, reader, run, release } = await refusedAndWaiting();
+    const original = reader.interactivePrompts.getMockImplementation()!;
+    let landed!: () => void;
+    reader.interactivePrompts.mockImplementationOnce(async (...args) => {
+      await new Promise<void>(resolve => (landed = resolve));
+      return original(...args);
+    });
+    controller.append(point('later'));
+    const saving = controller.flush();
+    await vi.waitFor(() => expect(reader.interactivePrompts).toHaveBeenCalledOnce());
+    release(saved(2));
+    await run;
+    expect(controller.conflict).toBe(false);
+    landed();
+    await saving;
+    expect(controller.conflict).toBe(false);
+    expect(controller.review?.generation).toBe(2);
+  });
+  it('keeps Reload saved work reachable when an edit has cleared the refusal, because it sits inside the message', async () => {
+    const { controller, run, release } = await refusedAndWaiting();
+    controller.append(point('later'));
+    expect(controller.error).toBe('');
+    controller.undo();
+    release(saved(2));
+    await run;
+    expect(controller.conflict).toBe(true);
+    expect(controller.error).toBe(refusal);
+  });
+  it('reads nothing after any other refusal', async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.interactiveReview.mockClear();
+    reader.predictInteractive.mockRejectedValueOnce(new ApiError(400, 'This GPU is not set up on this workstation.'));
+    await controller.apply(true);
+    expect(controller.error).toContain('not set up');
+    expect(reader.interactiveReview).not.toHaveBeenCalled();
+  });
+  it('reads nothing after a save that hit a conflict, which has said so already', async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.interactiveReview.mockClear();
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Another device edited this draft'));
+    controller.append(point('later'));
+    await controller.apply(true);
+    expect(controller.conflict).toBe(true);
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+    expect(reader.interactiveReview).not.toHaveBeenCalled();
+  });
+  it('reads nothing when there is no review to read', async () => {
+    const { controller, reader } = fixture();
+    await controller.load();
+    reader.startInteractive.mockRejectedValueOnce(new ApiError(409, 'Start a correction from the active revision'));
+    await controller.apply(true);
+    expect(controller.error).toContain('active revision');
+    expect(reader.interactiveReview).not.toHaveBeenCalled();
+  });
+  it('tells a 409 after predict answered from a refusal, because that job is real', async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.interactiveReview.mockClear();
+    reader.interactiveReview.mockRejectedValueOnce(new ApiError(409, 'Something else changed'));
+    await controller.apply(true);
+    expect(controller.job?.id).toBe('prediction');
+    expect(reader.interactiveReview).toHaveBeenCalledOnce();
+    expect(controller.conflict).toBe(false);
   });
 });
 

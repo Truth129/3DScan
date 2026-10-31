@@ -683,6 +683,82 @@ describe('a run that ends badly', () => {
   });
 });
 
+describe('a 409 from predict', () => {
+  const refusal = "This draft's AI results came from NVIDIA Test GPU. Re-run its steps to use another GPU.";
+
+  it('catches up with a result from another tab, which brings the lock and the Re-run it names', async () => {
+    const server = workstation([amd, nvidia], free(), 'default');
+    const { root, section } = await openAI();
+    await press(root.button('Options +'));
+    expect(root.named('review-advanced')?.content).toContain('The first AI result keeps this draft on this GPU.');
+    expect(root.button('Re-run on this GPU')).toBeUndefined();
+    server.predict.mockRejectedValueOnce(new ApiError(409, refusal));
+    server.setRemote(resultOn(nvidia));
+    await press(root.button('Refine whole mask'));
+    expect(root.named('review-messages')?.content).toContain(refusal);
+    expect(root.named('review-messages')?.button('Reload saved work')).toBeUndefined();
+    expect(section().props['data-inference-path']).toBe('nvidia');
+    expect(root.named('review-advanced')?.content).toContain('Re-run draft on');
+    await press(root.button('Re-run on this GPU'));
+    expect(server.predict).toHaveBeenLastCalledWith('case', 'draft', 1, false, { inference_path: 'default', replay: true });
+  });
+  it('keeps the marks and Undo while it catches up', async () => {
+    const server = workstation([amd, nvidia], free(), 'default');
+    const { root, panel } = await openAI();
+    panel.value.addPrompt(point);
+    await vi.waitFor(() => expect(api.interactivePrompts).toHaveBeenCalledOnce(), nextPoll);
+    await settled();
+    server.predict.mockRejectedValueOnce(new ApiError(409, refusal));
+    await press(root.button('Run AI'));
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 2');
+    expect(root.button('↶ Undo')?.props.disabled).toBeFalsy();
+  });
+  it("shows another tab's job running here, with its Cancel", async () => {
+    const server = workstation([amd, nvidia], free());
+    const { root } = await openAI();
+    server.predict.mockRejectedValueOnce(new ApiError(409, 'This correction session already has a queued or running job'));
+    server.setRemote(free({ status: 'predicting', job_id: 'prediction' }));
+    await press(root.button('Run AI'));
+    expect(root.named('review-working')?.button('Cancel')).toBeDefined();
+    expect(root.named('review-apply')?.props.disabled).toBe(true);
+    server.setRemote(resultOn(amd, { job_id: 'prediction' }));
+    await vi.waitFor(() => expect(root.named('review-working')).toBeUndefined(), nextPoll);
+    expect(root.named('review-result-summary')?.content).toContain('AI result from AMD Test GPU');
+  });
+  it('offers Reload saved work over a newer generation, and it loads that generation', async () => {
+    const server = workstation([amd, nvidia], free());
+    const { root } = await openAI();
+    server.predict.mockRejectedValueOnce(new ApiError(409, 'The correction draft changed; reload its current prompts'));
+    const other = free({ generation: 2, prompts: [applied, { id: 'other-tab', kind: 'point', include: true, ras: point }] });
+    server.setRemote(other);
+    await press(root.button('Run AI'));
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 1');
+    const reload = root.named('review-messages')?.button('Reload saved work');
+    await press(reload);
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 2');
+    expect(root.named('review-messages')?.button('Reload saved work')).toBeUndefined();
+  });
+  it('offers Reload saved work for a draft that another tab saved', async () => {
+    const server = workstation([amd, nvidia], free());
+    const { root } = await openAI();
+    server.predict.mockRejectedValueOnce(new ApiError(409, 'This correction session is closed'));
+    server.setRemote(free({ status: 'accepted' }));
+    await press(root.button('Run AI'));
+    expect(root.named('review-messages')?.button('Reload saved work')).toBeDefined();
+  });
+  it('leaves the refusal alone when the review cannot be read', async () => {
+    const server = workstation([amd, nvidia], free());
+    const { root } = await openAI();
+    server.predict.mockRejectedValueOnce(new ApiError(409, refusal));
+    vi.mocked(api.interactiveReview).mockRejectedValueOnce(new Error('Workstation offline'));
+    await press(root.button('Run AI'));
+    expect(root.named('review-messages')?.content).toContain(refusal);
+    expect(root.named('review-messages')?.content).not.toContain('Workstation offline');
+    expect(root.named('review-messages')?.button('Reload saved work')).toBeUndefined();
+    expect(root.named('review-apply')?.props.disabled).toBeFalsy();
+  });
+});
+
 describe('a draft with a result', () => {
   it('keeps Run AI on the bound card, whatever the select shows', async () => {
     const server = workstation([amd, nvidia], resultOn(nvidia));

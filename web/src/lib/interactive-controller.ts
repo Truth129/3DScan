@@ -357,7 +357,39 @@ export class InteractiveController {
       this.error = reason instanceof Error ? reason.message : String(reason);
       this.working = false;
       this.notify();
+      // `job` is set only once predict has answered, and a save that failed this way set `conflict`.
+      if (reason instanceof ApiError && reason.status === 409 && !this.job && !this.conflict && this.review) await this.catchUp(this.review);
     }
+  }
+  /**
+   * A 409 from predict can mean this page is behind, and no save may ever tell it: publishing a
+   * result moves no generation, so another tab's lock and its Re-run would never arrive. Only
+   * `review` moves, because install() and adopt() reset the marks and their history. A newer
+   * generation holds another tab's marks, and this page's next save would overwrite them if it
+   * took that generation on, so that asks for a reload instead.
+   */
+  private async catchUp(seen: InteractiveReview) {
+    const refusal = this.error;
+    let value: InteractiveReview;
+    try {
+      value = await this.reader.interactiveReview(this.caseId, seen.id);
+    } catch {
+      return; // The refusal stays on screen, and it is still true.
+    }
+    // A save in flight can already be in this reply, which would read as another tab's generation.
+    if (this.stopped || this.working || this.saving || this.review !== seen) return;
+    if (value.generation !== seen.generation || ['accepted', 'discarded'].includes(value.status)) {
+      this.conflict = true;
+      // Reload saved work sits inside the message, and an edit since the refusal has cleared it.
+      this.error ||= refusal;
+    } else {
+      this.review = value;
+      if (['predicting', 'accepting'].includes(value.status)) {
+        this.working = true;
+        this.poll();
+      }
+    }
+    this.notify();
   }
   async accept(): Promise<Job | undefined> {
     if (this.working || this.dirty || !this.review?.candidate) return;
