@@ -1,7 +1,8 @@
 """Deterministic engines for the supervised nnInteractive child in tests.
 
-They import neither torch nor a GPU runtime. A request's session key selects
-its behaviour, so one child can serve warm, cancelled and failing requests.
+They import neither torch nor a GPU runtime, except MeasuredEngine, which asks
+the fake PyTorch. A request's session key selects its behaviour, so one child
+can serve warm, cancelled and failing requests.
 """
 
 import os
@@ -10,6 +11,8 @@ import sys
 import time
 
 from scan3d import imaging
+from scan3d.config import device_request
+from scan3d.segmentation import _device_info
 
 
 class Engine:
@@ -73,6 +76,23 @@ class Engine:
         if marker := os.environ.get("SCAN3D_FAKE_ENGINE_RELEASES"):
             with open(marker, "a") as stream:
                 stream.write(f"{os.getpid()}\n")
+
+
+class MeasuredEngine(Engine):
+    """Measures its card where the real engine does: its own SCAN3D_DEVICE, its own PyTorch.
+
+    With fake PyTorch on the path, a review job's whole chain runs with no GPU.
+    """
+
+    def refine(self, prompts, progress, cancelled, session_key):
+        device = _device_info(device_request())
+        return {
+            "device": device["selected_device"],
+            "gpu_name": device.get("gpu_name"),
+            "torch_version": device["torch"],
+            "hip_version": device.get("hip"),
+            "cuda_version": device.get("cuda"),
+        }
 
 
 class PointwiseEngine(Engine):

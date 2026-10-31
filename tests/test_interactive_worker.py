@@ -14,8 +14,10 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-from scan3d import imaging
-from scan3d.config import Settings
+from inference_path_stub import GPU_NAME, activate, stand_in
+from scan3d import imaging, interactive_worker
+from scan3d.config import ROOT, Settings
+from scan3d.inference_paths import binding, require
 from scan3d.interactive_worker import ENGINE as DEFAULT_ENGINE, InteractiveWorker
 from scan3d.segmentation import SegmentationCancelled
 from scan3d.service import Service
@@ -25,6 +27,8 @@ from test_interactive_review import example, execute_next  # noqa: F401 (fixture
 
 TESTS = Path(__file__).resolve().parent
 ENGINE = "fake_interactive_engine:Engine"
+MEASURED = "fake_interactive_engine:MeasuredEngine"
+SECOND = "Test Second GPU"
 PROMPTS = [{"id": "point-1", "kind": "point", "ras": [0.0, 0.0, 0.0], "include": True}]
 BATCHES = [{"end": 1, "autozoom": True, "full_refine": False}]
 
@@ -50,7 +54,7 @@ def worker(child_environment, tmp_path):
     worker.release()
 
 
-def predict(worker, directory, session_key="warm", name="candidate.nii.gz", *, progress=lambda message: None, cancelled=lambda: False):
+def predict(worker, directory, session_key="warm", name="candidate.nii.gz", *, progress=lambda message: None, cancelled=lambda: False, **choice):
     return worker.predict(
         directory / "ct.nii.gz",
         directory / "mask.nii.gz",
@@ -61,6 +65,7 @@ def predict(worker, directory, session_key="warm", name="candidate.nii.gz", *, p
         session_key,
         batches=BATCHES,
         options={"autozoom": True, "start_empty": False},
+        **choice,
     )
 
 
@@ -316,3 +321,149 @@ def test_default_worker_runs_the_pinned_engine_and_starts_nothing_until_predicti
     assert runtime.engine == DEFAULT_ENGINE == "scan3d.interactive:InteractiveRuntime"
     service._release_interactive()
     assert service.interactive_runtime is None
+
+
+# Inference paths: one child, on one path, in that path's own interpreter
+
+
+@pytest.fixture
+def added(tmp_path, monkeypatch, child_environment):
+    first = stand_in(tmp_path)
+    second = stand_in(tmp_path, "second", proofs=first.proof.parent, device="gpu:1", gpu_name=SECOND)
+    activate(monkeypatch, first, gpus=[[stub.gpu_name, stub.memory_bytes, 0] for stub in (first, second)])
+    monkeypatch.setenv("SCAN3D_GPU_PROOF", str(tmp_path / "no-proof.json"))
+    monkeypatch.delenv("SCAN3D_DEVICE", raising=False)
+    return first, second
+
+
+def path_named(name):
+    """What a job on this path passes the worker: re-read from its proof, so a new object each time."""
+    return require(binding(name))
+
+
+def venv_of(stub):
+    return str(Path(stub.python).parents[1])
+
+
+def environment_of(pid):
+    entries = Path(f"/proc/{pid}/environ").read_text(errors="replace").split("\0")
+    return dict(entry.split("=", 1) for entry in entries if "=" in entry)
+
+
+def test_a_new_path_replaces_the_child_only_after_it_has_exited(worker, tmp_path, added, child_environment):
+    first, _ = added
+    messages = []
+    old = predict(worker, tmp_path)
+    assert old["prefix"] == sys.prefix and worker._child.process.args[0] == sys.executable
+    moved = predict(worker, tmp_path, inference_path=path_named("nvidia"), progress=messages.append)
+    assert not alive(old["pid"]) and moved["pid"] == worker.pid != old["pid"]
+    # Exactly once, because a child that was stopped by force never releases its engine.
+    assert child_environment.read_text().split() == [str(old["pid"])]
+    assert worker._child.process.args[0] == first.python and moved["prefix"] == venv_of(first)
+    # The worker's own engine, because replacing a child must never bring in the real one.
+    assert (moved["engine"], moved["loads"], moved["requests"]) == ("fake-nninteractive", 1, 1)
+    assert messages[0] == f"Switching the AI worker to {GPU_NAME}"
+
+
+def test_a_job_on_the_same_path_keeps_its_warm_child(worker, tmp_path, added):
+    messages = []
+    first = predict(worker, tmp_path, inference_path=path_named("nvidia"))
+    # Each job re-reads the proof, so this compares equal values, never one object.
+    second = predict(worker, tmp_path, name="second.nii.gz", inference_path=path_named("nvidia"), progress=messages.append)
+    assert second["pid"] == first["pid"] == worker.pid and (second["loads"], second["requests"]) == (1, 2)
+    assert not any("Switching" in message for message in messages)
+
+
+def test_leaving_a_path_for_the_default_replaces_the_child_too(worker, tmp_path, added, child_environment):
+    first_path = predict(worker, tmp_path, inference_path=path_named("nvidia"))
+    second_path = predict(worker, tmp_path, inference_path=path_named("second"))
+    messages = []
+    default = predict(worker, tmp_path, progress=messages.append)
+    assert len({first_path["pid"], second_path["pid"], default["pid"]}) == 3
+    assert default["prefix"] == sys.prefix and worker._child.process.args[0] == sys.executable
+    assert child_environment.read_text().split() == [str(first_path["pid"]), str(second_path["pid"])]
+    assert messages[0] == f"Switching the AI worker to {binding('default')['label']}"
+    assert predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"] != default["pid"]
+
+
+def test_a_reissued_proof_is_a_new_path_to_a_running_child(worker, tmp_path, added):
+    first, _ = added
+    pid = predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"]
+    first.change(lambda record: record["path"].update(memory_bytes=record["path"]["memory_bytes"] + 1))
+    reissued = path_named("nvidia")
+    assert predict(worker, tmp_path, inference_path=reissued)["pid"] != pid
+    assert worker._child.inference_path == reissued
+
+
+def test_a_first_child_or_one_that_died_needs_no_switch(worker, tmp_path, added):
+    messages = []
+    pid = predict(worker, tmp_path, inference_path=path_named("nvidia"), progress=messages.append)["pid"]
+    os.kill(pid, 9)
+    worker._child.process.wait(timeout=10)
+    retry = predict(worker, tmp_path, inference_path=path_named("second"), progress=messages.append)
+    assert retry["pid"] != pid and not any("Switching" in message for message in messages)
+
+
+def test_a_cancelled_switch_keeps_the_child_it_found(worker, tmp_path, added, child_environment):
+    pid = predict(worker, tmp_path)["pid"]
+
+    def cancelled(message):
+        raise InterruptedError("Processing cancelled")
+
+    with pytest.raises(InterruptedError, match="Processing cancelled"):
+        predict(worker, tmp_path, inference_path=path_named("nvidia"), progress=cancelled)
+    assert worker.pid == pid and not child_environment.exists()
+    assert predict(worker, tmp_path, name="next.nii.gz")["pid"] == pid
+
+
+def test_a_child_that_will_not_exit_is_never_joined_by_its_replacement(worker, tmp_path, added, monkeypatch):
+    # Two inference processes must never coexist, and that one may still hold its GPU's memory.
+    predict(worker, tmp_path)
+    child = worker._child
+    stop = interactive_worker._Child.stop
+
+    def refused(*args, **kwargs):
+        pytest.fail("A replacement started beside a child that had not exited")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(interactive_worker._Child, "stop", lambda self, graceful: False)
+        patch.setattr(interactive_worker, "_Child", refused)
+        with pytest.raises(RuntimeError, match="did not exit"):
+            predict(worker, tmp_path, inference_path=path_named("nvidia"))
+    assert worker._child is None
+    stop(child, graceful=False)
+
+
+def test_a_child_on_a_path_gets_that_paths_environment(worker, tmp_path, added, monkeypatch):
+    first, _ = added
+    other_stack = {"CUDA_VISIBLE_DEVICES": "GPU-other", "LD_LIBRARY_PATH": "/opt/other-stack/lib", "TORCHINDUCTOR_CACHE_DIR": "/opt/other-stack/cache"}
+    for name, value in other_stack.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:7")  # The default path's own choice.
+    monkeypatch.setenv("TOTALSEG_HOME_DIR", "/shared/totalsegmentator")
+    pid = predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"]
+    environment = environment_of(pid)
+    assert not set(other_stack) & set(environment)
+    assert environment["SCAN3D_DEVICE"] == "gpu"
+    assert environment["TOTALSEG_HOME_DIR"] == "/shared/totalsegmentator"
+    assert environment["XDG_CACHE_HOME"] == str(ROOT / ".cache" / "inference-paths" / "nvidia")
+    assert environment["PATH"].startswith(f"{Path(first.python).parent}{os.pathsep}")
+    assert environment["PYTHONPATH"].startswith(f"{ROOT}{os.pathsep}")  # This release of scan3d.
+
+
+def test_a_default_child_keeps_todays_environment(worker, tmp_path, added, monkeypatch):
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/this-stack/lib")
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:0")
+    predict(worker, tmp_path)
+    environment = environment_of(worker.pid)
+    assert (environment["LD_LIBRARY_PATH"], environment["SCAN3D_DEVICE"]) == ("/opt/this-stack/lib", "gpu:0")
+    assert ("XDG_CACHE_HOME" in environment) == ("XDG_CACHE_HOME" in os.environ)
+
+
+def test_the_paths_own_device_reaches_its_engine_past_the_defaults(worker, tmp_path, monkeypatch):
+    stub = stand_in(tmp_path, "pair", device="gpu:1", gpu_name=SECOND)
+    activate(monkeypatch, stub, gpus=[["Test First GPU", 1024, 0], [SECOND, 1024, 0]])
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:0")
+    worker.engine = MEASURED
+    result = predict(worker, tmp_path, inference_path=path_named("pair"))
+    assert (result["device"], result["gpu_name"], result["cuda_version"]) == ("gpu:1", SECOND, "13.0.fake")

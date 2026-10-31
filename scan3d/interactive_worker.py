@@ -40,6 +40,7 @@ import sys
 import threading
 import time
 
+from . import inference_paths
 from .config import ROOT
 from .segmentation import SegmentationCancelled
 
@@ -92,17 +93,18 @@ class _Channel:
 
 
 class _Child:
-    """One worker process, its channel and whether it has finished starting."""
+    """One worker process, its channel, its inference path and whether it has finished starting."""
 
-    def __init__(self, engine):
+    def __init__(self, engine, inference_path=None):
+        self.inference_path = inference_path
         parent, child = socket.socketpair()
         try:
-            env = dict(os.environ)
+            env = inference_path.environment() if inference_path else dict(os.environ)
             # Import exactly this release of scan3d: -P ignores the working
             # directory, and this checkout precedes any inherited path.
             env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(ROOT), env.get("PYTHONPATH"))))
             self.process = subprocess.Popen(
-                [sys.executable, "-P", "-m", "scan3d.interactive_worker", str(child.fileno()), engine],
+                [inference_path.python if inference_path else sys.executable, "-P", "-m", "scan3d.interactive_worker", str(child.fileno()), engine],
                 pass_fds=(child.fileno(),),
                 stdin=subprocess.DEVNULL,
                 env=env,
@@ -167,6 +169,13 @@ class InteractiveWorker:
     fast path, replay on undo, checkpoint verification and provenance are
     exactly InteractiveRuntime's. A cancelled or invalid request keeps the
     child; a failure, crash or hang replaces it at the next request.
+
+    A child also belongs to one inference path, because a process keeps the GPU
+    runtime it started with. A request for any other path, the default among
+    them, stops the child and verifies its exit before starting the next, so
+    one inference process exists across all GPUs. The device reaches the child
+    through its spawn environment, so the protocol and the engine never see a
+    path. The comparison stays here, where no fake runtime is ever compared.
     """
 
     def __init__(self, engine=ENGINE, *, cancel_grace=CANCEL_GRACE_SECONDS, stall_seconds=None):
@@ -182,7 +191,7 @@ class InteractiveWorker:
         child = self._child
         return child.process.pid if child is not None and child.process.poll() is None else None
 
-    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None):
+    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None, inference_path=None):
         args = {
             "ct_path": str(ct_path),
             "mask_path": str(mask_path),
@@ -197,8 +206,14 @@ class InteractiveWorker:
                 raise SegmentationCancelled("nnInteractive correction was cancelled")
             if self._child is not None and self._child.process.poll() is not None:
                 self._stop()  # It ended while idle; this request starts afresh.
+            if self._child is not None and self._child.inference_path != inference_path:
+                # Equality is full identity, so a re-issued proof is another path, and the
+                # default is None, so leaving an added path takes this branch too.
+                label = inference_path.label if inference_path else inference_paths.binding(inference_paths.DEFAULT)["label"]
+                progress(f"Switching the AI worker to {label}")
+                self._shutdown()
             if self._child is None:
-                self._child = _Child(self.engine)
+                self._child = _Child(self.engine, inference_path)
             return self._exchange(next(self._requests), args, progress, cancelled)
 
     def _exchange(self, request, args, progress, cancelled):
@@ -287,6 +302,12 @@ class InteractiveWorker:
         if child is not None and not child.stop(graceful=False):
             log.error("nnInteractive worker process %s did not exit; its GPU memory may remain in use", child.process.pid)
 
+    def _shutdown(self):
+        """Stop the child gracefully and verify its exit. The caller holds the lock."""
+        child, self._child = self._child, None
+        if child is not None and not child.stop(graceful=True):
+            raise RuntimeError("The nnInteractive worker process did not exit; its GPU memory may still be in use")
+
     def release(self):
         """Stop the child before TotalSegmentator runs and at shutdown.
 
@@ -294,9 +315,7 @@ class InteractiveWorker:
         including the GPU context. The next prediction starts a fresh child.
         """
         with self._lock:
-            child, self._child = self._child, None
-            if child is not None and not child.stop(graceful=True):
-                raise RuntimeError("The nnInteractive worker process did not exit; its GPU memory may still be in use")
+            self._shutdown()
 
 
 def _serve(channel, engine):
