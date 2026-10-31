@@ -127,6 +127,8 @@ class InferencePath:
         env["PATH"] = os.pathsep.join(filter(None, (str(Path(self.python).parent), env.get("PATH"))))
         env["XDG_CACHE_HOME"] = str(ROOT / ".cache" / "inference-paths" / self.id)
         env["SCAN3D_DEVICE"] = self.device
+        # Means only that this child belongs to an added path, for the device check's remedy.
+        env["SCAN3D_INFERENCE_PATH"] = self.id
         return env
 
     def versions(self):

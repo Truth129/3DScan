@@ -40,6 +40,11 @@ ENGINE_DIFFERS = "Its TotalSegmentator or nnInteractive version differs from thi
 RESAMPLER = "It has cupy or cucim installed, which would change resampling."
 HARDWARE_CHANGED = "The GPUs in this workstation changed after the last GPU check."
 CAUTION = "Its last GPU check failed or is out of date."
+NO_GPU_ADDED = (
+    "GPU inference was requested but PyTorch cannot access a GPU; check the driver, then repeat this GPU's check "
+    "(see Add a second GPU in docs/INSTALL.md). No other GPU was tried."
+)
+NO_GPU_DEFAULT = "GPU inference was requested but PyTorch cannot access a GPU; check the CUDA or ROCm setup, or set SCAN3D_DEVICE=cpu"
 GIB = 1024**3
 
 
@@ -727,6 +732,7 @@ def test_the_environment_withholds_the_other_stacks_variables_and_keeps_the_rest
     assert {name: env[name] for name in KEPT} == KEPT
     assert env["PATH"] == f"{Path(stub.python).parent}{os.pathsep}{before_path}"
     assert env["SCAN3D_DEVICE"] == "gpu"  # gpu:1 was the default path's.
+    assert env["SCAN3D_INFERENCE_PATH"] == "nvidia"
     assert env["XDG_CACHE_HOME"] == str(ROOT / ".cache" / "inference-paths" / "nvidia")
     assert env["PYTHONPATH"] == os.environ["PYTHONPATH"]
     assert dict(os.environ) == inherited
@@ -963,6 +969,7 @@ def test_the_default_paths_children_keep_todays_interpreter_and_environment(segm
         "XDG_CACHE_HOME": "/opt/this-stack/cache",
         "SCAN3D_DEVICE": "gpu:0",
     }
+    assert "SCAN3D_INFERENCE_PATH" not in run["environment"]
 
 
 def test_each_path_reuses_only_its_own_saved_result(segmenting):
@@ -1238,6 +1245,25 @@ def test_an_out_of_memory_correction_keeps_its_address_from_child_to_review(segm
     job, review = correct_with(segmenting, monkeypatch, "OutOfMemoryEngine", name)
     assert (job["status"], job["error"]) == ("failed", OUT_OF_MEMORY)
     assert review["error"] == OUT_OF_MEMORY
+
+
+@pytest.mark.parametrize("name, sentence", [("nvidia", NO_GPU_ADDED), ("default", NO_GPU_DEFAULT), (None, NO_GPU_DEFAULT)])
+def test_a_segmentation_with_no_gpu_gives_the_remedy_that_works_on_its_path(segmenting, monkeypatch, name, sentence):
+    # SCAN3D_DEVICE=cpu would do nothing for an added path and would move the default one.
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", "[]")
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu")  # auto would settle for the CPU.
+    job = segmenting.run(name)
+    assert (job["status"], job["error"]) == ("failed", sentence)
+    assert segmenting.runs() == [] and len(segmenting.prefixes()) == 1  # The device check, and nothing after it.
+
+
+@pytest.mark.parametrize("name, sentence", [("nvidia", NO_GPU_ADDED), ("default", NO_GPU_DEFAULT), (None, NO_GPU_DEFAULT)])
+def test_a_correction_with_no_gpu_gives_the_remedy_that_works_on_its_path(segmenting, monkeypatch, name, sentence):
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", "[]")
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu")
+    job, review = correct_with(segmenting, monkeypatch, "ReportingEngine", name)
+    assert (job["status"], job["error"]) == ("failed", sentence)
+    assert review["error"] == sentence
 
 
 def test_a_job_on_a_path_leaves_the_api_process_free_of_torch(tmp_path, monkeypatch):

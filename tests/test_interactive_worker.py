@@ -445,7 +445,7 @@ def test_a_child_on_a_path_gets_that_paths_environment(worker, tmp_path, added, 
     pid = predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"]
     environment = environment_of(pid)
     assert not set(other_stack) & set(environment)
-    assert environment["SCAN3D_DEVICE"] == "gpu"
+    assert environment["SCAN3D_DEVICE"] == "gpu" and environment["SCAN3D_INFERENCE_PATH"] == "nvidia"
     assert environment["TOTALSEG_HOME_DIR"] == "/shared/totalsegmentator"
     assert environment["XDG_CACHE_HOME"] == str(ROOT / ".cache" / "inference-paths" / "nvidia")
     assert environment["PATH"].startswith(f"{Path(first.python).parent}{os.pathsep}")
@@ -459,6 +459,7 @@ def test_a_default_child_keeps_todays_environment(worker, tmp_path, added, monke
     environment = environment_of(worker.pid)
     assert (environment["LD_LIBRARY_PATH"], environment["SCAN3D_DEVICE"]) == ("/opt/this-stack/lib", "gpu:0")
     assert ("XDG_CACHE_HOME" in environment) == ("XDG_CACHE_HOME" in os.environ)
+    assert "SCAN3D_INFERENCE_PATH" not in environment
 
 
 def test_the_paths_own_device_reaches_its_engine_past_the_defaults(worker, tmp_path, monkeypatch):

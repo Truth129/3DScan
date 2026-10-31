@@ -115,6 +115,12 @@ def _device_info(device):
     if device != "gpu" and not (device.startswith("gpu:") and device[4:].isdigit()):
         raise ValueError("SCAN3D_DEVICE must be auto, gpu, gpu:N or cpu")
     if not torch.cuda.is_available():
+        # An added path sets its own device, so SCAN3D_DEVICE=cpu could only move the default path.
+        if os.environ.get("SCAN3D_INFERENCE_PATH"):
+            raise RuntimeError(
+                "GPU inference was requested but PyTorch cannot access a GPU; check the driver, then repeat this GPU's check "
+                "(see Add a second GPU in docs/INSTALL.md). No other GPU was tried."
+            )
         raise RuntimeError("GPU inference was requested but PyTorch cannot access a GPU; check the CUDA or ROCm setup, or set SCAN3D_DEVICE=cpu")
     if ":" in device:
         index = int(device[4:])
