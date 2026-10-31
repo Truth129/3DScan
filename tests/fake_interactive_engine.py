@@ -14,6 +14,13 @@ from scan3d import imaging
 from scan3d.config import device_request
 from scan3d.segmentation import _device_info
 
+# How PyTorch's out-of-memory error ends, from the installed library's own string.
+OUT_OF_MEMORY = (
+    "CUDA out of memory. Tried to allocate 2.00 GiB. GPU 0 has a total capacity of 15.57 GiB of which 1.20 GiB is free. "
+    "If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  "
+    "See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)"
+)
+
 
 class Engine:
     def __init__(self):
@@ -100,6 +107,13 @@ class ReportingEngine(MeasuredEngine):
 
     def refine(self, prompts, progress, cancelled, session_key):
         return {**super().refine(prompts, progress, cancelled, session_key), "prefix": None}
+
+
+class OutOfMemoryEngine(Engine):
+    """Fails as an allocator failure reaches the real engine: PyTorch's text in a RuntimeError."""
+
+    def refine(self, prompts, progress, cancelled, session_key):
+        raise RuntimeError(OUT_OF_MEMORY)
 
 
 class PointwiseEngine(Engine):

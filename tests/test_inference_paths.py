@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 import pytest
 
+from fake_interactive_engine import OUT_OF_MEMORY
 from inference_path_stub import ENGINES, FAMILIES, GPU_NAME, MEMORY_BYTES, TORCH, activate, add_package, child_path, stand_in
 from scan3d import doctor, inference_paths, segmentation
 from scan3d.api import create_app
@@ -827,6 +828,13 @@ def test_a_timeout_never_shows_its_command_line():
         ("cannot read /home/some user/ct.nii.gz (line 3)", "cannot read <local path> (line 3)"),
         ("first /tmp/a b/c\nsecond line /tmp/d", "first <local path>\nsecond line <local path>"),
         ("CUDA out of memory and/or 1/2 of ./relative/file", "CUDA out of memory and/or 1/2 of ./relative/file"),
+        pytest.param(OUT_OF_MEMORY, OUT_OF_MEMORY, id="pytorch-out-of-memory-keeps-its-address"),
+        ("see http://example.org/help.", "see http://example.org/help."),
+        ("https://example.org:8443/help", "https://example.org:8443/help"),
+        ("file:///home/someone/ct.nii.gz", "file:<local path>"),
+        ("see https://example.org/help, then open /home/someone/ct.nii.gz", "see https://example.org/help, then open <local path>"),
+        ("see https://example.org/help:/opt/a/lib:/opt/b/lib", "see https://example.org/help:<local path>:<local path>"),
+        ("/home/some one/ct.nii.gz failed, see https://example.org/help", "<local path> failed, see https://example.org/help"),
     ],
 )
 def test_absolute_paths_leave_a_public_error(message, expected):
@@ -1206,6 +1214,30 @@ def test_no_public_surface_of_a_correction_names_the_interpreter(segmenting, tmp
     ]
     for surface in surfaces:
         assert "PRIVATE" not in surface and str(tmp_path) not in surface
+
+
+def correct_with(segmenting, monkeypatch, engine, name):
+    """One correction in a real child running `engine`: the job and the review it leaves."""
+    service, case = segmenting.service, segmenting.case
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(Path(__file__).resolve().parent), os.environ["PYTHONPATH"])))
+    service.interactive_runtime = runtime = InteractiveWorker(f"fake_interactive_engine:{engine}", stall_seconds=30.0)
+    base = service.store.revision(case["id"], case["active_revision_id"])
+    draft = service.reviews.create(case["id"], base["id"], "synthetic:liver")
+    draft = service.reviews.update(case["id"], draft["id"], 0, [dict(id="point-1", kind="point", ras=[0.0, 0.0, 0.0], include=True)])
+    try:
+        queued = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=name)
+        service.execute(service.store.claim())
+    finally:
+        runtime.release()
+    return service.store.get("jobs", queued["id"]), service.reviews.get(case["id"], draft["id"])
+
+
+@pytest.mark.parametrize("name", ["nvidia", "default"])
+def test_an_out_of_memory_correction_keeps_its_address_from_child_to_review(segmenting, monkeypatch, name):
+    # The expected failure on a smaller card, and the address is the help it offers.
+    job, review = correct_with(segmenting, monkeypatch, "OutOfMemoryEngine", name)
+    assert (job["status"], job["error"]) == ("failed", OUT_OF_MEMORY)
+    assert review["error"] == OUT_OF_MEMORY
 
 
 def test_a_job_on_a_path_leaves_the_api_process_free_of_torch(tmp_path, monkeypatch):

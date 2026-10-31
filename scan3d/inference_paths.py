@@ -73,9 +73,10 @@ _BAD_RECORD = (AttributeError, KeyError, OSError, RecursionError, TypeError, Val
 
 # ImportError and dlopen text leaves paths unquoted, and a directory can hold a space, so a space
 # ends a path only when no later word on its line has a slash. What follows a path's last slash
-# cannot be told from prose, and stays.
+# cannot be told from prose, and stays. A web address is matched first only so that it is kept,
+# because its `//host/...` reads as a path: PyTorch's out-of-memory error ends with one.
 _PATH_CHAR = r"""[^\s'"`,;:()<>\[\]{}]"""
-_LOCAL_PATH = re.compile(rf"""'/[^']*'|"/[^"]*"|(?<![\w.~-])/{_PATH_CHAR}+(?:(?: +{_PATH_CHAR}+)* +{_PATH_CHAR}*/{_PATH_CHAR}*)?""")
+_LOCAL_PATH = re.compile(rf"""(https?://{_PATH_CHAR}+)|'/[^']*'|"/[^"]*"|(?<![\w.~-])/{_PATH_CHAR}+(?:(?: +{_PATH_CHAR}+)* +{_PATH_CHAR}*/{_PATH_CHAR}*)?""")
 
 
 def installed(site, name):
@@ -373,4 +374,4 @@ def public_error(exc):
     """What a failed job on an added path may say publicly; the journal keeps the full detail."""
     if isinstance(exc, subprocess.TimeoutExpired):  # Its text holds the whole command line.
         return "The AI process did not stop in time."
-    return _LOCAL_PATH.sub("<local path>", str(exc) or type(exc).__name__)
+    return _LOCAL_PATH.sub(lambda found: found[1] or "<local path>", str(exc) or type(exc).__name__)
