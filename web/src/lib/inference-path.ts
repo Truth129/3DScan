@@ -1,5 +1,5 @@
 import { ref } from 'vue';
-import type { InferencePathRow, InteractiveMethod, InteractiveReview, InteractiveStatus } from '../types';
+import type { InferencePathRow, InteractiveMethod, InteractiveReview, InteractiveStatus, Job } from '../types';
 
 export const SEGMENT_PATH_KEY = 'scan3d-inference-path-segment-v1';
 export const REVIEW_PATH_KEY = 'scan3d-inference-path-review-v1';
@@ -112,6 +112,13 @@ export function reviewRunPath(
   const canRerun = !!chosen?.available && (id !== selected || !row || !!review.dirty);
   return { paths, locked: true, id, label, block: usable(pathBlock(row, label, true)), canRerun };
 }
+
+/**
+ * The card the toolbar names. A job states its own, because a re-run reaches the binding only
+ * when it publishes and review jobs never reach the header. `label` decides whether any card
+ * shows, so Direct edit and one path still show none.
+ */
+export const pathInUse = (label: string, working?: boolean, job?: Pick<Job, 'inference_path'>) => (label && working && job?.inference_path?.label) || label;
 
 /** What a stale result needs before it can be saved. On a locked draft with nothing pending or running, only a re-run can help. */
 export const staleResultHint = (locked: boolean, pending: number, working?: boolean) =>

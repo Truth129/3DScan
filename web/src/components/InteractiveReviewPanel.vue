@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { InteractiveController } from '../lib/interactive-controller';
 import { newReviewPrompt, normalizeRelationship, pendingReviewTargets, reviewCandidateHasChanges, reviewMethod } from '../lib/interactive-review';
 import { prettyName } from '../lib/geometry';
-import { pathOptionText, pathRun, pathStatus, REVIEW_PATH_KEY, reviewRunPath, staleResultHint, usePathChoice } from '../lib/inference-path';
+import { pathInUse, pathOptionText, pathRun, pathStatus, REVIEW_PATH_KEY, reviewRunPath, staleResultHint, usePathChoice } from '../lib/inference-path';
 import SegmentRelationshipEditor from './SegmentRelationshipEditor.vue';
 import type {
   InteractiveMethod,
@@ -142,6 +142,10 @@ const pathLine = computed(() =>
     reviewPathNotice.value,
   ),
 );
+const pathLabel = computed(() => {
+  void tick.value;
+  return pathInUse(runPath.value.label, current.value?.working, current.value?.job);
+});
 // Never part of `disabled`: marking, Direct edit and relationship-only Apply need no card.
 const pathStopsRun = (full: boolean) => pathRun(runPath.value, pendingMarks.value, full).stopped;
 const canRerun = computed(() => runPath.value.canRerun && !disabled.value && policyValid.value);
@@ -719,7 +723,7 @@ defineExpose({
         }}</span>
         <span v-if="view?.new_structure" class="review-new-target-note">New segment · starts empty</span>
         <span v-if="policyOpen && policyLoading">Loading saved relationship…</span>
-        <span v-if="runPath.label" class="review-ai-path" :title="runPath.label">AI · {{ runPath.label }}</span>
+        <span v-if="pathLabel" class="review-ai-path" :title="pathLabel">AI · {{ pathLabel }}</span>
         <div class="review-context-actions">
           <button
             v-if="!addOpen"

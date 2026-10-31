@@ -7,6 +7,7 @@ import {
   choosePath,
   pathBlock,
   pathBlocked,
+  pathInUse,
   pathOptionText,
   pathRun,
   pathStatus,
@@ -275,6 +276,23 @@ describe('the card Run AI uses', () => {
   it('does not block the default card over a new label, because its identity holds no card', () => {
     const state = reviewRunPath([row('default', 'Default device'), nvidia], 'default', { batches: [batch], inference_path: bound(amd) });
     expect(state).toMatchObject({ block: '', canRerun: false });
+  });
+});
+
+describe('the card the toolbar names', () => {
+  const job = { inference_path: bound(nvidia) };
+
+  it("is the draft's card until a running job says otherwise", () => {
+    expect(pathInUse('AMD Test GPU')).toBe('AMD Test GPU');
+    expect(pathInUse('AMD Test GPU', false, job)).toBe('AMD Test GPU');
+    expect(pathInUse('AMD Test GPU', true)).toBe('AMD Test GPU');
+    expect(pathInUse('AMD Test GPU', true, {})).toBe('AMD Test GPU');
+  });
+  it('is the card of a running re-run, which reaches the binding only when it publishes', () => {
+    expect(pathInUse('AMD Test GPU', true, job)).toBe('NVIDIA Test GPU');
+  });
+  it('stays empty where no card is shown, whatever a job carries', () => {
+    expect(pathInUse('', true, job)).toBe('');
   });
 });
 
