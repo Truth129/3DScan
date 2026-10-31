@@ -171,6 +171,14 @@ describe('choosing a card', () => {
     await press(root.button('Run AI'));
     expect(server.predict).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false);
   });
+  it('reports no replaced card with one path, which is what every browser that remembered it sees', async () => {
+    workstation([amd], undefined, 'nvidia');
+    const { root, section } = await openAI();
+    expect(section().props['data-inference-path']).toBeUndefined();
+    expect(root.named('review-messages')?.content ?? '').not.toContain('no longer set up');
+    await press(root.button('Options +'));
+    expect(root.named('review-advanced')?.content).not.toContain('no longer set up');
+  });
   it('sends the chosen card with Run AI, and stores only a change a person made', async () => {
     const server = workstation([amd, nvidia]);
     const { root, panel, section } = await openAI();
@@ -476,6 +484,14 @@ describe('a draft whose card has gone', () => {
     await press(root.button('Options +'));
     expect(root.button('Refine whole mask')?.props.disabled).toBe(true);
     await clickAnyway(root.named('review-apply'));
+    await clickAnyway(root.button('Refine whole mask'));
+    expect(server.predict).not.toHaveBeenCalled();
+  });
+  it('stops Refine with nothing pending, which needs the card all the same', async () => {
+    const server = workstation([amd], stranded());
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    expect(root.button('Refine whole mask')?.props.disabled).toBe(true);
     await clickAnyway(root.button('Refine whole mask'));
     expect(server.predict).not.toHaveBeenCalled();
   });

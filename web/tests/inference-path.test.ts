@@ -338,7 +338,7 @@ describe('the card Run AI uses', () => {
   });
   it('does not block the default card over a new label, because its identity holds no card', () => {
     const state = reviewRunPath([row('default', 'Default device'), nvidia], 'default', { batches: [batch], inference_path: bound(amd) });
-    expect(state).toMatchObject({ block: '', canRerun: false });
+    expect(state).toMatchObject({ label: 'AMD Test GPU', block: '', canRerun: false });
   });
 
   describe('after the last added card was removed', () => {
