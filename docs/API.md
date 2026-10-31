@@ -469,9 +469,10 @@ An added path with `available: false` gives the first of these that applies:
 and sending `default` run the same way and share saved results. `scan3d segment --inference-path ID` takes the
 same IDs and gets the same refusals, and `scan3d doctor` lists the rows.
 
-A job's path is frozen when it is queued and checked again as it starts. It never moves to another path or to
-the CPU. A draft is free until a model result publishes, then stays on that result's path while `batches` is
-non-empty:
+A job's path is frozen when it is queued, and an added path is checked again as the job starts. A job on an
+added path never moves to another path or to the CPU. `default` follows `SCAN3D_DEVICE`, so under `auto` it can
+still run on the CPU. A draft is free until a model result publishes, then stays on that result's path while
+`batches` is non-empty:
 
 | Draft           | Request                                 | Result                                               |
 | --------------- | --------------------------------------- | ---------------------------------------------------- |
@@ -485,7 +486,8 @@ more batch. Nothing need be pending, and a pending relationship goes with it as 
 new generation, so as it is queued the old candidate turns `dirty` and can no longer be accepted. That candidate
 stays in `candidate` until the new one publishes, which is also when the draft's `inference_path` changes. After
 a failed or cancelled re-run it stays there, still `dirty`, and the draft can re-run on any available path, its
-own included. With `batches` empty, `replay` has no effect.
+own included. On its own path, a worker that still holds those batches reuses them and runs only pending marks,
+if any. With `batches` empty, `replay` adds nothing, though `replay` with `full_refine` is still refused.
 
 Direct Apply and a relationship-only Apply run no model. They ignore `inference_path`, their jobs name no path,
 and they stay on the CPU lane. A direct draft ignores `replay` too.
@@ -510,9 +512,12 @@ Only runs on an added path are checked for that last key, so on a job that named
 detected. A true value also adds `Part of <task> re-ran with results in system memory on <label>, usually because
 GPU memory ran out. The run took longer.` to the revision's `qc`.
 
-A saved correction's `operation.runtime` is the engine's provenance, which holds the same `device`, `gpu_name`,
-`torch_version`, `hip_version` and `cuda_version`, plus `inference_path` when the job named a path. Its
-`miopen_find_mode` is null unless the build is HIP.
+A saved correction's `operation.runtime` records what made its candidate. nnInteractive's provenance holds the
+same `device`, `gpu_name`, `torch_version`, `hip_version` and `cuda_version`, plus `inference_path` when the job
+named a path, and its `miopen_find_mode` is null unless the build is HIP. A direct edit records its own
+provenance, with `device: "cpu"` and no GPU or PyTorch keys. A relationship-only result reuses its prediction's
+provenance, or has `engine: "mask-relationship-processing"` and none of these keys when there is no prediction
+to reuse.
 
 ### Refusals and failures
 
@@ -527,7 +532,8 @@ A bad request is refused before any job exists:
 | 409    | Another path on a draft with `batches`   | `This draft's AI results came from <label>. Re-run its steps to use another GPU.` |
 
 Once queued, a problem fails the job and never the route. The job has `status: "failed"` and keeps its
-`inference_path`, and on a review job its `error` also reaches the draft's `error`:
+`inference_path`, and on a review job its `error` also reaches the draft's `error`. On an added path, these
+errors name the cause:
 
 - A path that was removed: `<label> is no longer available: This GPU is not set up on this workstation. Nothing
   ran and no other GPU was tried.`
@@ -543,10 +549,10 @@ Once queued, a problem fails the job and never the route. The job has `status: "
   `it ran out of GPU memory`, `the process was killed, usually because system memory ran out` or `exit <code>`.
 - A report from another PyTorch: `TotalSegmentator <task> ran on PyTorch <version>, not the <version> that <label>
   was checked on. No result was kept and no other GPU was tried.`
-- A child that will not stop: `The AI process did not stop in time.`
 
-On a job that named a path, `default` included, an absolute path in any other error becomes `<local path>`. The
-service log keeps the detail.
+None of these apply on `default`, whose errors keep their existing text. On a job that named a path, `default`
+included, a child that will not stop gives `The AI process did not stop in time.`, and an absolute path in any
+other error becomes `<local path>`. The service log keeps the detail.
 
 ## Viewer data
 

@@ -212,9 +212,10 @@ than the server, and process exit is the only way to return all GPU memory.
 - **Changing path.** A process keeps the GPU runtime it started with, so a worker belongs to one
   [inference path](#inference-paths). A request for any other path, the default among them, stops the worker,
   verifies its exit and starts the next, so one inference process exists across all GPUs. The job reports
-  `Switching the AI worker to <label>`, and the new worker replays recorded batches. Paths compare in full, so
-  a re-issued proof also replaces the worker. The protocol and the engine never see a path: the device reaches
-  the child through its spawn environment.
+  `Switching the AI worker to <label>`, and the new worker replays recorded batches. Paths compare by every
+  `InferencePath` field, so a proof re-issued with a changed field also replaces the worker. One that repeats
+  those fields, as a routine re-check does, keeps it. The protocol and the engine never see a path: the device
+  reaches the child through its spawn environment.
 
 The model is pinned: nnInteractive 2.6.0 and `nnInteractive_v1.0` at a fixed revision, with the checkpoint
 hash verified on load. Requests never download it; that is the job of
@@ -232,6 +233,7 @@ blocks nothing. An added path is one proof file, `<SCAN3D_INFERENCE_PATH_DIR>/<i
 `scripts/check_gpu.py --path ID` from inside that interpreter. The file is the whole registration. There is no
 list to edit and no restart, a failed check still appears with its reason, and moving the file out removes the
 path. With one path there is nothing to choose, so the viewer shows no chooser and its requests name no path.
+The exception is a draft whose added path was removed, which keeps its re-run control so it has a way out.
 
 **Discovery.** `rows()` runs in the API process and reads the folder on every call, which is why a new proof
 needs no restart. `GET /api/segmentation-options` and `GET /api/interactive/status` merge it in, and those are
@@ -251,11 +253,12 @@ first-time weight downloads safe.
 unavailable path with no job row, and the job stores `{id, label, identity}` at its top level, where it stays
 public and outlives a failure that overwrites the stage. A queued job can outlive its proof, so `require()`
 compares the frozen identity with the current proof as the job starts, and a removed, unavailable or changed
-path fails the job with a named cause. Nothing re-routes: a job runs on its card or fails naming it, and no
-branch moves work to another card or to the CPU. `InferencePath.confirm` must see the proven card and build
-before TotalSegmentator starts. nnInteractive measures as it loads, so there the same check follows the
-prediction, and a mismatch keeps no result. After each TotalSegmentator task, the report's PyTorch version
-must equal the device check's, which shows the spawn used the chosen interpreter.
+path fails the job with a named cause. An added path never re-routes: a job runs on its card or fails naming
+it, and no branch moves work to another card or to the CPU. `default` keeps the meaning of `SCAN3D_DEVICE`, so
+`auto` can still use the CPU. `InferencePath.confirm` must see the proven card and build before
+TotalSegmentator starts. nnInteractive measures as it loads, so there the same check follows the prediction,
+and a mismatch keeps no result. After each TotalSegmentator task, the report's PyTorch version must equal the
+device check's, which shows the spawn used the chosen interpreter.
 
 **Cache identity.** An added path feeds the existing inputs and adds no key. `versions` come from the path's own
 site-packages, and `device_request` becomes `<id>|<device>|<gpu_name>`, so the cache key and the model digest
@@ -298,9 +301,10 @@ nnInteractive surfaces are built on Save.
 then stays on that card, so every step of a saved correction ran on one card. A new worker has no warm state
 to continue from, so one added mark on another card would rebuild reviewed work from the original mask. The
 lock is derived, not stored: it is non-empty `batches`, which only a published result writes. A failed or
-cancelled first run therefore never locks a draft, and undoing every applied mark or changing an option frees
-it. Direct and relationship-only Apply run no model, so they ignore the choice, and a relationship-only result
-leaves the draft's card as it was.
+cancelled first run therefore never locks a draft. Undoing back past the first step frees it, unless that step
+was a whole-mask refine with no marks, which undo cannot remove, and changing `options` always frees it. Direct
+and relationship-only Apply run no model, so they ignore the choice, and a relationship-only result leaves the
+draft's card as it was.
 
 To change card, a client re-runs the draft with `replay: true` on the predict route. The job repeats the exact
 Apply steps from the original mask on the new path, with any pending marks as one more step. The old candidate

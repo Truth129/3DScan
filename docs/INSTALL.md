@@ -176,6 +176,11 @@ scripts/add_inference_path.sh nvidia
 
 A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk.
 
+**Your existing install needs the AI packages too.** Every path must use the same
+TotalSegmentator and nnInteractive versions, and the script does not check yours. An
+install made with `--torch none` has neither, so the GPU stays unavailable even after its
+check passes. Add them first with `scripts/bootstrap.sh --torch cpu`.
+
 **What it never touches.** It leaves every other Python environment, the viewer, the
 DICOM converter, TotalSegmentator's settings, `scan3d.env` and the running app alone.
 `scripts/bootstrap.sh` plays no part, and `--torch cuda` is not the way to add a GPU:

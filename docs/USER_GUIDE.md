@@ -107,13 +107,16 @@ need to know about the selected GPU:
   another or the problem is fixed. 3DScan never swaps it quietly.
 - **A GPU that has been removed** is replaced by the first available one, and the line says so.
 - **The default GPU** can always be chosen. If its last GPU check failed or is out of date, the
-  line says so as a caution.
+  line says so as a caution. It reads **Default device** when no GPU check names a card, and
+  **CPU** when `SCAN3D_DEVICE` is `cpu`.
 - **A GPU that drives your display** gets the line **This GPU also drives the display, so free
   memory depends on what is on screen.**
 
 One AI job runs at a time across all GPUs, so a job on one GPU waits for a job on the other. A job
-runs on the GPU you chose or fails saying why: it never moves to another GPU or to the CPU. The top
-of the window names the GPU while the job waits and runs, and if it fails.
+on an added GPU runs there or fails saying why: it never moves to another GPU or to the CPU. The
+default entry follows `SCAN3D_DEVICE`, so with `auto`, the default setting, it uses the CPU if
+PyTorch sees no GPU, even if the list still names one. The top of the window names your choice
+while the job waits and runs, and if it fails.
 
 Each GPU keeps its own saved results, so a repeat run reuses only a result from the same GPU. AMD
 and NVIDIA software are not assumed to give identical results, and how far they differ has not
@@ -250,8 +253,10 @@ same [status line](#choose-a-gpu) as segmentation, and the toolbar shows **AI ·
 Until the first AI result you can choose freely. That result keeps the draft on its GPU, so each
 step builds on the last and all of a saved correction comes from one GPU. The summary beside
 **Exit review** reads **AI result from** that GPU, and **Revision history** names it once you
-save. A run that fails or is cancelled leaves the draft free, and undoing every applied mark or
-changing an option frees it again.
+save. A first run that fails or is cancelled leaves the draft free. **↶ Undo** back past the first
+result frees it, unless that result came from **Refine whole mask** with no marks, and changing
+**Automatically focus inference** or **Start from an empty mask** always frees it. Both drop the
+current result.
 
 After that, **Run AI** and **Refine whole mask** stay on the draft's GPU, whatever the list shows,
 and **Run on** becomes **Re-run draft on**. To move the draft, choose a GPU there, then choose
@@ -264,7 +269,8 @@ and **Run on** becomes **Re-run draft on**. To move the draft, choose a GPU ther
 While it runs, the toolbar names the GPU doing the work. If the re-run fails or you cancel it, the
 toolbar goes back to the draft's GPU, and the old result stays visible as the previous result but
 cannot be saved. Choose **Re-run on this GPU** again, now on any available GPU including the one
-that made that result, or choose **Discard draft**. Your marks are never lost.
+that made that result, or choose **Discard draft**. Back on the GPU that made the result, 3DScan
+reuses any steps still held in memory instead of repeating them. Your marks are never lost.
 
 **If a GPU cannot be used**, a message beside **Exit review** gives the reason, with **Check
 again** to read the list again once it is fixed. **Run AI** for marks and **Refine whole mask**

@@ -94,8 +94,9 @@ for these:
   `GPU_DEVICE_ORDINAL`, because they select another stack's cards.
 - `LD_LIBRARY_PATH` and `LD_PRELOAD`, because they could load another stack's libraries
   over the runtime's own.
-- `nnUNet_compile`, because it would switch nnU-Net to compiled models on one path only,
-  and nothing recorded with a result would show that.
+- `nnUNet_compile`, because it would turn on compiled models there, which no check covers,
+  and nothing recorded with a result would show that. It still reaches the default path,
+  so leave it unset or the two paths will differ.
 - `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR`, because they point at another stack's
   compiled kernels.
 
