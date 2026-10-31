@@ -56,7 +56,7 @@ import {
 } from './lib/image-workspace';
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
-import { pathBlocked, runSummary, SEGMENT_PATH_KEY, usePathChoice } from './lib/inference-path';
+import { pathBlocked, pathField, runSummary, SEGMENT_PATH_KEY, usePathChoice } from './lib/inference-path';
 import { recoverCaseJob } from './lib/jobs';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
@@ -734,7 +734,7 @@ async function segment() {
       robust_crop: activeModality.value === 'CT' && (task.robust_crop_default || (task.robust_crop_supported && settings.robust_crop)),
       body_seg: activeModality.value === 'CT' && task.body_seg_supported && settings.body_seg,
       remove_small_blobs: settings.remove_small_blobs,
-      ...(segmentationPaths.value.length > 1 ? { inference_path: segmentationPath.value } : {}),
+      ...pathField(segmentationPaths.value, segmentationPath.value),
     });
     track(next);
     if (generation === caseGeneration) {

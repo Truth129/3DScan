@@ -56,11 +56,32 @@ export function usePathChoice(key: string) {
   return { selected, notice, settle, choose };
 }
 
+/**
+ * Read AI assist's status and apply only the newest reply: opening review asks twice, and the
+ * chooser settles on the answer. A failed read is an answer too, so that Check again can clear it.
+ */
+export function statusReader(read: () => Promise<InteractiveStatus>, apply: (status: InteractiveStatus) => void) {
+  let newest = 0;
+  return async () => {
+    const request = ++newest;
+    let status: InteractiveStatus;
+    try {
+      status = await read();
+    } catch (reason) {
+      status = { installed: false, model_available: false, available: false, reason: reason instanceof Error ? reason.message : String(reason) };
+    }
+    if (request === newest) apply(status);
+  };
+}
+
 export const pathOptionText = (row: InferencePathRow) =>
   `${row.label}${row.memory_gib ? ` · ${row.memory_gib} GiB` : ''}${row.available ? '' : ' · unavailable'}`;
 
 /** With one row there is nothing to choose, so nothing a choice could block. */
 export const pathBlocked = (paths: readonly InferencePathRow[], id?: string) => paths.length > 1 && !paths.find(row => row.id === id)?.available;
+
+/** The same rule for a request: one row names nothing, so the body stays exactly as it was. */
+export const pathField = (paths: readonly InferencePathRow[], id: string) => (paths.length > 1 ? { inference_path: id } : {});
 
 const unavailable = (row: InferencePathRow) => `${row.label} is unavailable${row.reason ? `: ${row.reason}` : '.'}`;
 

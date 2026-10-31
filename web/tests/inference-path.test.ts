@@ -7,6 +7,7 @@ import {
   choosePath,
   pathBlock,
   pathBlocked,
+  pathField,
   pathInUse,
   pathOptionText,
   pathRun,
@@ -15,10 +16,11 @@ import {
   reviewRunPath as runPathFor,
   runSummary,
   staleResultHint,
+  statusReader,
   usePathChoice,
   writePath,
 } from '../src/lib/inference-path';
-import type { InferencePathBinding, InferencePathRow, InteractiveMethod, InteractiveReview, SegmentationCatalog } from '../src/types';
+import type { InferencePathBinding, InferencePathRow, InteractiveMethod, InteractiveReview, InteractiveStatus, SegmentationCatalog } from '../src/types';
 
 const row = (id: string, label: string, extra: Partial<InferencePathRow> = {}): InferencePathRow => ({
   id,
@@ -140,6 +142,62 @@ describe("one chooser's card", () => {
   });
 });
 
+describe('reading the status', () => {
+  const answer = (reason: string): InteractiveStatus => ({ installed: true, model_available: true, available: true, reason });
+  function reader() {
+    const replies: { resolve: (status: InteractiveStatus) => void; reject: (reason: unknown) => void }[] = [];
+    const applied: InteractiveStatus[] = [];
+    const read = statusReader(
+      () => new Promise((resolve, reject) => replies.push({ resolve, reject })),
+      status => applied.push(status),
+    );
+    return { read, replies, applied };
+  }
+
+  it('applies the newest reply and drops an older one that arrives after it', async () => {
+    const { read, replies, applied } = reader();
+    const first = read(),
+      second = read();
+    replies[1].resolve(answer('newest'));
+    await second;
+    replies[0].resolve(answer('older'));
+    await first;
+    expect(applied.map(status => status.reason)).toEqual(['newest']);
+  });
+  it('drops an older reply that arrives first, so the chooser settles once', async () => {
+    const { read, replies, applied } = reader();
+    const first = read(),
+      second = read();
+    replies[0].resolve(answer('older'));
+    await first;
+    expect(applied).toEqual([]);
+    replies[1].resolve(answer('newest'));
+    await second;
+    expect(applied.map(status => status.reason)).toEqual(['newest']);
+  });
+  it('answers a failed read as unavailable with its reason, so that Check again can clear it', async () => {
+    const { read, replies, applied } = reader();
+    const failed = read();
+    replies[0].reject(new Error('Workstation offline'));
+    await failed;
+    expect(applied).toEqual([{ installed: false, model_available: false, available: false, reason: 'Workstation offline' }]);
+    const recovered = read();
+    replies[1].resolve(answer('back'));
+    await recovered;
+    expect(applied.at(-1)?.available).toBe(true);
+  });
+  it('lets a failed older read lose to a newer reply too', async () => {
+    const { read, replies, applied } = reader();
+    const first = read(),
+      second = read();
+    replies[1].resolve(answer('newest'));
+    await second;
+    replies[0].reject(new Error('Too late'));
+    await first;
+    expect(applied.map(status => status.reason)).toEqual(['newest']);
+  });
+});
+
 describe('path text', () => {
   it('reads as label, memory and availability', () => {
     expect(pathOptionText(amd)).toBe('AMD Test GPU · 32 GiB');
@@ -155,6 +213,11 @@ describe('path text', () => {
     expect(pathBlocked([amd], undefined)).toBe(false);
     expect(pathBlocked([amd, nvidia], 'nvidia')).toBe(false);
     expect(pathBlocked([amd, nvidia], undefined)).toBe(true);
+  });
+  it('names no card in a request with one row, whatever is selected', () => {
+    expect(pathField([amd], 'default')).toEqual({});
+    expect(pathField([], 'nvidia')).toEqual({});
+    expect(pathField([amd, nvidia], 'nvidia')).toEqual({ inference_path: 'nvidia' });
   });
   it('tells the reviewer what still works', () => {
     expect(pathBlock(nvidia, nvidia.label, false)).toBe('');
@@ -390,6 +453,11 @@ describe('the segmentation panel', () => {
     const one = await render([amd], 'default');
     expect(one).toBe(await render(undefined));
     for (const text of ['Inference path', 'Run on', 'across GPUs']) expect(one).not.toContain(text);
+  });
+  it("keeps a lone row's caution off the panel, because there is nothing to choose", async () => {
+    const cautioned = row('default', 'AMD Test GPU', { reason: 'Its last GPU check failed or is out of date.', shares_display: true });
+    expect(await render([cautioned], 'default')).toBe(await render(undefined));
+    expect(await render([cautioned], 'default', 'The GPU chosen earlier is gone.')).toBe(await render(undefined));
   });
   it('offers Run on after Task, which stays the first select', async () => {
     const html = await render([amd, nvidia, broken], 'nvidia');

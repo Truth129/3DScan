@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSSRApp } from 'vue';
 import { renderToString } from '@vue/server-renderer';
 import InteractiveReviewPanel from '../src/components/InteractiveReviewPanel.vue';
+import { api } from '../src/lib/api';
 
 const props = { caseId: 'case', revisionId: 'revision', selected: 'liver', structures: [], busy: false };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('review toolbar', () => {
   it('offers Direct edit its own tools and no AI hints', async () => {
@@ -23,8 +29,15 @@ describe('review toolbar', () => {
     expect(loading).toContain('Preparing the 3D candidate preview');
     expect(loading).not.toContain('role="alert"');
   });
-  it('has no card control or attribute in Direct edit', async () => {
-    const html = await renderToString(createSSRApp(InteractiveReviewPanel, props));
+  // SSR stays on the opening render: it never reaches AI assist and never waits for a status
+  // reply, so a missing card here says little. Opening for real does run, so the request can
+  // be pinned. inference_path_smoke.py covers what a card does once AI assist has answered.
+  it('opens Direct edit without asking for AI readiness', async () => {
+    const status = vi.spyOn(api, 'interactiveStatus');
+    vi.spyOn(api, 'interactiveReviews').mockResolvedValue([]);
+    vi.stubGlobal('localStorage', { getItem: () => null });
+    const html = await renderToString(createSSRApp(InteractiveReviewPanel, { ...props, active: true }));
+    expect(status).not.toHaveBeenCalled();
     for (const text of ['Inference path', 'Run on', 'Re-run', 'AI ·', 'data-inference-path']) expect(html).not.toContain(text);
   });
 });

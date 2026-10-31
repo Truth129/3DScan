@@ -4,7 +4,17 @@ import { api } from '../lib/api';
 import { InteractiveController } from '../lib/interactive-controller';
 import { newReviewPrompt, normalizeRelationship, pendingReviewTargets, reviewCandidateHasChanges, reviewMethod } from '../lib/interactive-review';
 import { prettyName } from '../lib/geometry';
-import { pathInUse, pathOptionText, pathRun, pathStatus, REVIEW_PATH_KEY, reviewRunPath, staleResultHint, usePathChoice } from '../lib/inference-path';
+import {
+  pathInUse,
+  pathOptionText,
+  pathRun,
+  pathStatus,
+  REVIEW_PATH_KEY,
+  reviewRunPath,
+  staleResultHint,
+  statusReader,
+  usePathChoice,
+} from '../lib/inference-path';
 import SegmentRelationshipEditor from './SegmentRelationshipEditor.vue';
 import type {
   InteractiveMethod,
@@ -86,7 +96,6 @@ const draftMethods = new Map<string, InteractiveMethod>();
 let disposed = false,
   identityVersion = 0,
   targetVersion = 0,
-  runtimeRequest = 0,
   discoveryScope = '';
 const current = computed(() => {
   void tick.value;
@@ -327,19 +336,15 @@ async function ensureController() {
     if (value.review && ['accepted', 'discarded'].includes(value.review.status)) await value.reload();
   }
 }
+const readRuntime = statusReader(
+  () => api.interactiveStatus(),
+  status => {
+    runtime.value = status;
+    settleReviewPath(status.inference_paths ?? []);
+  },
+);
 async function checkRuntime() {
-  if (method.value !== 'nninteractive') return;
-  const request = ++runtimeRequest;
-  let status: InteractiveStatus;
-  try {
-    status = await api.interactiveStatus();
-  } catch (reason) {
-    status = { installed: false, model_available: false, available: false, reason: reason instanceof Error ? reason.message : String(reason) };
-  }
-  // Opening review asks twice, and the chooser must not settle on the older reply.
-  if (request !== runtimeRequest) return;
-  runtime.value = status;
-  settleReviewPath(status.inference_paths ?? []);
+  if (method.value === 'nninteractive') await readRuntime();
 }
 function chooseMethod(value: InteractiveMethod) {
   if (value === method.value || methodDisabled.value) return;
