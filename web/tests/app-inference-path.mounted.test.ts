@@ -195,6 +195,58 @@ describe('running segmentation', () => {
   });
 });
 
+describe('a card that cannot be picked', () => {
+  const second = row('second', 'Second Test GPU', { available: false, reason: 'Its Python environment is missing.' });
+  const fixed = { ...broken, available: true, reason: null };
+  const statusLines = (root: FakeElement) =>
+    root
+      .named('segmentation-panel')!
+      .all.filter(node => node.props.class === 'segmentation-status')
+      .map(node => node.content);
+  const robustCrop = (root: FakeElement) => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
+
+  it('says why with nothing remembered, one line for each card', async () => {
+    workstation([amd, broken, second]);
+    const root = await openPanel();
+    expect(root.select('Inference path')?.props.value).toBe('default');
+    expect(statusLines(root)).toEqual([
+      'Broken Test GPU is unavailable: Its last GPU check failed.',
+      'Second Test GPU is unavailable: Its Python environment is missing.',
+    ]);
+    expect(runButton(root)?.props.disabled).toBeFalsy();
+  });
+  it('re-reads the list with Check again, keeping what the person set', async () => {
+    workstation([amd, broken]);
+    const root = await openPanel();
+    (robustCrop(root).props.onChange as (event: unknown) => void)({ target: { checked: true } });
+    await settled();
+    const options = vi.mocked(api.segmentationOptions);
+    options.mockClear();
+    options.mockImplementation(async () => catalog([amd, fixed]));
+    await press(form(root).button('Check again'));
+    expect(options).toHaveBeenCalledOnce();
+    expect(statusLines(root)).toEqual([]);
+    expect(root.select('Inference path')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB']);
+    expect(form(root).button('Check again'), 'nothing left to check').toBeUndefined();
+    expect(robustCrop(root).props.checked).toBe(true);
+  });
+  it('keeps the card a person chose through Check again', async () => {
+    workstation([amd, nvidia, broken], { remembered: 'nvidia' });
+    const root = await openPanel();
+    await press(form(root).button('Check again'));
+    expect(root.select('Inference path')?.props.value).toBe('nvidia');
+    expect(statusLines(root)).toEqual(['Broken Test GPU is unavailable: Its last GPU check failed.']);
+  });
+  it('offers it only with more than one row, and while one of them is unavailable', async () => {
+    workstation([amd, nvidia]);
+    expect(form(await openPanel()).button('Check again')).toBeUndefined();
+    workstation([broken]);
+    const lone = await openPanel();
+    expect(form(lone).button('Check again')).toBeUndefined();
+    expect(statusLines(lone)).toEqual([]);
+  });
+});
+
 describe('the header while a job runs', () => {
   const banner = (root: FakeElement) => root.named('job-banner')?.all.find(node => node.tag === 'strong')?.content;
 

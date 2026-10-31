@@ -5,6 +5,7 @@ import { InteractiveController } from '../lib/interactive-controller';
 import { newReviewPrompt, normalizeRelationship, pendingReviewTargets, reviewCandidateHasChanges, reviewMethod } from '../lib/interactive-review';
 import { prettyName } from '../lib/geometry';
 import {
+  otherPathReasons,
   pathInUse,
   pathOptionText,
   pathRun,
@@ -151,6 +152,8 @@ const pathLine = computed(() =>
     reviewPathNotice.value,
   ),
 );
+const otherReasons = computed(() => otherPathReasons(runPath.value.paths, reviewPath.value));
+const cardUnavailable = computed(() => runPath.value.paths.some(row => !row.available));
 const pathLabel = computed(() => {
   void tick.value;
   return pathInUse(runPath.value.label, current.value?.working, current.value?.job);
@@ -887,6 +890,7 @@ defineExpose({
               <option v-for="row in runPath.paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
             </select></label
           >
+          <button v-if="cardUnavailable" class="text-button" @click="checkRuntime">Check again</button>
           <button v-if="runPath.locked" class="button secondary compact review-rerun" :disabled="!canRerun" @click="rerun">Re-run on this GPU</button>
           <p v-if="runPath.locked">
             This draft's AI results came from {{ runPath.label }}, and Run AI stays on it so each step builds on the last. Re-running on another GPU repeats
@@ -897,6 +901,7 @@ defineExpose({
           <p v-else>The first AI result keeps this draft on this GPU.</p>
           <p>One AI job runs at a time across GPUs.</p>
           <p v-if="pathLine" role="status">{{ pathLine }}</p>
+          <p v-for="(reason, index) in otherReasons" :key="index" role="status">{{ reason }}</p>
         </template>
         <p v-if="method === 'direct'">
           Paint and erase affect one native slice. Scissors cuts through the selected segment in the captured 3D view direction. Edits run in gesture order.
@@ -1143,6 +1148,9 @@ defineExpose({
 }
 .review-advanced small {
   color: #8696ad;
+}
+.review-advanced .text-button {
+  font-size: 10px;
 }
 .review-advanced p {
   flex-basis: 100%;

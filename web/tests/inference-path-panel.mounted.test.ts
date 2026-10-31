@@ -135,6 +135,12 @@ async function openAI() {
   await press(view.root.button('AI assist'));
   return view;
 }
+/** The status lines of Options +, in the order they read. */
+const statusLines = (root: FakeElement) =>
+  root
+    .named('review-advanced')!
+    .all.filter(node => node.tag === 'p' && node.props.role === 'status')
+    .map(node => node.content);
 /** Past the disabled attribute, for the guard behind it: a click can land before a re-render. */
 async function clickAnyway(button: FakeElement | undefined) {
   (button!.props.onClick as () => void)();
@@ -328,6 +334,95 @@ describe('choosing a card', () => {
     await press(root.button('AI assist'));
     expect(root.named('review-messages')?.content).toContain('NVIDIA Test GPU is unavailable');
     expect(scrolled).toHaveBeenCalledWith({ top: 0 });
+  });
+});
+
+describe('a card that cannot be picked', () => {
+  const broken2 = row('broken-2', 'Second Broken GPU', { available: false, reason: 'Its Python environment is missing.' });
+  const fixed = { ...broken, available: true, reason: null };
+
+  it('says why beside the chooser, with nothing remembered and no block', async () => {
+    workstation([amd, broken]);
+    const { root, section } = await openAI();
+    expect(section().props['data-inference-path']).toBe('default');
+    expect(root.named('review-messages')?.content ?? '').not.toContain('Broken Test GPU');
+    await press(root.button('Options +'));
+    expect(statusLines(root)).toEqual(['Broken Test GPU is unavailable: Its last GPU check failed.']);
+  });
+  it('gives each card a line of its own, under the line for the selected card', async () => {
+    workstation([amd, row('nvidia', 'NVIDIA Test GPU', { shares_display: true }), broken, broken2], undefined, 'nvidia');
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    expect(statusLines(root)).toEqual([
+      'This GPU also drives the display, so free memory depends on what is on screen.',
+      'Broken Test GPU is unavailable: Its last GPU check failed.',
+      'Second Broken GPU is unavailable: Its Python environment is missing.',
+    ]);
+  });
+  it('says the selected card once', async () => {
+    workstation([amd, broken, broken2], undefined, 'broken');
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    expect(statusLines(root)).toEqual([
+      'Broken Test GPU is unavailable: Its last GPU check failed.',
+      'Second Broken GPU is unavailable: Its Python environment is missing.',
+    ]);
+  });
+  it('re-reads the list in place with Check again, which leaves the marks and the panel alone', async () => {
+    const server = workstation([amd, broken]);
+    const { root, panel } = await openAI();
+    panel.value.addPrompt(point);
+    await settled();
+    await press(root.button('Options +'));
+    server.interactiveStatus.mockClear();
+    server.interactiveStatus.mockImplementation(async () => status([amd, fixed]));
+    await press(root.named('review-advanced')?.button('Check again'));
+    expect(server.interactiveStatus).toHaveBeenCalledOnce();
+    expect(root.select('Inference path')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB']);
+    expect(statusLines(root)).toEqual([]);
+    expect(root.named('review-advanced')?.button('Check again'), 'nothing left to check').toBeUndefined();
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 1');
+  });
+  it('offers Check again for the selected card too, and on a locked draft', async () => {
+    workstation([amd, broken], undefined, 'broken');
+    const first = await openAI();
+    await press(first.root.button('Options +'));
+    expect(first.root.named('review-advanced')?.button('Check again')).toBeDefined();
+    workstation([amd, nvidia, broken], resultOn(nvidia));
+    const second = await openAI();
+    await press(second.root.button('Options +'));
+    expect(second.root.named('review-advanced')?.button('Check again')).toBeDefined();
+    expect(second.root.named('review-advanced')?.content).toContain('Broken Test GPU is unavailable: Its last GPU check failed.');
+  });
+  it('offers Check again on a stranded draft, whose one row is the only way out', async () => {
+    const lastRow = row('default', 'AMD Test GPU', { available: false, reason: 'Its last GPU check failed.' });
+    workstation([lastRow], resultOn(nvidia));
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    expect(root.named('review-advanced')?.button('Check again')).toBeDefined();
+    expect(statusLines(root)).toEqual(['AMD Test GPU is unavailable: Its last GPU check failed.']);
+  });
+  it('shows neither while every card works', async () => {
+    workstation([amd, nvidia]);
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    expect(root.named('review-advanced')?.button('Check again')).toBeUndefined();
+    expect(statusLines(root)).toEqual([]);
+  });
+  it('shows neither with one path, whatever its row says', async () => {
+    workstation([{ ...broken, id: 'default' }]);
+    const { root } = await openAI();
+    await press(root.button('Options +'));
+    expect(root.named('review-advanced')?.button('Check again')).toBeUndefined();
+    expect(root.named('review-advanced')?.content).not.toContain('unavailable');
+  });
+  it('shows neither in Direct edit, which has no card', async () => {
+    workstation([amd, broken]);
+    const { root } = await openAI();
+    await press(root.button('Direct edit'));
+    await press(root.button('Options +'));
+    expect(root.named('review-advanced')?.button('Check again')).toBeUndefined();
+    expect(root.named('review-advanced')?.content).not.toContain('Broken Test GPU');
   });
 });
 

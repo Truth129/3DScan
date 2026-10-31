@@ -5,6 +5,7 @@ import SegmentationControls from '../src/components/SegmentationControls.vue';
 import { api } from '../src/lib/api';
 import {
   choosePath,
+  otherPathReasons,
   pathBlock,
   pathBlocked,
   pathField,
@@ -228,6 +229,35 @@ describe('path text', () => {
     expect(pathBlock(nvidia, nvidia.label, true, true)).toBe('');
     expect(pathBlock(broken, broken.label, false, true)).toBe('Broken Test GPU is unavailable: Its last GPU check failed.');
     expect(pathBlock(undefined, 'Old Test GPU', true, true)).toBe('Old Test GPU is no longer set up on this workstation.');
+  });
+});
+
+describe('why the other cards cannot be picked', () => {
+  const gone = row('second', 'Second Test GPU', { available: false, reason: 'Its Python environment is missing.' });
+
+  it('gives the reason of every unavailable row, in list order', () => {
+    expect(otherPathReasons([amd, broken, nvidia, gone], 'default')).toEqual([
+      'Broken Test GPU is unavailable: Its last GPU check failed.',
+      'Second Test GPU is unavailable: Its Python environment is missing.',
+    ]);
+  });
+  it('leaves out the selected row, whose own line already says it', () => {
+    expect(otherPathReasons([amd, broken, gone], 'broken')).toEqual(['Second Test GPU is unavailable: Its Python environment is missing.']);
+    expect(otherPathReasons([amd, broken], 'broken')).toEqual([]);
+  });
+  it('says nothing of a card that works, even with a caution or the display note', () => {
+    const cautioned = row('default', 'AMD Test GPU', { reason: 'Its last GPU check failed or is out of date.', shares_display: true });
+    expect(otherPathReasons([cautioned, nvidia], 'nvidia')).toEqual([]);
+  });
+  it('still gives a line when nothing is selected yet', () => {
+    expect(otherPathReasons([amd, broken], undefined)).toEqual(['Broken Test GPU is unavailable: Its last GPU check failed.']);
+  });
+  it('reads as a sentence for a row with no reason', () => {
+    expect(otherPathReasons([amd, row('bare', 'Bare Test GPU', { available: false })], 'default')).toEqual(['Bare Test GPU is unavailable.']);
+  });
+  it('keeps both lines for twin cards, which read the same', () => {
+    const twin = { ...broken, id: 'broken-2' };
+    expect(otherPathReasons([amd, broken, twin], 'default')).toHaveLength(2);
   });
 });
 
@@ -607,6 +637,52 @@ describe('the segmentation panel', () => {
     expect(runDisabled(html)).toBe(true);
     expect(html).toContain('Broken Test GPU is unavailable: Its last GPU check failed.');
     expect(html).toMatch(/role="status"[^>]*>Broken Test GPU is unavailable/);
+  });
+  describe('with a card nobody could pick', () => {
+    const second = row('second', 'Second Test GPU', { available: false, reason: 'Its Python environment is missing.' });
+    const statusLines = (html: string) => [...html.matchAll(/<p class="segmentation-status" role="status"[^>]*>([^<]*)</g)].map(match => match[1]);
+    const checkAgain = (html: string) => /<button[^>]*>Check again<\/button>/.exec(html)?.[0];
+
+    it('shows why, even when another card is selected', async () => {
+      expect(statusLines(await render([amd, broken], 'default'))).toEqual(['Broken Test GPU is unavailable: Its last GPU check failed.']);
+    });
+    it('gives each card its own line, under the line for the selected card', async () => {
+      const shared = row('nvidia', 'NVIDIA Test GPU', { shares_display: true });
+      expect(statusLines(await render([amd, shared, broken, second], 'nvidia'))).toEqual([
+        'This GPU also drives the display, so free memory depends on what is on screen.',
+        'Broken Test GPU is unavailable: Its last GPU check failed.',
+        'Second Test GPU is unavailable: Its Python environment is missing.',
+      ]);
+    });
+    it('says the selected card once', async () => {
+      expect(statusLines(await render([amd, broken, second], 'broken'))).toEqual([
+        'Broken Test GPU is unavailable: Its last GPU check failed.',
+        'Second Test GPU is unavailable: Its Python environment is missing.',
+      ]);
+    });
+    it('offers Check again beside the chooser, which never submits the form', async () => {
+      const html = await render([amd, broken], 'default');
+      expect(checkAgain(html)).toContain('type="button"');
+      expect(html.indexOf('aria-label="Inference path"')).toBeLessThan(html.indexOf('Check again'));
+      expect(html.indexOf('Check again')).toBeLessThan(html.indexOf('<fieldset'));
+    });
+    it('offers Check again for the selected card too, whose reason is the only one', async () => {
+      expect(checkAgain(await render([amd, broken], 'broken'))).toBeDefined();
+    });
+    it('holds Check again while a job starts or the list loads', async () => {
+      expect(checkAgain(await render([amd, broken], 'default'))).not.toContain('disabled');
+      expect(checkAgain(await render([amd, broken], 'default', '', { busy: true }))).toContain('disabled');
+      expect(checkAgain(await render([amd, broken], 'default', '', { loading: true }))).toContain('disabled');
+    });
+    it('shows neither while every card works', async () => {
+      const html = await render([amd, nvidia], 'nvidia');
+      expect(checkAgain(html)).toBeUndefined();
+      expect(statusLines(html)).toEqual([]);
+    });
+    it('shows neither with one row, whatever that row says', async () => {
+      expect(await render([broken], 'broken')).toBe(await render(undefined));
+      expect(await render([broken], '')).toBe(await render(undefined));
+    });
   });
   it('shows a remembered card being replaced, and the display note on a shared card', async () => {
     expect(await render([amd, nvidia], 'default', 'The GPU chosen earlier is gone.')).toContain('The GPU chosen earlier is gone.');

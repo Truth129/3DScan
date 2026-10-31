@@ -1739,6 +1739,7 @@ onBeforeUnmount(() => {
           @run="segment"
           @close="segmentationOpen = false"
           @retry="loadSegmentationOptions"
+          @recheck="loadSegmentationOptions(true)"
           @license-changed="loadSegmentationOptions(true)"
         />
       </div>

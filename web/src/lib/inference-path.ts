@@ -93,6 +93,13 @@ export function pathStatus(row: InferencePathRow | undefined, notice: string) {
 }
 
 /**
+ * Why each other card cannot be picked. An unavailable row is a disabled option, so it can never
+ * become the selected row that pathStatus describes, and nothing else on the page says why.
+ */
+export const otherPathReasons = (paths: readonly InferencePathRow[], selected?: string) =>
+  paths.filter(row => !row.available && row.id !== selected).map(row => unavailable(row));
+
+/**
  * Why Run AI cannot use its card, for the message list. `row` is undefined when the card has gone.
  * While a job runs only the cause stays: what the rest offers is off until the job ends, and the
  * job may be the re-run it would ask for.

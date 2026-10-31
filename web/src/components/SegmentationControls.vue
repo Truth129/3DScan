@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue';
 import TotalSegmentatorLicense from './TotalSegmentatorLicense.vue';
 import { prettyName } from '../lib/geometry';
-import { pathBlocked, pathOptionText, pathStatus } from '../lib/inference-path';
+import { otherPathReasons, pathBlocked, pathOptionText, pathStatus } from '../lib/inference-path';
 import { searchSegmentationTasks } from '../lib/segmentation-task-search';
 import type { SegmentationCatalog, SegmentationSettings } from '../types';
 const props = defineProps<{
@@ -20,6 +20,7 @@ const emit = defineEmits<{
   run: [];
   close: [];
   retry: [];
+  recheck: [];
   'license-changed': [];
 }>();
 const licensePending = ref(false);
@@ -36,6 +37,8 @@ const pathLine = computed(() =>
       )
     : '',
 );
+const otherReasons = computed(() => (paths.value.length > 1 ? otherPathReasons(paths.value, props.inferencePath) : []));
+const cardUnavailable = computed(() => paths.value.length > 1 && paths.value.some(row => !row.available));
 const unavailable = computed(
   () => !task.value || (task.value.license_required && !task.value.license_available) || pathBlocked(paths.value, props.inferencePath),
 );
@@ -108,6 +111,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
           <option v-for="row in paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
         </select></label
       >
+      <button v-if="cardUnavailable" type="button" class="text-button" :disabled="working || loading" @click="emit('recheck')">Check again</button>
       <fieldset :disabled="working || loading || !task">
         <legend class="sr-only">Optional segmentation processing</legend>
         <label
@@ -152,6 +156,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
       </button>
     </form>
     <p v-if="pathLine" class="segmentation-status" role="status">{{ pathLine }}</p>
+    <p v-for="(reason, index) in otherReasons" :key="index" class="segmentation-status" role="status">{{ reason }}</p>
     <p v-if="loading" class="segmentation-status" role="status">Loading compatible segmentation tasks…</p>
     <p v-else-if="error" class="segmentation-error" role="status">
       {{ error }} <button type="button" class="text-button" @click="emit('retry')">Retry tasks</button>
@@ -311,6 +316,10 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
   min-height: 34px;
   font-size: 11px;
   white-space: nowrap;
+}
+.segmentation-panel form > .text-button {
+  min-height: 34px;
+  font-size: 10px;
 }
 .segmentation-description {
   margin-top: 8px;
