@@ -55,11 +55,17 @@ _WITHHELD = (
     "TRITON_CACHE_DIR",
 )
 
+# What scripts/add_inference_path.sh keeps in an environment it made. The second file goes before
+# the script changes anything and comes back when it has finished.
+_MADE_BY_SCRIPT = ".scan3d-inference-path"
+_FINISHED = ".scan3d-inference-path-finished"
+
 # Rows, refusals and job errors carry fixed sentences only. Proof text can hold local paths and
 # raw errors, and these surfaces are public.
 _NOT_SET_UP = "This GPU is not set up on this workstation."
 _UNREADABLE = "Its GPU check record cannot be read."
 _CHECK_FAILED = "Its last GPU check failed."
+_INSTALL_STOPPED = "Its last install did not finish."
 _NO_PYTHON = "Its Python environment is missing."
 _PACKAGES_CHANGED = "Its installed packages changed after the last GPU check."
 _ENGINE_DIFFERS = "Its TotalSegmentator or nnInteractive version differs from this workstation's."
@@ -282,6 +288,11 @@ def _version(lookup, name):
 
 def _stale(path):
     """The first installed fact that no longer matches the proof, as a fixed sentence, or None."""
+    # First, because everything below can pass on a half-installed environment: a package's
+    # dist-info is no sign that its files arrived. A hand-made environment has neither file.
+    environment = Path(path.python).parent.parent
+    if (environment / _MADE_BY_SCRIPT).exists() and not (environment / _FINISHED).exists():
+        return _INSTALL_STOPPED
     if not os.access(path.python, os.X_OK):
         return _NO_PYTHON
     here = partial(installed, path.site_packages)

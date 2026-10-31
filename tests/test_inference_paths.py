@@ -34,6 +34,7 @@ CHECK_GPU = ROOT / "scripts" / "check_gpu.py"
 UNSET_UP = "This GPU is not set up on this workstation."
 UNREADABLE = "Its GPU check record cannot be read."
 CHECK_FAILED = "Its last GPU check failed."
+INSTALL_STOPPED = "Its last install did not finish."
 NO_PYTHON = "Its Python environment is missing."
 PACKAGES_CHANGED = "Its installed packages changed after the last GPU check."
 ENGINE_DIFFERS = "Its TotalSegmentator or nnInteractive version differs from this workstation's."
@@ -61,6 +62,10 @@ def stub(tmp_path, monkeypatch):
     built = stand_in(tmp_path)
     activate(monkeypatch, built)
     return built
+
+
+def venv_of(stub):
+    return str(Path(stub.python).parents[1])
 
 
 def default_proof(tmp_path, **checks):
@@ -332,6 +337,16 @@ def missing_interpreter(stub):
     Path(stub.python).unlink()
 
 
+def stopped_install(stub):
+    """What the install script leaves from the moment it starts changing an environment."""
+    (Path(venv_of(stub)) / ".scan3d-inference-path").write_text("Made by scripts/add_inference_path.sh nvidia.\n")
+
+
+def finished_install(stub):
+    stopped_install(stub)
+    (Path(venv_of(stub)) / ".scan3d-inference-path-finished").write_text("The last install finished.\n")
+
+
 def changed_family(stub):
     shutil.rmtree(stub.site_packages / f"cuda_toolkit-{FAMILIES['cuda']['cuda-toolkit']}.dist-info")
     add_package(stub.site_packages, "cuda-toolkit", "13.2.1")
@@ -401,6 +416,7 @@ def cucim_import(stub):
         (nested_too_deeply, UNREADABLE),
         (failed_check, CHECK_FAILED),
         (truthy_ready, CHECK_FAILED),
+        (stopped_install, INSTALL_STOPPED),
         (missing_interpreter, NO_PYTHON),
         (changed_family, PACKAGES_CHANGED),
         (removed_family, PACKAGES_CHANGED),
@@ -423,6 +439,44 @@ def test_each_failed_check_disables_its_row_with_one_fixed_sentence(stub, tmp_pa
     assert str(tmp_path) not in public and "PRIVATE" not in public and "/private" not in public
     with pytest.raises(ValueError, match="is unavailable: "):
         binding("nvidia")
+
+
+@pytest.mark.parametrize("also_missing", [missing_interpreter, removed_family, changed_family, cupy_wheel])
+def test_a_stopped_install_is_the_reason_however_little_of_it_is_left(stub, also_missing):
+    stopped_install(stub)
+    also_missing(stub)
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, INSTALL_STOPPED)
+
+
+def test_a_failed_check_outranks_a_stopped_install(stub):
+    # A failed proof is never judged further, and either way the path is withdrawn.
+    stopped_install(stub)
+    failed_check(stub)
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, CHECK_FAILED)
+
+
+def test_a_finished_install_passes_and_its_mark_excuses_nothing_else(stub):
+    finished_install(stub)
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (True, None)
+    missing_interpreter(stub)
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, NO_PYTHON)
+
+
+def test_a_hand_made_environment_needs_neither_file(stub):
+    assert not list(Path(venv_of(stub)).glob(".scan3d-*"))
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (True, None)
+    assert require(binding("nvidia")).python == stub.python
+
+
+@pytest.mark.parametrize("python", ["python", "/python"])
+def test_an_interpreter_with_no_environment_around_it_costs_only_its_own_row(stub, python):
+    stub.change(lambda record: record["path"].update(python=python))
+    assert (rows()[0]["available"], rows()[1]["reason"]) == (True, NO_PYTHON)
+
+
+def test_the_install_script_writes_the_files_discovery_reads():
+    script = (ROOT / "scripts" / "add_inference_path.sh").read_text()
+    assert 'marker="$venv/.scan3d-inference-path"\n' in script and 'finished="$venv/.scan3d-inference-path-finished"\n' in script
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -695,6 +749,24 @@ def test_a_path_that_went_bad_fails_its_queued_job_by_name(stub):
     with pytest.raises(ValueError) as error:
         require(bound)
     assert str(error.value) == f"{GPU_NAME} is no longer available: {NO_PYTHON} Nothing ran and no other GPU was tried."
+
+
+def test_a_stopped_install_refuses_a_new_job_and_fails_a_queued_one_by_name(stub):
+    bound = binding("nvidia")
+    stopped_install(stub)
+    with pytest.raises(ValueError) as error:
+        binding("nvidia")
+    assert str(error.value) == f"{GPU_NAME} is unavailable: {INSTALL_STOPPED}"
+    with pytest.raises(ValueError) as error:
+        require(bound)
+    assert str(error.value) == f"{GPU_NAME} is no longer available: {INSTALL_STOPPED} Nothing ran and no other GPU was tried."
+
+
+def test_a_finished_install_gives_the_path_back_to_a_queued_job(stub):
+    bound = binding("nvidia")
+    stopped_install(stub)
+    finished_install(stub)
+    assert binding("nvidia") == bound and require(bound).python == stub.python
 
 
 def test_a_path_whose_card_changed_fails_its_queued_job_and_never_reroutes(stub):
@@ -973,10 +1045,6 @@ def segmenting(request, tmp_path, monkeypatch):
     )
     yield fixture
     fixture.http.close()
-
-
-def venv_of(stub):
-    return str(Path(stub.python).parents[1])
 
 
 def saved_runs(segmenting):
