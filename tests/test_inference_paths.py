@@ -1712,3 +1712,59 @@ def test_a_queue_that_cannot_be_read_stops_the_check(check, tmp_path):
     completed = check("--path", "nvidia")
     assert completed.returncode == 1 and "Could not read the job queue" in completed.stderr
     assert not check.stub.proof.exists()
+
+
+BUSY = "Jobs are queued or running, so no GPU check ran. Run it again when the queue is empty."
+
+
+def ask_the_queue(stub):
+    """As the install script asks: a Python with no packages, and no way to write into this checkout."""
+    environment = {name: value for name, value in os.environ.items() if name != "PYTHONPATH"}
+    return subprocess.run([stub.python, "-B", "-P", str(CHECK_GPU), "--queue"], env=environment, capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize(
+    "statuses, code, said",
+    [
+        (("queued",), 1, BUSY),
+        (("running",), 1, BUSY),
+        (("completed", "running"), 1, BUSY),
+        (("completed", "failed", "cancelled"), 0, ""),
+        ((), 0, ""),
+    ],
+    ids=["queued", "running", "done-and-running", "all-done", "no-jobs"],
+)
+def test_the_queue_answer_comes_from_the_library_and_writes_nothing(check, tmp_path, statuses, code, said):
+    store = library(tmp_path, *statuses)
+    before = store.db.read_bytes()
+    completed = ask_the_queue(check.stub)
+    assert (completed.returncode, completed.stdout, completed.stderr.strip()) == (code, "", said)
+    assert store.db.read_bytes() == before
+    assert not (tmp_path / "gpu-proof.json").exists() and list(check.stub.proof.parent.iterdir()) == []
+
+
+def test_a_library_with_no_database_has_an_empty_queue(check, tmp_path):
+    completed = ask_the_queue(check.stub)
+    assert (completed.returncode, completed.stdout, completed.stderr) == (0, "", "")
+    assert not (tmp_path / "data").exists()
+
+
+def test_a_queue_that_cannot_be_read_is_not_an_empty_one(check, tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "scan3d.sqlite3").write_text("this is not a database, and it is long enough to be read as one")
+    completed = ask_the_queue(check.stub)
+    assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
+
+
+def test_the_queue_question_loads_no_gpu_runtime(check, tmp_path, monkeypatch):
+    # Importing this PyTorch records the import and then kills the process.
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH", "crash")
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH_PREFIXES", str(tmp_path / "prefixes"))
+    assert check("--queue").returncode == 0
+    assert not (tmp_path / "prefixes").exists()
+
+
+@pytest.mark.parametrize("other", [("--path", "nvidia"), ("--output", "elsewhere.json")])
+def test_the_queue_question_cannot_also_ask_for_a_check(check, tmp_path, other):
+    assert check("--queue", *other).returncode == 2
+    assert not (tmp_path / "elsewhere.json").exists() and not check.stub.proof.exists()

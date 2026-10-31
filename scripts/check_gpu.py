@@ -53,6 +53,7 @@ def main():
     destination = parser.add_mutually_exclusive_group()
     destination.add_argument("--output", type=Path, help="proof file for the default path; the default is SCAN3D_GPU_PROOF")
     destination.add_argument("--path", metavar="ID", help="record this interpreter as the added inference path ID, instead of the default path")
+    destination.add_argument("--queue", action="store_true", help="only read the job queue: exit 0 when it is empty, and 1 when it is busy or unreadable")
     parser.add_argument("--device", help="gpu or gpu:N; N counts within this PyTorch build, so it names a different card per build")
     args = parser.parse_args()
     if args.path is not None and (re.fullmatch(ID_PATTERN, args.path) is None or args.path == DEFAULT):
@@ -67,6 +68,9 @@ def main():
     if waiting:
         print("Jobs are queued or running, so no GPU check ran. Run it again when the queue is empty.", file=sys.stderr)
         return 1
+    # The install script asks this with a bare Python, which has nothing the rest needs.
+    if args.queue:
+        return 0
     # SCAN3D_DEVICE belongs to the default path: gpu:N counts within one build, so it says nothing
     # about an added runtime. A GPU check needs a GPU, so auto and cpu mean the best one.
     configured = "gpu" if args.path else device_request()
