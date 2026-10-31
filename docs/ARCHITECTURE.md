@@ -401,7 +401,8 @@ no DICOM listener, and Orthanc owns its own archive and setup. See [ORTHANC.md](
 with overlaps preserved. Masks are processed one at a time, so memory stays bounded. A manifest pins the
 SEG, mask and reference hashes before any upload, and Orthanc keeps and sends the same bytes to allowlisted
 modality IDs. Export never changes a revision. It requires an original classic CT imported through the
-configured archive.
+configured archive. A ranked export claims voxels in rank order against one boolean grid, so each voxel
+stays in one structure. It is a derived copy for viewers: the saved masks remain the authority.
 
 **SEG import** takes a local upload and needs no Orthanc connection. It appends segments as a new unreviewed
 revision after exact source-identity and native-grid checks. Anything that would need thresholding or

@@ -1,6 +1,6 @@
 """Exact source-grid export, overlap, provenance and bounded-memory gates."""
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import copy
 from itertools import permutations
 from pathlib import Path
@@ -136,6 +136,78 @@ def test_per_frame_segment_discovery_and_highdicom_readback_preserve_exact_masks
         native = restored.get_pixels_by_source_instance(source_ids, segment_numbers=[entry.segment_number], assert_missing_frames_are_empty=True)
         np.testing.assert_array_equal(native[..., 0], expected)
         assert len(restored.SegmentSequence) == 2
+
+
+@pytest.mark.parametrize("winner,loser", [("ring", "block"), ("block", "ring")])
+def test_ranked_export_keeps_each_overlap_voxel_only_in_the_higher_rank(fixture, winner, loser):
+    import highdicom as hd
+
+    saved = {segment.id: hash_file(segment.mask_path) for segment in fixture["segments"]}
+    truth = {"ring": fixture["truth"][..., 0], "block": fixture["truth"][..., 1]}
+    result = export(fixture, overlap_priority=[winner, loser])
+    instance = result.files[0]
+    first, second = instance.segments
+    assert (first.structure_id, first.segment_number, first.removed_voxel_count) == (winner, 1, 0)
+    assert (second.structure_id, second.segment_number, second.removed_voxel_count) == (loser, 2, 529)
+    seg, kept = independent_pixels(instance.path, fixture["images"], 1)
+    trimmed = independent_pixels(instance.path, fixture["images"], 2)[1]
+    np.testing.assert_array_equal(kept, truth[winner])
+    np.testing.assert_array_equal(trimmed, truth[loser] & ~truth[winner])
+    assert first.voxel_count == int(kept.sum()) and second.voxel_count == int(trimmed.sum())
+    assert int(seg.NumberOfFrames) == sum(int(np.count_nonzero(np.any(pixels, axis=(1, 2)))) for pixels in (kept, trimmed))
+    assert seg.SegmentsOverlap == "NO"
+    assert seg.SeriesDescription == f"3DScan segmentations {result.revision_id[:8]} overlaps resolved"
+    assert seg.ContentDescription == "Overlaps resolved by rank; saved masks and review are unchanged"
+    assert [item.TrackingID for item in seg.SegmentSequence] == [winner, loser]
+    assert [item.SegmentAlgorithmType for item in seg.SegmentSequence] == ["AUTOMATIC", "SEMIAUTOMATIC"]
+    # Hashes still name the saved masks, which the export never rewrites.
+    assert {item.structure_id: item.mask_sha256 for item in instance.segments} == saved
+    assert {segment.id: hash_file(segment.mask_path) for segment in fixture["segments"]} == saved
+    restored = hd.seg.segread(instance.path)
+    source_ids = [str(image.SOPInstanceUID) for image in fixture["images"]]
+    for number, expected in ((1, kept), (2, trimmed)):
+        native = restored.get_pixels_by_source_instance(source_ids, segment_numbers=[number], assert_missing_frames_are_empty=True)
+        np.testing.assert_array_equal(native[..., 0], expected)
+
+
+def test_ranked_export_of_separate_masks_changes_no_voxels_or_provenance(fixture):
+    ring, block = fixture["segments"]
+    image = nib.load(block.mask_path)
+    values = np.asanyarray(image.dataobj) & ~np.asanyarray(nib.load(ring.mask_path).dataobj)
+    nib.save(nib.Nifti1Image(values, image.affine), block.mask_path)
+    instance = export(fixture, overlap_priority=["block", "ring"]).files[0]
+    assert [item.removed_voxel_count for item in instance.segments] == [0, 0]
+    seg = independent_pixels(instance.path, fixture["images"], 2)[0]
+    assert seg.SegmentsOverlap == "NO"
+    assert [item.SegmentAlgorithmType for item in seg.SegmentSequence] == ["AUTOMATIC", "AUTOMATIC"]
+
+
+def test_unranked_export_still_declares_overlap_unknown_without_a_ranked_label(fixture):
+    seg = independent_pixels(export(fixture).files[0].path, fixture["images"])[0]
+    assert seg.SegmentsOverlap == "UNDEFINED"
+    assert "overlaps resolved" not in seg.SeriesDescription
+    assert seg.ContentDescription == "Exported voxel masks; clinical review status is unchanged"
+
+
+def test_ranked_export_stops_instead_of_emptying_a_structure(fixture):
+    fixture["segments"].append(replace(fixture["segments"][0], id="copy", name="Copy"))
+    with pytest.raises(dicom_seg.DicomSegError, match="Overlap rank 3 would lose every voxel"):
+        export(fixture, overlap_priority=["ring", "block", "copy"])
+    assert not fixture["output"].exists()
+    assert not list(fixture["output"].parent.glob(".dicom-seg-*"))
+
+
+@pytest.mark.parametrize("ranking", [[], ["ring"], ["ring", "ring"], ["ring", "block", "block"], ["ring", "other"]])
+def test_ranking_must_name_every_selected_structure_once(fixture, ranking):
+    with pytest.raises(dicom_seg.DicomSegError, match="Rank every selected structure"):
+        export(fixture, overlap_priority=ranking)
+    assert not fixture["output"].exists()
+
+
+def test_a_single_structure_has_nothing_to_rank(fixture):
+    fixture["segments"] = fixture["segments"][:1]
+    with pytest.raises(dicom_seg.DicomSegError, match="Rank every selected structure"):
+        export(fixture, overlap_priority=["ring"])
 
 
 @pytest.mark.parametrize("source_kind", ["refinement", "slicer_correction", "interactive", "direct_edit", "include_all_outputs"])

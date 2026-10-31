@@ -633,8 +633,8 @@ modality IDs; leaving it empty allows archive-only export.
 encoding_version}`. `exports` is scoped to the revision, newest first, and addresses stay server-side. An
 unavailable revision has a `reason`, for example a local-only source, an MR image or an image-only revision.
 
-**`POST .../dicom-seg`** takes `{structure_ids?, destination?, resend?}` and returns an `orthanc_export`
-job. Omitted IDs select all nonempty masks. A null destination archives only. Export never changes review
+**`POST .../dicom-seg`** takes `{structure_ids?, destination?, resend?, overlap_priority?}` and returns an
+`orthanc_export` job. Omitted IDs select all nonempty masks. A null destination archives only. Export never changes review
 status, adds a revision or activates one.
 
 **Encoding.** All selected structures become numbered segments of one binary SEG instance in a new series,
@@ -644,6 +644,16 @@ unique integer native voxels within the tolerances above, and dimensions, axis c
 slice coverage are mandatory. A combined export is capped at 512 MiB and 100,000 frames, and exceeding that
 fails before upload. Corrected masks are described as semiautomatic. The private coding scheme `99SCAN3D`
 defines `REGION` and `SEGMENTATION`, which can produce unknown-vocabulary validator warnings.
+
+**Overlap resolution.** `overlap_priority` ranks every selected structure once, highest first, and needs at
+least two. Each voxel then stays only in the highest-ranked structure that holds it, in this SEG only. Saved
+masks, measurements and review status do not change. Segment numbers follow the rank, `SegmentsOverlap` is
+`NO`, the series description ends `overlaps resolved`, and a segment that lost voxels is described as
+semiautomatic. A structure that would lose every voxel stops the export, and the error names its rank. Each
+ranking is a separate artifact of the same saved inputs, so **Send again** needs the exact ranking.
+`export.json` adds `overlap_priority`, and `removed_voxel_count` on each segment that lost voxels. Its
+`voxel_count` is the exported count, and `mask_sha256` still names the saved mask. The job's `dicom_seg` result adds
+`overlap_priority` and `removed_voxels`, keyed by structure ID. An export without a ranking is unchanged.
 
 **Identity.** Enqueue freezes mask file identities, and later changes are refused. `export.json` pins the
 source, reference, mask and SEG hashes before any network write, and `delivery.json` holds transfer
