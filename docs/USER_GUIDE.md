@@ -67,8 +67,9 @@ image** switches between images you have opened.
 4. Choose **Run segmentation**.
 
 A task's weights download the first time it runs. AI jobs run one at a time on the device set
-by `SCAN3D_DEVICE`, and a CPU is much slower than a GPU. Progress appears at the top of the window,
-beside the case selector, and **Cancel job** stops a running job.
+by `SCAN3D_DEVICE`, unless you [choose another GPU](#choose-a-gpu), and a CPU is much slower than
+a GPU. Progress appears at the top of the window, beside the case selector, and **Cancel job**
+stops a running job.
 Imports, opening a CT, direct edits and saves use a separate queue, so they do not wait behind a
 segmentation.
 
@@ -90,6 +91,41 @@ and running jobs to finish.
 **Validated when saved** records that earlier check. It does not promise access to every task:
 licensed models check access when their weights download. See the
 [provider's license page](https://backend.totalsegmentator.com/license-academic/) for terms.
+
+### Choose a GPU
+
+On a workstation with [a second GPU set up](INSTALL.md#add-a-second-gpu), **Run on** appears
+after **Task**. With one GPU there is no **Run on**, and nothing in this section applies.
+
+**Run on** lists each GPU with its memory, and starts on the default GPU. Your browser remembers
+what you choose, separately for segmentation and for [AI assist](#choose-a-gpu-for-ai-assist).
+The list is read again each time you open **Segment CT…**. A line under the form says what you
+need to know about the selected GPU:
+
+- **An unavailable GPU** is marked **· unavailable** and cannot be picked. If you chose it earlier
+  it stays selected, the line gives the reason, and **Run segmentation** stays off until you choose
+  another or the problem is fixed. 3DScan never swaps it quietly.
+- **A GPU that has been removed** is replaced by the first available one, and the line says so.
+- **The default GPU** can always be chosen. If its last GPU check failed or is out of date, the
+  line says so as a caution.
+- **A GPU that drives your display** gets the line **This GPU also drives the display, so free
+  memory depends on what is on screen.**
+
+One AI job runs at a time across all GPUs, so a job on one GPU waits for a job on the other. A job
+runs on the GPU you chose or fails saying why: it never moves to another GPU or to the CPU. The top
+of the window names the GPU while the job waits and runs, and if it fails.
+
+Each GPU keeps its own saved results, so a repeat run reuses only a result from the same GPU. AMD
+and NVIDIA software are not assumed to give identical results, and how far they differ has not
+been measured. Treat a result from another GPU as a new result, and inspect it.
+
+**Revision history** names the GPU beside each run, as **Run on** and its name, and adds **reused
+saved result** when nothing ran again. It can also add **part re-ran in system memory**: nnU-Net
+repeated part of the task on the same GPU, keeping its results in system memory, usually because
+GPU memory ran out. The run took longer, and an automated check note under **Review status &
+tools** records it. A GPU that drives the display has less free memory, so expect this more often
+there. Only runs on an added GPU are checked for this, so its absence on the default GPU proves
+nothing.
 
 ## Arrange the workspace
 
@@ -204,6 +240,42 @@ for exact replay and undo.
 afresh without changing the saved mask; and **Refine whole mask**, a slower extra model stage.
 
 Save or discard your draft before switching between **Direct edit** and **AI assist**.
+
+### Choose a GPU for AI assist
+
+With [a second GPU set up](INSTALL.md#add-a-second-gpu), **Options +** adds **Run on**, with the
+same [status line](#choose-a-gpu) as segmentation, and the toolbar shows **AI ·** and the GPU that
+**Run AI** uses. With one GPU neither appears. **Direct edit** needs no GPU, so it shows neither.
+
+Until the first AI result you can choose freely. That result keeps the draft on its GPU, so each
+step builds on the last and all of a saved correction comes from one GPU. The summary beside
+**Exit review** reads **AI result from** that GPU, and **Revision history** names it once you
+save. A run that fails or is cancelled leaves the draft free, and undoing every applied mark or
+changing an option frees it again.
+
+After that, **Run AI** and **Refine whole mask** stay on the draft's GPU, whatever the list shows,
+and **Run on** becomes **Re-run draft on**. To move the draft, choose a GPU there, then choose
+**Re-run on this GPU**. A re-run:
+
+- repeats every Apply step from the original mask, with any pending marks as a last step
+- replaces the current result only when it finishes
+- can change regions where you made no marks, so inspect the new result before saving
+
+While it runs, the toolbar names the GPU doing the work. If the re-run fails or you cancel it, the
+toolbar goes back to the draft's GPU, and the old result stays visible as the previous result but
+cannot be saved. Choose **Re-run on this GPU** again, now on any available GPU including the one
+that made that result, or choose **Discard draft**. Your marks are never lost.
+
+**If a GPU cannot be used**, a message beside **Exit review** gives the reason, with **Check
+again** to read the list again once it is fixed. **Run AI** for marks and **Refine whole mask**
+stop until then. Whatever needs no GPU keeps working: marking, **↶ Undo**, a **Direct edit**
+draft, applying a relationship change and saving a current result. A draft with no result can
+choose another GPU under **Run on**. One with a result can re-run on another GPU or be discarded.
+
+**If a GPU has been removed**, **Run on** moves to the first available GPU and says so. A draft
+with results from that GPU says it is no longer set up, and it keeps **Re-run draft on** and
+**Re-run on this GPU** even with one GPU left, so it always has a way out. If the GPU comes back,
+**Check again** clears the message.
 
 ### Add a missing structure
 
@@ -398,7 +470,8 @@ running, it does the work.
 .venv/bin/scan3d job JOB_ID
 ```
 
-`include-all` restores labels that were filtered out earlier, from saved model outputs, as a new
+`segment --inference-path ID` runs on [an added GPU](#choose-a-gpu), and `scan3d doctor` lists the
+IDs. `include-all` restores labels that were filtered out earlier, from saved model outputs, as a new
 revision that keeps corrections. `optimize` prepares viewer assets for an older case without
 changing its masks or revisions. A `refine` recipe is JSON in patient RAS millimetres:
 
