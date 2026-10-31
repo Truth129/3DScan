@@ -190,9 +190,10 @@ if (( dry_run )); then
   exit 0
 fi
 
-# `uv pip sync` cannot decide this. It reads a pin by PEP 440, so ==2.14.0 accepts an installed
-# 2.14.0+cu126, the wheel the lock exists to keep out. And it asks the index even when nothing
-# differs, so a re-run could not reach the check offline.
+# Only a finished environment that equals the lock stays, and `uv pip sync` cannot judge that. It
+# reads a pin by PEP 440, so ==2.14.0 accepts an installed 2.14.0+cu126, the wheel the lock exists
+# to keep out. And it asks the index even when nothing differs, so a re-run could not reach the
+# check offline.
 #
 # Nor can uv repair what a stop leaves. It trusts a dist-info, with no sign that the package's
 # files all arrived, and a stop inside a package's RECORD leaves a state it refuses forever
