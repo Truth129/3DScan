@@ -110,9 +110,10 @@ driver="${driver%%$'\n'*}"
 (( 10#${BASH_REMATCH[1]} >= 580 )) ||
   fail "NVIDIA driver $driver is too old: the CUDA 13 build of PyTorch needs 580 or newer."
 
-# Only a new environment needs the room: a finished install may have used what this asks for,
-# and a re-run has to stay possible. The cache holds a second copy when it is on another disk.
-if [[ ! -x "$python" ]]; then
+# Only the run that starts an install needs the room. What it leaves in the environment and the
+# cache counts against the free space from then on, so asking again would refuse the re-run that
+# finishes or repairs it. The cache holds a second copy when it is on another disk.
+if [[ ! -f "$marker" ]]; then
   for place in "$venv" "$UV_CACHE_DIR"; do
     free="$(free_bytes "$place")"
     (( free >= 12 * 1024 ** 3 )) ||

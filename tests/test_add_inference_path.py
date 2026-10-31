@@ -26,7 +26,9 @@ GIB = 1024**3
 COREUTILS = ("bash", "cat", "dirname", "mkdir", "realpath", "stat", "tail")
 PREFLIGHT = ["uv python find", "nvidia-smi", "df", "df", "system-python"]
 FIRST_RUN = [*PREFLIGHT, "uv venv", "uv pip sync", "venv-python"]
-RE_RUN = ["uv python find", "nvidia-smi", "system-python", "uv pip sync", "venv-python"]
+LATER_PREFLIGHT = ["uv python find", "nvidia-smi", "system-python"]  # A later run needs no room.
+RE_RUN = [*LATER_PREFLIGHT, "uv pip sync", "venv-python"]
+REBUILT = [*LATER_PREFLIGHT, "uv venv", "uv pip sync", "venv-python"]
 MARKER = ".scan3d-inference-path"
 
 # Every tool the script can reach. Its first two arguments come from the shim that starts it.
@@ -358,7 +360,7 @@ def test_a_dry_run_on_an_installed_environment_changes_nothing_either(rig):
     before = rig.snapshot()
     completed = rig.run("nvidia", "--dry-run")
     assert completed.returncode == 0, completed.stderr
-    assert rig.steps() == ["uv python find", "nvidia-smi", "system-python"]
+    assert rig.steps() == LATER_PREFLIGHT
     assert rig.snapshot() == before
     assert "from an earlier run, kept" in completed.stdout
 
@@ -567,7 +569,7 @@ def test_a_run_stopped_inside_uv_venv_leaves_a_directory_the_next_run_owns(rig):
     rig.forget_calls()
     rig.scenario["venv_status"] = 0
     assert rig.run("nvidia").returncode == 0
-    assert rig.steps() == FIRST_RUN
+    assert rig.steps() == REBUILT
 
 
 def test_a_failed_sync_runs_no_check_and_the_next_run_carries_on(rig):
@@ -613,9 +615,24 @@ def test_an_environment_that_lost_its_interpreter_gets_one_back(rig):
     package.parent.mkdir()
     package.touch()
     (rig.venv / "bin" / "python").unlink()
-    assert rig.run("nvidia").returncode == 0
-    assert rig.steps() == FIRST_RUN
+    # Usual after a 9 GiB install on a nearly full disk, and a new link needs no room.
+    rig.scenario["free"] = 10 * GIB
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert rig.steps() == REBUILT
     assert package.exists()
+
+
+@pytest.mark.parametrize("stopped", ["venv_status", "sync_status"])
+def test_a_stopped_install_carries_on_in_the_room_it_left(rig, stopped):
+    # The cache already holds what the first run fetched, which is what took the room.
+    rig.scenario[stopped] = 1
+    assert rig.run("nvidia").returncode == 1
+    rig.forget_calls()
+    rig.scenario.update({stopped: 0, "free": 3 * GIB})
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert "df" not in rig.steps()
 
 
 # What the result says
