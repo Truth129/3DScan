@@ -488,7 +488,7 @@ describe('the segmentation panel', () => {
       },
     ],
   });
-  const render = (paths: InferencePathRow[] | undefined, inferencePath = '', pathNotice = '') =>
+  const render = (paths: InferencePathRow[] | undefined, inferencePath = '', pathNotice = '', state: { busy?: boolean; loading?: boolean } = {}) =>
     renderToString(
       createSSRApp(SegmentationControls, {
         modelValue: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
@@ -497,6 +497,7 @@ describe('the segmentation panel', () => {
         pathNotice,
         busy: false,
         loading: false,
+        ...state,
       }),
     );
   const firstSelect = (html: string) => /<select[^>]*aria-label="([^"]+)"/.exec(html)?.[1];
@@ -520,6 +521,12 @@ describe('the segmentation panel', () => {
     expect(html).toMatch(/<option value="broken" disabled[^>]*>Broken Test GPU · 16 GiB · unavailable/);
     expect(html).toContain('One AI job runs at a time across GPUs. Each GPU keeps its own saved results, and results can differ between GPUs.');
     expect(runDisabled(html)).toBe(false);
+  });
+  it('holds the choice still while a job starts or the list loads', async () => {
+    const pathSelect = (html: string) => /<select[^>]*aria-label="Inference path"[^>]*>/.exec(html)?.[0];
+    expect(pathSelect(await render([amd, nvidia], 'nvidia'))).not.toContain('disabled');
+    expect(pathSelect(await render([amd, nvidia], 'nvidia', '', { busy: true }))).toContain('disabled');
+    expect(pathSelect(await render([amd, nvidia], 'nvidia', '', { loading: true }))).toContain('disabled');
   });
   it('blocks a run on an unavailable card and shows why', async () => {
     const html = await render([amd, broken], 'broken');
