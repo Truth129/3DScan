@@ -988,16 +988,63 @@ onBeforeUnmount(() => {
           <option v-for="item in cases" :key="item.id" :value="item.id">{{ item.label }}</option>
         </select>
       </div>
+      <div v-if="activeCase && job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
+        <span v-if="busyJob" class="spinner"></span>
+        <div>
+          <strong>{{
+            job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
+          }}</strong
+          ><span :title="job.error || job.stage"
+            >{{ job.error || job.stage
+            }}<template v-if="job.progress">
+              · {{ job.progress.completed }} / {{ job.progress.total }} {{ job.progress.phase === 'meshes' ? 'surfaces' : 'structures' }}</template
+            ></span
+          ><progress
+            v-if="busyJob && job.progress && job.progress.total"
+            :value="job.progress.completed"
+            :max="job.progress.total"
+            :aria-label="`${job.progress.phase} progress`"
+          ></progress>
+          <details v-if="busyJob && jobMeasurements?.structures.length" class="measurement-progress" :open="!revision">
+            <summary>{{ jobMeasurements.completed }} / {{ jobMeasurements.total }} measurements</summary>
+            <div class="measurement-progress-body">
+              <p>
+                Volumes are calculated from mask voxels.<template v-if="revision">
+                  The current result stays available while this new revision is prepared.</template
+                >
+              </p>
+              <div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Structure</th>
+                      <th>Volume (mL)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in jobMeasurements.structures" :key="item.id">
+                      <td>{{ prettyName(item.name) }}</td>
+                      <td>{{ Number(item.volume_ml).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </details>
+        </div>
+        <button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button
+        ><button v-else class="text-button" @click="job = undefined">Dismiss</button>
+      </div>
       <div class="worker-status">
         <span class="live-dot"></span><span>{{ workerText }}</span>
       </div>
       <button class="button primary compact" @click="importOpen = true"><span>+</span> Import scan</button>
+      <div v-if="error" class="error-banner" role="alert">
+        <span>⚠ {{ error }}</span
+        ><button aria-label="Dismiss error" @click="error = ''">×</button>
+      </div>
     </header>
 
-    <div v-if="error" class="error-banner" role="alert">
-      <span>⚠ {{ error }}</span
-      ><button aria-label="Dismiss error" @click="error = ''">×</button>
-    </div>
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
 
     <main v-if="!activeCase && !loading" class="welcome">
@@ -1101,53 +1148,6 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
-        <span v-if="busyJob" class="spinner"></span>
-        <div>
-          <strong>{{
-            job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
-          }}</strong
-          ><span
-            >{{ job.error || job.stage
-            }}<template v-if="job.progress">
-              · {{ job.progress.completed }} / {{ job.progress.total }} {{ job.progress.phase === 'meshes' ? 'surfaces' : 'structures' }}</template
-            ></span
-          ><progress
-            v-if="busyJob && job.progress && job.progress.total"
-            :value="job.progress.completed"
-            :max="job.progress.total"
-            :aria-label="`${job.progress.phase} progress`"
-          ></progress>
-        </div>
-        <button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button
-        ><button v-else class="text-button" @click="job = undefined">Dismiss</button>
-      </div>
-      <details v-if="busyJob && jobMeasurements?.structures.length" class="measurement-progress" :open="!revision">
-        <summary>
-          {{ jobMeasurements.completed }} / {{ jobMeasurements.total }} measurements available ·
-          {{ job?.progress?.phase === 'meshes' ? 'building display surfaces' : 'checking masks' }}
-        </summary>
-        <p>
-          Volumes are calculated from mask voxels.<template v-if="revision"> The current result stays available while this new revision is prepared.</template>
-        </p>
-        <div>
-          <table>
-            <thead>
-              <tr>
-                <th>Structure</th>
-                <th>Volume (mL)</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in jobMeasurements.structures" :key="item.id">
-                <td>{{ prettyName(item.name) }}</td>
-                <td>{{ Number(item.volume_ml).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </details>
-
       <div v-if="!revision || prepareOpen" class="prepare-workspace">
         <section class="prepare-panel">
           <div class="prepare-heading">
@@ -1233,13 +1233,6 @@ onBeforeUnmount(() => {
         :style="workspaceStyle"
       >
         <div v-show="workspaceMode === 'review'" class="review-workspace-toolbar">
-          <div class="review-workspace-tabs">
-            <strong>Review segmentation</strong
-            ><button :class="{ active: reviewFocus === 'both' }" @click="setReviewFocus('both')">{{ sourceLabel }} + 3D</button
-            ><button :class="{ active: reviewFocus === 'ct' }" @click="setReviewFocus('ct')">Focus {{ sourceLabel }}</button
-            ><button :class="{ active: reviewFocus === 'model' }" @click="setReviewFocus('model')">Focus 3D</button
-            ><button class="text-button" @click="workspaceMode = 'model'">Exit review</button>
-          </div>
           <InteractiveReviewPanel
             ref="interactivePanel"
             :modality="sourceLabel"
@@ -1249,6 +1242,9 @@ onBeforeUnmount(() => {
             :structures="reviewStructures"
             :busy="busy"
             :active="workspaceMode === 'review'"
+            :surface-error="showingCandidate ? candidateSurfaceError : ''"
+            :surface-loading="showingCandidate && candidateSurfaceLoading"
+            @retry-surface="loadCandidateSurface"
             @state="setInteractiveReview"
             @targets="pendingStructures = $event"
             @create-target="createTarget"
@@ -1265,7 +1261,15 @@ onBeforeUnmount(() => {
             @disabled="interactiveDisabled = $event"
             @opened="interactiveOpen = $event"
             @accept="track"
-          />
+          >
+            <template #navigation>
+              <strong>Review segmentation</strong
+              ><button :class="{ active: reviewFocus === 'both' }" @click="setReviewFocus('both')">{{ sourceLabel }} + 3D</button
+              ><button :class="{ active: reviewFocus === 'ct' }" @click="setReviewFocus('ct')">Focus {{ sourceLabel }}</button
+              ><button :class="{ active: reviewFocus === 'model' }" @click="setReviewFocus('model')">Focus 3D</button>
+            </template>
+            <template #exit><button class="text-button" @click="workspaceMode = 'model'">Exit review</button></template>
+          </InteractiveReviewPanel>
         </div>
         <div id="workspace-sidebar" v-show="sidebarVisible" class="workspace-sidebar">
           <aside id="workspace-anatomy-panel" v-show="panels.anatomy" class="anatomy-rail" aria-label="Anatomy panel">
@@ -1440,14 +1444,6 @@ onBeforeUnmount(() => {
                 ×
               </button>
             </div>
-            <p
-              v-if="workspaceMode === 'review' && showingCandidate && (candidateSurfaceLoading || candidateSurfaceError)"
-              class="candidate-surface-note"
-              :role="candidateSurfaceError ? 'alert' : 'status'"
-            >
-              {{ candidateSurfaceError || 'Preparing the 3D candidate preview… Previous surfaces remain visible.'
-              }}<button v-if="candidateSurfaceError" class="text-button" @click="loadCandidateSurface">Retry preview</button>
-            </p>
             <ModelViewport
               v-if="shownRevision"
               ref="model"
@@ -1524,6 +1520,15 @@ onBeforeUnmount(() => {
               <div>
                 <span class="eyebrow">SOURCE IMAGES</span>
                 <h2>{{ sourceLabel }} review</h2>
+              </div>
+              <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate">
+                <span
+                  >Reviewing
+                  <strong>{{
+                    prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id)
+                  }}</strong>
+                  · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
+                ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
               </div>
               <span class="pill">LINKED</span
               ><button
@@ -1632,15 +1637,6 @@ onBeforeUnmount(() => {
                 </p>
               </div>
             </div>
-            <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate">
-              <span
-                >Reviewing
-                <strong>{{
-                  prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id)
-                }}</strong>
-                · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
-              ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
-            </div>
             <div class="ct-slice-stage">
               <CTReviewRail
                 :overlay-opacity="overlayOpacity"
@@ -1672,14 +1668,14 @@ onBeforeUnmount(() => {
             </div>
             <div class="probe-readout">
               <span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span
+              ><label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
+                ><input v-model="compare" type="checkbox" /><span>{{
+                  showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent`
+                }}</span></label
               ><strong
                 >{{ formatImageValue(hu, imageDisplay.units) }} <small>{{ imageDisplay.units }}</small></strong
               >
             </div>
-            <label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
-              ><input v-model="compare" type="checkbox" />
-              {{ showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent` }}</label
-            >
             <details v-if="!ctOnly" ref="reviewStatus" class="review-status" @keydown="reviewStatusKeyboard">
               <summary>Review status &amp; tools</summary>
               <div ref="reviewStatusBody" class="review-status-body">
@@ -1833,18 +1829,6 @@ onBeforeUnmount(() => {
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
-}
-.candidate-surface-note {
-  margin: 0;
-  padding: 6px 14px;
-  background: #1c2532;
-  color: #bdcce0;
-  font-size: 10px;
-  line-height: 1.5;
-}
-.candidate-surface-note .text-button {
-  margin-left: 8px;
-  font-size: 10px;
 }
 .ct-only-anatomy {
   padding: 22px 17px;

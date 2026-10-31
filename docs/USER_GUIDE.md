@@ -67,7 +67,8 @@ image** switches between images you have opened.
 4. Choose **Run segmentation**.
 
 A task's weights download the first time it runs. AI jobs run one at a time on the device set
-by `SCAN3D_DEVICE`, and a CPU is much slower than a GPU. **Cancel job** stops a running job.
+by `SCAN3D_DEVICE`, and a CPU is much slower than a GPU. Progress appears at the top of the window,
+beside the case selector, and **Cancel job** stops a running job.
 Imports, opening a CT, direct edits and saves use a separate queue, so they do not wait behind a
 segmentation.
 
@@ -216,12 +217,25 @@ review so that nothing covers the view you mark on. Choosing a drawing tool alre
 the CT plane and faces it. While **Review tools** is open a mark cannot start underneath it, so
 fold it again to reach that part of the view.
 
+### Toolbar messages and panels
+
+The review toolbar keeps one height, so the viewers stay where they are while you work.
+
+Errors, warnings, the result of **Apply edits** or **Run AI** and the progress of the 3D preview
+appear beside **Exit review**. They never cover a viewer. When there are more than two lines,
+scroll that area; errors come first, with any button you need, such as **Reload saved work** or
+**Retry preview**.
+
+**+ Add segment**, **Relationship**, **Impact preview** and **Options +** open over the viewers
+only when you choose them. A mark cannot start underneath an open panel, so choose the same
+button again to fold it.
+
 ### Compare and save
 
 Applying creates a candidate. It does not change accepted masks.
 
 1. Use **Original** and **Candidate** to compare the CT mask and the 3D surface.
-2. Read the summary of voxels changed and volume before and after.
+2. Read the summary of voxels changed and volume before and after, beside **Exit review**.
 3. If other segments are affected, open **Impact preview** and choose **Show affected in CT**.
 4. Add more marks and apply again as needed. Saving waits until pending marks are applied.
 5. Choose **Save correction** only after inspecting the result.

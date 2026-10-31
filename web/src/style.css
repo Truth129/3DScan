@@ -317,6 +317,7 @@ h3 {
   background: var(--bg);
 }
 .app-header {
+  position: relative;
   height: 65px;
   min-height: 65px;
   display: flex;
@@ -462,7 +463,11 @@ h3 {
   font-size: 8px;
   letter-spacing: 0.04em;
 }
+/* An error lies over the case toolbar until dismissed, so it neither moves nor covers a viewer. */
 .error-banner {
+  position: absolute;
+  top: 100%;
+  inset-inline: 0;
   z-index: 1000;
   background: #4a3025;
   border-bottom: 1px solid #7b5238;
@@ -470,11 +475,18 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 12px 22px;
+  padding: 7px 22px;
   color: #f0cbaa;
   font-size: 12px;
 }
+.error-banner > span {
+  max-height: 34px;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
 .error-banner button {
+  flex: none;
   border: 0;
   background: transparent;
   font-size: 21px;
@@ -495,32 +507,52 @@ h3 {
   border-radius: 6px;
   font-size: 12px;
 }
+/* Job status lives in the fixed header, so a running job never takes height from a viewer. */
 .job-banner {
-  background: var(--surface-hover);
+  position: relative;
   display: flex;
+  flex: 1 1 0;
   align-items: center;
-  gap: 14px;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--line);
-  min-height: 63px;
+  gap: 10px;
+  min-width: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-hover);
 }
 .job-banner > div {
-  display: flex;
-  flex: 1;
-  gap: 14px;
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, auto);
   align-items: center;
-  font-size: 12px;
-}
-.job-banner > div span {
-  color: var(--text-secondary);
+  gap: 1px 12px;
+  min-width: 0;
   font-size: 11px;
 }
+.job-banner > div > span {
+  grid-area: 2 / 1;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.job-banner > .button {
+  flex: none;
+  white-space: nowrap;
+}
 .job-banner.failed {
+  padding-block: 1px;
   background: #382b25;
   border-color: #624631;
 }
-.job-banner.failed > div span {
+.job-banner.failed > div > span {
+  grid-column: 1 / -1;
+  max-height: 24px;
+  overflow-y: auto;
   color: #d5a88d;
+  line-height: 12px;
+  white-space: normal;
 }
 .workspace {
   display: grid;
@@ -1428,12 +1460,18 @@ h3 {
   display: flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
   font-size: 10px;
   color: var(--text-secondary);
-  margin: 13px 12px;
 }
 .compare-check input {
+  flex: none;
   margin: 0;
+}
+.compare-check > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .review-status {
   padding: 16px 14px 18px;
@@ -2203,7 +2241,6 @@ h3 {
     font-size: 13px;
   }
   .compare-check {
-    margin: 15px 20px;
     font-size: 12px;
   }
   .structure-select > span {
@@ -2273,19 +2310,14 @@ h3 {
   .prepare-guide {
     display: none;
   }
-  .job-banner {
-    padding: 12px 16px;
+  .app-header:has(> .job-banner) {
+    flex-wrap: wrap;
+    height: auto;
+    padding-block: 10px;
   }
-  .job-banner > div {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .job-banner > div strong {
-    font-size: 11px;
-  }
-  .job-banner > div span {
-    font-size: 10px;
+  .app-header > .job-banner {
+    flex: 1 0 100%;
+    order: 1;
   }
   .offline-workspace {
     display: block;
@@ -2660,18 +2692,10 @@ h3 {
   .series-list {
     margin: 22px 0;
   }
-  .job-banner {
-    padding: 11px 14px;
-    gap: 10px;
-  }
   .job-banner > .button {
     font-size: 9px;
     padding: 7px;
     min-height: 30px;
-  }
-  .job-banner > div span {
-    max-width: 220px;
-    overflow-wrap: anywhere;
   }
   .job-banner .spinner {
     width: 14px;
@@ -2715,7 +2739,7 @@ h3 {
   }
   .error-banner {
     font-size: 11px;
-    padding: 10px 15px;
+    padding-inline: 15px;
   }
   .offline-badge {
     font-size: 0;
@@ -2924,7 +2948,6 @@ h3 {
   padding: 16px 24px;
 }
 .ct-expanded .compare-check {
-  margin: 16px 24px;
   font-size: 12px;
 }
 @media (max-height: 850px) and (min-width: 1001px) {
@@ -3018,29 +3041,41 @@ h3 {
   }
 }
 .job-banner progress {
+  grid-area: 1 / 2;
   width: 110px;
   max-width: 25vw;
   height: 5px;
   accent-color: var(--accent);
-  margin-left: auto;
 }
 .measurement-progress {
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-  padding: 9px 24px;
-  flex-shrink: 0;
-  font-size: 11px;
+  grid-area: 2 / 2;
+  font-size: 10px;
   color: var(--text-secondary);
 }
-.measurement-progress summary {
+.job-banner > div > .measurement-progress > summary {
+  padding: 0 6px;
   cursor: pointer;
+  white-space: nowrap;
 }
-.measurement-progress > p {
+/* The table opens over the workspace on request instead of pushing the viewers down. */
+.measurement-progress-body {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  width: min(420px, calc(100vw - 32px));
+  padding: 4px 12px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 7px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px #0008;
+}
+.measurement-progress-body > p {
   margin: 9px 0;
   color: var(--text-secondary);
   font-size: 10px;
 }
-.measurement-progress > div {
+.measurement-progress-body > div {
   overflow: auto;
   max-height: 160px;
   scrollbar-width: thin;
@@ -3262,17 +3297,22 @@ h3 {
   cursor: pointer;
   padding: 7px 0;
 }
+/* A fixed heading holds the review state, so opening a draft never resizes the slices. */
 .ct-review-active {
   display: flex;
+  flex: 1 1 0;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 8px 14px;
-  background: #202735;
-  border-block: 1px solid #3c485d;
+  min-width: 0;
+  overflow: hidden;
   color: #bdcadf;
   font-size: 10px;
   line-height: 1.5;
+}
+.ct-review-active > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ct-review-active .text-button {
   font-size: 10px;

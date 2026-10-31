@@ -121,14 +121,14 @@
   color: var(--white);
 }
 
-:root :is(.volume-crop, .review-impact, .review-status, .slicer-fallback, .measurement-progress) > summary,
+:root :is(.volume-crop, .review-status, .slicer-fallback, .measurement-progress) > summary,
 :root .ct-overlay-picker > details > summary {
   padding: 5px 7px;
   border: 1px solid var(--control-border);
   border-radius: 4px;
   background: var(--surface);
 }
-:root :is(.volume-crop, .review-impact, .review-status, .slicer-fallback, .measurement-progress) > summary:hover,
+:root :is(.volume-crop, .review-status, .slicer-fallback, .measurement-progress) > summary:hover,
 :root .ct-overlay-picker > details > summary:hover {
   border-color: var(--control-border-hover);
   background: var(--surface-hover);
@@ -423,8 +423,7 @@ input[type='range'] {
 .selection-controls > label > span {
   color: var(--text-secondary);
 }
-.job-banner,
-.measurement-progress {
+.job-banner {
   background: #191d26;
   border-color: var(--line-strong);
 }
@@ -435,10 +434,7 @@ input[type='range'] {
 .job-banner progress {
   accent-color: var(--accent);
 }
-.measurement-progress {
-  color: var(--text-secondary);
-}
-.measurement-progress > p {
+.measurement-progress-body > p {
   color: var(--muted);
 }
 .measurement-progress th,
