@@ -13,14 +13,22 @@ Usage: scripts/add_inference_path.sh nvidia [options]
               A directory that exists is used only if this script made it.
   --dry-run   check this workstation and print the plan, creating, installing and testing nothing
 
-Run it again whenever the app shows this GPU as unavailable, whatever the reason. It keeps the
-environment, puts its packages back to the lock and repeats the GPU check.
+Run it again after a driver change or when the app shows this GPU as unavailable. An environment
+that equals the lock stays, anything else is rebuilt from empty, and the GPU check runs again. If
+the reason is a TotalSegmentator or nnInteractive version, update the existing install as well,
+because this script cannot fix that.
 USAGE
 }
 
 fail() {
   echo "$1" >&2
   exit 1
+}
+
+# For a run stopped past the finished mark: discovery now refuses the path, and with no proof yet
+# there is no row to refuse.
+stopped() {
+  fail "$1 Until a run finishes, the app shows this GPU as unavailable, or not at all if it was never checked. Fix what was reported above, then run this again."
 }
 
 # Free bytes where a directory is, or where it would be created.
@@ -147,15 +155,15 @@ print(directory())
 ' "$root")" || fail 'The settings could not be read, so nothing was changed.'
 proof="$proofs/$chosen.json"
 
-kept=
+earlier=
 if has_environment; then
-  kept=' (from an earlier run, kept)'
+  earlier=' (from an earlier run)'
 fi
 cat <<PLAN
 
 Adding the NVIDIA inference path.
 
-  Environment  $venv$kept
+  Environment  $venv$earlier
   Python       $interpreter
   Driver       $driver
   Lock         $lock
@@ -163,16 +171,18 @@ Adding the NVIDIA inference path.
 
 A first install downloads about 3.3 GiB and takes about 9 GiB on disk. A re-run leaves an
 environment that equals the lock alone, and needs no network to do so. Anything else, such as
-an install that did not finish, is installed again in full, from what uv has already fetched
-where it can. Every package is checked against a hash, with one gap: acvl-utils is published
-only as source, and the tools that build it are fetched without hashes.
+an install that did not finish, is rebuilt from empty, from what uv has already fetched where
+it can. Every package is checked against a hash, with one gap: acvl-utils is published only as
+source, and the tools that build it are fetched without hashes.
 
 It will not touch any other Python environment, the viewer, the DICOM converter,
 TotalSegmentator's settings, scan3d.env or the running app, and it does not install a Python.
 
 Last, it runs a short GPU check on the NVIDIA card. The proof that check writes is the
 registration: when it passes, a running app that reads the proof's folder offers the card the
-next time a panel opens, with no restart.
+next time a panel opens, with no restart, provided the existing install's TotalSegmentator and
+nnInteractive versions equal the lock's. If they differ, the app shows the card as unavailable
+and says why. This script cannot tell which Python serves the app, so it cannot compare them.
 
 PLAN
 if (( dry_run )); then
@@ -205,13 +215,13 @@ else
   echo "Made by scripts/add_inference_path.sh $chosen." >"$marker"
   rm -f -- "$finished"
   find "$venv" -mindepth 1 -maxdepth 1 ! -name "${marker##*/}" -exec rm -rf -- {} + ||
-    fail 'The old environment could not be cleared. Fix what was reported above, then run this again.'
+    stopped 'The old environment could not be cleared.'
   "$uv" venv --python "$interpreter" --allow-existing "$venv" ||
-    fail 'The environment could not be created. Fix what uv reported, then run this again.'
+    stopped 'The environment could not be created.'
   # --require-hashes covers what is installed, and acvl-utils's build requirements are outside
   # it: it has no wheel, and they come from the index unhashed.
   "$uv" pip sync --python "$python" --require-hashes "$lock" ||
-    fail 'The install did not finish, so no GPU check ran. Run this again.'
+    stopped 'The install did not finish, so no GPU check ran.'
   echo 'The last install finished.' >"$finished"
 fi
 
@@ -226,13 +236,16 @@ after="$(proof_state)"
 
 echo
 if [[ -z "$after" || "$after" == "$before" ]]; then
-  # A refused check exits 1 as a failed one does, but leaves no proof, so no row changes.
-  fail 'The GPU check recorded nothing, so the app shows what it showed before. Its message is above. If it was waiting on the job queue, run this again when the queue is empty.'
+  # A refused check exits 1 as a failed one does, but leaves no proof. What the app shows can still
+  # have changed, if this run rebuilt the environment, so say only what it goes by.
+  fail 'The GPU check recorded nothing, so the app still goes by the last proof, if there is one. Its message is above. If it was waiting on the job queue, run this again when the queue is empty.'
 elif (( status == 0 )); then
   echo "The GPU check passed and wrote $proof."
   echo 'That file is the whole registration: a running app that reads its folder offers this GPU'
-  echo 'the next time a panel opens, with no restart. To remove the path, move the file out of that'
-  echo 'folder. The environment stays until you delete it.'
+  echo "the next time a panel opens, with no restart, provided the existing install's"
+  echo "TotalSegmentator and nnInteractive versions equal this environment's. If they differ, the"
+  echo 'app shows this GPU as unavailable and says why. To remove the path, move the file out of'
+  echo 'that folder. The environment stays until you delete it.'
 elif (( status == 1 )); then
   echo "The GPU check failed and wrote $proof." >&2
   fail 'A running app that reads its folder now shows this GPU as unavailable, with its reason. Fix what the check reported above, then run this again.'

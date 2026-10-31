@@ -37,6 +37,7 @@ RESTARTED = [*LATER_PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"] 
 REBUILT = [*LATER_PREFLIGHT, "uv pip freeze", "queue", "find", "uv venv", "uv pip sync", "venv-python"]
 MARKER = ".scan3d-inference-path"
 FINISHED = ".scan3d-inference-path-finished"
+PLAN_ENDS = "so it cannot compare them."
 # In the real lock's format, with what the script must read past, and in an order uv does not
 # print, so that the comparison cannot rest on one.
 STUB_LOCK = """# A stub: only the fake uv installs from this.
@@ -286,6 +287,16 @@ def installed(rig):
     rig.forget_calls()
 
 
+def said(words):
+    """Text as a person reads it, whichever way the script wrapped it."""
+    return " ".join(words.split())
+
+
+def the_result(completed):
+    """What the script said about this run. The plan comes first, and speaks only of what could happen."""
+    return said(completed.stdout).rpartition(PLAN_ENDS)[2] + said(completed.stderr)
+
+
 # The command line
 
 
@@ -443,7 +454,7 @@ def test_a_dry_run_prints_the_plan_and_changes_nothing(rig):
         str(rig.proof),
         "nothing was created",
     ):
-        assert words in " ".join(completed.stdout.split())
+        assert words in said(completed.stdout)
 
 
 def test_a_dry_run_on_an_installed_environment_changes_nothing_either(rig):
@@ -453,7 +464,8 @@ def test_a_dry_run_on_an_installed_environment_changes_nothing_either(rig):
     assert completed.returncode == 0, completed.stderr
     assert rig.steps() == LATER_PREFLIGHT
     assert rig.snapshot() == before
-    assert "from an earlier run, kept" in completed.stdout
+    assert f"{rig.venv} (from an earlier run)" in completed.stdout
+    assert "kept" not in completed.stdout  # It cannot tell yet, and it may be rebuilt.
 
 
 def test_the_folder_question_cannot_write_or_load_from_the_working_directory(rig):
@@ -681,7 +693,7 @@ def test_a_re_run_keeps_the_environment_and_repeats_the_check(rig):
     assert completed.returncode == 0, completed.stderr
     assert rig.steps() == RE_RUN
     assert package.exists() and (rig.venv / "bin" / "python").stat().st_ino == interpreter.st_ino
-    assert "from an earlier run, kept" in completed.stdout
+    assert "from an earlier run" in completed.stdout
     assert "nothing was installed" in completed.stdout
 
 
@@ -920,7 +932,7 @@ def test_a_run_stopped_after_uv_venv_made_the_link_never_reaches_the_python_it_p
     (rig.venv / "bin").mkdir(parents=True)
     (rig.venv / MARKER).touch()
     shutil.copy(rig.fakes / "venv-python", rig.venv / "bin" / "python")
-    assert "kept" not in rig.run("nvidia", "--dry-run").stdout
+    assert "from an earlier run" not in rig.run("nvidia", "--dry-run").stdout
     rig.forget_calls()
     completed = rig.run("nvidia")
     assert completed.returncode == 0, completed.stderr
@@ -1104,8 +1116,8 @@ def test_a_check_that_wrote_nothing_claims_no_row(rig, outcome):
     completed = rig.run("nvidia")
     assert completed.returncode == 1
     assert not rig.proof.exists()
-    assert "recorded nothing, so the app shows what it showed before" in completed.stderr
-    assert "unavailable" not in completed.stdout + completed.stderr
+    assert "recorded nothing, so the app still goes by the last proof" in completed.stderr
+    assert "unavailable" not in the_result(completed)
 
 
 @pytest.mark.parametrize("earlier", ["passed", "failed"])
@@ -1126,6 +1138,55 @@ def test_a_check_that_dies_after_writing_is_reported_as_that(rig):
     assert completed.returncode == 1
     assert f"exit status 139 after writing {rig.proof}" in completed.stderr
     assert "unavailable" not in completed.stderr and "recorded nothing" not in completed.stderr
+
+
+OFFERED = "provided the existing install's TotalSegmentator and nnInteractive versions equal {}. If they differ, {} as unavailable and says why."
+
+
+def test_the_plan_offers_the_card_only_on_a_condition_it_cannot_check(rig):
+    plan = said(rig.run("nvidia", "--dry-run").stdout)
+    assert OFFERED.format("the lock's", "the app shows the card") in plan
+    assert "cannot tell which Python serves the app" in plan
+
+
+def test_the_result_offers_the_card_only_on_the_same_condition(rig):
+    assert OFFERED.format("this environment's", "the app shows this GPU") in said(rig.run("nvidia").stdout)
+
+
+def test_the_plan_says_what_a_re_run_does_to_anything_but_an_environment_equal_to_the_lock(rig):
+    assert "is rebuilt from empty, from what uv has already fetched where it can" in said(rig.run("nvidia", "--dry-run").stdout)
+
+
+def test_usage_says_what_a_re_run_does_and_what_it_cannot_fix(rig):
+    usage = said(rig.run("--help").stdout)
+    assert "whatever the reason" not in usage and "keeps the environment" not in usage
+    for words in (
+        "after a driver change or when the app shows this GPU as unavailable",
+        "An environment that equals the lock stays, anything else is rebuilt from empty",
+        "the GPU check runs again",
+        "If the reason is a TotalSegmentator or nnInteractive version, update the existing install as well",
+    ):
+        assert words in usage
+
+
+UNAVAILABLE_UNTIL_FINISHED = "Until a run finishes, the app shows this GPU as unavailable, or not at all if it was never checked."
+
+
+@pytest.mark.parametrize(
+    "stop, reason",
+    [
+        ("wipe_status", "The old environment could not be cleared."),
+        ("venv_status", "The environment could not be created."),
+        ("sync_status", "The install did not finish, so no GPU check ran."),
+        ("sync_stops", "The install did not finish, so no GPU check ran."),
+    ],
+)
+def test_a_stopped_install_says_what_the_app_shows_until_a_run_finishes(rig, stop, reason):
+    rig.scenario[stop] = 1
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1
+    assert said(completed.stderr).startswith(f"{reason} {UNAVAILABLE_UNTIL_FINISHED} ")
+    assert "then run this again" in completed.stderr
 
 
 # Where the proof goes
