@@ -223,6 +223,7 @@ def test_a_default_proof_that_still_describes_this_machine_keeps_its_card(tmp_pa
         pytest.param({"card1": AMD_CARD, "card2": ("0x1002", "0x7552")}, ["1002:7551"], id="added"),
         pytest.param({"card1": AMD_CARD}, ["1002:7551", "1002:7551"], id="one-of-a-twin-removed"),
         pytest.param({"card2": NVIDIA_CARD}, ["1002:7551"], id="the-last-one-removed"),
+        pytest.param({"card1": AMD_CARD}, [], id="the-first-one-arrived"),
     ],
 )
 def test_a_changed_card_costs_the_default_row_its_name_and_never_its_availability(tmp_path, fresh, sysfs, cards, proven):
