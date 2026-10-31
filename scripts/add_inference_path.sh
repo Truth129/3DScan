@@ -37,6 +37,12 @@ proof_state() {
   stat --format='%i %y' -- "$proof" 2>/dev/null || true
 }
 
+# The link alone is not an environment. uv writes pyvenv.cfg after it, and without that file the
+# link is the Python it points at, which `uv pip sync --python` would then change.
+has_environment() {
+  [[ -x "$python" && -f "$venv/pyvenv.cfg" ]]
+}
+
 chosen=
 venv="$root/.venv-nvidia-py314"
 dry_run=0
@@ -129,7 +135,7 @@ print(directory())
 proof="$proofs/$chosen.json"
 
 kept=
-if [[ -x "$python" ]]; then
+if has_environment; then
   kept=' (from an earlier run, kept)'
 fi
 cat <<PLAN
@@ -159,7 +165,7 @@ if (( dry_run )); then
   exit 0
 fi
 
-if [[ ! -x "$python" ]]; then
+if ! has_environment; then
   # Marker first: a run stopped inside `uv venv` must leave a directory the next run still
   # owns, because running this again is the one remedy.
   mkdir -p "$venv"

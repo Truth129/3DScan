@@ -64,7 +64,11 @@ if arguments[0] == "venv":
     shutil.copy(rig / "venv-python", target / "bin" / "python")
     (target / "pyvenv.cfg").write_text("home = fake\n")
 if arguments[:2] == ["pip", "sync"]:
-    sys.exit(scenario["sync_status"])
+    if scenario["sync_status"]:
+        sys.exit(scenario["sync_status"])
+    # With no pyvenv.cfg the link is the Python it points at, and uv acts on that.
+    if not (Path(arguments[arguments.index("--python") + 1]).parents[1] / "pyvenv.cfg").is_file():
+        (rig / "base-python-changed").touch()
 """
 
 # Writes its proof the way scripts/check_gpu.py does, by replacing the file.
@@ -575,6 +579,32 @@ def test_a_failed_sync_runs_no_check_and_the_next_run_carries_on(rig):
     rig.scenario["sync_status"] = 0
     assert rig.run("nvidia").returncode == 0
     assert rig.steps() == RE_RUN
+
+
+def test_a_run_stopped_after_uv_venv_made_the_link_never_reaches_the_python_it_points_at(rig):
+    # uv writes bin/python before pyvenv.cfg, and the marker is written before uv starts.
+    (rig.venv / "bin").mkdir(parents=True)
+    (rig.venv / MARKER).touch()
+    shutil.copy(rig.fakes / "venv-python", rig.venv / "bin" / "python")
+    assert "kept" not in rig.run("nvidia", "--dry-run").stdout
+    rig.forget_calls()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert rig.steps()[-3:] == ["uv venv", "uv pip sync", "venv-python"]
+    assert (rig.venv / "pyvenv.cfg").is_file()
+    assert not (rig.fakes / "base-python-changed").exists()
+
+
+def test_an_environment_that_lost_pyvenv_cfg_gets_it_back(rig):
+    installed(rig)
+    package = rig.venv / "lib" / "installed-package"
+    package.parent.mkdir()
+    package.touch()
+    (rig.venv / "pyvenv.cfg").unlink()
+    assert rig.run("nvidia").returncode == 0
+    assert rig.steps()[-3:] == ["uv venv", "uv pip sync", "venv-python"]
+    assert package.exists()
+    assert not (rig.fakes / "base-python-changed").exists()
 
 
 def test_an_environment_that_lost_its_interpreter_gets_one_back(rig):
