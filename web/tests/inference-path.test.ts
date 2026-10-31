@@ -271,7 +271,7 @@ describe('the card Run AI uses', () => {
   const reviewRunPath = (
     rows: InferencePathRow[],
     selected: string,
-    review?: Pick<InteractiveReview, 'batches' | 'inference_path' | 'applied_prompt_count' | 'dirty'>,
+    review?: Partial<Pick<InteractiveReview, 'batches' | 'inference_path' | 'applied_prompt_count' | 'dirty'>>,
     method: InteractiveMethod = 'nninteractive',
   ) => runPathFor(method, status(rows), selected, review);
 
@@ -339,6 +339,59 @@ describe('the card Run AI uses', () => {
   it('does not block the default card over a new label, because its identity holds no card', () => {
     const state = reviewRunPath([row('default', 'Default device'), nvidia], 'default', { batches: [batch], inference_path: bound(amd) });
     expect(state).toMatchObject({ block: '', canRerun: false });
+  });
+
+  describe('after the last added card was removed', () => {
+    const gone = { batches: [batch], inference_path: bound(nvidia) };
+
+    it('locks the draft on that card with the one row left as its way out', () => {
+      expect(reviewRunPath([amd], 'default', gone)).toEqual({
+        paths: [amd],
+        locked: true,
+        id: 'nvidia',
+        label: 'NVIDIA Test GPU',
+        block: 'NVIDIA Test GPU is no longer set up on this workstation. Re-run this draft on another GPU in Options +, or discard it. Marking still works.',
+        canRerun: true,
+      });
+    });
+    it('holds for a full refine with no marks, which has a result and no applied count', () => {
+      const refined = { batches: [{ end: 0, autozoom: true, full_refine: true }], applied_prompt_count: 0, inference_path: bound(nvidia) };
+      expect(reviewRunPath([amd], 'default', refined)).toMatchObject({ locked: true, canRerun: true });
+    });
+    it('sends Run AI and Refine nowhere, and only the re-run goes to the row', () => {
+      const state = reviewRunPath([amd], 'default', gone);
+      expect(pathRun(state, 1, false).stopped).toBe(true);
+      expect(pathRun(state, 0, true).stopped).toBe(true);
+      expect(pathRun(state, 0, false)).toEqual({ stopped: false, choice: undefined });
+    });
+    it('leaves the message about AI assist itself to speak for every card', () => {
+      expect(runPathFor('nninteractive', status([amd], false), 'default', gone)).toMatchObject({ locked: true, block: '' });
+    });
+    it('cannot re-run on a row that is unavailable', () => {
+      expect(reviewRunPath([broken], 'broken', gone)).toMatchObject({ locked: true, canRerun: false });
+    });
+    it('is nothing for a draft with no binding, which ran on the default card', () => {
+      expect(reviewRunPath([amd], 'default', { batches: [batch], inference_path: null })).toEqual(noCard);
+      expect(reviewRunPath([amd], 'default', { batches: [batch] })).toEqual(noCard);
+    });
+    it('is nothing for a binding to the listed row, which is where a published re-run leaves it', () => {
+      expect(reviewRunPath([amd], 'default', { batches: [batch], inference_path: bound(amd) })).toEqual(noCard);
+    });
+    it('goes by id, because the default row can change its label and it is still the same path', () => {
+      expect(reviewRunPath([row('default', 'Default device')], 'default', { batches: [batch], inference_path: bound(amd) })).toEqual(noCard);
+    });
+    it('is nothing when the status read failed, so an empty list is not read as a removal', () => {
+      expect(reviewRunPath([], 'nvidia', gone)).toEqual(noCard);
+      expect(runPathFor('nninteractive', { installed: false, model_available: false, available: false, reason: 'Offline' }, 'nvidia', gone)).toEqual(noCard);
+    });
+    it('is nothing in Direct edit', () => {
+      expect(reviewRunPath([amd], 'default', gone, 'direct')).toEqual(noCard);
+    });
+    it('is nothing on an unlocked draft, because a binding only counts while it has a result', () => {
+      expect(reviewRunPath([amd], 'default', { batches: [], inference_path: bound(nvidia) })).toEqual(noCard);
+      expect(reviewRunPath([amd], 'default', { inference_path: bound(nvidia) })).toEqual(noCard);
+      expect(reviewRunPath([amd], 'default')).toEqual(noCard);
+    });
   });
 });
 

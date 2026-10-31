@@ -100,13 +100,22 @@ export function pathBlock(row: InferencePathRow | undefined, label: string, lock
 }
 
 /**
+ * Removing a card is the documented rollback, and removing the last added one leaves a draft
+ * on a workstation with one row, bound to a card that row is not. Only an added card can write
+ * such a binding, so a workstation that never had one still shows nothing.
+ */
+const stranded = (paths: readonly InferencePathRow[], review?: Pick<InteractiveReview, 'batches' | 'inference_path'>) =>
+  paths.length === 1 && !!review?.batches?.length && !!review.inference_path && review.inference_path.id !== paths[0].id;
+
+/**
  * The card Run AI uses, which is the selected row until the draft's first result and the
  * card that made it afterwards. `batches` is the lock because only a published result
  * writes it: a full refine with no marks is locked with an applied count of zero, and a
  * failed first run leaves it free.
  *
  * Direct edit has no card, and the status list survives a switch back to it. With one
- * path there is no choice. Either way `id` is empty, so nothing renders or is sent.
+ * path there is no choice. Either way `id` is empty, so nothing renders or is sent. The
+ * exception is a stranded draft, which would otherwise fail every Run AI with no way out.
  */
 export function reviewRunPath(
   method: InteractiveMethod,
@@ -115,7 +124,8 @@ export function reviewRunPath(
   review?: Pick<InteractiveReview, 'batches' | 'inference_path' | 'dirty'>,
 ) {
   const paths = status?.inference_paths ?? [];
-  if (method !== 'nninteractive' || paths.length < 2) return { paths: [], locked: false, id: '', label: '', block: '', canRerun: false };
+  if (method !== 'nninteractive' || (paths.length < 2 && !stranded(paths, review)))
+    return { paths: [], locked: false, id: '', label: '', block: '', canRerun: false };
   // When AI assist itself is unavailable, its own message covers every card.
   const usable = (block: string) => (status?.available ? block : ''),
     chosen = paths.find(row => row.id === selected);
@@ -137,7 +147,7 @@ export function reviewRunPath(
 /**
  * The card the toolbar names. A job states its own, because a re-run reaches the binding only
  * when it publishes and review jobs never reach the header. `label` decides whether any card
- * shows, so Direct edit and one path still show none.
+ * shows, so wherever reviewRunPath has no card, a job cannot add one.
  */
 export const pathInUse = (label: string, working?: boolean, job?: Pick<Job, 'inference_path'>) => (label && working && job?.inference_path?.label) || label;
 
