@@ -18,7 +18,8 @@ other service.
 - **DICOM import.** Browser upload, the `scan3d import` command, or an optional
   [Orthanc](docs/ORTHANC.md) archive. CT is on by default; static MRI is experimental and
   opt-in.
-- **Segmentation.** Selected TotalSegmentator tasks, on a GPU or the CPU.
+- **Segmentation.** Selected TotalSegmentator tasks, on a GPU or the CPU. With
+  [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
 - **Corrections.** nnInteractive prompts, direct mask edits, scissors and recipes. Every
   save is a new revision with an exact parent, so undo is exact too.
 - **Viewer.** Linked multiplanar slices and 3D volume rendering built on Cornerstone3D and
@@ -67,7 +68,7 @@ git-ignored `scan3d.env`. See [configuration](docs/CONFIGURATION.md).
 | ----------------------------------- | ------------------------------------------------------- |
 | Ubuntu 24.04 and 26.04, CPU         | Install, app and test suite verified on clean machines  |
 | AMD GPU (gfx1201) with ROCm         | Used extensively                                        |
-| NVIDIA GPU with CUDA                | **Untested**: no hardware was available                 |
+| NVIDIA GPU with CUDA                | **Untested**: no real NVIDIA card has run it            |
 | Other Linux distributions, arm64    | Expected to work, untested unless listed in the install guide |
 | macOS, Windows                      | Not supported                                           |
 

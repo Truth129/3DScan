@@ -112,14 +112,17 @@ Run the script again at any time to update an install. It keeps `scan3d.env`.
 ## Choosing how AI runs
 
 `SCAN3D_DEVICE` in `scan3d.env` selects the device. The default, `auto`, uses the
-discrete GPU with the most memory if PyTorch sees one, otherwise the CPU. `gpu` and
-`gpu:N` fail rather than falling back to the CPU, and `cpu` always uses the CPU.
+discrete GPU with the most memory if PyTorch sees one, otherwise the CPU. A PyTorch
+build sees only its own vendor's GPUs, so `auto` never chooses between AMD and NVIDIA.
+`gpu` and `gpu:N` fail rather than falling back to the CPU, and `cpu` always uses the
+CPU.
 
 | Setup                           | Install flag   | Status                                                                          |
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------- |
 | CPU                             | `--torch cpu`  | Tested with TotalSegmentator and nnInteractive. Works, but is slow on real CTs. |
 | AMD Radeon AI PRO (gfx1201)     | `--torch rocm` | The one GPU stack exercised in depth.                                           |
-| NVIDIA with CUDA 13             | `--torch cuda` | **Untested.** The code path is shared, but no NVIDIA hardware was available.    |
+| NVIDIA with CUDA 13             | `--torch cuda` | **Untested.** The code path is shared, but no real NVIDIA card has run it.      |
+| NVIDIA as a second GPU          | See below      | **Untested**, for the same reason. See [Add a second GPU](#add-a-second-gpu).   |
 | Other AMD GPUs                  | Manual         | Untested. Edit the device extras in `requirements/rocm10-py314-gpu.in`.         |
 
 For a GPU, install the vendor's driver first. On AMD, your user needs access to the
@@ -133,11 +136,100 @@ exercise the GPU once:
 This runs a small 3D convolution and records the result in `.runtime/gpu-proof.json`,
 which the app reads to show the GPU's name. It does not prove that a model produces
 good results. The check is repeated automatically only when you run it, so run it again
-after changing the PyTorch or driver version.
+after changing the PyTorch or driver version. It will not run while a job is queued or
+running.
 
 For scale, the `total` task on a very small synthetic phantom took just under two
 minutes on a 32-thread CPU, and one nnInteractive point took about 13 seconds. Full-size
 CTs take far longer on a CPU, and TotalSegmentator's authors recommend a GPU.
+
+## Add a second GPU
+
+A PyTorch build drives one vendor's GPUs, so a workstation with an AMD and an NVIDIA card
+needs a second Python environment to use both. `scripts/add_inference_path.sh` builds
+one. The result is an **inference path**, an interpreter plus a GPU that a person can
+choose in the app. Your existing install stays the default path, and nothing about it
+changes. To use the new GPU, see the [user guide](USER_GUIDE.md#choose-a-gpu).
+
+**No real NVIDIA card or CUDA build has run this.** The project's tests use a fake
+PyTorch, so they cover how the app behaves, not whether this stack works on a card. The
+GPU check at the end of the script is the first real evidence on your machine.
+
+```bash
+scripts/add_inference_path.sh nvidia --dry-run
+scripts/add_inference_path.sh nvidia
+```
+
+| Option       | Effect                                                                     |
+| ------------ | -------------------------------------------------------------------------- |
+| `--venv DIR` | Where the environment goes. The default is `.venv-nvidia-py314`.           |
+| `--dry-run`  | Check this workstation and print the plan, changing nothing.               |
+
+**Before it changes anything**, the script needs:
+
+- `uv`, from `.tools/bin` or `PATH`
+- Python 3.14, which it never installs. It also searches `.tools/python`, where the
+  bootstrap puts one
+- `nvidia-smi` reporting driver 580 or newer
+- For a first install, at least 12 GiB free where the environment goes and where uv
+  keeps its cache
+
+A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk.
+
+**What it never touches.** It leaves every other Python environment, the viewer, the
+DICOM converter, TotalSegmentator's settings, `scan3d.env` and the running app alone.
+`scripts/bootstrap.sh` plays no part, and `--torch cuda` is not the way to add a GPU:
+that changes `.venv`, and rebuilds the viewer and the converter. All paths share the
+AI weights, the license and your cases, so nothing downloads twice.
+
+The script installs only into a directory it made, which it marks with a
+`.scan3d-inference-path` file. It refuses any other directory that already exists,
+however empty, because its install removes whatever `requirements/cuda-py314.lock` does
+not list. Packages are checked against the lock's hashes, with one gap: acvl-utils is
+published only as source, and the tools that build it are fetched without hashes.
+
+**The GPU check.** Last, the script runs `scripts/check_gpu.py --path nvidia`, which
+writes a proof to `.runtime/inference-paths/nvidia.json`, or under
+`SCAN3D_INFERENCE_PATH_DIR` if you set it. That file is the whole registration. When the
+check passes, a running app that reads that folder offers the GPU the next time a panel
+opens, with no restart and no setting to change.
+
+A passing check proves that this PyTorch build sees the card and ran a small 3D
+convolution on it, and that this environment can import what the app's AI processes
+import. It runs neither model. It does not prove that a model fits in the card's memory,
+that results are good, or that they match another GPU's.
+
+- **A failed check** still writes the proof, so the app lists the GPU as unavailable
+  with its reason. Fix what the check reported and run the script again.
+- **A refused check** writes nothing, so the app shows what it showed before. The check
+  refuses while a job is queued or running, and when it cannot read the queue.
+
+**Run the script again** after changing the NVIDIA driver, after anything changes that
+environment, and whenever the app shows the GPU as unavailable. It keeps the
+environment. If its last install finished and it equals the lock, the script installs
+nothing and needs no network. Otherwise it installs every package again, from what uv
+has already fetched where it can. Either way it then repeats the GPU check. If an
+install stops, no check runs, and running the script again carries on. The app notices
+changed PyTorch and engine packages by itself, but it cannot see a driver change, so
+until you re-run the script, only the device check at the start of each job can catch a
+broken driver. If the reason shown is a TotalSegmentator or nnInteractive version,
+update your existing install too: every path must use the same versions.
+
+**To remove a path**, move its proof out of the folder. The GPU leaves the app the next
+time a panel opens, with no restart, and a job already queued on it fails, naming the
+GPU. The environment stays until you delete it.
+
+```bash
+mkdir -p .runtime/archive
+mv .runtime/inference-paths/nvidia.json .runtime/archive/
+```
+
+**Two cards of one vendor** can share an environment, so the script is not needed.
+Running `scripts/check_gpu.py --path second --device gpu:1` with that environment's
+Python records the second card as its own path. `N` counts within one PyTorch build.
+This has only run against a fake PyTorch. A task with a crop model, currently `teeth`,
+cannot run on an index above 0, because TotalSegmentator starts that model on the first
+GPU, so the job fails and says so.
 
 ## AI models
 
@@ -207,9 +299,11 @@ See the [user guide](USER_GUIDE.md) for what a backup contains and how to restor
 | `Invalid host header`                   | Add the name you browse to in `SCAN3D_ALLOWED_HOSTS`.                                       |
 | The app shows **GPU setup required**    | Run `scripts/check_gpu.py`, or set `SCAN3D_DEVICE=auto` or `cpu`.                           |
 | Import by path is refused               | Add the folder to `SCAN3D_IMPORT_ROOTS`. Browser upload needs no entry.                     |
-| AI task fails with an out-of-memory error | Close other GPU work, or set `SCAN3D_DEVICE=cpu`.                                         |
+| AI task fails with an out-of-memory error | Close other GPU work, choose a larger GPU, or set `SCAN3D_DEVICE=cpu`.                    |
+| A GPU shows **· unavailable**           | Read its reason, then run `scripts/add_inference_path.sh nvidia` again.                     |
 | Port 9010 is taken                      | Set `SCAN3D_PORT` in `scan3d.env`.                                                          |
 
-`.venv/bin/scan3d doctor` reports the device, PyTorch build and `dcm2niix` status.
+`.venv/bin/scan3d doctor` reports the device, PyTorch build, `dcm2niix` status and
+inference paths.
 
 Next: [configuration](CONFIGURATION.md), then the [user guide](USER_GUIDE.md).
