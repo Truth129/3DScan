@@ -416,6 +416,41 @@ describe('a draft with a result', () => {
     expect(root.named('review-messages')?.content).toContain('NVIDIA Test GPU is no longer set up on this workstation.');
     expect(root.named('review-messages')?.content).not.toContain('Replacement Test GPU');
   });
+  it('does not flash the re-run while undoing a pending mark saves', async () => {
+    workstation([amd, nvidia], resultOn(nvidia), 'nvidia');
+    const { root, panel } = await openAI();
+    const save = vi.mocked(api.interactivePrompts),
+      summaryLine = () => root.named('review-result-summary')?.content;
+    panel.value.addPrompt(point);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce(), nextPoll);
+    await settled();
+    expect(summaryLine()).toContain('Apply pending changes before saving.');
+    let land!: () => void;
+    const landing = new Promise<void>(resolve => (land = resolve)),
+      original = save.getMockImplementation()!;
+    save.mockImplementationOnce(async (...args) => {
+      await landing;
+      return original(...args);
+    });
+    await press(root.button('↶ Undo'));
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI');
+    expect(summaryLine()).toContain('Apply pending changes before saving.');
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2), nextPoll);
+    expect(summaryLine()).not.toContain(rerunHint);
+    land();
+    await vi.waitFor(() => expect(summaryLine()).toContain('Inspect the result, then save a new revision.'), nextPoll);
+  });
+  it('asks for the re-run once a stale draft has saved', async () => {
+    workstation([amd, nvidia], afterFailedRerun(resultOn(amd)), 'default');
+    const { root, panel } = await openAI();
+    const save = vi.mocked(api.interactivePrompts);
+    panel.value.addPrompt(point);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce(), nextPoll);
+    await settled();
+    await press(root.button('↶ Undo'));
+    expect(root.named('review-messages')?.content).toContain('Apply pending changes before saving.');
+    await vi.waitFor(() => expect(root.named('review-messages')?.content).toContain(rerunHint), nextPoll);
+  });
   it('names the running job in the toolbar, and goes back to the binding when it ends', async () => {
     const server = workstation([amd, nvidia], resultOn(amd), 'nvidia');
     const { root, section } = await openAI();

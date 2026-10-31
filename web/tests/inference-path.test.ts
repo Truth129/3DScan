@@ -479,10 +479,23 @@ describe('what a stale result needs', () => {
     expect(staleResultHint(true, 1, true, true)).toBe('Apply pending changes before saving.');
     expect(staleResultHint(false, 1, false, true)).toBe('Apply pending changes before saving.');
   });
+  it('waits for autosave on a draft with nothing pending, because undoing a mark needs no re-run', () => {
+    const rerun = 'Re-run this draft from Options + before saving.',
+      apply = 'Apply pending changes before saving.';
+    // [pending, unsaved] on a locked draft, with nothing running and no card stopped.
+    expect(staleResultHint(true, 0, false, false, false)).toBe(rerun);
+    expect(staleResultHint(true, 0, false, false, true)).toBe(apply);
+    expect(staleResultHint(true, 1, false, false, false)).toBe(apply);
+    expect(staleResultHint(true, 1, false, false, true)).toBe(apply);
+  });
+  it('still sends a stopped mark to the re-run while it saves, because autosave cannot help it', () => {
+    expect(staleResultHint(true, 1, false, true, true)).toBe('Re-run this draft from Options + before saving.');
+  });
   it('asks for Apply in the words of the place that shows it', () => {
     const words = 'Apply the latest edits and relationship before saving.';
-    expect(staleResultHint(true, 1, false, false, words)).toBe(words);
-    expect(staleResultHint(true, 0, false, false, words)).toBe('Re-run this draft from Options + before saving.');
+    expect(staleResultHint(true, 1, false, false, false, words)).toBe(words);
+    expect(staleResultHint(true, 0, false, false, true, words)).toBe(words);
+    expect(staleResultHint(true, 0, false, false, false, words)).toBe('Re-run this draft from Options + before saving.');
   });
 });
 

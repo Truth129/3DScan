@@ -157,7 +157,8 @@ const pathLabel = computed(() => {
 });
 // Never part of `disabled`: marking, Direct edit and relationship-only Apply need no card.
 const pathStopsRun = (full: boolean) => pathRun(runPath.value, pendingMarks.value, full).stopped;
-const staleHint = (apply?: string) => staleResultHint(runPath.value.locked, pending.value, current.value?.working, pathStopsRun(false), apply);
+const staleHint = (apply?: string) =>
+  staleResultHint(runPath.value.locked, pending.value, current.value?.working, pathStopsRun(false), current.value?.unsaved, apply);
 const canRerun = computed(() => runPath.value.canRerun && !disabled.value && policyValid.value);
 const saveEnabled = computed(
   () =>

@@ -161,9 +161,17 @@ export const pathInUse = (label: string, working?: boolean, job?: Pick<Job, 'inf
 /**
  * What a stale result needs before it can be saved. On a locked draft only a re-run can help when
  * nothing is pending, and when a card has `stopped` what is. A running job may be that re-run.
+ * Undoing the last pending mark is a save away from restoring the result, so while `unsaved` the
+ * re-run is not asked for yet.
  */
-export const staleResultHint = (locked: boolean, pending: number, working?: boolean, stopped?: boolean, apply = 'Apply pending changes before saving.') =>
-  locked && !working && (!pending || stopped) ? 'Re-run this draft from Options + before saving.' : apply;
+export const staleResultHint = (
+  locked: boolean,
+  pending: number,
+  working?: boolean,
+  stopped?: boolean,
+  unsaved?: boolean,
+  apply = 'Apply pending changes before saving.',
+) => (locked && !working && (pending ? stopped : !unsaved) ? 'Re-run this draft from Options + before saving.' : apply);
 
 /**
  * What a card means for one Run AI or Refine. Pending relationship edits are not marks: they
