@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { InteractiveController } from '../lib/interactive-controller';
 import { newReviewPrompt, normalizeRelationship, pendingReviewTargets, reviewCandidateHasChanges, reviewMethod } from '../lib/interactive-review';
 import { prettyName } from '../lib/geometry';
-import { choosePath, pathOptionText, pathRun, pathStatus, readPath, REVIEW_PATH_KEY, reviewRunPath, writePath } from '../lib/inference-path';
+import { choosePath, pathOptionText, pathRun, pathStatus, readPath, REVIEW_PATH_KEY, reviewRunPath, staleResultHint, writePath } from '../lib/inference-path';
 import SegmentRelationshipEditor from './SegmentRelationshipEditor.vue';
 import type {
   InteractiveMethod,
@@ -582,7 +582,8 @@ defineExpose({
               ? 'This segment will be empty when saved.'
               : 'The candidate is empty. Paint or add include hints before saving.'
           }}</span
-          ><span v-else-if="current?.dirty">Apply pending changes before saving.</span><span v-else>Inspect the result, then save a new revision.</span>
+          ><span v-else-if="current?.dirty">{{ staleResultHint(runPath.locked, pending, current.working) }}</span
+          ><span v-else>Inspect the result, then save a new revision.</span>
         </div>
         <p v-for="warning in candidate?.warnings || []" :key="warning" class="review-alert" role="status">{{ warning }}</p>
       </div>

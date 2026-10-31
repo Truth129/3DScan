@@ -69,7 +69,7 @@ export function reviewRunPath(
   method: InteractiveMethod,
   status: InteractiveStatus | undefined,
   selected: string,
-  review?: Pick<InteractiveReview, 'batches' | 'inference_path'>,
+  review?: Pick<InteractiveReview, 'batches' | 'inference_path' | 'dirty'>,
 ) {
   const paths = status?.inference_paths ?? [];
   if (method !== 'nninteractive' || paths.length < 2) return { paths: [], locked: false, id: '', label: '', block: '', canRerun: false };
@@ -85,8 +85,15 @@ export function reviewRunPath(
   // The default path's identity has no card in it, so only an added path can change this way.
   const row = id === DEFAULT_PATH || named?.label === bound?.label ? named : undefined,
     label = bound?.label ?? row?.label ?? '';
-  return { paths, locked: true, id, label, block: usable(pathBlock(row, label, true)), canRerun: !!chosen?.available && (id !== selected || !row) };
+  // A current result on this card would only be repeated. A stale one cannot be saved, and a
+  // failed or cancelled re-run leaves it stale, so then the draft's own card must be offered.
+  const canRerun = !!chosen?.available && (id !== selected || !row || !!review.dirty);
+  return { paths, locked: true, id, label, block: usable(pathBlock(row, label, true)), canRerun };
 }
+
+/** What a stale result needs before it can be saved. On a locked draft with nothing pending or running, only a re-run can help. */
+export const staleResultHint = (locked: boolean, pending: number, working?: boolean) =>
+  locked && !pending && !working ? 'Re-run this draft from Options + before saving.' : 'Apply pending changes before saving.';
 
 /**
  * What a card means for one Run AI or Refine. Pending relationship edits are not marks: they

@@ -13,6 +13,7 @@ import {
   readPath,
   reviewRunPath as runPathFor,
   runSummary,
+  staleResultHint,
   writePath,
 } from '../src/lib/inference-path';
 import type { InferencePathBinding, InferencePathRow, InteractiveMethod, InteractiveReview, SegmentationCatalog } from '../src/types';
@@ -127,7 +128,7 @@ describe('the card Run AI uses', () => {
   const reviewRunPath = (
     rows: InferencePathRow[],
     selected: string,
-    review?: Pick<InteractiveReview, 'batches' | 'inference_path' | 'applied_prompt_count'>,
+    review?: Pick<InteractiveReview, 'batches' | 'inference_path' | 'applied_prompt_count' | 'dirty'>,
     method: InteractiveMethod = 'nninteractive',
   ) => runPathFor(method, status(rows), selected, review);
 
@@ -160,6 +161,21 @@ describe('the card Run AI uses', () => {
     expect(reviewRunPath([amd, nvidia], 'default', draft).canRerun).toBe(false);
     expect(reviewRunPath([amd, broken], 'broken', draft).canRerun).toBe(false);
   });
+  it('offers a draft its own card again once its result is stale, because that card may be the only one that works', () => {
+    const failed = { batches: [batch], inference_path: bound(amd), dirty: true };
+    expect(reviewRunPath([amd, nvidia], 'default', failed)).toMatchObject({ locked: true, id: 'default', block: '', canRerun: true });
+    expect(reviewRunPath([amd, nvidia], 'nvidia', failed).canRerun).toBe(true);
+    // A full refine has no marks to fall back on, so nothing else could make it saveable.
+    const refined = { batches: [{ end: 0, autozoom: true, full_refine: true }], applied_prompt_count: 0, inference_path: bound(amd), dirty: true };
+    expect(reviewRunPath([amd, nvidia], 'default', refined).canRerun).toBe(true);
+  });
+  it('still will not repeat a current result on the card that made it', () => {
+    expect(reviewRunPath([amd, nvidia], 'default', { batches: [batch], inference_path: bound(amd), dirty: false }).canRerun).toBe(false);
+  });
+  it('never re-runs on an unavailable card, however stale the result', () => {
+    expect(reviewRunPath([amd, broken], 'broken', { batches: [batch], inference_path: bound(amd), dirty: true }).canRerun).toBe(false);
+    expect(reviewRunPath([amd, broken], 'broken', { batches: [batch], inference_path: bound(broken), dirty: true }).canRerun).toBe(false);
+  });
   it('reads a draft from before a choice existed as the default card', () => {
     expect(reviewRunPath([amd, nvidia], 'nvidia', { batches: [batch], inference_path: null })).toMatchObject({
       locked: true,
@@ -180,6 +196,19 @@ describe('the card Run AI uses', () => {
   it('does not block the default card over a new label, because its identity holds no card', () => {
     const state = reviewRunPath([row('default', 'Default device'), nvidia], 'default', { batches: [batch], inference_path: bound(amd) });
     expect(state).toMatchObject({ block: '', canRerun: false });
+  });
+});
+
+describe('what a stale result needs', () => {
+  it('sends a locked draft with nothing pending to the re-run, because Apply has nothing to do', () => {
+    expect(staleResultHint(true, 0)).toBe('Re-run this draft from Options + before saving.');
+  });
+  it("keeps today's words wherever Apply is the way forward", () => {
+    expect(staleResultHint(true, 1)).toBe('Apply pending changes before saving.');
+    // A re-run in progress leaves the same state, and must not be told to start one.
+    expect(staleResultHint(true, 0, true)).toBe('Apply pending changes before saving.');
+    // Unlocked covers Direct edit and one path, where a card can never be the answer.
+    expect(staleResultHint(false, 0)).toBe('Apply pending changes before saving.');
   });
 });
 

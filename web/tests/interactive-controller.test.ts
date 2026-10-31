@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InteractiveController } from '../src/lib/interactive-controller';
 import { ApiError } from '../src/lib/api';
+import { reviewRunPath } from '../src/lib/inference-path';
 import type { InteractiveMethod, InteractiveOptions, InteractivePrompt, InteractiveReview } from '../src/types';
 
 const point = (id: string): InteractivePrompt => ({ id, kind: 'point', include: true, ras: [1, 2, 3] });
@@ -222,6 +223,18 @@ describe('running on a chosen card', () => {
     await controller.load();
     await controller.apply(false, { inference_path: 'nvidia', replay: true });
     expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia', replay: true });
+  });
+  it('keeps a failed re-run open on the bound card, with nothing pending and nothing saveable', async () => {
+    const card = (id: string) => ({ id, label: `${id} card`, memory_gib: 16, shares_display: false, available: true, reason: null });
+    const status = { installed: true, model_available: true, available: true, inference_paths: [card('default'), card('nvidia')] };
+    const bound = { id: 'default', label: 'default card', identity: 'default' };
+    // The server's state after one: enqueueing moved the generation on and the candidate stayed.
+    const { controller, reader } = fixture({ ...locked(), generation: 2, dirty: true, inference_path: bound, error: 'Ran out of GPU memory' });
+    await controller.load();
+    expect([controller.pendingCount, controller.dirty, !!controller.candidate]).toEqual([0, true, true]);
+    expect(reviewRunPath('nninteractive', status, 'default', controller.publicReview)).toMatchObject({ locked: true, id: 'default', canRerun: true });
+    await controller.apply(false, { inference_path: 'default', replay: true });
+    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 2, false, { inference_path: 'default', replay: true });
   });
   it('saves unsaved marks before a re-run and keeps them and their undo history', async () => {
     const { controller, reader } = fixture(locked());
