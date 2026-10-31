@@ -55,12 +55,15 @@ class FakeRuntime:
 class MeasuringRuntime(FakeRuntime):
     """Reports the card a real child would measure on the path it was sent."""
 
+    measures = None  # Set to a name to report a card the path's proof never saw.
+
     def predict(self, *args, **kwargs):
         provenance = super().predict(*args, **kwargs)
         chosen = kwargs.get("inference_path")
         if chosen is None:
             return {**provenance, "device": "gpu:0", "gpu_name": DEFAULT_GPU, "cuda_version": None}
-        return {**provenance, "device": "gpu:0", "gpu_name": chosen.gpu_name, "cuda_version": "13.0.fake" if chosen.kind == "cuda" else None}
+        card = self.measures or chosen.gpu_name
+        return {**provenance, "device": "gpu:0", "gpu_name": card, "cuda_version": "13.0.fake" if chosen.kind == "cuda" else None}
 
 
 @pytest.fixture
@@ -1075,6 +1078,19 @@ def test_a_replay_on_a_card_that_went_away_keeps_the_old_result_and_card(example
     assert job["error"] == f"{SECOND_GPU} is no longer available: This GPU is not set up on this workstation. Nothing ran and no other GPU was tried."
     state = current(example, draft)
     assert state["candidate"] == draft["candidate"] and state["inference_path"] == binding("nvidia") and state["error"] == job["error"]
+
+
+@pytest.mark.parametrize("choice", [{}, {"inference_path": "second", "replay": True}], ids=["next-step", "re-run"])
+def test_every_run_confirms_its_card_and_a_wrong_one_keeps_the_last_good_result(example, paths, choice):
+    # A first result has nothing to lose. Here a wrong card would replace reviewed work.
+    draft = bound_draft(example)
+    add_mark(example, draft, "point-3")
+    example[0].interactive_runtime.measures = "Test Other GPU"
+    job, state = run(example, draft, **choice)
+    assert job["status"] == "failed" and state["error"] == job["error"]
+    assert "but the GPU check found Test Other GPU (gpu:0, " in job["error"] and job["error"].endswith("No result was kept and no other GPU was tried.")
+    assert state["candidate"]["revision_id"] == draft["candidate"]["revision_id"] and set(state["candidates"]) == set(draft["candidates"])
+    assert state["inference_path"] == binding("nvidia") and state["batches"] == draft["batches"]
 
 
 def test_a_replay_runs_the_model_even_with_a_relationship_change_waiting(example, paths):
