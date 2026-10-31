@@ -308,6 +308,26 @@ describe('shared native Cornerstone MPR ownership', () => {
     attachment.release();
   });
 
+  it('keeps the zoom and centre of each slice when review locks the planes and when it releases them', async () => {
+    const owner = await create(),
+      viewport = fake.engines[0].getViewport(owner.viewportId('axial'));
+    // Like Cornerstone, a new orientation refits the slice and discards the reader's zoom and pan.
+    viewport.setOrientation.mockImplementation(function (this: any, orientation: any) {
+      this.orientation = orientation;
+      this.camera = { ...this.camera, focalPoint: [0, 0, 0], position: [0, 0, 100], parallelScale: 80 };
+    });
+    viewport.camera = { ...viewport.camera, focalPoint: [12, -7, 2], position: [12, -7, 102], parallelScale: 25 };
+    owner.setNativeReview(true);
+    expect(viewport.camera.parallelScale).toBe(25);
+    expect(viewport.camera.focalPoint.slice(0, 2)).toEqual([12, -7]);
+    expect(viewport.camera.position.slice(0, 2)).toEqual([12, -7]);
+    expect(viewport.camera.position[2] - viewport.camera.focalPoint[2]).toBe(100);
+    viewport.camera = { ...viewport.camera, parallelScale: 40 };
+    owner.setNativeReview(false);
+    expect(viewport.camera.parallelScale).toBe(40);
+    expect(viewport.camera.focalPoint.slice(0, 2)).toEqual([12, -7]);
+  });
+
   it('uploads one reflected native volume once for all three viewports and releases every owned image', async () => {
     const input = source(),
       owner = await create(input);

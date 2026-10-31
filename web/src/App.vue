@@ -15,6 +15,7 @@ import {
   defaultWorkspaceLayout,
   clampModelShare,
   clampSidebarWidth,
+  reviewFocusFor,
   MODEL_SHARE_RANGE,
   SIDEBAR_WIDTH_RANGE,
   type WorkspacePanelId,
@@ -221,16 +222,14 @@ if (!panels.value.model) mobilePanel.value = 'review';
 const modelPanelVisible = computed(() => panels.value.model && (workspaceMode.value !== 'review' || reviewFocus.value !== 'ct'));
 const reviewPanelVisible = computed(() => panels.value.review && (workspaceMode.value !== 'review' || reviewFocus.value !== 'model'));
 const sidebarVisible = computed(() => panels.value.anatomy || panels.value.inspector);
-// Review edits on the source slices, so it keeps its own 3D/slice split.
-const shareKey = computed(() => (workspaceMode.value === 'review' ? 'reviewModelShare' : 'modelShare'));
-const modelShare = computed(() => layout.value[shareKey.value]);
+const modelShare = computed(() => layout.value.modelShare);
 const workspaceStyle = computed(() => ({
   '--sidebar-width': `${layout.value.sidebarWidth}px`,
   '--stage-model': `${Math.round(modelShare.value * 1000)}fr`,
   '--stage-review': `${Math.round((1 - modelShare.value) * 1000)}fr`,
 }));
 function setModelShare(value: number) {
-  layout.value = { ...layout.value, [shareKey.value]: clampModelShare(value) };
+  layout.value = { ...layout.value, modelShare: clampModelShare(value) };
 }
 function setSidebarWidth(value: number) {
   layout.value = { ...layout.value, sidebarWidth: clampSidebarWidth(value) };
@@ -253,7 +252,7 @@ watch(
   value => {
     saveWorkspacePanels(value);
     if (!value.review) ctExpanded.value = false;
-    if (workspaceMode.value === 'review') reviewFocus.value = value.model && value.review ? 'both' : value.review ? 'ct' : 'model';
+    if (workspaceMode.value === 'review') reviewFocus.value = reviewFocusFor(value);
     if (!value[mobilePanel.value === 'anatomy' ? 'anatomy' : mobilePanel.value === 'model' ? 'model' : 'review'])
       mobilePanel.value = value.model ? 'model' : 'review';
   },
@@ -784,12 +783,16 @@ function cornerstoneWindowLevel(value: [number, number]) {
   windowWidth.value = value[0];
   level.value = value[1];
 }
+// Review opens on the views the main page was left with. The starting tool is
+// chosen first so that it reaches the 3D view with review itself, not as a later
+// tool change that would turn the camera to face the CT plane.
 async function openInteractiveReview() {
   ctExpanded.value = false;
-  workspaceMode.value = 'review';
-  setReviewFocus('both');
+  const shown = interactivePanel.value?.show();
   await nextTick();
-  await interactivePanel.value?.show();
+  reviewFocus.value = reviewFocusFor(panels.value);
+  workspaceMode.value = 'review';
+  await shown;
 }
 function picked(id: string, next: Point) {
   selected.value = id;
@@ -1504,7 +1507,7 @@ onBeforeUnmount(() => {
             :label="`Resize the 3D and ${sourceLabel} views`"
             controls="workspace-model-panel workspace-review-panel"
             @update="setModelShare"
-            @reset="setModelShare(defaultWorkspaceLayout()[shareKey])"
+            @reset="setModelShare(defaultWorkspaceLayout().modelShare)"
           />
           <div v-if="ctExpanded" class="ct-expanded-backdrop" @click="ctExpanded = false"></div>
           <aside

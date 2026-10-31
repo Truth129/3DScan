@@ -161,6 +161,12 @@ Select anatomy in the list or on the model and inspect its overlay in all three 
 QC messages under **Selected structure** against the CT. Then choose **Review segmentation ↗** and
 pick the target under **Structure**. **Exit review** leaves.
 
+Review opens on the views you left on the main page: the same tiles and split, each slice at the
+same zoom and centre, and the 3D camera where it was. Your window and overlays carry over too.
+Marking needs a few changes while you review: the **CT volume** layer turns off, **Segmentation**
+and the **CT plane** show in the 3D view, and slab projection and rotatable crosshairs pause.
+**Exit review** puts all of this back.
+
 During review the planes lock to the native source slices, so drawings keep their true geometry
 on oblique scans. Marks autosave into a draft that survives reloads and restarts, and nothing
 changes the accepted masks until you save. Mark only a settled, full-resolution view. **↶ Undo**
@@ -213,9 +219,10 @@ Right drag rotates while marking, and a 3D point moves the linked CT crosshair s
 confirm it.
 
 **Mark on** and the other 3D controls are under **Review tools**, which starts folded in each
-review so that nothing covers the view you mark on. Choosing a drawing tool already switches to
-the CT plane and faces it. While **Review tools** is open a mark cannot start underneath it, so
-fold it again to reach that part of the view.
+review so that nothing covers the view you mark on. Switching from surface marking to a drawing
+tool moves to the CT plane and faces it; **Face plane** does the same at any time, including when
+review has just opened on your own camera angle. While **Review tools** is open a mark cannot
+start underneath it, so fold it again to reach that part of the view.
 
 ### Toolbar messages and panels
 

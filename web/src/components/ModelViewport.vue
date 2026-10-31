@@ -1331,16 +1331,19 @@ watch(
 );
 let volumeBeforeReview = showVolume.value;
 let segmentationBeforeReview = showSegmentation.value;
+let planeBeforeReview = showPlane.value;
 watch(
   () => props.reviewActive,
   active => {
     if (active) {
       volumeBeforeReview = showVolume.value;
       segmentationBeforeReview = showSegmentation.value;
+      planeBeforeReview = showPlane.value;
       showSegmentation.value = true;
       setVolumeEnabled(false);
     } else {
       showSegmentation.value = segmentationBeforeReview;
+      showPlane.value = planeBeforeReview;
       if (preferCornerstone) setVolumeEnabled(volumeBeforeReview);
     }
   },
@@ -1395,7 +1398,7 @@ watch(
 );
 watch(
   () => [props.reviewActive, props.reviewTool, target.value?.id],
-  () => {
+  (_current, previous) => {
     if (!props.reviewActive) return;
     if (props.reviewTool === 'scissors') {
       faceWhenReady = false;
@@ -1403,7 +1406,9 @@ watch(
       return;
     }
     if (!hasTargetSurface.value || (props.reviewTool && !['navigate', 'point'].includes(props.reviewTool))) {
-      if (reviewMode.value !== 'plane') faceWhenReady = true;
+      // Opening review keeps the main page's camera; Face plane is there to turn it.
+      const opening = !!previous && !previous[0];
+      if (reviewMode.value !== 'plane' && !opening) faceWhenReady = true;
       reviewMode.value = 'plane';
       showPlane.value = true;
     }

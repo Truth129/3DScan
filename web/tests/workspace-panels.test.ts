@@ -11,6 +11,7 @@ import {
   readWorkspacePanels,
   restoreWorkspaceLayout,
   restoreWorkspacePanels,
+  reviewFocusFor,
   saveWorkspaceLayout,
   saveWorkspacePanels,
   setWorkspacePanel,
@@ -94,10 +95,9 @@ describe('workspace panel preferences', () => {
 
 describe('workspace tiling preferences', () => {
   it('bounds stored tile sizes so a record cannot collapse a viewer or the sidebar', () => {
-    expect(restoreWorkspaceLayout({ arrangement: 'rows', modelShare: 0.05, reviewModelShare: 3, sidebarWidth: 2000 })).toEqual({
+    expect(restoreWorkspaceLayout({ arrangement: 'rows', modelShare: 0.05, sidebarWidth: 2000 })).toEqual({
       arrangement: 'rows',
       modelShare: MODEL_SHARE_RANGE[0],
-      reviewModelShare: MODEL_SHARE_RANGE[1],
       sidebarWidth: SIDEBAR_WIDTH_RANGE[1],
     });
     expect(restoreWorkspaceLayout('{"modelShare":0.45,"sidebarWidth":301.6}')).toEqual({ ...defaultWorkspaceLayout(), modelShare: 0.45, sidebarWidth: 302 });
@@ -105,7 +105,23 @@ describe('workspace tiling preferences', () => {
     expect(restoreWorkspaceLayout(inherited)).toEqual({ ...defaultWorkspaceLayout(), modelShare: 0.5 });
   });
 
-  it.each([null, undefined, 'not JSON', '[]', 7, { arrangement: 'grid', modelShare: 'wide', reviewModelShare: NaN, sidebarWidth: Infinity }])(
+  it('drops the separate review split from records saved before review shared the main page layout', () => {
+    expect(restoreWorkspaceLayout({ arrangement: 'rows', modelShare: 0.7, reviewModelShare: 0.3, sidebarWidth: 300 })).toEqual({
+      arrangement: 'rows',
+      modelShare: 0.7,
+      sidebarWidth: 300,
+    });
+  });
+
+  it.each([
+    [{ anatomy: true, model: true, review: true, inspector: true }, 'both'],
+    [{ anatomy: true, model: false, review: true, inspector: true }, 'ct'],
+    [{ anatomy: true, model: true, review: false, inspector: true }, 'model'],
+  ] as const)('opens review on the viewers the panels show: %o', (panels, focus) => {
+    expect(reviewFocusFor(panels)).toBe(focus);
+  });
+
+  it.each([null, undefined, 'not JSON', '[]', 7, { arrangement: 'grid', modelShare: 'wide', sidebarWidth: Infinity }])(
     'falls back to defaults for invalid layout %s',
     value => {
       expect(restoreWorkspaceLayout(value)).toEqual(defaultWorkspaceLayout());
@@ -152,13 +168,13 @@ describe('workspace tiling preferences', () => {
     const getItem = vi.fn(),
       setItem = vi.fn();
     vi.stubGlobal('localStorage', { getItem, setItem });
-    saveWorkspaceLayout({ arrangement: 'rows', modelShare: 0.9, reviewModelShare: 0.3, sidebarWidth: 250 });
+    saveWorkspaceLayout({ arrangement: 'rows', modelShare: 0.9, sidebarWidth: 250 });
     expect(setItem).toHaveBeenCalledWith(
       WORKSPACE_LAYOUT_STORAGE_KEY,
-      JSON.stringify({ arrangement: 'rows', modelShare: MODEL_SHARE_RANGE[1], reviewModelShare: 0.3, sidebarWidth: 250 }),
+      JSON.stringify({ arrangement: 'rows', modelShare: MODEL_SHARE_RANGE[1], sidebarWidth: 250 }),
     );
     getItem.mockReturnValue(setItem.mock.calls[0][1]);
-    expect(readWorkspaceLayout()).toEqual({ arrangement: 'rows', modelShare: MODEL_SHARE_RANGE[1], reviewModelShare: 0.3, sidebarWidth: 250 });
+    expect(readWorkspaceLayout()).toEqual({ arrangement: 'rows', modelShare: MODEL_SHARE_RANGE[1], sidebarWidth: 250 });
     vi.stubGlobal('localStorage', {
       getItem: () => {
         throw new Error('blocked');

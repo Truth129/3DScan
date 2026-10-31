@@ -16,10 +16,8 @@ export type WorkspacePreset = WorkspaceArrangement | 'model' | 'review';
 
 export interface WorkspaceLayoutState {
   arrangement: WorkspaceArrangement;
-  /** The 3D tile's share of the stage while exploring. */
+  /** The 3D tile's share of the stage, on the main page and in review alike. */
   modelShare: number;
-  /** Review edits on the source slices, so the 3D tile defaults to the smaller share. */
-  reviewModelShare: number;
   /** Sidebar width in CSS pixels. */
   sidebarWidth: number;
 }
@@ -33,7 +31,7 @@ export function defaultWorkspacePanels(): WorkspacePanelsState {
 }
 
 export function defaultWorkspaceLayout(): WorkspaceLayoutState {
-  return { arrangement: 'columns', modelShare: 0.6, reviewModelShare: 0.4, sidebarWidth: 280 };
+  return { arrangement: 'columns', modelShare: 0.6, sidebarWidth: 280 };
 }
 
 /** Stored layout is a preference only; an invalid record cannot hide the app. */
@@ -98,12 +96,16 @@ export function restoreWorkspaceLayout(value: unknown): WorkspaceLayoutState {
     const arrangement = own('arrangement');
     if (arrangement === 'columns' || arrangement === 'rows') state.arrangement = arrangement;
     state.modelShare = clamp(own('modelShare'), MODEL_SHARE_RANGE, state.modelShare);
-    state.reviewModelShare = clamp(own('reviewModelShare'), MODEL_SHARE_RANGE, state.reviewModelShare);
     state.sidebarWidth = Math.round(clamp(own('sidebarWidth'), SIDEBAR_WIDTH_RANGE, state.sidebarWidth));
     return state;
   } catch {
     return defaultWorkspaceLayout();
   }
+}
+
+/** Which viewers review shows: the same ones as the panels, so review opens as the main page was left. */
+export function reviewFocusFor(panels: WorkspacePanelsState): 'both' | 'ct' | 'model' {
+  return panels.model && panels.review ? 'both' : panels.review ? 'ct' : 'model';
 }
 
 export function workspacePreset(panels: WorkspacePanelsState, layout: WorkspaceLayoutState): WorkspacePreset {

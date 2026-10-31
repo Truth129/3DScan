@@ -535,6 +535,12 @@ export class CornerstoneMPR {
       position: position.map((value, axis) => value + shift[axis]) as Point,
     });
   }
+  /** Changing orientation refits the slice. Put back the reader's zoom and centre; setPointRAS then settles the depth. */
+  private keepSliceView(viewport: ReturnType<CornerstoneMPR['viewport']>, centre: Point, parallelScale: number) {
+    const { focalPoint, position, viewPlaneNormal } = viewport.getCamera();
+    const distance = Math.hypot(...position!.map((value, axis) => value - focalPoint![axis]));
+    viewport.setCamera({ parallelScale, focalPoint: centre, position: centre.map((value, axis) => value + viewPlaneNormal![axis] * distance) as Point });
+  }
   setNativeReview(native: boolean) {
     if (this.disposed || !this.sourceVolume) return;
     if (this.nativeReview === native) return;
@@ -546,7 +552,10 @@ export class CornerstoneMPR {
         const orientation = native
           ? nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, plane, this.pointRAS).axis)
           : this.patientOrientation(plane);
-        this.viewport(plane).setOrientation(orientation, false, true);
+        const viewport = this.viewport(plane),
+          { focalPoint, parallelScale } = viewport.getCamera();
+        viewport.setOrientation(orientation, false, true);
+        this.keepSliceView(viewport, focalPoint!, parallelScale!);
       }
       if (native) this.setSlab('mpr', 1);
       this.updateCrosshairs();
