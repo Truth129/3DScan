@@ -14,6 +14,7 @@ import {
   reviewRunPath as runPathFor,
   runSummary,
   staleResultHint,
+  usePathChoice,
   writePath,
 } from '../src/lib/inference-path';
 import type { InferencePathBinding, InferencePathRow, InteractiveMethod, InteractiveReview, SegmentationCatalog } from '../src/types';
@@ -57,6 +58,84 @@ describe('choosing a remembered card', () => {
   });
   it('holds its place when the list could not be read', () => {
     expect(choosePath([], 'nvidia')).toEqual({ selected: 'nvidia', notice: '' });
+  });
+});
+
+describe("one chooser's card", () => {
+  const stored = (value?: string) => {
+    const store = new Map(value ? [['key', value]] : []);
+    vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, id: string) => store.set(key, id) });
+    return store;
+  };
+  const showing = (id: string) => {
+    const choice = usePathChoice('key');
+    choice.selected.value = id;
+    return choice;
+  };
+
+  it('starts from storage when the page shows nothing yet', () => {
+    stored('nvidia');
+    const choice = usePathChoice('key');
+    choice.settle([amd, nvidia]);
+    expect(choice.selected.value).toBe('nvidia');
+    expect(choice.notice.value).toBe('');
+  });
+  it('keeps what the page shows when another tab has stored something else', () => {
+    stored('default');
+    const choice = showing('nvidia');
+    choice.settle([amd, nvidia]);
+    expect(choice.selected.value).toBe('nvidia');
+  });
+  it('keeps a pick that storage refused, which the next check would otherwise undo', () => {
+    const store = stored('default');
+    const refuse = vi.fn(() => {
+      throw new DOMException('full', 'QuotaExceededError');
+    });
+    vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: refuse });
+    const choice = usePathChoice('key');
+    choice.choose('nvidia');
+    expect(refuse).toHaveBeenCalledOnce();
+    choice.settle([amd, nvidia]);
+    expect(choice.selected.value).toBe('nvidia');
+  });
+  it('reports a removed card once, and leaves what was stored for the person to replace', () => {
+    const store = stored('second');
+    const choice = usePathChoice('key');
+    choice.settle([amd, nvidia]);
+    expect(choice.selected.value).toBe('default');
+    expect(choice.notice.value).toContain('no longer set up');
+    choice.settle([amd, nvidia]);
+    expect(choice.selected.value).toBe('default');
+    expect(choice.notice.value).toBe('');
+    expect(store.get('key')).toBe('second');
+  });
+  it('reports a card that goes while the page shows it', () => {
+    stored('nvidia');
+    const choice = showing('nvidia');
+    choice.settle([amd]);
+    expect(choice.selected.value).toBe('default');
+    expect(choice.notice.value).toContain('no longer set up');
+  });
+  it('holds what the page shows when the list could not be read', () => {
+    stored('default');
+    const choice = showing('nvidia');
+    choice.settle([]);
+    expect(choice.selected.value).toBe('nvidia');
+  });
+  it('stores what a person chose and nothing a fallback chose', () => {
+    const store = stored();
+    const choice = usePathChoice('key');
+    choice.settle([amd, nvidia]);
+    expect(store.size).toBe(0);
+    choice.choose('nvidia');
+    expect(store.get('key')).toBe('nvidia');
+  });
+  it('clears a notice when a person chooses', () => {
+    stored('second');
+    const choice = usePathChoice('key');
+    choice.settle([amd, nvidia]);
+    choice.choose('nvidia');
+    expect(choice.notice.value).toBe('');
   });
 });
 

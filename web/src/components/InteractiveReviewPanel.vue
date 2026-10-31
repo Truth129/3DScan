@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { InteractiveController } from '../lib/interactive-controller';
 import { newReviewPrompt, normalizeRelationship, pendingReviewTargets, reviewCandidateHasChanges, reviewMethod } from '../lib/interactive-review';
 import { prettyName } from '../lib/geometry';
-import { choosePath, pathOptionText, pathRun, pathStatus, readPath, REVIEW_PATH_KEY, reviewRunPath, staleResultHint, writePath } from '../lib/inference-path';
+import { pathOptionText, pathRun, pathStatus, REVIEW_PATH_KEY, reviewRunPath, staleResultHint, usePathChoice } from '../lib/inference-path';
 import SegmentRelationshipEditor from './SegmentRelationshipEditor.vue';
 import type {
   InteractiveMethod,
@@ -80,8 +80,7 @@ const policyOpen = ref(false),
   policyValid = ref(true),
   newPolicyValid = ref(true),
   newRelationship = ref(normalizeRelationship());
-const reviewPath = ref(''),
-  reviewPathNotice = ref('');
+const { selected: reviewPath, notice: reviewPathNotice, settle: settleReviewPath, choose: chooseReviewPath } = usePathChoice(REVIEW_PATH_KEY);
 const controllers = new Map<string, InteractiveController>();
 const draftMethods = new Map<string, InteractiveMethod>();
 let disposed = false,
@@ -336,14 +335,7 @@ async function checkRuntime() {
   // Opening review asks twice, and the chooser must not settle on the older reply.
   if (request !== runtimeRequest) return;
   runtime.value = status;
-  const choice = choosePath(status.inference_paths ?? [], readPath(REVIEW_PATH_KEY) || reviewPath.value);
-  reviewPath.value = choice.selected;
-  reviewPathNotice.value = choice.notice;
-}
-function selectPath(event: Event) {
-  reviewPath.value = (event.target as HTMLSelectElement).value;
-  reviewPathNotice.value = '';
-  writePath(REVIEW_PATH_KEY, reviewPath.value);
+  settleReviewPath(status.inference_paths ?? []);
 }
 function chooseMethod(value: InteractiveMethod) {
   if (value === method.value || methodDisabled.value) return;
@@ -875,7 +867,12 @@ defineExpose({
         <template v-if="runPath.id">
           <label
             >{{ runPath.locked ? 'Re-run draft on' : 'Run on'
-            }}<select aria-label="Inference path" :value="reviewPath" :disabled="current.working || discarding" @change="selectPath">
+            }}<select
+              aria-label="Inference path"
+              :value="reviewPath"
+              :disabled="current.working || discarding"
+              @change="chooseReviewPath(($event.target as HTMLSelectElement).value)"
+            >
               <option v-for="row in runPath.paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
             </select></label
           >

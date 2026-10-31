@@ -56,7 +56,7 @@ import {
 } from './lib/image-workspace';
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
-import { choosePath, pathBlocked, readPath, runSummary, SEGMENT_PATH_KEY, writePath } from './lib/inference-path';
+import { pathBlocked, runSummary, SEGMENT_PATH_KEY, usePathChoice } from './lib/inference-path';
 import { recoverCaseJob } from './lib/jobs';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
@@ -268,17 +268,14 @@ const segmentationCatalog = shallowRef<SegmentationCatalog>();
 const segmentationSettings = ref<SegmentationSettings>(restoreSegmentationSettings());
 // Separate from the settings, which revisions record and restore. A card belongs to this
 // browser, and the server lists what exists.
-const segmentationPath = ref(''),
-  segmentationPathNotice = ref('');
+const {
+  selected: segmentationPath,
+  notice: segmentationPathNotice,
+  settle: settleSegmentationPath,
+  choose: chooseSegmentationPath,
+} = usePathChoice(SEGMENT_PATH_KEY);
 const segmentationPaths = computed(() => segmentationCatalog.value?.inference_paths ?? []);
-const chosenSegmentationPath = computed({
-  get: () => segmentationPath.value,
-  set(id: string) {
-    segmentationPath.value = id;
-    segmentationPathNotice.value = '';
-    writePath(SEGMENT_PATH_KEY, id);
-  },
-});
+const chosenSegmentationPath = computed({ get: () => segmentationPath.value, set: chooseSegmentationPath });
 const model = ref<InstanceType<typeof ModelViewport>>(),
   correctionInput = ref<HTMLInputElement>();
 const reviewStatus = ref<HTMLDetailsElement>(),
@@ -696,9 +693,7 @@ async function loadSegmentationOptions(preserveCurrent = false) {
     if (catalog.tasks.some(task => task.modality !== modality)) throw new Error('The task catalog does not match this image modality.');
     segmentationCatalog.value = catalog;
     segmentationSettings.value = restoreSegmentationSettings(catalog, preserveCurrent ? current : revision.value?.segmentation_settings);
-    const choice = choosePath(segmentationPaths.value, readPath(SEGMENT_PATH_KEY) || segmentationPath.value);
-    segmentationPath.value = choice.selected;
-    segmentationPathNotice.value = choice.notice;
+    settleSegmentationPath(segmentationPaths.value);
   } catch (reason) {
     if (alive && ticket.current()) segmentationError.value = reason instanceof Error ? reason.message : 'Available segmentation tasks could not be loaded.';
   } finally {

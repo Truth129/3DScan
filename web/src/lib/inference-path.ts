@@ -1,3 +1,4 @@
+import { ref } from 'vue';
 import type { InferencePathRow, InteractiveMethod, InteractiveReview, InteractiveStatus } from '../types';
 
 export const SEGMENT_PATH_KEY = 'scan3d-inference-path-segment-v1';
@@ -32,6 +33,27 @@ export function choosePath(paths: readonly InferencePathRow[], remembered: strin
   if (!fallback) return { selected: remembered, notice: '' };
   if (!remembered || paths.some(row => row.id === remembered)) return { selected: remembered || fallback.id, notice: '' };
   return { selected: fallback.id, notice: `The GPU chosen earlier is no longer set up on this workstation, so ${fallback.label} is selected.` };
+}
+
+/**
+ * One chooser's card. What the page already shows outranks storage: a write can fail and
+ * another tab can write, and neither may move a card here, so a card that goes away is
+ * reported once, against what the page was showing. Only a person's choice is stored.
+ */
+export function usePathChoice(key: string) {
+  const selected = ref(''),
+    notice = ref('');
+  function settle(paths: readonly InferencePathRow[]) {
+    const choice = choosePath(paths, selected.value || readPath(key));
+    selected.value = choice.selected;
+    notice.value = choice.notice;
+  }
+  function choose(id: string) {
+    selected.value = id;
+    notice.value = '';
+    writePath(key, id);
+  }
+  return { selected, notice, settle, choose };
 }
 
 export const pathOptionText = (row: InferencePathRow) =>
