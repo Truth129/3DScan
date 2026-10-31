@@ -17,7 +17,7 @@ from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.inference_paths import binding
 from scan3d.service import Service
-from scan3d.store import Store, identifier, job_lane
+from scan3d.store import ReviewConflict, Store, identifier, job_lane
 
 from test_interactive_review import FakeRuntime, MeasuringRuntime, SECOND_GPU, example, execute_next, paths  # noqa: F401 (fixture)
 
@@ -424,6 +424,18 @@ def test_direct_edit_ignores_a_stale_choice_and_stays_off_the_gpu(example, paths
         assert ready["inference_path"] is None and "gpu_name" not in ready["candidate"]
         draft = service.reviews.update(case["id"], draft["id"], ready["generation"], [*ready["prompts"], erase(f"again-{name}", index=3)])
     assert service.interactive_runtime.calls == []
+
+
+def test_a_replay_lifts_no_refusal_in_direct_edit(example, paths):
+    # Direct edit has no card to change and its own replay, so the flag must mean nothing there.
+    service, case, base, _ = example
+    draft = direct_draft(service, case, base)
+    assert execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"]))["status"] == "completed"
+    ready = service.reviews.get(case["id"], draft["id"])
+    jobs = service.store.list("jobs", case["id"])
+    with pytest.raises(ReviewConflict, match="Add or edit a prompt"):
+        service.reviews.predict(case["id"], draft["id"], ready["generation"], inference_path="nvidia", replay=True)
+    assert service.store.list("jobs", case["id"]) == jobs and service.reviews.get(case["id"], draft["id"])["generation"] == ready["generation"]
 
 
 def test_a_replay_changes_no_lane(example, paths):
