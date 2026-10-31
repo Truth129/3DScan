@@ -54,6 +54,7 @@ class Engine:
         return {
             "engine": "fake-nninteractive",
             "pid": os.getpid(),
+            "prefix": sys.prefix,  # The venv that actually ran this, which argv cannot prove.
             "loads": self.loads,
             "requests": self.requests,
             "prompts": prompts,

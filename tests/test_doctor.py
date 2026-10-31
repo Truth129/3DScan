@@ -123,3 +123,28 @@ def test_malformed_proof_does_not_break_health(proof, malformed):
 def test_health_reports_the_configured_device(proof, monkeypatch, request_value, expected):
     monkeypatch.setenv("SCAN3D_DEVICE", request_value)
     assert doctor.diagnose(live=False)["device"] == expected
+
+
+def test_the_proof_location_follows_the_setting_per_call(proof, monkeypatch, tmp_path):
+    target, _, _ = proof
+    assert doctor.proof_path() == target
+    monkeypatch.setenv("SCAN3D_GPU_PROOF", str(tmp_path / "moved.json"))
+    assert doctor.proof_path() == tmp_path / "moved.json"
+    monkeypatch.delenv("SCAN3D_GPU_PROOF")
+    assert doctor.proof_path() == tmp_path / ".runtime" / "gpu-proof.json"
+
+
+def test_a_proof_can_be_compared_with_another_environments_packages(proof):
+    theirs = {"torch": "2.14.0", "cuda-toolkit": "13.0.3"}
+
+    def lookup(package):
+        if package not in theirs:
+            raise metadata.PackageNotFoundError(package)
+        return theirs[package]
+
+    assert doctor._matching_versions(theirs, lookup)
+    assert not doctor._matching_versions({**theirs, "torch": "2.8.0"}, lookup)
+    assert not doctor._matching_versions({**theirs, "rocm": "10.1.0"}, lookup)
+    # Without a lookup it stays this process's own, as the patched fixture proves per call.
+    assert not doctor._matching_versions(theirs)
+    assert doctor._matching_versions({"torch": VERSIONS["torch"]})

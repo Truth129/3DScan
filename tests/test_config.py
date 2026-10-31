@@ -107,6 +107,7 @@ def test_the_example_is_all_defaults_and_documents_every_setting():
         "SCAN3D_IMPORT_ROOTS",
         "SCAN3D_MODALITIES",
         "SCAN3D_DEVICE",
+        "SCAN3D_INFERENCE_PATH_DIR",
         "SCAN3D_ORTHANC_URL",
         "SCAN3D_ORTHANC_USERNAME",
         "SCAN3D_ORTHANC_PASSWORD",

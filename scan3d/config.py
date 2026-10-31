@@ -9,6 +9,7 @@ CONFIG_FILE = ROOT / "scan3d.env"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9010
 # auto prefers a discrete GPU and uses the CPU when PyTorch sees none; see segmentation._device_info.
+# It chooses within one PyTorch build, which sees only its vendor's GPUs. See inference_paths.
 DEFAULT_DEVICE = "auto"
 # Modalities with an installed image adapter (modalities._ADAPTERS).
 MODALITIES = ("CT", "MR")

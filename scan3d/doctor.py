@@ -8,12 +8,22 @@ import shutil
 from .config import ROOT, device_request
 
 
-def _matching_versions(versions):
-    """Proofs belong to an exact installed package family, not a wheel label."""
+def proof_path():
+    """The default path's proof. An added path keeps its own, so neither overwrites the other."""
+    return Path(os.environ.get("SCAN3D_GPU_PROOF", str(ROOT / ".runtime" / "gpu-proof.json")))
+
+
+def _matching_versions(versions, lookup=None):
+    """Proofs belong to an exact installed package family, not a wheel label.
+
+    `lookup` reads another environment's packages, because a healthy second runtime
+    holds a different family from this process. The default is resolved per call.
+    """
     if not isinstance(versions, dict):
         return False
+    lookup = lookup or metadata.version
     try:
-        return all(isinstance(name, str) and isinstance(version, str) and metadata.version(name) == version for name, version in versions.items())
+        return all(isinstance(name, str) and isinstance(version, str) and lookup(name) == version for name, version in versions.items())
     except metadata.PackageNotFoundError:
         return False
 
@@ -42,7 +52,7 @@ def diagnose(live=True):
             result["reason"] = str(exc)
     else:
         result["reason"] = "AI tasks are set to run on the CPU" if result["device"] == "cpu" else "Run scripts/check_gpu.py to verify the GPU runtime"
-    proof_file = Path(os.environ.get("SCAN3D_GPU_PROOF", str(ROOT / ".runtime" / "gpu-proof.json")))
+    proof_file = proof_path()
     if proof_file.exists():
         try:
             proof = json.loads(proof_file.read_text())

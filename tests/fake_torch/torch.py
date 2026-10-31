@@ -1,7 +1,8 @@
 """Stands in for PyTorch in device-check children, so those tests never reach a GPU.
 
 A test puts this directory on PYTHONPATH. SCAN3D_FAKE_GPUS is a JSON list of
-[name, total_memory, is_integrated], and SCAN3D_FAKE_TORCH selects a failure.
+[name, total_memory, is_integrated], SCAN3D_FAKE_TORCH selects a failure, and
+SCAN3D_FAKE_TORCH_BUILD=cuda reports a CUDA build instead of a ROCm one.
 """
 
 import json
@@ -23,7 +24,7 @@ if failure == "hang":
 
 gpus = json.loads(os.environ.get("SCAN3D_FAKE_GPUS", "[]"))
 __version__ = "0.0+fake"
-version = SimpleNamespace(hip="7.2.fake", cuda=None)
+version = SimpleNamespace(hip=None, cuda="13.0.fake") if os.environ.get("SCAN3D_FAKE_TORCH_BUILD") == "cuda" else SimpleNamespace(hip="7.2.fake", cuda=None)
 
 
 def properties(index):
