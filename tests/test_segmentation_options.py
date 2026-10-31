@@ -308,6 +308,8 @@ def test_a_replaced_card_or_upgraded_stack_is_a_different_fingerprint(tmp_path, 
 # Running a task on an added inference path, with both children replaced in this process
 
 ADDED = InferencePath("nvidia", "/venv/bin/python", "/venv/lib/python/site-packages", "gpu", "cuda", GPU_NAME, MEMORY_BYTES, (("torch", "2.0"),))
+OVERFLOW = b"Prediction on device was unsuccessful, probably due to a lack of memory. Moving results arrays to CPU\n"
+QC = f"Part of total re-ran with results in system memory on {GPU_NAME}, usually because GPU memory ran out. The run took longer."
 
 
 @pytest.fixture
@@ -449,3 +451,72 @@ def test_a_run_that_fell_back_to_the_cpu_is_rejected(run, inference_path):
     run.report["device"] = "cpu"
     with pytest.raises(RuntimeError, match="did not complete on the requested GPU; CPU fallback results were rejected"):
         run.segment(inference_path)
+
+
+@pytest.mark.parametrize(
+    "log, returncode, cause",
+    [
+        (b"torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB\n", 1, "it ran out of GPU memory"),
+        (b"RuntimeError: HIP Out Of Memory\n", 1, "it ran out of GPU memory"),
+        (b"", -9, "the process was killed, usually because system memory ran out"),
+        (b"CUDA out of memory on an earlier attempt\n", -9, "the process was killed, usually because system memory ran out"),
+        (b"Traceback\n", 3, "exit 3"),
+        (b"", -11, "exit -11"),
+        (b"out of memory\n" + b"x" * (64 * 1024), 1, "exit 1"),
+        (b"x" * (64 * 1024) + b"\nout of memory\n", 1, "it ran out of GPU memory"),
+    ],
+    ids=["cuda", "any-case", "killed", "killed-with-old-text", "plain", "another-signal", "older-than-the-tail", "end-of-a-long-log"],
+)
+def test_a_failed_task_says_what_stopped_it_on_which_card(run, log, returncode, cause):
+    run.log, run.returncode = log, returncode
+    with pytest.raises(RuntimeError) as error:
+        run.segment()
+    assert str(error.value) == f"TotalSegmentator total failed on {GPU_NAME}: {cause}. No other GPU was tried."
+    assert run.manifest()["tasks"][0]["status"] == "failed"
+
+
+def test_a_failure_on_the_default_path_keeps_its_message(run):
+    run.log, run.returncode = b"CUDA out of memory\n", 1
+    with pytest.raises(RuntimeError) as error:
+        run.segment(None)
+    assert str(error.value) == "TotalSegmentator total failed (exit 1); inspect the local worker log"
+
+
+def test_results_moved_to_system_memory_are_recorded_and_explained(run):
+    run.log = b"Predicting\n" + OVERFLOW + b"Done\n"
+    run.segment()
+    manifest = run.manifest()
+    assert manifest["tasks"][0]["results_moved_to_cpu"] is True and manifest["qc"] == [QC]
+    assert json.loads(next(run.output.glob("run-*/inference.json")).read_text()) == manifest
+
+
+def test_a_clean_log_records_no_move(run):
+    run.log = b"Predicting\nDone\n"
+    run.segment()
+    manifest = run.manifest()
+    assert "results_moved_to_cpu" not in manifest["tasks"][0] and manifest["qc"] == []
+
+
+def test_the_default_path_cannot_see_a_move_so_it_claims_nothing(run):
+    run.log = OVERFLOW
+    run.report.pop("torch_version")
+    run.segment(None)
+    manifest = run.manifest()
+    assert "results_moved_to_cpu" not in manifest["tasks"][0] and manifest["qc"] == []
+
+
+def test_the_overflow_text_is_what_the_pinned_nnunet_prints():
+    try:
+        source = metadata.distribution("nnunetv2").locate_file("nnunetv2/inference/predict_from_raw_data.py")
+    except metadata.PackageNotFoundError:
+        pytest.skip("CI installs no nnU-Net")
+    assert OVERFLOW.strip().decode() in " ".join(Path(source).read_text().split())
+
+
+def test_vram_scope_describes_a_sample_only_when_there_is_one(run, tmp_path):
+    run.segment()
+    resources = run.manifest()["tasks"][0]["resources"]
+    assert resources["vram_scope"] is None and resources["whole_device_vram_peak_bytes"] is None
+    sampled = segmentation._Resources()
+    sampled.vram_path = tmp_path / "mem_info_vram_used"
+    assert sampled.result()["vram_scope"].startswith("Sampled whole GPU use")

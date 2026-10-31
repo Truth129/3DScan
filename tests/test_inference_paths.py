@@ -24,7 +24,7 @@ from scan3d.api import create_app
 from scan3d.config import ROOT, Settings
 from scan3d.demo import create_demo
 from scan3d.inference_paths import InferencePath, binding, gpu_cards, identity, public_error, require, rows
-from scan3d.store import Store
+from scan3d.store import Store, public_job, public_revision
 from scripts.check_gpu import jobs_waiting
 
 CHECK_GPU = ROOT / "scripts" / "check_gpu.py"
@@ -861,6 +861,8 @@ nib.save(nib.Nifti1Image(mask, reference.affine, reference.header.copy()), Path(
 report = {"device": "gpu", "torch_version": torch.__version__, "classes": {"1": "liver"}, **plan.get("report", {})}
 Path(option("--report")).write_text(json.dumps(report))
 """
+OVERFLOW = "Prediction on device was unsuccessful, probably due to a lack of memory. Moving results arrays to CPU"
+OVERFLOW_QC = f"Part of total re-ran with results in system memory on {GPU_NAME}, usually because GPU memory ran out. The run took longer."
 
 
 @pytest.fixture
@@ -1010,7 +1012,7 @@ def test_a_saved_result_is_not_reachable_from_a_path_that_went_bad(segmenting):
 
 
 def test_the_saved_run_stays_byte_for_byte_what_include_all_compares(segmenting):
-    job = segmenting.run("nvidia")
+    job = segmenting.run("nvidia", log=OVERFLOW)
     revision = segmenting.revision(job)
     (run,) = saved_runs(segmenting)
     assert json.loads((run / "inference.json").read_text()) == revision["inference_manifest"]
@@ -1038,6 +1040,77 @@ def test_a_failed_check_and_a_wrong_report_leave_nothing_to_reuse(segmenting, mo
     )
     assert len(segmenting.runs()) == 2 and nothing_saved()
     assert segmenting.run("nvidia")["status"] == "completed" and len(segmenting.runs()) == 3
+
+
+@pytest.mark.parametrize(
+    "plan, cause",
+    [
+        ({"log": "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB", "exit": 1}, "it ran out of GPU memory"),
+        ({"kill": True}, "the process was killed, usually because system memory ran out"),
+        ({"log": "Traceback", "exit": 3}, "exit 3"),
+    ],
+    ids=["out-of-memory", "killed", "plain"],
+)
+def test_a_failed_run_names_its_card_and_what_stopped_it(segmenting, plan, cause):
+    job = segmenting.run("nvidia", **plan)
+    assert (job["status"], job["stage"]) == ("failed", "Failed")
+    assert job["error"] == f"TotalSegmentator total failed on {GPU_NAME}: {cause}. No other GPU was tried."
+    assert job["inference_path"]["label"] == GPU_NAME and job["revision_id"] is None
+
+
+def test_a_run_that_moved_results_says_so_and_a_reuse_keeps_saying_so(segmenting):
+    first = segmenting.revision(segmenting.run("nvidia", log=OVERFLOW))
+    assert first["operation"]["runtime"]["results_moved_to_cpu"] is True and OVERFLOW_QC in first["qc"]
+    assert first["inference_manifest"]["tasks"][0]["results_moved_to_cpu"] is True
+    again = segmenting.revision(segmenting.run("nvidia"))
+    assert again["operation"]["runtime"]["reused"] is True and again["operation"]["runtime"]["results_moved_to_cpu"] is True and OVERFLOW_QC in again["qc"]
+
+
+def gone(tmp_path):
+    return dataclasses.replace(require(binding("nvidia")), python=str(tmp_path / "PRIVATE-gone" / "bin" / "python"))
+
+
+def test_an_interpreter_that_vanished_after_the_recheck_names_no_path(segmenting, tmp_path, monkeypatch):
+    monkeypatch.setattr(inference_paths, "require", lambda bound: gone(tmp_path))
+    job = segmenting.run("nvidia")
+    assert (job["status"], job["error"]) == ("failed", "[Errno 2] No such file or directory: <local path>")
+
+
+def test_a_child_that_will_not_stop_fails_its_job_without_showing_its_command(segmenting, monkeypatch):
+    def stuck(self, timeout=None):
+        raise subprocess.TimeoutExpired(self.args, timeout)
+
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH", "hang")
+    monkeypatch.setattr(segmentation, "DEVICE_CHECK_SECONDS", 0.1)
+    monkeypatch.setattr(subprocess.Popen, "wait", stuck)
+    job = segmenting.run("nvidia")
+    assert (job["status"], job["error"]) == ("failed", "The AI process did not stop in time.")
+
+
+def test_no_public_surface_names_the_interpreter(segmenting, tmp_path, monkeypatch):
+    http = segmenting.http
+    route = f"/api/cases/{segmenting.case['id']}"
+    with monkeypatch.context() as patch:
+        patch.setattr(inference_paths, "require", lambda bound: gone(tmp_path))
+        failed = segmenting.run("nvidia")  # First, because a saved result would start no child.
+    assert failed["status"] == "failed"
+    completed = segmenting.run("nvidia", log=OVERFLOW)
+    revision = segmenting.revision(completed)
+    public = http.get(f"{route}/revisions/{completed['revision_id']}")
+    assert public.json()["operation"]["runtime"]["gpu_name"] == GPU_NAME
+    surfaces = [
+        public.text,
+        json.dumps(public_job(completed)),
+        json.dumps(public_revision(revision)),
+        json.dumps(revision["inference_manifest"]),
+        http.get(f"/api/jobs/{failed['id']}").text,
+        http.get(f"/api/jobs/{completed['id']}").text,
+        http.get(f"{route}/jobs").text,
+        http.get("/api/segmentation-options").text,
+        http.get("/api/interactive/status").text,
+    ]
+    for surface in surfaces:
+        assert "PRIVATE" not in surface and str(tmp_path) not in surface
 
 
 def test_a_job_on_a_path_leaves_the_api_process_free_of_torch(tmp_path, monkeypatch):

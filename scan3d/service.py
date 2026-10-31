@@ -374,7 +374,9 @@ class Service:
                 self.reviews.get(job["case_id"], job["payload"]["session_id"])
         except Exception as exc:
             log.exception("Job %s failed", job["id"])
-            self.store.update_job(job["id"], status="failed", stage="Failed", error=str(exc))
+            # A named path's interpreter and environment stay in the journal, out of public text.
+            error = inference_paths.public_error(exc) if job.get("inference_path") else str(exc)
+            self.store.update_job(job["id"], status="failed", stage="Failed", error=error)
             if job["kind"].startswith("review_"):
                 self.reviews.get(job["case_id"], job["payload"]["session_id"])
 

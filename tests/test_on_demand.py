@@ -513,6 +513,16 @@ def two_paths(rig, tmp_path, monkeypatch):
     return rig
 
 
+def failed(rig, response):
+    assert response.status_code == 200, response.text
+    claimed = rig.service.store.claim()
+    assert claimed["id"] == response.json()["id"]
+    rig.service.execute(claimed)
+    job = rig.service.store.get("jobs", claimed["id"])
+    assert job["status"] == "failed"
+    return job
+
+
 def test_each_path_keeps_its_own_results_and_naming_default_changes_nothing(two_paths):
     rig = two_paths
     case, ct = prepared(rig)
@@ -614,3 +624,22 @@ def test_a_malformed_path_is_a_schema_error(two_paths, value):
     rig = two_paths
     case, ct = prepared(rig)
     assert requested(rig, case, ct, inference_path=value).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [(None, "cannot read /home/someone/venv/bin/python"), ("nvidia", "cannot read <local path>"), ("default", "cannot read <local path>")],
+    ids=["no-path-keeps-its-text", "added", "named-default"],
+)
+def test_a_job_with_a_path_keeps_local_paths_out_of_its_public_error(two_paths, monkeypatch, caplog, name, expected):
+    rig = two_paths
+    case, ct = prepared(rig)
+
+    def broken(*args, **kwargs):
+        raise OSError("cannot read /home/someone/venv/bin/python")
+
+    monkeypatch.setattr(segmentation, "segment", broken)
+    job = failed(rig, requested(rig, case, ct, inference_path=name))
+    assert (job["error"], job["stage"]) == (expected, "Failed")
+    assert rig.http.get(f"/api/jobs/{job['id']}").json()["error"] == expected
+    assert "cannot read /home/someone/venv/bin/python" in caplog.text  # The journal keeps it all.

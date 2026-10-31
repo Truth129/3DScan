@@ -30,6 +30,10 @@ _LOBES = ("lung_lower_lobe_left", "lung_lower_lobe_right", "lung_middle_lobe_rig
 _LUNG = {"lung_arteries", "lung_veins", "lung_airways", "lung_airways_wall"}
 # Far longer than a cold PyTorch import should need. A hung GPU driver must not hold the serialized lane.
 DEVICE_CHECK_SECONDS = 300.0
+# nnU-Net's only trace of re-running a part with results in system memory: its report omits it.
+# Upstream catches any RuntimeError there, so the QC line says 'usually'.
+_RESULTS_MOVED = b"Prediction on device was unsuccessful"
+_FAILURE_LOG_BYTES = 64 * 1024
 
 
 def _appearance(name, task=None):
@@ -387,7 +391,9 @@ class _Resources:
             "whole_device_vram_baseline_bytes": self.vram_baseline,
             "whole_device_vram_peak_bytes": self.vram_peak,
             "whole_device_vram_peak_above_baseline_bytes": (self.vram_peak - self.vram_baseline if self.vram_peak is not None else None),
-            "vram_scope": "Sampled whole GPU use via amdgpu sysfs; includes graphics and other processes; not per-process allocation",
+            "vram_scope": "Sampled whole GPU use via amdgpu sysfs; includes graphics and other processes; not per-process allocation"
+            if self.vram_path
+            else None,
         }
 
 
@@ -400,6 +406,17 @@ def _confirm_card(inference_path, runtime, tasks):
             raise ValueError(
                 f"TotalSegmentator would run part of {task} on the first GPU, so it cannot run on {inference_path.label}. Nothing ran and no other GPU was tried."
             )
+
+
+def _failure_cause(returncode, log_path):
+    """Why a task on a path stopped. On a smaller card, out of memory is the expected failure."""
+    if returncode == -signal.SIGKILL:
+        return "the process was killed, usually because system memory ran out"
+    with log_path.open("rb") as log:
+        log.seek(max(0, log_path.stat().st_size - _FAILURE_LOG_BYTES))
+        if b"out of memory" in log.read().lower():
+            return "it ran out of GPU memory"
+    return f"exit {returncode}"
 
 
 def segment(
@@ -509,7 +526,8 @@ def segment(
             save_manifest()
             started = time.monotonic()
             resources = _Resources(track_amd_vram=bool(runtime.get("hip")))
-            with (run_dir / f"{task}.log").open("wb") as log:
+            log_path = run_dir / f"{task}.log"
+            with log_path.open("wb") as log:
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, **spawn_options)
                 try:
                     while process.poll() is None:
@@ -528,6 +546,9 @@ def segment(
             record["returncode"] = process.returncode
             if process.returncode:
                 record["status"] = "failed"
+                if inference_path:
+                    cause = _failure_cause(process.returncode, log_path)
+                    raise RuntimeError(f"TotalSegmentator {task} failed on {inference_path.label}: {cause}. No other GPU was tried.")
                 raise RuntimeError(f"TotalSegmentator {task} failed (exit {process.returncode}); inspect the local worker log")
             report_path = run_dir / f"{task}-report.json"
             if not report_path.is_file():
@@ -541,6 +562,11 @@ def segment(
                     raise RuntimeError(
                         f"TotalSegmentator {task} ran on PyTorch {native.get('torch_version')}, not the {runtime['torch']} that {inference_path.label} was checked on. "
                         "No result was kept and no other GPU was tried."
+                    )
+                if _RESULTS_MOVED in log_path.read_bytes():
+                    record["results_moved_to_cpu"] = True
+                    manifest["qc"].append(
+                        f"Part of {task} re-ran with results in system memory on {inference_path.label}, usually because GPU memory ran out. The run took longer."
                     )
             if native.get("fast") or native.get("fastest") or native.get("save_lowres"):
                 raise RuntimeError("TotalSegmentator returned an unexpected reduced-resolution result")
