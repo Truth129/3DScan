@@ -56,6 +56,7 @@ import {
 } from './lib/image-workspace';
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
+import { choosePath, pathBlocked, readPath, runSummary, SEGMENT_PATH_KEY, writePath } from './lib/inference-path';
 import { recoverCaseJob } from './lib/jobs';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
@@ -265,6 +266,19 @@ const segmentationOpen = ref(false),
   segmentationError = ref('');
 const segmentationCatalog = shallowRef<SegmentationCatalog>();
 const segmentationSettings = ref<SegmentationSettings>(restoreSegmentationSettings());
+// Separate from the settings, which revisions record and restore. A card belongs to this
+// browser, and the server lists what exists.
+const segmentationPath = ref(''),
+  segmentationPathNotice = ref('');
+const segmentationPaths = computed(() => segmentationCatalog.value?.inference_paths ?? []);
+const chosenSegmentationPath = computed({
+  get: () => segmentationPath.value,
+  set(id: string) {
+    segmentationPath.value = id;
+    segmentationPathNotice.value = '';
+    writePath(SEGMENT_PATH_KEY, id);
+  },
+});
 const model = ref<InstanceType<typeof ModelViewport>>(),
   correctionInput = ref<HTMLInputElement>();
 const reviewStatus = ref<HTMLDetailsElement>(),
@@ -682,6 +696,9 @@ async function loadSegmentationOptions(preserveCurrent = false) {
     if (catalog.tasks.some(task => task.modality !== modality)) throw new Error('The task catalog does not match this image modality.');
     segmentationCatalog.value = catalog;
     segmentationSettings.value = restoreSegmentationSettings(catalog, preserveCurrent ? current : revision.value?.segmentation_settings);
+    const choice = choosePath(segmentationPaths.value, readPath(SEGMENT_PATH_KEY) || segmentationPath.value);
+    segmentationPath.value = choice.selected;
+    segmentationPathNotice.value = choice.notice;
   } catch (reason) {
     if (alive && ticket.current()) segmentationError.value = reason instanceof Error ? reason.message : 'Available segmentation tasks could not be loaded.';
   } finally {
@@ -707,7 +724,8 @@ async function segment() {
     !task ||
     !canSegment.value ||
     task.modality !== activeModality.value ||
-    (task.license_required && !task.license_available)
+    (task.license_required && !task.license_available) ||
+    pathBlocked(segmentationPaths.value, segmentationPath.value)
   )
     return;
   const generation = caseGeneration;
@@ -721,6 +739,7 @@ async function segment() {
       robust_crop: activeModality.value === 'CT' && (task.robust_crop_default || (task.robust_crop_supported && settings.robust_crop)),
       body_seg: activeModality.value === 'CT' && task.body_seg_supported && settings.body_seg,
       remove_small_blobs: settings.remove_small_blobs,
+      ...(segmentationPaths.value.length > 1 ? { inference_path: segmentationPath.value } : {}),
     });
     track(next);
     if (generation === caseGeneration) {
@@ -837,7 +856,7 @@ const { visibility, groupVisibility, solo, showAll, hideAll, allSegmentOpacity }
   display,
   selected,
 );
-function changeSummary(item: Revision) {
+function maskChange(item: Revision) {
   const op = item.operation;
   if (op && Array.isArray(op.affected_structures)) {
     const masks = op.affected_structures
@@ -854,6 +873,10 @@ function changeSummary(item: Revision) {
     afterVolume = Number(op.after_volume_ml);
   const volumes = Number.isFinite(beforeVolume) && Number.isFinite(afterVolume) ? ` · ${beforeVolume.toFixed(1)} → ${afterVolume.toFixed(1)} mL` : '';
   return `${op.changed_voxels.toLocaleString()} changed voxels${volumes} · code ${op.code_version || 'recorded'}`;
+}
+// Only this revision's operation names its card: other records are copied to child revisions.
+function changeSummary(item: Revision) {
+  return [maskChange(item), runSummary(item.operation)].filter(Boolean).join(' · ');
 }
 async function refine(operation: Operation) {
   if (!activeCase.value || !revision.value || !selected.value) return;
@@ -994,9 +1017,9 @@ onBeforeUnmount(() => {
       <div v-if="activeCase && job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
         <span v-if="busyJob" class="spinner"></span>
         <div>
-          <strong>{{
-            job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
-          }}</strong
+          <strong
+            >{{ job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
+            }}{{ job.inference_path ? ` · ${job.inference_path.label}` : '' }}</strong
           ><span :title="job.error || job.stage"
             >{{ job.error || job.stage
             }}<template v-if="job.progress">
@@ -1712,6 +1735,8 @@ onBeforeUnmount(() => {
         <SegmentationControls
           v-if="segmentationOpen && !prepareOpen"
           v-model="segmentationSettings"
+          v-model:inference-path="chosenSegmentationPath"
+          :path-notice="segmentationPathNotice"
           :catalog="segmentationCatalog"
           :busy="busy"
           :loading="segmentationLoading"

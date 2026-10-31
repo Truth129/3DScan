@@ -2,22 +2,43 @@
 import { computed, ref } from 'vue';
 import TotalSegmentatorLicense from './TotalSegmentatorLicense.vue';
 import { prettyName } from '../lib/geometry';
+import { pathBlocked, pathOptionText, pathStatus } from '../lib/inference-path';
 import { searchSegmentationTasks } from '../lib/segmentation-task-search';
 import type { SegmentationCatalog, SegmentationSettings } from '../types';
 const props = defineProps<{
   modelValue: SegmentationSettings;
+  inferencePath?: string;
+  pathNotice?: string;
   catalog?: SegmentationCatalog;
   busy: boolean;
   loading: boolean;
   error?: string;
 }>();
-const emit = defineEmits<{ 'update:modelValue': [value: SegmentationSettings]; run: []; close: []; retry: []; 'license-changed': [] }>();
+const emit = defineEmits<{
+  'update:modelValue': [value: SegmentationSettings];
+  'update:inferencePath': [value: string];
+  run: [];
+  close: [];
+  retry: [];
+  'license-changed': [];
+}>();
 const licensePending = ref(false);
 const search = ref('');
 const searchedTasks = computed(() => searchSegmentationTasks(props.catalog?.tasks ?? [], search.value, props.modelValue.task));
 const working = computed(() => props.busy || licensePending.value);
 const task = computed(() => props.catalog?.tasks.find(item => item.id === props.modelValue.task));
-const unavailable = computed(() => !task.value || (task.value.license_required && !task.value.license_available));
+const paths = computed(() => props.catalog?.inference_paths ?? []);
+const pathLine = computed(() =>
+  paths.value.length > 1
+    ? pathStatus(
+        paths.value.find(row => row.id === props.inferencePath),
+        props.pathNotice ?? '',
+      )
+    : '',
+);
+const unavailable = computed(
+  () => !task.value || (task.value.license_required && !task.value.license_available) || pathBlocked(paths.value, props.inferencePath),
+);
 const fixedCrop = computed(() => !!task.value?.robust_crop_default);
 function selectTask(event: Event) {
   const id = (event.target as HTMLSelectElement).value,
@@ -77,6 +98,16 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
           </option>
         </select></label
       >
+      <label v-if="paths.length > 1" class="segmentation-task"
+        >Run on<select
+          aria-label="Inference path"
+          :value="inferencePath"
+          :disabled="working || loading"
+          @change="emit('update:inferencePath', ($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="row in paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
+        </select></label
+      >
       <fieldset :disabled="working || loading || !task">
         <legend class="sr-only">Optional segmentation processing</legend>
         <label
@@ -120,6 +151,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
         {{ busy ? 'Processing…' : licensePending ? 'Updating license…' : 'Run segmentation' }}
       </button>
     </form>
+    <p v-if="pathLine" class="segmentation-status" role="status">{{ pathLine }}</p>
     <p v-if="loading" class="segmentation-status" role="status">Loading compatible segmentation tasks…</p>
     <p v-else-if="error" class="segmentation-error" role="status">
       {{ error }} <button type="button" class="text-button" @click="emit('retry')">Retry tasks</button>
@@ -137,7 +169,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
       Creates a new revision. Replaces this task’s segments and existing segments with matching anatomical names, including manual corrections. Keeps unrelated
       segments; earlier revisions remain available.<span v-if="modelValue.remove_small_blobs">
         Components below {{ catalog?.remove_small_blobs_mm3 ?? 200 }} mm³ will be removed.</span
-      >
+      ><span v-if="paths.length > 1"> One AI job runs at a time across GPUs. Each GPU keeps its own saved results, and results can differ between GPUs.</span>
     </p>
     <TotalSegmentatorLicense :disabled="working || loading" @pending="licensePending = $event" @changed="emit('license-changed')" />
   </section>

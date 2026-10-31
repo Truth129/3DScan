@@ -1,0 +1,287 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createSSRApp } from 'vue';
+import { renderToString } from '@vue/server-renderer';
+import SegmentationControls from '../src/components/SegmentationControls.vue';
+import { api } from '../src/lib/api';
+import {
+  choosePath,
+  pathBlock,
+  pathBlocked,
+  pathOptionText,
+  pathRun,
+  pathStatus,
+  readPath,
+  reviewRunPath as runPathFor,
+  runSummary,
+  writePath,
+} from '../src/lib/inference-path';
+import type { InferencePathBinding, InferencePathRow, InteractiveMethod, InteractiveReview, SegmentationCatalog } from '../src/types';
+
+const row = (id: string, label: string, extra: Partial<InferencePathRow> = {}): InferencePathRow => ({
+  id,
+  label,
+  memory_gib: 16,
+  shares_display: false,
+  available: true,
+  reason: null,
+  ...extra,
+});
+const amd = row('default', 'AMD Test GPU', { memory_gib: 32 });
+const nvidia = row('nvidia', 'NVIDIA Test GPU');
+const broken = row('broken', 'Broken Test GPU', { available: false, reason: 'Its last GPU check failed.' });
+const bound = (card: InferencePathRow): InferencePathBinding => ({ id: card.id, label: card.label, identity: `${card.id}|gpu|${card.label}` });
+const batch = { end: 2, autozoom: true, full_refine: false };
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe('choosing a remembered card', () => {
+  it('starts on the first available row, with nothing to report', () => {
+    expect(choosePath([amd, nvidia], '')).toEqual({ selected: 'default', notice: '' });
+    expect(choosePath([broken, nvidia], '')).toEqual({ selected: 'nvidia', notice: '' });
+  });
+  it('keeps a remembered card', () => {
+    expect(choosePath([amd, nvidia], 'nvidia')).toEqual({ selected: 'nvidia', notice: '' });
+  });
+  it('keeps an unavailable card selected, so it blocks with its reason instead of moving the run', () => {
+    expect(choosePath([amd, broken], 'broken')).toEqual({ selected: 'broken', notice: '' });
+    expect(pathBlocked([amd, broken], 'broken')).toBe(true);
+    expect(pathStatus(broken, '')).toBe('Broken Test GPU is unavailable: Its last GPU check failed.');
+  });
+  it('replaces a removed card only with a notice naming the replacement', () => {
+    const { selected, notice } = choosePath([amd, nvidia], 'second');
+    expect(selected).toBe('default');
+    expect(notice).toContain('no longer set up');
+    expect(notice).toContain('AMD Test GPU');
+    expect(pathStatus(amd, notice)).toBe(notice);
+  });
+  it('holds its place when the list could not be read', () => {
+    expect(choosePath([], 'nvidia')).toEqual({ selected: 'nvidia', notice: '' });
+  });
+});
+
+describe('path text', () => {
+  it('reads as label, memory and availability', () => {
+    expect(pathOptionText(amd)).toBe('AMD Test GPU · 32 GiB');
+    expect(pathOptionText(broken)).toBe('Broken Test GPU · 16 GiB · unavailable');
+    expect(pathOptionText(row('default', 'Default device', { memory_gib: null }))).toBe('Default device');
+  });
+  it('shows a caution or the display note beside a usable card', () => {
+    expect(pathStatus(row('default', 'AMD Test GPU', { reason: 'Its last GPU check failed or is out of date.' }), '')).toContain('out of date');
+    expect(pathStatus(row('nvidia', 'NVIDIA Test GPU', { shares_display: true }), '')).toContain('also drives the display');
+    expect(pathStatus(nvidia, '')).toBe('');
+  });
+  it('blocks nothing with one row, whatever is selected', () => {
+    expect(pathBlocked([amd], undefined)).toBe(false);
+    expect(pathBlocked([amd, nvidia], 'nvidia')).toBe(false);
+    expect(pathBlocked([amd, nvidia], undefined)).toBe(true);
+  });
+  it('tells the reviewer what still works', () => {
+    expect(pathBlock(nvidia, nvidia.label, false)).toBe('');
+    expect(pathBlock(broken, broken.label, false)).toContain('Choose another GPU in Options +.');
+    expect(pathBlock(undefined, 'Old Test GPU', true)).toContain('Old Test GPU is no longer set up on this workstation. Re-run this draft');
+  });
+});
+
+describe('the remembered key', () => {
+  it('survives storage that refuses to work', () => {
+    vi.stubGlobal('localStorage', {
+      getItem() {
+        throw new Error('blocked');
+      },
+      setItem() {
+        throw new Error('blocked');
+      },
+    });
+    expect(readPath('key')).toBe('');
+    expect(() => writePath('key', 'nvidia')).not.toThrow();
+  });
+  it('reads back what a person chose', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value) });
+    expect(readPath('key')).toBe('');
+    writePath('key', 'nvidia');
+    expect(readPath('key')).toBe('nvidia');
+  });
+});
+
+describe('the revision history line', () => {
+  it('stays empty without this revision naming a path', () => {
+    expect(runSummary(undefined)).toBe('');
+    expect(runSummary({ type: 'segment' })).toBe('');
+    // A direct-edit correction has provenance of its own and no card.
+    expect(runSummary({ runtime: { engine: 'direct_edit', gpu_name: 'Inherited Test GPU' } })).toBe('');
+  });
+  it('names the card, and says when a result was reused or spilled to system memory', () => {
+    expect(runSummary({ runtime: { inference_path: 'nvidia', gpu_name: 'NVIDIA Test GPU', reused: false, results_moved_to_cpu: false } })).toBe(
+      'Run on NVIDIA Test GPU',
+    );
+    expect(runSummary({ runtime: { inference_path: 'nvidia', gpu_name: 'NVIDIA Test GPU', reused: true, results_moved_to_cpu: true } })).toBe(
+      'Run on NVIDIA Test GPU · reused saved result · part re-ran in system memory',
+    );
+  });
+});
+
+describe('the card Run AI uses', () => {
+  const noCard = { paths: [], locked: false, id: '', label: '', block: '', canRerun: false };
+  const status = (rows: InferencePathRow[], available = true) => ({ installed: true, model_available: true, available, inference_paths: rows });
+  const reviewRunPath = (
+    rows: InferencePathRow[],
+    selected: string,
+    review?: Pick<InteractiveReview, 'batches' | 'inference_path' | 'applied_prompt_count'>,
+    method: InteractiveMethod = 'nninteractive',
+  ) => runPathFor(method, status(rows), selected, review);
+
+  it('is nothing with one path, so no request or attribute can name one', () => {
+    expect(reviewRunPath([amd], 'default', { batches: [batch], inference_path: null })).toEqual(noCard);
+  });
+  it('is nothing in Direct edit, because the status list survives a switch back', () => {
+    expect(reviewRunPath([amd, nvidia], 'nvidia', undefined, 'direct')).toEqual(noCard);
+    expect(reviewRunPath([amd, broken], 'broken', { batches: [batch], inference_path: bound(amd) }, 'direct')).toEqual(noCard);
+  });
+  it('is nothing before the status list has been read, or when the read failed', () => {
+    expect(runPathFor('nninteractive', undefined, '')).toEqual(noCard);
+    expect(runPathFor('nninteractive', { installed: false, model_available: false, available: false, reason: 'Offline' }, 'nvidia')).toEqual(noCard);
+  });
+  it('is the selected row until the first result', () => {
+    expect(reviewRunPath([amd, nvidia], 'nvidia')).toMatchObject({ locked: false, id: 'nvidia', label: 'NVIDIA Test GPU', block: '' });
+    expect(reviewRunPath([amd, broken], 'broken').block).toContain('Its last GPU check failed.');
+  });
+  it('leaves the message about AI assist itself to speak for every card', () => {
+    expect(runPathFor('nninteractive', status([amd, broken], false), 'broken')).toMatchObject({ id: 'broken', block: '' });
+  });
+  it('locks on published batches alone, including a full refine with no marks', () => {
+    const refined = { batches: [{ end: 0, autozoom: true, full_refine: true }], applied_prompt_count: 0, inference_path: bound(nvidia) };
+    expect(reviewRunPath([amd, nvidia], 'default', refined)).toMatchObject({ locked: true, id: 'nvidia', label: 'NVIDIA Test GPU' });
+    expect(reviewRunPath([amd, nvidia], 'default', { batches: [], applied_prompt_count: 3, inference_path: null }).locked).toBe(false);
+  });
+  it('stays on the bound card whichever row is selected, and only the button uses the selection', () => {
+    const draft = { batches: [batch], inference_path: bound(amd) };
+    expect(reviewRunPath([amd, nvidia], 'nvidia', draft)).toMatchObject({ id: 'default', label: 'AMD Test GPU', block: '', canRerun: true });
+    expect(reviewRunPath([amd, nvidia], 'default', draft).canRerun).toBe(false);
+    expect(reviewRunPath([amd, broken], 'broken', draft).canRerun).toBe(false);
+  });
+  it('reads a draft from before a choice existed as the default card', () => {
+    expect(reviewRunPath([amd, nvidia], 'nvidia', { batches: [batch], inference_path: null })).toMatchObject({
+      locked: true,
+      id: 'default',
+      label: 'AMD Test GPU',
+    });
+  });
+  it('blocks a bound card that has gone, and leaves the re-run as the way out', () => {
+    const state = reviewRunPath([amd, nvidia], 'default', { batches: [batch], inference_path: bound(row('second', 'Old Test GPU')) });
+    expect(state).toMatchObject({ id: 'second', label: 'Old Test GPU', canRerun: true });
+    expect(state.block).toContain('Old Test GPU is no longer set up');
+  });
+  it('treats a re-issued proof for another card as gone, even under the same id', () => {
+    const state = reviewRunPath([amd, row('nvidia', 'Replacement Test GPU')], 'nvidia', { batches: [batch], inference_path: bound(nvidia) });
+    expect(state.block).toContain('NVIDIA Test GPU is no longer set up');
+    expect(state.canRerun).toBe(true);
+  });
+  it('does not block the default card over a new label, because its identity holds no card', () => {
+    const state = reviewRunPath([row('default', 'Default device'), nvidia], 'default', { batches: [batch], inference_path: bound(amd) });
+    expect(state).toMatchObject({ block: '', canRerun: false });
+  });
+});
+
+describe('what a card means for one run', () => {
+  const free = { id: 'nvidia', block: '' },
+    blocked = { id: 'broken', block: 'Broken Test GPU is unavailable.' },
+    noChoice = { id: '', block: '' };
+
+  it('sends the card with marks or a full refine', () => {
+    expect(pathRun(free, 2, false)).toEqual({ stopped: false, choice: { inference_path: 'nvidia' } });
+    expect(pathRun(free, 0, true)).toEqual({ stopped: false, choice: { inference_path: 'nvidia' } });
+  });
+  it('sends nothing with one path or in Direct edit, even with marks', () => {
+    expect(pathRun(noChoice, 2, false)).toEqual({ stopped: false, choice: undefined });
+    expect(pathRun(noChoice, 0, true)).toEqual({ stopped: false, choice: undefined });
+  });
+  it('stops a run that needs a blocked card', () => {
+    expect(pathRun(blocked, 1, false).stopped).toBe(true);
+    expect(pathRun(blocked, 0, true).stopped).toBe(true);
+  });
+  it('lets a relationship-only Apply past a blocked card, asking for no card', () => {
+    expect(pathRun(blocked, 0, false)).toEqual({ stopped: false, choice: undefined });
+  });
+});
+
+describe('requests', () => {
+  const answered = () => {
+    const fetch = vi.fn().mockImplementation(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    return (call: number) => JSON.parse(fetch.mock.calls[call][1].body);
+  };
+  it('keeps the predict body of one path exactly as it was', async () => {
+    const body = answered();
+    await api.predictInteractive('case', 'draft', 3, false);
+    expect(body(0)).toEqual({ generation: 3, full_refine: false });
+  });
+  it('adds only the chosen fields to a predict body', async () => {
+    const body = answered();
+    await api.predictInteractive('case', 'draft', 3, false, { inference_path: 'nvidia' });
+    await api.predictInteractive('case', 'draft', 3, false, { inference_path: 'nvidia', replay: true });
+    expect(body(0)).toEqual({ generation: 3, full_refine: false, inference_path: 'nvidia' });
+    expect(body(1)).toEqual({ generation: 3, full_refine: false, inference_path: 'nvidia', replay: true });
+  });
+});
+
+describe('the segmentation panel', () => {
+  const catalog = (inference_paths?: InferencePathRow[]): SegmentationCatalog => ({
+    engine_version: '0.0.test',
+    defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
+    remove_small_blobs_mm3: 200,
+    inference_paths,
+    tasks: [
+      {
+        id: 'total',
+        label: 'Total',
+        modality: 'CT',
+        classes: [],
+        license_required: false,
+        license_available: true,
+        class_count: 1,
+        robust_crop_default: false,
+        robust_crop_supported: true,
+        body_seg_supported: true,
+      },
+    ],
+  });
+  const render = (paths: InferencePathRow[] | undefined, inferencePath = '', pathNotice = '') =>
+    renderToString(
+      createSSRApp(SegmentationControls, {
+        modelValue: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
+        catalog: catalog(paths),
+        inferencePath,
+        pathNotice,
+        busy: false,
+        loading: false,
+      }),
+    );
+  const firstSelect = (html: string) => /<select[^>]*aria-label="([^"]+)"/.exec(html)?.[1];
+  const runDisabled = (html: string) => /<button class="button primary"[^>]*>/.exec(html)?.[0].includes('disabled');
+
+  it('renders nothing new with one path', async () => {
+    const one = await render([amd], 'default');
+    expect(one).toBe(await render(undefined));
+    for (const text of ['Inference path', 'Run on', 'across GPUs']) expect(one).not.toContain(text);
+  });
+  it('offers Run on after Task, which stays the first select', async () => {
+    const html = await render([amd, nvidia, broken], 'nvidia');
+    expect(firstSelect(html)).toBe('Segmentation task');
+    expect(html.indexOf('aria-label="Inference path"')).toBeGreaterThan(html.indexOf('aria-label="Segmentation task"'));
+    expect(html).toContain('AMD Test GPU · 32 GiB');
+    expect(html).toMatch(/<option value="broken" disabled[^>]*>Broken Test GPU · 16 GiB · unavailable/);
+    expect(html).toContain('One AI job runs at a time across GPUs. Each GPU keeps its own saved results, and results can differ between GPUs.');
+    expect(runDisabled(html)).toBe(false);
+  });
+  it('blocks a run on an unavailable card and shows why', async () => {
+    const html = await render([amd, broken], 'broken');
+    expect(runDisabled(html)).toBe(true);
+    expect(html).toContain('Broken Test GPU is unavailable: Its last GPU check failed.');
+    expect(html).toMatch(/role="status"[^>]*>Broken Test GPU is unavailable/);
+  });
+  it('shows a remembered card being replaced, and the display note on a shared card', async () => {
+    expect(await render([amd, nvidia], 'default', 'The GPU chosen earlier is gone.')).toContain('The GPU chosen earlier is gone.');
+    expect(await render([amd, row('nvidia', 'NVIDIA Test GPU', { shares_display: true })], 'nvidia')).toContain('This GPU also drives the display');
+  });
+});

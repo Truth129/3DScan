@@ -71,11 +71,27 @@ export interface Job {
   source_revision_id?: string;
   created_at: string;
   progress?: { phase: string; completed: number; total: number; timings_seconds?: Record<string, number> };
+  inference_path?: InferencePathBinding;
 }
 export interface JobMeasurements {
   structures: Structure[];
   completed: number;
   total: number;
+}
+/** One card a person can pick, as the two panel routes list it. */
+export interface InferencePathRow {
+  id: string;
+  label: string;
+  memory_gib: number | null;
+  shares_display: boolean;
+  available: boolean;
+  reason: string | null;
+}
+/** A card frozen on a job or a draft, which outlives the row it came from. */
+export interface InferencePathBinding {
+  id: string;
+  label: string;
+  identity: string;
 }
 export interface SegmentationSettings {
   task: string;
@@ -105,6 +121,7 @@ export interface SegmentationCatalog {
   defaults: SegmentationSettings;
   remove_small_blobs_mm3: number;
   license_configured?: boolean;
+  inference_paths?: InferencePathRow[];
 }
 export interface TotalSegmentatorLicenseStatus {
   configured: boolean;
@@ -243,6 +260,16 @@ export interface InteractiveStatus {
   available: boolean;
   reason?: string;
   license?: string;
+  inference_paths?: InferencePathRow[];
+}
+export interface InteractiveBatch {
+  end: number;
+  autozoom: boolean;
+  full_refine: boolean;
+}
+export interface InteractiveRunChoice {
+  inference_path: string;
+  replay?: boolean;
 }
 export interface InteractiveReview {
   method?: InteractiveMethod;
@@ -260,6 +287,8 @@ export interface InteractiveReview {
   dirty?: boolean;
   pending_count?: number;
   applied_prompt_count?: number;
+  batches?: InteractiveBatch[];
+  inference_path?: InferencePathBinding | null;
   job_id?: string;
   error?: string;
   accepted_revision_id?: string;
@@ -278,5 +307,6 @@ export interface InteractiveReview {
     relationship_changed?: boolean;
     preview_3d_ready?: boolean;
     model_manifest_url?: string | null;
+    gpu_name?: string;
   };
 }

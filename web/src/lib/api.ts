@@ -8,6 +8,7 @@ import type {
   InteractiveOptions,
   InteractivePrompt,
   InteractiveReview,
+  InteractiveRunChoice,
   InteractiveStatus,
   InteractiveStructureInput,
   SegmentRelationship,
@@ -91,7 +92,8 @@ export const api = {
   totalSegmentatorLicense: (signal?: AbortSignal) => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', { signal }),
   saveTotalSegmentatorLicense: (license_key: string) => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', json('PUT', { license_key })),
   removeTotalSegmentatorLicense: () => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', { method: 'DELETE' }),
-  segment: (id: string, data: SegmentationSettings & { revision_id: string }) => request<Job>(`${caseUrl(id)}/segment`, json('POST', data)),
+  segment: (id: string, data: SegmentationSettings & { revision_id: string; inference_path?: string }) =>
+    request<Job>(`${caseUrl(id)}/segment`, json('POST', data)),
   job: (id: string, signal?: AbortSignal) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`, { signal }),
   measurements: async (id: string) => {
     const result = await request<JobMeasurements>(`/api/jobs/${encodeURIComponent(id)}/measurements`);
@@ -137,8 +139,8 @@ export const api = {
     options?: InteractiveOptions,
     relationship?: SegmentRelationship,
   ) => request<InteractiveReview>(reviewUrl(id, session), json('PATCH', { expected_generation: generation, prompts, options, relationship })),
-  predictInteractive: (id: string, session: string, generation: number, full_refine = false) =>
-    request<Job>(`${reviewUrl(id, session)}/predict`, json('POST', { generation, full_refine })),
+  predictInteractive: (id: string, session: string, generation: number, full_refine = false, choice?: InteractiveRunChoice) =>
+    request<Job>(`${reviewUrl(id, session)}/predict`, json('POST', { generation, full_refine, ...choice })),
   acceptInteractive: (id: string, session: string, generation: number) => request<Job>(`${reviewUrl(id, session)}/accept`, json('POST', { generation })),
   discardInteractive: (id: string, session: string, generation: number) =>
     request<InteractiveReview>(`${reviewUrl(id, session)}/discard`, json('POST', { expected_generation: generation })),
