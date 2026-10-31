@@ -142,7 +142,7 @@ def rig(tmp_path, monkeypatch):
     service.store.save("revisions", saved)
     calls = []
 
-    def encode(source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled, progress):
+    def encode(source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled, progress, overlap_priority=None):
         assert all(Path(path).is_file() for path in source_paths)
         assert not output_dir.exists()
         output_dir.mkdir(parents=True)
@@ -150,7 +150,8 @@ def rig(tmp_path, monkeypatch):
         encoded_segments = []
         sop_uid = f"2.25.{uuid.uuid4().int}"
         chunks = [f"synthetic multi-segment SEG {sop_uid}"]
-        for index, segment in enumerate(sorted(segments, key=lambda item: item.id), 1):
+        ranks = {key: rank for rank, key in enumerate(overlap_priority or sorted(item.id for item in segments))}
+        for index, segment in enumerate(sorted(segments, key=lambda item: ranks[item.id]), 1):
             if cancelled():
                 raise InterruptedError("Synthetic encoding cancelled")
             mask_digest = hashlib.sha256(segment.mask_path.read_bytes()).hexdigest()
@@ -161,6 +162,7 @@ def rig(tmp_path, monkeypatch):
                     segment_number=index,
                     voxel_count=int(np.asanyarray(nib.load(segment.mask_path).dataobj).sum()),
                     mask_sha256=mask_digest,
+                    removed_voxel_count=0,
                 )
             )
             progress(index, len(segments))
@@ -196,10 +198,12 @@ def execute(rig, job):
     return rig.service.store.get("jobs", job["id"])
 
 
-def start(rig, *, destination=None, structures=None, resend=False):
+def start(rig, *, destination=None, structures=None, resend=False, overlap_priority=None):
     body = {"destination": destination, "resend": resend}
     if structures is not None:
         body["structure_ids"] = structures
+    if overlap_priority is not None:
+        body["overlap_priority"] = overlap_priority
     response = rig.http.post(rig.endpoint, json=body)
     assert response.status_code == 200, response.text
     return response.json()
@@ -462,6 +466,12 @@ def test_queued_old_encoding_is_blocked_before_encoding_upload_or_delivery(rig, 
         ({"structure_ids": ["test:0", "test:0"]}, 400),
         ({"structure_ids": ["unknown"]}, 400),
         ({"structure_ids": [True]}, 422),
+        ({"overlap_priority": []}, 422),
+        ({"overlap_priority": ["test:0"]}, 422),
+        ({"overlap_priority": ["test:0", True]}, 422),
+        ({"overlap_priority": ["test:0", "test:0"]}, 400),
+        ({"overlap_priority": ["test:0", "unknown"]}, 400),
+        ({"structure_ids": ["test:0"], "overlap_priority": ["test:0", "test:1"]}, 400),
     ],
 )
 def test_export_rejects_unlisted_or_invalid_inputs_privately(rig, body, status):
@@ -804,6 +814,100 @@ def test_manager_uses_actual_encoder_for_eight_exact_saved_masks_in_one_instance
     assert len(rig.archive.sends[0][1]) == 1 and not rig.calls
     assert start(rig, destination="osirix")["id"] == finished["id"]
     assert len(rig.archive.sends) == len(rig.archive.uploads) == 1
+
+
+def test_each_ranking_is_its_own_artifact_of_the_same_saved_inputs(rig):
+    plain = execute(rig, start(rig))
+    ranked = start(rig, overlap_priority=["test:1", "test:0"])
+    assert ranked["result"]["dicom_seg"]["overlap_priority"] == ["test:1", "test:0"]
+    assert start(rig, overlap_priority=["test:1", "test:0"])["id"] == ranked["id"]
+    ranked = execute(rig, ranked)
+    reversed_rank = execute(rig, start(rig, overlap_priority=["test:0", "test:1"]))
+    assert len({job["result"]["dicom_seg"]["export_id"] for job in (plain, ranked, reversed_rank)}) == 3
+    assert len(rig.calls) == 3
+    payloads = [rig.service.store.get("jobs", job["id"])["payload"] for job in (plain, ranked, reversed_rank)]
+    assert len({item["selection_key"] for item in payloads}) == len({item["input_key"] for item in payloads}) == 1
+    assert len({item["artifact_key"] for item in payloads}) == 3
+    manifest = artifact(rig, ranked)[1]
+    assert manifest["overlap_priority"] == ["test:1", "test:0"]
+    assert [item["structure_id"] for item in manifest["files"][0]["segments"]] == ["test:1", "test:0"]
+    assert ranked["result"]["dicom_seg"]["structure_ids"] == ["test:1", "test:0"]
+    assert ranked["result"]["dicom_seg"]["overlap_priority"] == ["test:1", "test:0"]
+    assert ranked["result"]["dicom_seg"]["removed_voxels"] == {"test:1": 0, "test:0": 0}
+
+
+def test_unranked_exports_keep_their_exact_manifest_and_result_fields(rig):
+    plain = execute(rig, start(rig))
+    manifest = artifact(rig, plain)[1]
+    assert "overlap_priority" not in manifest
+    assert all("removed_voxel_count" not in item for item in manifest["files"][0]["segments"])
+    assert "overlap_priority" not in plain["result"]["dicom_seg"] and "removed_voxels" not in plain["result"]["dicom_seg"]
+
+
+def test_ranked_send_reuses_its_archive_and_send_again_needs_the_exact_ranking(rig):
+    ranking = ["test:1", "test:0"]
+    archived = execute(rig, start(rig, overlap_priority=ranking))
+    sent = execute(rig, start(rig, destination="osirix", overlap_priority=ranking))
+    assert sent["result"]["dicom_seg"]["export_id"] == archived["result"]["dicom_seg"]["export_id"]
+    assert len(rig.calls) == 1 and len(rig.archive.sends) == 1
+    for body in ({"destination": "osirix", "resend": True}, {"destination": "osirix", "resend": True, "overlap_priority": ranking[::-1]}):
+        response = rig.http.post(rig.endpoint, json=body)
+        assert response.status_code == 400 and "Send again" in response.json()["detail"]
+    again = execute(rig, start(rig, destination="osirix", resend=True, overlap_priority=ranking))
+    assert again["id"] != sent["id"] and again["result"]["dicom_seg"]["export_id"] == archived["result"]["dicom_seg"]["export_id"]
+    assert len(rig.calls) == 1 and len(rig.archive.sends) == 2
+
+
+def test_changed_saved_mask_is_caught_between_plain_and_ranked_exports(rig):
+    execute(rig, start(rig))
+    Path(rig.revision["structures"][0]["mask_file"]).write_bytes(b"changed saved mask")
+    response = rig.http.post(rig.endpoint, json={"overlap_priority": ["test:1", "test:0"]})
+    assert response.status_code == 400 and "Saved masks changed" in response.json()["detail"]
+    assert len(rig.calls) == 1
+
+
+def test_cached_artifact_must_carry_its_ranking(rig):
+    ranking = ["test:1", "test:0"]
+    rig.archive.upload_error = OrthancError("Synthetic interruption")
+    first = execute(rig, start(rig, overlap_priority=ranking))
+    directory, manifest = artifact(rig, first)
+    manifest["overlap_priority"] = ranking[::-1]
+    (directory / "export.json").write_text(json.dumps(manifest))
+    private = rig.service.store.get("jobs", first["id"])
+    del private["payload"]["artifact_manifest_sha256"]
+    rig.service.store.update_job(first["id"], payload=private["payload"])
+    uploads = len(rig.archive.uploads)
+    failed = execute(rig, start(rig, overlap_priority=ranking))
+    assert failed["status"] == "failed" and "differs from its frozen source" in failed["error"]
+    assert len(rig.archive.uploads) == uploads and len(rig.calls) == 1
+
+
+def test_manager_ranks_real_masks_and_never_rewrites_saved_masks(rig, monkeypatch):
+    import scan3d
+
+    saved = {item["id"]: Path(item["mask_file"]).read_bytes() for item in rig.revision["structures"]}
+    with monkeypatch.context() as encoder_context:
+        encoder_context.setattr(scan3d, "dicom_seg", None, raising=False)
+        encoder_context.delitem(sys.modules, "scan3d.dicom_seg")
+        importlib.import_module("scan3d.dicom_seg")
+        # test:1 lies wholly inside test:0, so ranking it second would empty it.
+        refused = execute(rig, start(rig, overlap_priority=["test:0", "test:1"]))
+        assert not rig.archive.uploads
+        finished = execute(rig, start(rig, overlap_priority=["test:1", "test:0"]))
+    assert refused["status"] == "failed" and refused["error"].startswith("Overlap rank 2 would lose every voxel")
+    assert finished["status"] == "completed", finished["error"]
+    result = finished["result"]["dicom_seg"]
+    assert result["removed_voxels"] == {"test:1": 0, "test:0": 6} and result["structure_ids"] == ["test:1", "test:0"]
+    directory, manifest = artifact(rig, finished)
+    segments = manifest["files"][0]["segments"]
+    assert [item["voxel_count"] for item in segments] == [6, 3]
+    assert [item.get("removed_voxel_count", 0) for item in segments] == [0, 6]
+    assert [item["mask_sha256"] for item in segments] == [hashlib.sha256(saved[key]).hexdigest() for key in ("test:1", "test:0")]
+    assert {item["id"]: Path(item["mask_file"]).read_bytes() for item in rig.revision["structures"]} == saved
+    ds = pydicom.dcmread(directory / "dicom" / manifest["files"][0]["path"], stop_before_pixels=True)
+    assert ds.SegmentsOverlap == "NO" and ds.SeriesDescription.endswith("overlaps resolved")
+    assert [item.TrackingID for item in ds.SegmentSequence] == ["test:1", "test:0"]
+    assert len(rig.archive.uploads) == 1
 
 
 @pytest.mark.parametrize("safe", [True, False])

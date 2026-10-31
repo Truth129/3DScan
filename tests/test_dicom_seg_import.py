@@ -32,7 +32,7 @@ def fixture(tmp_path):
         nib.save(nib.Nifti1Image(masks[..., index].astype(np.uint8), affine), path)
         segments.append(dicom_seg.SegmentInput(str(index), f"Imported {index}", ("#ff4040", "#00dcff")[index], path))
     result = dicom_seg.export_segmentation(paths, reference, segments, tmp_path / "export", revision_id="synthetic", source_kind="totalsegmentator")
-    return dict(paths=paths, reference=reference, seg=result.files[0].path, truth=masks, images=images, output=tmp_path / "imported")
+    return dict(paths=paths, reference=reference, seg=result.files[0].path, truth=masks, images=images, output=tmp_path / "imported", segments=segments)
 
 
 def run(fixture, **kwargs):
@@ -44,6 +44,23 @@ def modify(fixture, callback):
     callback(ds)
     ds.save_as(fixture["seg"], enforce_file_format=True)
     return ds
+
+
+def test_ranked_export_imports_as_separate_masks_without_overlap(fixture, tmp_path):
+    ranked = dicom_seg.export_segmentation(
+        fixture["paths"],
+        fixture["reference"],
+        fixture["segments"],
+        tmp_path / "ranked",
+        revision_id="synthetic",
+        source_kind="totalsegmentator",
+        overlap_priority=["1", "0"],
+    )
+    fixture["seg"] = ranked.files[0].path
+    winner, loser = run(fixture)
+    assert [winner["name"], loser["name"]] == ["Imported 1", "Imported 0"]
+    np.testing.assert_array_equal(nib.load(winner["mask_file"]).dataobj, fixture["truth"][..., 1])
+    np.testing.assert_array_equal(nib.load(loser["mask_file"]).dataobj, fixture["truth"][..., 0] & ~fixture["truth"][..., 1])
 
 
 def test_import_exact_separate_masks_names_colors_and_source_identity(fixture):

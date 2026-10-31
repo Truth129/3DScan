@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, ref } from 'vue';
 import { api, ApiError } from '../src/lib/api';
 import {
+  defaultOverlapOrder,
   dicomSegExportSummary,
+  moveOverlapRank,
   nonemptySavedStructures,
   savedRevisionExportBlockReason,
+  unfinishedOverlapRanking,
   successfulDicomSegDelivery,
   type DicomSegAvailability,
   type DicomSegExportJob,
@@ -115,6 +118,68 @@ describe('saved mask export scope', () => {
     expect(successfulDicomSegDelivery([delivered], ['heart', 'lung'], 'other')).toBe(false);
     expect(successfulDicomSegDelivery([{ ...delivered, status: 'failed' }, delivered], ['heart', 'lung'], 'osirix')).toBe(false);
   });
+  it('starts the overlap ranking with the smallest masks, breaking ties by ID', () => {
+    const structures = [
+      { id: 'liver', voxel_count: 900 },
+      { id: 'vessel', voxel_count: 12 },
+      { id: 'b', voxel_count: 40 },
+      { id: 'a', voxel_count: 40 },
+    ] as Structure[];
+    expect(defaultOverlapOrder(structures)).toEqual(['vessel', 'a', 'b', 'liver']);
+    expect(structures[0].id).toBe('liver');
+  });
+  it('moves a mask past its selected neighbour and keeps unselected masks in place', () => {
+    const order = ['a', 'b', 'c', 'd'];
+    expect(moveOverlapRank(order, ['a', 'c', 'd'], 'c', -1)).toEqual(['c', 'b', 'a', 'd']);
+    expect(moveOverlapRank(order, ['a', 'c', 'd'], 'c', 1)).toEqual(['a', 'b', 'd', 'c']);
+    expect(moveOverlapRank(order, order, 'a', -1)).toBe(order);
+    expect(moveOverlapRank(order, order, 'd', 1)).toBe(order);
+    expect(moveOverlapRank(order, ['a', 'c'], 'b', 1)).toBe(order);
+    expect(moveOverlapRank(order, order, 'unknown', 1)).toBe(order);
+  });
+  it('treats each overlap ranking as a different delivery from an unranked one', () => {
+    const base = {
+      export_id: 'seg-a',
+      archived: true,
+      sent: true,
+      segments_count: 2,
+      instance_count: 1,
+      structure_ids: ['heart', 'lung'],
+      destination_id: 'osirix',
+    };
+    const unranked = job('completed', { result: { dicom_seg: base } }),
+      ranked = job('completed', { result: { dicom_seg: { ...base, structure_ids: ['lung', 'heart'], overlap_priority: ['lung', 'heart'] } } });
+    expect(successfulDicomSegDelivery([unranked], ['heart', 'lung'], 'osirix', undefined, ['lung', 'heart'])).toBe(false);
+    expect(successfulDicomSegDelivery([ranked], ['heart', 'lung'], 'osirix')).toBe(false);
+    expect(successfulDicomSegDelivery([ranked], ['heart', 'lung'], 'osirix', undefined, ['heart', 'lung'])).toBe(false);
+    expect(successfulDicomSegDelivery([ranked], ['heart', 'lung'], 'osirix', undefined, ['lung', 'heart'])).toBe(true);
+  });
+  it('reports what a ranked export removed and that saved masks stayed the same', () => {
+    const result = {
+      export_id: 'seg-a',
+      archived: true,
+      sent: false,
+      segments_count: 3,
+      instance_count: 1,
+      structure_ids: ['a', 'b', 'c'],
+      overlap_priority: ['a', 'b', 'c'],
+    };
+    const summary = (removed_voxels: Record<string, number>) =>
+      dicomSegExportSummary(job('completed', { result: { dicom_seg: { ...result, removed_voxels } } }));
+    expect(summary({ a: 0, b: 3, c: 1 })).toBe(
+      '3 masks archived in Orthanc. Nothing was sent to another viewer. 4 overlapping voxels removed from 2 masks in this export. Saved masks are unchanged.',
+    );
+    expect(summary({ a: 0, b: 1, c: 0 })).toContain('1 overlapping voxel removed from 1 mask in this export.');
+    expect(summary({ a: 0, b: 0, c: 0 })).toContain('did not overlap, so no voxels were removed.');
+  });
+  it('keeps the ranking of an unfinished export, and no other', () => {
+    const result = { export_id: 'seg-a', archived: false, sent: false, segments_count: 2, instance_count: 1, structure_ids: ['a', 'b'] };
+    const ranked = { dicom_seg: { ...result, overlap_priority: ['b', 'a'] } };
+    for (const status of ['failed', 'queued', 'running'] as const) expect(unfinishedOverlapRanking(job(status, { result: ranked }))).toEqual(['b', 'a']);
+    for (const status of ['completed', 'cancelled'] as const) expect(unfinishedOverlapRanking(job(status, { result: ranked }))).toBeUndefined();
+    expect(unfinishedOverlapRanking(job('failed', { result: { dicom_seg: result } }))).toBeUndefined();
+    expect(unfinishedOverlapRanking(undefined)).toBeUndefined();
+  });
   it('does not treat a previous encoding as a successful delivery of the current files', () => {
     const delivered = job('completed', {
       result: {
@@ -167,6 +232,39 @@ describe('explicit DICOM SEG export lifecycle', () => {
     expect(create).toHaveBeenCalledExactlyOnceWith('case-a', 'revision-a', { structure_ids: ['heart', 'lung'], destination: null }, expect.any(AbortSignal));
     await state.start(['heart'], 'osirix');
     expect(create).toHaveBeenLastCalledWith('case-a', 'revision-a', { structure_ids: ['heart'], destination: 'osirix' }, expect.any(AbortSignal));
+    scope.stop();
+  });
+  it('submits a ranking only when one is chosen, and resends only that exact ranking', async () => {
+    const delivered = job('completed', {
+      result: {
+        dicom_seg: {
+          export_id: 'seg-a',
+          archived: true,
+          sent: true,
+          segments_count: 2,
+          instance_count: 1,
+          structure_ids: ['lung', 'heart'],
+          destination_id: 'osirix',
+          overlap_priority: ['lung', 'heart'],
+        },
+      },
+    });
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ exports: [delivered] }));
+    const create = vi.spyOn(api, 'exportDicomSeg').mockResolvedValue(job('completed')),
+      { scope, state } = fixture();
+    await state.load();
+    expect(state.alreadySent(['heart', 'lung'], 'osirix')).toBe(false);
+    expect(state.alreadySent(['heart', 'lung'], 'osirix', ['lung', 'heart'])).toBe(true);
+    await state.start(['heart', 'lung'], 'osirix', true);
+    await state.start(['heart', 'lung'], 'osirix', true, ['heart', 'lung']);
+    expect(create).not.toHaveBeenCalled();
+    await state.start(['heart', 'lung'], 'osirix', true, ['lung', 'heart']);
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      'case-a',
+      'revision-a',
+      { structure_ids: ['heart', 'lung'], destination: 'osirix', resend: true, overlap_priority: ['lung', 'heart'] },
+      expect.any(AbortSignal),
+    );
     scope.stop();
   });
   it('retains the availability reason and never queues an unavailable export', async () => {
