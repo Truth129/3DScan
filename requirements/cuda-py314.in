@@ -1,0 +1,17 @@
+# Python 3.14 stack for NVIDIA GPUs, installed as a second runtime beside the AMD one by
+# scripts/add_inference_path.sh. cuda-py314.lock is compiled from this file.
+# The PyPI torch wheel is the CUDA 13.0 build. Its version has no local tag, and only that
+# build covers sm_120, so the lock's hashes are what keep a +cu126 wheel out.
+# Never add cupy or cucim: TotalSegmentator would switch to a different resampler.
+-c constraints.txt
+torch==2.14.0
+torchvision==0.29.0
+# What scan3d's child processes import at module level, named so they cannot drop out.
+numpy
+scipy
+nibabel
+pydicom
+requests
+nnunetv2==2.8.1
+TotalSegmentator==2.18.0
+nnInteractive==2.6.0
