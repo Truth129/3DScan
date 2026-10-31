@@ -63,8 +63,9 @@ def main():
         return
     if args.command == "doctor":
         from .doctor import diagnose
+        from .inference_paths import rows
 
-        print(json.dumps(diagnose(), indent=2))
+        print(json.dumps({**diagnose(), "inference_paths": rows()}, indent=2))
         return
     if args.command == "backup":
         # Only reads the live database and files, so it is safe while the service runs.

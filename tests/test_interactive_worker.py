@@ -205,7 +205,10 @@ nib.save(image, directory / "ct.nii.gz")
 imaging._save_mask(np.ones((4, 4, 4), np.uint8), image, directory / "mask.nii.gz")
 app = create_app(Settings(directory / "data", (directory,)))
 service = app.state.service
-assert TestClient(app, base_url="http://127.0.0.1").get("/api/interactive/status").status_code == 200
+client = TestClient(app, base_url="http://127.0.0.1")
+for route in ("/api/interactive/status", "/api/segmentation-options"):
+    response = client.get(route)
+    assert response.status_code == 200 and [row["id"] for row in response.json()["inference_paths"]] == ["default"]
 assert service.interactive_runtime is None  # Readiness starts no worker process.
 assert isinstance(service._interactive(), InteractiveWorker) and service._interactive().pid is None
 service.interactive_runtime = InteractiveWorker("fake_interactive_engine:Engine")

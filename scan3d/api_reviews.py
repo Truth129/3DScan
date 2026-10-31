@@ -14,9 +14,11 @@ def public_review(record):
 def add_routes(app, service):
     @app.get("/api/interactive/status")
     def interactive_status():
+        from .inference_paths import rows
         from .interactive import status
 
-        return {**status(), "capabilities": {"point": True, "bbox2d": True, "bbox3d": False, "scribble": True, "lasso": True, "initial_label": True}}
+        capabilities = {"point": True, "bbox2d": True, "bbox3d": False, "scribble": True, "lasso": True, "initial_label": True}
+        return {**status(), "capabilities": capabilities, "inference_paths": rows()}
 
     @app.get("/api/cases/{case_id}/reviews")
     def interactive_reviews(case_id: str):

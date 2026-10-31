@@ -12,11 +12,13 @@ import platform
 import shutil
 import subprocess
 
+from fastapi.testclient import TestClient
 import pytest
 
 from inference_path_stub import FAMILIES, GPU_NAME, MEMORY_BYTES, TORCH, activate, add_package, stand_in
 from scan3d import doctor, inference_paths
-from scan3d.config import ROOT
+from scan3d.api import create_app
+from scan3d.config import ROOT, Settings
 from scan3d.inference_paths import InferencePath, binding, gpu_cards, identity, public_error, require, rows
 
 UNSET_UP = "This GPU is not set up on this workstation."
@@ -410,6 +412,18 @@ sys.stdout.write(json.dumps([[row["id"] for row in inference_paths.rows()], sort
     completed = subprocess.run([stub.python, "-P", "-c", code], env=environment, capture_output=True, text=True, timeout=60)
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == [["default", "nvidia"], ["scan3d", "scan3d.config", "scan3d.doctor", "scan3d.inference_paths"]]
+
+
+def test_both_panel_routes_list_the_paths_and_health_does_not(stub, tmp_path):
+    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
+    client = TestClient(app, base_url="http://127.0.0.1")
+    for route in ("/api/segmentation-options", "/api/interactive/status"):
+        response = client.get(route)
+        assert [row["id"] for row in response.json()["inference_paths"]] == ["default", "nvidia"]
+        assert str(tmp_path) not in response.text
+    assert set(client.get("/api/segmentation-options").json()) >= {"tasks", "inference_paths"}
+    health = client.get("/api/health").json()
+    assert "inference_paths" not in health and "inference_paths" not in health["gpu"]
 
 
 # GPUs in sysfs

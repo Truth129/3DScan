@@ -24,9 +24,10 @@ def add_routes(app, service):
 
     @app.get("/api/segmentation-options")
     def segmentation_options(modality: Modality = Modality.CT):
+        from .inference_paths import rows
         from .segmentation_options import segmentation_catalog
 
-        return segmentation_catalog(modality)
+        return {**segmentation_catalog(modality), "inference_paths": rows()}
 
     @app.get("/api/imaging-capabilities")
     def imaging_capabilities():

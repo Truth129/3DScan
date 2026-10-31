@@ -4,9 +4,12 @@ import copy
 import builtins
 import json
 from importlib import metadata
+import os
 
 import pytest
 
+from inference_path_stub import GPU_NAME, activate, stand_in
+from scan3d import __main__ as cli
 from scan3d import doctor
 
 
@@ -148,3 +151,20 @@ def test_a_proof_can_be_compared_with_another_environments_packages(proof):
     # Without a lookup it stays this process's own, as the patched fixture proves per call.
     assert not doctor._matching_versions(theirs)
     assert doctor._matching_versions({"torch": VERSIONS["torch"]})
+
+
+def test_the_doctor_command_adds_every_inference_path(proof, monkeypatch, capsys, tmp_path):
+    stub = stand_in(tmp_path)
+    activate(monkeypatch, stub)
+    settings = tmp_path / "no-settings.env"
+    settings.touch()
+    monkeypatch.setenv("SCAN3D_CONFIG", str(settings))
+    monkeypatch.setenv("TOTALSEG_HOME_DIR", str(tmp_path))
+    monkeypatch.setenv("PATH", os.environ["PATH"])  # load_environment extends it in place.
+    monkeypatch.setattr(os, "umask", lambda mask: None)
+    monkeypatch.setattr(doctor, "diagnose", lambda: {"ready": False, "reason": "A live check imports PyTorch"})
+    monkeypatch.setattr("sys.argv", ["scan3d", "doctor"])
+    cli.main()
+    output = json.loads(capsys.readouterr().out)
+    assert output["ready"] is False and output["reason"] == "A live check imports PyTorch"
+    assert [(row["id"], row["label"]) for row in output["inference_paths"]] == [("default", "Default device"), ("nvidia", GPU_NAME)]
