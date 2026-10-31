@@ -2,21 +2,81 @@
 
 import argparse
 from datetime import datetime, timezone
-from importlib import metadata
+from importlib import import_module, metadata
 import json
-import os
 from pathlib import Path
 import platform
+import re
+import sqlite3
 import sys
+import sysconfig
 import time
+
+# An added runtime holds no scan3d install, and Python puts only scripts/ on the path. Without
+# this a healthy runtime would write a failing proof.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from scan3d.config import Settings, device_request, load_environment
+from scan3d.doctor import proof_path
+from scan3d.inference_paths import DEFAULT, GPU_REQUEST, ID_PATTERN, directory, gpu_cards, installed
+
+# What a child on this runtime imports at the top of its entry point, and the two engines. They
+# fail here, in a check, and not at the first job.
+RUNTIME_IMPORTS = (
+    "scan3d.segmentation",
+    "scan3d.interactive",
+    "scan3d.interactive_worker",
+    "totalsegmentator.python_api",
+    "nnInteractive.inference.inference_session",
+)
+
+
+def jobs_waiting():
+    """Whether any job is queued or running, by the same rule as the license route.
+
+    A proof taken beside inference proves little and competes for the card. The connection is
+    read-only and selects no case content. A library with no database has no jobs.
+    """
+    database = Settings.from_env().data_dir / "scan3d.sqlite3"
+    if not database.is_file():
+        return False
+    connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
+    try:
+        return connection.execute("SELECT 1 FROM jobs WHERE status IN ('queued','running') LIMIT 1").fetchone() is not None
+    finally:
+        connection.close()
 
 
 def main():
+    load_environment()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--output", type=Path, default=Path(os.environ.get("SCAN3D_GPU_PROOF", str(Path(__file__).resolve().parents[1] / ".runtime/gpu-proof.json")))
-    )
+    destination = parser.add_mutually_exclusive_group()
+    destination.add_argument("--output", type=Path, help="proof file for the default path; the default is SCAN3D_GPU_PROOF")
+    destination.add_argument("--path", metavar="ID", help="record this interpreter as the added inference path ID, instead of the default path")
+    parser.add_argument("--device", help="gpu or gpu:N; N counts within this PyTorch build, so it names a different card per build")
     args = parser.parse_args()
+    if args.path is not None and (re.fullmatch(ID_PATTERN, args.path) is None or args.path == DEFAULT):
+        parser.error(f"--path must match {ID_PATTERN} and cannot be {DEFAULT}")
+    if args.device is not None and re.fullmatch(GPU_REQUEST, args.device) is None:
+        parser.error("--device must be gpu or gpu:N")
+    try:
+        waiting = jobs_waiting()
+    except sqlite3.Error as exc:
+        print(f"Could not read the job queue, so no GPU check ran: {exc}", file=sys.stderr)
+        return 1
+    if waiting:
+        print("Jobs are queued or running, so no GPU check ran. Run it again when the queue is empty.", file=sys.stderr)
+        return 1
+    # SCAN3D_DEVICE belongs to the default path: gpu:N counts within one build, so it says nothing
+    # about an added runtime. A GPU check needs a GPU, so auto and cpu mean the best one.
+    configured = "gpu" if args.path else device_request()
+    request = args.device or (configured if configured.startswith("gpu") else "gpu")
+    # Read the packages the way discovery re-reads them, from this site-packages alone.
+    site = sysconfig.get_path("purelib")
+
+    def version(package):
+        return installed(site, package) if args.path else metadata.version(package)
+
     result = {
         "gpu_ready": False,
         "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -24,20 +84,26 @@ def main():
         "checks": {},
         "errors": [],
     }
+    # A failed check still leaves a record, so the app can show the path with its reason.
+    path_record = {"id": args.path, "python": sys.executable, "site_packages": site, "device": request, "kind": None, "gpu_name": None, "memory_bytes": None}
+    if args.path:
+        result["path"] = path_record
     try:
         import torch
 
+        path_record["kind"] = "cuda" if torch.version.cuda else "rocm" if torch.version.hip else None
         result["checks"].update(
             torch_version=torch.__version__,
-            torch_distribution_version=metadata.version("torch"),
+            torch_distribution_version=version("torch"),
             hip_version=torch.version.hip,
             cuda_version=torch.version.cuda,
             gpu_available=torch.cuda.is_available(),
+            hardware=gpu_cards(path_record["kind"]),
         )
-        runtime_versions = {"torch": metadata.version("torch")}
-        for package in ("rocm", "rocm-sdk-core", "rocm-sdk-libraries"):
+        runtime_versions = {"torch": version("torch")}
+        for package in ("rocm", "rocm-sdk-core", "rocm-sdk-libraries", "cuda-toolkit", "nvidia-cudnn-cu13"):
             try:
-                runtime_versions[package] = metadata.version(package)
+                runtime_versions[package] = version(package)
             except metadata.PackageNotFoundError:
                 pass
         result["checks"]["runtime_versions"] = runtime_versions
@@ -50,7 +116,9 @@ def main():
         result["checks"]["devices"] = devices
         from scan3d.segmentation import _device_info
 
-        selected = _device_info("gpu")["gpu_index"]
+        chosen = _device_info(request)
+        selected = chosen["gpu_index"]
+        path_record.update(gpu_name=chosen["gpu_name"], memory_bytes=devices[selected]["memory_bytes"])
         device = torch.device(f"cuda:{selected}")
         started = time.monotonic()
         with torch.inference_mode():
@@ -63,14 +131,18 @@ def main():
             if not bool(torch.isfinite(full).all()) or not bool(torch.isfinite(mixed).all()):
                 raise RuntimeError("3D convolution produced nonfinite values.")
         result["checks"]["conv3d_seconds"] = round(time.monotonic() - started, 3)
+        if args.path:
+            for module in RUNTIME_IMPORTS:
+                import_module(module)
         result["checks"]["recommended_device"] = f"gpu:{selected}"
         result["gpu_ready"] = True
     except Exception as exc:
         result["errors"].append(str(exc))
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    pending = args.output.with_suffix(".json.writing")
+    output = directory() / f"{args.path}.json" if args.path else args.output or proof_path()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    pending = output.with_suffix(".json.writing")
     pending.write_text(json.dumps(result, indent=2) + "\n")
-    pending.replace(args.output)
+    pending.replace(output)
     print(json.dumps(result, indent=2))
     return 0 if result["gpu_ready"] else 1
 

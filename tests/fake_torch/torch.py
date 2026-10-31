@@ -5,6 +5,7 @@ A test puts this directory on PYTHONPATH. SCAN3D_FAKE_GPUS is a JSON list of
 SCAN3D_FAKE_TORCH_BUILD=cuda reports a CUDA build instead of a ROCm one.
 """
 
+from contextlib import nullcontext
 import json
 import os
 import signal
@@ -25,6 +26,7 @@ if failure == "hang":
 gpus = json.loads(os.environ.get("SCAN3D_FAKE_GPUS", "[]"))
 __version__ = "0.0+fake"
 version = SimpleNamespace(hip=None, cuda="13.0.fake") if os.environ.get("SCAN3D_FAKE_TORCH_BUILD") == "cuda" else SimpleNamespace(hip="7.2.fake", cuda=None)
+float16 = "float16"
 
 
 def properties(index):
@@ -32,9 +34,44 @@ def properties(index):
     return SimpleNamespace(total_memory=memory, is_integrated=integrated)
 
 
+class Finite:
+    """All that scripts/check_gpu.py asks of a tensor, a module and a comparison."""
+
+    def to(self, device):
+        return self
+
+    def __call__(self, values):
+        return self
+
+    def all(self):
+        return True
+
+
+def device(name):
+    return name
+
+
+def inference_mode():
+    return nullcontext()
+
+
+def autocast(device_type, dtype):
+    return nullcontext()
+
+
+def randn(shape, device):
+    return Finite()
+
+
+def isfinite(values):
+    return values
+
+
 cuda = SimpleNamespace(
     is_available=lambda: bool(gpus),
     device_count=lambda: len(gpus),
     get_device_name=lambda index: gpus[index][0],
     get_device_properties=properties,
+    synchronize=lambda device: None,
 )
+nn = SimpleNamespace(Conv3d=lambda *args, **kwargs: Finite())

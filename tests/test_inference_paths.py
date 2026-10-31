@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import sqlite3
 import subprocess
 
 from fastapi.testclient import TestClient
@@ -20,7 +21,10 @@ from scan3d import doctor, inference_paths
 from scan3d.api import create_app
 from scan3d.config import ROOT, Settings
 from scan3d.inference_paths import InferencePath, binding, gpu_cards, identity, public_error, require, rows
+from scan3d.store import Store
+from scripts.check_gpu import jobs_waiting
 
+CHECK_GPU = ROOT / "scripts" / "check_gpu.py"
 UNSET_UP = "This GPU is not set up on this workstation."
 UNREADABLE = "Its GPU check record cannot be read."
 CHECK_FAILED = "Its last GPU check failed."
@@ -717,3 +721,240 @@ def test_absolute_paths_leave_a_public_error(message, expected):
 
 def test_an_empty_error_still_says_something():
     assert public_error(RuntimeError()) == "RuntimeError"
+
+
+# Proofs, from scripts/check_gpu.py on the fake PyTorch
+
+
+@pytest.fixture
+def check(tmp_path, monkeypatch):
+    """Run the real script in a stand-in with no proof yet, on a scratch library.
+
+    Both sides read real sysfs here: the child has no patched root, and a census is only ever
+    compared with itself, so this holds on any machine.
+    """
+    built = stand_in(tmp_path)
+    built.proof.unlink()
+    activate(monkeypatch, built)
+    monkeypatch.setattr(inference_paths, "SYS_DRM", Path("/sys/class/drm"))
+    (tmp_path / "no-settings.env").touch()
+    monkeypatch.setenv("SCAN3D_CONFIG", str(tmp_path / "no-settings.env"))
+    monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "data"))
+
+    def run(*arguments, python=built.python):
+        return subprocess.run([python, str(CHECK_GPU), *arguments], cwd=tmp_path, capture_output=True, text=True, timeout=120)
+
+    run.stub = built
+    return run
+
+
+def test_a_path_check_writes_only_its_own_proof_and_lists_the_path(check, tmp_path):
+    stub = check.stub
+    default = tmp_path / "gpu-proof.json"
+    default.write_text("the default path's proof")
+    completed = check("--path", "nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert default.read_text() == "the default path's proof"
+    record = stub.record()
+    assert record["gpu_ready"] is True and record["errors"] == []
+    assert record["path"] == {
+        "id": "nvidia",
+        "python": stub.python,
+        "site_packages": str(stub.site_packages),
+        "device": "gpu",
+        "kind": "cuda",
+        "gpu_name": GPU_NAME,
+        "memory_bytes": MEMORY_BYTES,
+    }
+    checks = record["checks"]
+    # Only the stand-in's family, even with the parent's packages importable in this child.
+    assert checks["runtime_versions"] == {"torch": TORCH, **FAMILIES["cuda"]}
+    assert checks["torch_version"] == checks["torch_distribution_version"] == TORCH and checks["recommended_device"] == "gpu:0"
+    assert checks["hardware"] == gpu_cards("cuda")
+    added = rows()[1]
+    assert (added["id"], added["label"], added["memory_gib"], added["available"], added["reason"]) == ("nvidia", GPU_NAME, 16, True, None)
+    assert [file.name for file in stub.proof.parent.iterdir()] == ["nvidia.json"]
+
+
+def test_a_checked_path_passes_its_own_recheck_with_the_venvs_interpreter(check):
+    assert check("--path", "nvidia").returncode == 0
+    path = require(binding("nvidia"))
+    assert path.python == check.stub.python and dict(path.packages) == {"torch": TORCH, **FAMILIES["cuda"]}
+
+
+def test_a_rocm_runtime_records_its_own_family(check, tmp_path, monkeypatch):
+    built = stand_in(tmp_path, "amd", proofs=check.stub.proof.parent, kind="rocm")
+    built.proof.unlink()
+    activate(monkeypatch, built)
+    assert check("--path", "amd", python=built.python).returncode == 0
+    record = built.record()
+    assert record["path"]["kind"] == "rocm" and record["checks"]["runtime_versions"] == {"torch": TORCH, **FAMILIES["rocm"]}
+
+
+def test_a_failed_check_still_lists_the_path_with_a_fixed_reason(check, monkeypatch):
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", "[]")
+    completed = check("--path", "nvidia")
+    assert completed.returncode == 1
+    record = check.stub.record()
+    assert record["gpu_ready"] is False and "cannot access a GPU" in record["errors"][0]
+    assert record["path"]["id"] == "nvidia" and record["path"]["gpu_name"] is None
+    assert (rows()[1]["label"], rows()[1]["reason"], rows()[1]["available"]) == ("nvidia", CHECK_FAILED, False)
+    assert "cannot access" not in json.dumps(rows())
+
+
+def test_a_runtime_with_no_torch_still_leaves_a_failing_proof(check, monkeypatch):
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH", "missing")
+    assert check("--path", "nvidia").returncode == 1
+    assert check.stub.record()["checks"] == {} and rows()[1]["reason"] == CHECK_FAILED
+
+
+@pytest.mark.parametrize("module", ["totalsegmentator.python_api", "nnInteractive.inference.inference_session", "requests"])
+def test_a_broken_or_trimmed_runtime_fails_its_check_instead_of_its_first_job(check, module):
+    # requests stands for every package a child imports at module level through scan3d.
+    check.stub.shadow(module, "raise ImportError('this runtime is incomplete')")
+    assert check("--path", "nvidia").returncode == 1
+    record = check.stub.record()
+    assert record["errors"] == ["this runtime is incomplete"] and rows()[1]["reason"] == CHECK_FAILED
+
+
+def test_a_path_check_imports_what_the_children_import(check):
+    code = f"""
+import runpy, sys
+sys.argv = ["check_gpu.py", "--path", "nvidia"]
+try:
+    runpy.run_path({str(CHECK_GPU)!r}, run_name="__main__")
+except SystemExit:
+    pass
+print(*sorted(sys.modules), file=sys.stderr)
+"""
+    completed = subprocess.run([check.stub.python, "-c", code], capture_output=True, text=True, timeout=120)
+    assert {"scan3d.segmentation", "scan3d.interactive", "scan3d.interactive_worker"} <= set(completed.stderr.split())
+    assert {"totalsegmentator.python_api", "nnInteractive.inference.inference_session"} <= set(completed.stderr.split())
+
+
+def test_a_runtime_needs_no_scan3d_install(check, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(part for part in os.environ["PYTHONPATH"].split(os.pathsep) if Path(part) != ROOT))
+    completed = check("--path", "nvidia")
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_a_second_card_on_the_same_interpreter_is_its_own_path(check, monkeypatch):
+    gpus = [["Test First GPU", 8 * GIB, 0], ["Test Second GPU", 24 * GIB, 0]]
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", json.dumps(gpus))
+    assert check("--path", "second", "--device", "gpu:0").returncode == 0
+    second = json.loads((check.stub.proof.parent / "second.json").read_text())["path"]
+    assert (second["device"], second["gpu_name"], second["memory_bytes"]) == ("gpu:0", "Test First GPU", 8 * GIB)
+    assert check("--path", "nvidia").returncode == 0  # gpu picks the most memory.
+    assert (check.stub.record()["path"]["device"], check.stub.record()["path"]["gpu_name"]) == ("gpu", "Test Second GPU")
+
+
+def test_a_path_check_ignores_the_default_paths_device_setting(check, monkeypatch):
+    # gpu:N counts within one build, so the default path's index means nothing here.
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:7")
+    assert check("--path", "nvidia").returncode == 0
+    assert check.stub.record()["path"]["device"] == "gpu"
+
+
+def test_an_unavailable_index_fails_the_check(check):
+    assert check("--path", "nvidia", "--device", "gpu:1").returncode == 1
+    assert check.stub.record()["errors"] == ["Requested GPU index is unavailable"]
+
+
+@pytest.mark.parametrize(
+    "arguments", [("--path", "default"), ("--path", "Upper"), ("--path", "../x"), ("--path", "-x"), ("--path", "x" * 33), ("--device", "cpu")]
+)
+def test_a_bad_request_is_refused_before_anything_is_written(check, tmp_path, arguments):
+    assert check(*arguments).returncode == 2
+    assert not (tmp_path / "gpu-proof.json").exists() and list(check.stub.proof.parent.iterdir()) == []
+
+
+def test_a_path_proof_cannot_be_sent_anywhere_else(check, tmp_path):
+    assert check("--path", "nvidia", "--output", str(tmp_path / "elsewhere.json")).returncode == 2
+    assert not (tmp_path / "elsewhere.json").exists()
+
+
+def test_a_default_check_writes_to_the_setting_and_adds_a_census_but_no_path(check, tmp_path):
+    assert check().returncode == 0
+    record = json.loads((tmp_path / "gpu-proof.json").read_text())
+    assert record["gpu_ready"] is True and "path" not in record and record["checks"]["hardware"] == gpu_cards("cuda")
+    assert not check.stub.proof.exists()
+
+
+def test_output_outranks_the_setting(check, tmp_path):
+    assert check("--output", str(tmp_path / "chosen" / "proof.json")).returncode == 0
+    assert (tmp_path / "chosen" / "proof.json").is_file() and not (tmp_path / "gpu-proof.json").exists()
+
+
+def test_a_default_check_proves_the_configured_card(check, tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_FAKE_GPUS", json.dumps([["Test Large GPU", 24 * GIB, 0], ["Test Small GPU", 8 * GIB, 0]]))
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:1")
+    assert check().returncode == 0
+    assert json.loads((tmp_path / "gpu-proof.json").read_text())["checks"]["recommended_device"] == "gpu:1"
+
+
+@pytest.mark.parametrize("setting", ["auto", "cpu"])
+def test_a_gpu_check_needs_a_gpu_whatever_the_device_setting(check, tmp_path, monkeypatch, setting):
+    monkeypatch.setenv("SCAN3D_DEVICE", setting)
+    assert check().returncode == 0
+    assert json.loads((tmp_path / "gpu-proof.json").read_text())["checks"]["recommended_device"] == "gpu:0"
+
+
+def test_settings_come_from_scan3d_env_with_no_launcher(check, tmp_path, monkeypatch):
+    folder, proof = tmp_path / "from-env", tmp_path / "from-env.json"
+    (tmp_path / "settings.env").write_text(f"SCAN3D_INFERENCE_PATH_DIR={folder}\nSCAN3D_GPU_PROOF={proof}\nSCAN3D_DEVICE=gpu:0\n")
+    monkeypatch.setenv("SCAN3D_CONFIG", str(tmp_path / "settings.env"))
+    monkeypatch.delenv("SCAN3D_INFERENCE_PATH_DIR")
+    monkeypatch.delenv("SCAN3D_GPU_PROOF")
+    assert check("--path", "nvidia").returncode == 0
+    assert (folder / "nvidia.json").is_file()
+    assert check().returncode == 0
+    assert proof.is_file()
+
+
+def library(tmp_path, *statuses):
+    store = Store(tmp_path / "data")
+    with store.connection() as connection:
+        for number, status in enumerate(statuses):
+            connection.execute("INSERT INTO jobs(id, case_id, status, data) VALUES (?, ?, ?, ?)", (f"{number:032x}", "0" * 32, status, "{}"))
+    return store
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_a_check_refuses_to_run_beside_work_and_keeps_the_last_proof(check, tmp_path, status):
+    library(tmp_path, "completed", status)
+    (tmp_path / "gpu-proof.json").write_text("the last proof")
+    for arguments in (("--path", "nvidia"), ()):
+        completed = check(*arguments)
+        assert completed.returncode == 1 and "queued or running" in completed.stderr
+    assert (tmp_path / "gpu-proof.json").read_text() == "the last proof"
+    assert not check.stub.proof.exists()
+
+
+def test_a_check_runs_when_all_work_has_finished(check, tmp_path):
+    store = library(tmp_path, "completed", "failed", "cancelled")
+    before = store.db.read_bytes()
+    assert check("--path", "nvidia").returncode == 0
+    assert store.db.read_bytes() == before  # Read-only, even with no live writer.
+
+
+def test_the_queue_is_only_ever_opened_read_only(tmp_path, monkeypatch):
+    store = library(tmp_path, "queued")
+    monkeypatch.setenv("SCAN3D_DATA_DIR", str(store.directory))
+    opened, connect = [], sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda database, **options: opened.append(database) or connect(database, **options))
+    assert jobs_waiting() is True
+    assert opened == [f"{store.db.as_uri()}?mode=ro"]
+
+
+def test_a_library_with_no_database_has_no_jobs_to_wait_for(check, tmp_path):
+    assert not (tmp_path / "data").exists()
+    assert check("--path", "nvidia").returncode == 0
+    assert not (tmp_path / "data").exists()
+
+
+def test_a_queue_that_cannot_be_read_stops_the_check(check, tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "scan3d.sqlite3").write_text("this is not a database, and it is long enough to be read as one")
+    completed = check("--path", "nvidia")
+    assert completed.returncode == 1 and "Could not read the job queue" in completed.stderr
+    assert not check.stub.proof.exists()
