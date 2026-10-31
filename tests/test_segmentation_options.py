@@ -490,6 +490,15 @@ def test_results_moved_to_system_memory_are_recorded_and_explained(run):
     assert json.loads(next(run.output.glob("run-*/inference.json")).read_text()) == manifest
 
 
+def test_a_move_is_found_anywhere_in_a_long_log(run):
+    # Preprocessing prints before it and the rest of the task after it, so no window is enough.
+    filler = b"x" * (64 * 1024)
+    run.log = filler + OVERFLOW + filler
+    run.segment()
+    manifest = run.manifest()
+    assert manifest["tasks"][0]["results_moved_to_cpu"] is True and manifest["qc"] == [QC]
+
+
 def test_a_clean_log_records_no_move(run):
     run.log = b"Predicting\nDone\n"
     run.segment()
