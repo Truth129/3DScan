@@ -38,7 +38,8 @@ unexpected 500 is plain text.
 | 503    | A cached surface or viewer bundle is missing            | Surface and export routes                 |
 
 The license route replaces validation detail with a fixed message, because Pydantic's errors would echo the
-submitted key.
+submitted key. [Inference path](#refusals-and-failures) refusals use fixed sentences too, which never hold
+proof text or local paths.
 
 ## Transport rules
 
@@ -124,7 +125,7 @@ an empty mask. Structures from DICOM SEG also carry a `dicom_seg` provenance obj
 ```text
 {id, case_id, kind, status, stage, error, revision_id, created_at, started_at?, completed_at?,
  progress?: {phase, completed, total, timings_seconds?, bytes?},
- result?, review_session_id?, source_revision_id?}
+ result?, review_session_id?, source_revision_id?, inference_path?: {id, label, identity}}
 ```
 
 `status` is `queued`, `running`, `completed`, `failed` or `cancelled`. `stage` is display text.
@@ -135,13 +136,19 @@ only), `review_predict`, `review_accept`, `orthanc_import`, `orthanc_export` or 
 [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists which lane runs each. A restart marks running jobs
 failed with stage `Interrupted`.
 
+`inference_path` is the [inference path](#inference-paths) frozen when the job was queued: its `id`, a `label`
+to show, and an `identity` that clients compare whole and never parse. `identity` is `default` for the default
+path and `<id>|<device>|<gpu_name>` for an added one. The key is present on a `segment` job that named a path,
+`default` included, and on a `review_predict` that runs the model and either named a path or belongs to a
+draft bound to one. It is absent on every other job, including direct and relationship-only `review_predict`.
+
 ### ReviewSession
 
 ```text
 {id, case_id, revision_id, structure_id, method, status, generation, prompts, options, batches,
  relationship, relationship_suggestions, relationship_dirty, dirty, pending_count,
  applied_prompt_count, job_id, candidate: Candidate | null, error, accepted_revision_id,
- created_at, updated_at, new_structure, target?, preview_revision_id?}
+ created_at, updated_at, new_structure, inference_path, target?, preview_revision_id?}
 ```
 
 `status` is `draft`, `predicting`, `ready`, `accepting`, `accepted` or `discarded`. A failed or cancelled
@@ -149,12 +156,17 @@ job returns the session to `draft`, or to `ready` if a candidate remains, with `
 kept. `accepted` and `discarded` are closed. `target` and `preview_revision_id` appear when `new_structure`
 is true.
 
+`inference_path` is the path that made the current result, as `{id, label, identity}`. It is null while
+`batches` is empty, and when the job that published the result named no path. It changes only when a model
+result publishes, so a queued, failed or cancelled re-run leaves it as it was, and a relationship-only Apply
+never changes it.
+
 ### Candidate
 
 ```text
 {generation, revision_id, summary, created_at, relationship, overlaps, warnings,
  total_changed_voxels, relationship_changed, affected_structures, preview_3d_ready?,
- model_manifest_url?}
+ model_manifest_url?, gpu_name?}
 ```
 
 - `summary`: `before_voxels`, `after_voxels`, `changed_voxels`, `added_voxels`, `removed_voxels`,
@@ -162,15 +174,17 @@ is true.
 - `affected_structures`: `{id, name, role: "target" | "exclusive_sibling", summary, metadata_only,
   relationship}`.
 - `overlaps`: `{id, name, voxel_count, volume_ml, policy: "removed" | "preserved", reason}`.
+- `gpu_name`: the GPU that made this result, as the run measured it. It is present only when the job named a
+  path and the run reported a GPU, and a relationship-only Apply keeps it from the result it reuses.
 
 ## Route index
 
 | Method and path                                      | Purpose                                 |
 | ---------------------------------------------------- | --------------------------------------- |
 | `GET /api/health`, `GET /api/imaging-capabilities`   | Liveness, installed modality adapters   |
-| `GET /api/segmentation-options`                      | Task catalog for a modality             |
+| `GET /api/segmentation-options`                      | Task catalog and inference paths        |
 | `GET`, `PUT`, `DELETE /api/totalsegmentator/license` | License status and changes              |
-| `GET /api/interactive/status`                        | nnInteractive availability              |
+| `GET /api/interactive/status`                        | nnInteractive state and inference paths |
 | `GET /api/agreement`                                 | Pooled AI-agreement report              |
 | `GET /api/cases`, `GET /api/cases/{id}`              | Case records                            |
 | `POST /api/cases/demo`, `.../import`, `.../import-local` | Phantom, multipart or local import  |
@@ -221,16 +235,17 @@ lock, `lanes` is empty and `worker` is false. `modalities` lists what this insta
 `gpu` has `ready`, `device` (the `SCAN3D_DEVICE` request), `dcm2niix` and `reason`. `ready` comes from the
 proof written by `scripts/check_gpu.py` and means a verified GPU, so a CPU installation reports `false` by
 design. With a proof present, `gpu` adds `torch_version`, and with a matching one `hip_version`,
-`cuda_version`, `devices` and `checked_at`. This route never loads PyTorch.
+`cuda_version`, `devices` and `checked_at`. This route never loads PyTorch. `gpu` describes the default path
+alone, and added [inference paths](#inference-paths) never appear here.
 
 **`GET /api/imaging-capabilities`** returns `{schema_version, modalities: [{adapter, modality, kind,
 capabilities, presentation, enabled}]}`.
 
 **`GET /api/segmentation-options?modality=CT`** returns `{engine_version, tasks, license_configured,
-defaults, remove_small_blobs_mm3}`. Each task has `id`, `label`, `modality`, `classes`, `class_count`,
-`model_class_count`, `description`, `license_required`, `license_available`, `available`, `uses_organ_crop`,
-`robust_crop_default`, `robust_crop_supported` and `body_seg_supported`. The default task is `total` for CT
-and `total_mr` for MR.
+defaults, remove_small_blobs_mm3, inference_paths}`. Each task has `id`, `label`, `modality`, `classes`,
+`class_count`, `model_class_count`, `description`, `license_required`, `license_available`, `available`,
+`uses_organ_crop`, `robust_crop_default`, `robust_crop_supported` and `body_seg_supported`. The default task
+is `total` for CT and `total_mr` for MR. [Listing paths](#listing-paths) describes `inference_paths`.
 
 **License.** `GET /api/totalsegmentator/license` returns `{configured, validated, validated_at}` without
 contacting the network. `PUT` takes `{license_key}`, checks its format, validates it with the
@@ -238,9 +253,10 @@ TotalSegmentator service and stores it. `DELETE` removes it. Changes return 409 
 running.
 
 **`GET /api/interactive/status`** returns `{installed, version, model_available, available, reason,
-model_id, model_revision, license, capabilities}`. It checks packages and files only, with no GPU probe.
-`capabilities` are `point`, `bbox2d`, `scribble`, `lasso` and `initial_label`, with `bbox3d` false. The
-worker verifies checkpoint integrity and the device before predicting.
+model_id, model_revision, license, capabilities, inference_paths}`. It checks packages and files only, with no
+GPU probe. `capabilities` are `point`, `bbox2d`, `scribble`, `lasso` and `initial_label`, with `bbox3d` false.
+The worker verifies checkpoint integrity and the device before predicting. [Listing paths](#listing-paths)
+describes `inference_paths`.
 
 ## Imports
 
@@ -282,14 +298,15 @@ These fields are saved metadata. They do not select frames, change intensities, 
 task. Unsupported series and disabled modalities are refused.
 
 **`POST /api/cases/{id}/segment`** takes `{revision_id, task?, robust_crop?, body_seg?,
-remove_small_blobs?}` and returns a `segment` job. `revision_id` must be the active revision. `task` must be
-in the catalog for the image's modality, and licensed tasks need a configured key. MR refuses `robust_crop`
-and `body_seg`. Body cropping cannot combine with a task that already crops to an organ.
+remove_small_blobs?, inference_path?}` and returns a `segment` job. `revision_id` must be the active revision.
+`task` must be in the catalog for the image's modality, and licensed tasks need a configured key. MR refuses
+`robust_crop` and `body_seg`. Body cropping cannot combine with a task that already crops to an organ.
+`inference_path` is covered under [Choosing a path](#choosing-a-path).
 
 The run replaces results as described in [ARCHITECTURE.md](ARCHITECTURE.md#store-and-revision-model): every
 structure of its task, plus same-named structures of other tasks. Ambiguous incoming names and conflicting
 relationships fail before publishing. `operation` records `replacement_policy`, `replaced_structure_ids` and
-`replacement_id_map`.
+`replacement_id_map`, and a run that named a path adds [`runtime`](#what-a-run-records).
 
 **`POST /api/cases/{id}/refinements`** takes `{revision_id, structure_id, operation}` and returns a `refine`
 job. `operation` is `{type, seed_ras?, bounds_ras?}`, where `keep_component` and `remove_component` need a
@@ -331,11 +348,12 @@ Autosave never runs inference. Appending keeps the last candidate for preview an
 Editing an applied prompt drops later boundaries and invalidates the candidate. Undoing back to an exact
 applied snapshot restores identical bytes under a fresh alias with no work.
 
-**`POST .../reviews/{sid}/predict`** takes `{generation, full_refine?}` and returns a `review_predict` job.
-It applies every pending mark. With none pending, it needs `full_refine` or a changed relationship. A
-policy-only Apply reuses the previous prediction with no inference. `full_refine` is nnInteractive only: it
-copies the current candidate, resets prompt channels and refines the whole mask, and can take longer than a
-local correction. Completion publishes a candidate and no revision.
+**`POST .../reviews/{sid}/predict`** takes `{generation, full_refine?, inference_path?, replay?}` and returns
+a `review_predict` job. It applies every pending mark. With none pending, it needs `full_refine`, a changed
+relationship or `replay`. A policy-only Apply reuses the previous prediction with no inference. `full_refine`
+is nnInteractive only: it copies the current candidate, resets prompt channels and refines the whole mask, and
+can take longer than a local correction. Completion publishes a candidate and no revision. `inference_path` and
+`replay` are covered under [Choosing a path](#choosing-a-path).
 
 **`POST .../reviews/{sid}/accept`** takes `{generation}` and returns a `review_accept` job. The candidate
 must belong to the current generation and change masks or relationships, and the base must still be active.
@@ -409,6 +427,126 @@ Relationships describe voxel ownership. A draft stores `{kind, parent_id?, exclu
 - Save updates reciprocal peer links in the same revision. Removing an exclusive link does not restore
   voxels removed in an earlier revision, and activating the parent revision restores everything exactly.
 - An existing nonempty segment can save a relationship-only change with no voxel edit.
+
+## Inference paths
+
+An inference path is an interpreter plus a device that AI jobs run on. `default` is the API's own interpreter
+with `SCAN3D_DEVICE`, and an added path is one proof file. [INSTALL.md](INSTALL.md#add-a-second-gpu) adds one,
+and [ARCHITECTURE.md](ARCHITECTURE.md#inference-paths) explains how they work. A request that names no path
+runs on the default path, or on a draft's own path once it has one.
+
+### Listing paths
+
+`GET /api/segmentation-options` and `GET /api/interactive/status` return the same `inference_paths` rows:
+`default` first, then added paths by `id`, so there is always at least one row. Neither route starts a process,
+loads PyTorch or touches a GPU, and no row holds a local path or proof text. `GET /api/health` is unchanged.
+
+| Field            | Meaning                                                                                  |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| `id`             | The value to send as `inference_path`                                                    |
+| `label`          | The GPU's name. `default` falls back to `Default device`, and shows `CPU` when `SCAN3D_DEVICE` is `cpu`. An added path whose proof names no GPU shows its `id` |
+| `memory_gib`     | The GPU's memory to the nearest GiB, or null if unknown                                  |
+| `shares_display` | True when a GPU of this vendor has a connected display now, so its free memory depends on what is on screen. False when that cannot be read |
+| `available`      | Whether a request may name this path: installed as proven, and its last check passed. It never means a scan will fit. Always true for `default` |
+| `reason`         | A fixed sentence, or null                                                                |
+
+An added path with `available: false` gives the first of these that applies:
+
+- `Its GPU check record cannot be read.`
+- `Its last GPU check failed.`
+- `Its Python environment is missing.`
+- `Its installed packages changed after the last GPU check.`
+- `Its TotalSegmentator or nnInteractive version differs from this workstation's.`
+- `It has cupy or cucim installed, which would change resampling.`
+- `The GPUs in this workstation changed after the last GPU check.`
+
+`default` gives null or the caution `Its last GPU check failed or is out of date.`, which blocks nothing.
+
+### Choosing a path
+
+`inference_path` is optional on `POST .../segment` and `POST .../reviews/{sid}/predict`. It must match
+`^[a-z0-9][a-z0-9-]{0,31}$`, and it never goes inside `options` or `batches`. On a segmentation, leaving it out
+and sending `default` run the same way and share saved results. `scan3d segment --inference-path ID` takes the
+same IDs and gets the same refusals, and `scan3d doctor` lists the rows.
+
+A job's path is frozen when it is queued and checked again as it starts. It never moves to another path or to
+the CPU. A draft is free until a model result publishes, then stays on that result's path while `batches` is
+non-empty:
+
+| Draft           | Request                                 | Result                                               |
+| --------------- | --------------------------------------- | ---------------------------------------------------- |
+| `batches` empty | `inference_path`, or none for `default` | Runs there, and a published result binds the draft   |
+| `batches` set   | None, or the draft's own path           | Runs on the draft's path                             |
+| `batches` set   | Another path, with `replay` false       | 409                                                  |
+| `batches` set   | `replay: true`                          | Repeats the draft's steps on the named path, or on its own path if none is named |
+
+**`replay`** repeats every recorded batch exactly, from the original mask, and adds any pending marks as one
+more batch. Nothing need be pending, and a pending relationship goes with it as a model run. The re-run takes a
+new generation, so as it is queued the old candidate turns `dirty` and can no longer be accepted. That candidate
+stays in `candidate` until the new one publishes, which is also when the draft's `inference_path` changes. After
+a failed or cancelled re-run it stays there, still `dirty`, and the draft can re-run on any available path, its
+own included. With `batches` empty, `replay` has no effect.
+
+Direct Apply and a relationship-only Apply run no model. They ignore `inference_path`, their jobs name no path,
+and they stay on the CPU lane. A direct draft ignores `replay` too.
+
+### What a run records
+
+A segment revision from a job that named a path, `default` included, has `operation.runtime`. One from a job
+that named none does not.
+
+| Key                    | Meaning                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------- |
+| `inference_path`       | The path's `id`                                                                  |
+| `gpu_name`             | The GPU the child measured, or null on the CPU                                   |
+| `device`               | The device it selected, such as `gpu:0` or `cpu`                                 |
+| `torch_version`        | The PyTorch version it measured                                                  |
+| `hip_version`          | The build's HIP version, or null                                                 |
+| `cuda_version`         | The build's CUDA version, or null                                                |
+| `reused`               | True when this revision reused a saved result, so every value above is that original run's |
+| `results_moved_to_cpu` | True when nnU-Net re-ran part of a task with its results in system memory, usually because GPU memory ran out |
+
+Only runs on an added path are checked for that last key, so on a job that named `default`, false means not
+detected. A true value also adds `Part of <task> re-ran with results in system memory on <label>, usually because
+GPU memory ran out. The run took longer.` to the revision's `qc`.
+
+A saved correction's `operation.runtime` is the engine's provenance, which holds the same `device`, `gpu_name`,
+`torch_version`, `hip_version` and `cuda_version`, plus `inference_path` when the job named a path. Its
+`miopen_find_mode` is null unless the build is HIP.
+
+### Refusals and failures
+
+A bad request is refused before any job exists:
+
+| Status | When                                     | `detail`                                                                        |
+| ------ | ---------------------------------------- | ------------------------------------------------------------------------------- |
+| 422    | A malformed ID, or `replay` on a segment | FastAPI's validation list                                                       |
+| 400    | The path is not set up                   | `This GPU is not set up on this workstation.`                                   |
+| 400    | The path is unavailable                  | `<label> is unavailable: <reason>`                                              |
+| 400    | `replay` with `full_refine`              | `A re-run repeats the draft's own steps, so it cannot add a whole-object refinement` |
+| 409    | Another path on a draft with `batches`   | `This draft's AI results came from <label>. Re-run its steps to use another GPU.` |
+
+Once queued, a problem fails the job and never the route. The job has `status: "failed"` and keeps its
+`inference_path`, and on a review job its `error` also reaches the draft's `error`:
+
+- A path that was removed: `<label> is no longer available: This GPU is not set up on this workstation. Nothing
+  ran and no other GPU was tried.`
+- A path that became unavailable: `<label> is no longer available: <reason> Nothing ran and no other GPU was
+  tried.`
+- A different card or device under that ID: `<label> changed after this job was queued. Nothing ran and no other
+  GPU was tried. Start it again.`
+- A device check that measures anything else: `Expected <label>, but the GPU check found <name> (<device>,
+  <build>). No result was kept and no other GPU was tried.` `<build>` is `CUDA` or `no CUDA`.
+- A crop-model task such as `teeth` on a GPU index above 0: `TotalSegmentator would run part of <task> on the
+  first GPU, so it cannot run on <label>. Nothing ran and no other GPU was tried.`
+- A task that stopped: `TotalSegmentator <task> failed on <label>: <cause>. No other GPU was tried.` `<cause>` is
+  `it ran out of GPU memory`, `the process was killed, usually because system memory ran out` or `exit <code>`.
+- A report from another PyTorch: `TotalSegmentator <task> ran on PyTorch <version>, not the <version> that <label>
+  was checked on. No result was kept and no other GPU was tried.`
+- A child that will not stop: `The AI process did not stop in time.`
+
+On a job that named a path, `default` included, an absolute path in any other error becomes `<local path>`. The
+service log keeps the detail.
 
 ## Viewer data
 
