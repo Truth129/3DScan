@@ -178,6 +178,9 @@ def test_a_stale_default_proof_stays_available_with_a_fixed_caution(tmp_path, fr
         '{"checks": {"devices": [{"name": ""}], "recommended_device": "gpu:0"}}',
         '{"checks": {"devices": [{"name": "x"}], "recommended_device": 0}}',
         '{"checks": {"devices": [{"name": "x"}], "recommended_device": "cuda:0"}}',
+        '{"checks": {"devices": [{"name": "\\ud800"}], "recommended_device": "gpu:0"}}',
+        pytest.param(json.dumps({"checks": {"devices": [{"name": "x"}], "recommended_device": f"gpu:{'9' * 5000}"}}), id="an-index-no-integer-can-hold"),
+        pytest.param("[" * 200_000, id="nested-too-deeply"),
     ],
 )
 def test_a_malformed_default_proof_names_no_card_and_blocks_nothing(tmp_path, malformed):
@@ -246,8 +249,24 @@ def untyped_hardware(stub):
     stub.change(lambda record: record["checks"].update(hardware=7))
 
 
+def empty_name(stub):
+    stub.change(lambda record: record["path"].update(gpu_name=""))
+
+
+def unencodable_name(stub):
+    stub.change(lambda record: record["path"].update(gpu_name="\ud800"))
+
+
+def nested_too_deeply(stub):
+    stub.proof.write_text("[" * 200_000)
+
+
 def failed_check(stub):
     stub.change(lambda record: record.update(gpu_ready=False, errors=["PRIVATE failure at /private/home/venv/bin/python"]))
+
+
+def truthy_ready(stub):
+    stub.change(lambda record: record.update(gpu_ready="yes"))
 
 
 def missing_interpreter(stub):
@@ -265,6 +284,24 @@ def removed_family(stub):
 
 def proof_of_other_packages(stub):
     stub.change(lambda record: record["checks"]["runtime_versions"].update({"torch": "2.14.0"}))
+
+
+def torch_record(stub):
+    return next(stub.site_packages.glob("torch-*.dist-info")) / "METADATA"
+
+
+def looping_package_record(stub):
+    record = torch_record(stub)
+    record.unlink()
+    record.symlink_to(record)
+
+
+def undecodable_package_record(stub):
+    torch_record(stub).write_bytes(b"Version: \xff\n")
+
+
+def bottomless_package_record(stub):
+    torch_record(stub).write_text("".join(f'Content-Type: multipart/mixed; boundary="{level}"\n\n--{level}\n' for level in range(2000)))
 
 
 def cupy_wheel(stub):
@@ -300,11 +337,18 @@ def cucim_import(stub):
         (null_byte_in_a_field, UNREADABLE),
         (untyped_memory, UNREADABLE),
         (untyped_hardware, UNREADABLE),
+        (empty_name, UNREADABLE),
+        (unencodable_name, UNREADABLE),
+        (nested_too_deeply, UNREADABLE),
         (failed_check, CHECK_FAILED),
+        (truthy_ready, CHECK_FAILED),
         (missing_interpreter, NO_PYTHON),
         (changed_family, PACKAGES_CHANGED),
         (removed_family, PACKAGES_CHANGED),
         (proof_of_other_packages, PACKAGES_CHANGED),
+        (looping_package_record, PACKAGES_CHANGED),
+        (undecodable_package_record, PACKAGES_CHANGED),
+        (bottomless_package_record, PACKAGES_CHANGED),
         (cupy_wheel, RESAMPLER),
         (cupy_import, RESAMPLER),
         (cucim_wheel, RESAMPLER),
@@ -315,7 +359,8 @@ def test_each_failed_check_disables_its_row_with_one_fixed_sentence(stub, tmp_pa
     damage(stub)
     default, added = rows()
     assert default["available"] and (added["id"], added["available"], added["reason"]) == ("nvidia", False, reason)
-    public = json.dumps(added)
+    public = json.dumps(added, ensure_ascii=False)
+    public.encode()  # What a response does with it.
     assert str(tmp_path) not in public and "PRIVATE" not in public and "/private" not in public
     with pytest.raises(ValueError, match="is unavailable: "):
         binding("nvidia")
@@ -353,8 +398,9 @@ def test_a_failed_proof_keeps_the_card_name_it_measured(stub):
     assert (rows()[1]["label"], rows()[1]["memory_gib"]) == (GPU_NAME, 16)
 
 
-def test_a_proof_with_no_card_is_named_by_its_id(stub):
-    stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(gpu_name=None, memory_bytes=None, kind=None)))
+@pytest.mark.parametrize("gpu_name", [None, ""])
+def test_a_proof_with_no_card_is_named_by_its_id(stub, gpu_name):
+    stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(gpu_name=gpu_name, memory_bytes=None, kind=None)))
     added = rows()[1]
     assert (added["label"], added["memory_gib"], added["shares_display"]) == ("nvidia", None, False)
 
@@ -362,6 +408,20 @@ def test_a_proof_with_no_card_is_named_by_its_id(stub):
 def test_a_failed_proof_with_any_field_shape_keeps_the_panel_working(stub):
     stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(gpu_name=[], memory_bytes={}, kind=[])))
     assert (rows()[1]["label"], rows()[1]["reason"]) == ("nvidia", CHECK_FAILED)
+
+
+def test_a_failed_proof_with_a_name_no_response_can_carry_is_named_by_its_id(stub):
+    stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(gpu_name="\ud800")))
+    assert (rows()[1]["label"], rows()[1]["reason"]) == ("nvidia", CHECK_FAILED)
+    with pytest.raises(ValueError) as error:
+        binding("nvidia")
+    assert str(error.value) == f"nvidia is unavailable: {CHECK_FAILED}"
+
+
+def test_a_proof_that_cannot_be_opened_disables_its_row(stub):
+    stub.proof.unlink()
+    stub.proof.symlink_to(stub.proof)
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, UNREADABLE)
 
 
 def test_memory_rounds_to_whole_gibibytes(stub):
@@ -428,6 +488,26 @@ def test_both_panel_routes_list_the_paths_and_health_does_not(stub, tmp_path):
     assert set(client.get("/api/segmentation-options").json()) >= {"tasks", "inference_paths"}
     health = client.get("/api/health").json()
     assert "inference_paths" not in health and "inference_paths" not in health["gpu"]
+
+
+BAD_PROOFS = {
+    "nested-too-deeply": "[" * 200_000,
+    "a-name-no-response-can-carry": json.dumps(
+        {"checks": {"devices": [{"name": "\ud800"}], "recommended_device": "gpu:0"}, "path": {"id": "nvidia", "gpu_name": "\ud800"}}
+    ),
+    "an-index-no-integer-can-hold": json.dumps({"checks": {"devices": [{"name": "x"}], "recommended_device": f"gpu:{'9' * 5000}"}, "path": {"id": "nvidia"}}),
+}
+
+
+@pytest.mark.parametrize("contents", BAD_PROOFS.values(), ids=BAD_PROOFS)
+@pytest.mark.parametrize("proof", ["default", "added"])
+def test_no_single_proof_can_take_down_a_panel(stub, tmp_path, proof, contents):
+    (tmp_path / "gpu-proof.json" if proof == "default" else stub.proof).write_text(contents)
+    client = TestClient(create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist")), base_url="http://127.0.0.1")
+    for route in ("/api/segmentation-options", "/api/interactive/status"):
+        response = client.get(route)
+        assert response.status_code == 200, response.text
+        assert [row["id"] for row in response.json()["inference_paths"]] == ["default", "nvidia"]
 
 
 # GPUs in sysfs

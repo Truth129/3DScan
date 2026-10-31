@@ -67,6 +67,9 @@ _RESAMPLER_PRESENT = "It has cupy or cucim installed, which would change resampl
 _HARDWARE_CHANGED = "The GPUs in this workstation changed after the last GPU check."
 _DEFAULT_STALE = "Its last GPU check failed or is out of date."
 _NOTHING_RAN = "Nothing ran and no other GPU was tried."
+# What a damaged or hand-made proof can raise while it is judged. RecursionError is how a parser
+# gives up on deep nesting.
+_BAD_RECORD = (AttributeError, KeyError, OSError, RecursionError, TypeError, ValueError)
 
 _LOCAL_PATH = re.compile(r"""'/[^']*'|"/[^"]*"|(?<![\w.~-])/[^\s'"`,;:()<>\[\]{}]+""")
 
@@ -183,6 +186,18 @@ def _shares_display(kind):
     return False
 
 
+def _showable(name):
+    """Whether a card name from a proof can reach a response.
+
+    JSON can spell a lone surrogate and UTF-8 cannot encode one, so showing it would fail the
+    whole response, even for someone using only the default path.
+    """
+    try:
+        return isinstance(name, str) and bool(name.encode())
+    except UnicodeEncodeError:
+        return False
+
+
 def _row(name, label, memory, kind, reason=None, available=True):
     return {
         "id": name,
@@ -201,7 +216,7 @@ def _default_card(checks):
     devices = checks.get("devices")
     if isinstance(chosen, str) and re.fullmatch(r"gpu:\d+", chosen) and isinstance(devices, list) and int(chosen[4:]) < len(devices):
         card = devices[int(chosen[4:])]
-        if isinstance(card, dict) and isinstance(card.get("name"), str):
+        if isinstance(card, dict) and _showable(card.get("name")):
             return card
     return {}
 
@@ -215,14 +230,14 @@ def _default_row():
     """
     if device_request() == "cpu":
         return _row(DEFAULT, "CPU", None, None)
+    proof = doctor.proof_path()
     try:
-        checks = json.loads(doctor.proof_path().read_text())["checks"]
-    except (OSError, ValueError, KeyError, TypeError):
-        checks = None
-    checks = checks if isinstance(checks, dict) else {}
-    card = _default_card(checks)
-    kind = "cuda" if checks.get("cuda_version") else "rocm" if checks.get("hip_version") else None
-    stale = doctor.proof_path().exists() and not doctor.diagnose(live=False)["ready"]
+        checks = json.loads(proof.read_text())["checks"]
+        card = _default_card(checks)
+        kind = "cuda" if checks.get("cuda_version") else "rocm" if checks.get("hip_version") else None
+        stale = not doctor.diagnose(live=False)["ready"]
+    except _BAD_RECORD:
+        card, kind, stale = {}, None, proof.exists()
     return _row(DEFAULT, card.get("name") or "Default device", card.get("memory_bytes"), kind, _DEFAULT_STALE if stale else None)
 
 
@@ -240,7 +255,7 @@ def _inference_path(record, checks):
         tuple(sorted(checks["runtime_versions"].items())),
         None if hardware is None else tuple(hardware),
     )
-    named = all(isinstance(value, str) and value for value in (path.python, path.site_packages, path.gpu_name))
+    named = all(isinstance(value, str) and value for value in (path.python, path.site_packages)) and _showable(path.gpu_name)
     if not named or not path.packages or path.kind not in _VENDORS or type(path.memory_bytes) is not int or re.fullmatch(GPU_REQUEST, path.device) is None:
         raise ValueError("Invalid inference path record")
     return path
@@ -278,21 +293,23 @@ def _examine(name):
         record, checks = proof["path"], proof["checks"]
         if record["id"] != name or not isinstance(checks, dict):
             raise ValueError("Invalid inference path record")
-    except (OSError, ValueError, KeyError, TypeError):
+    except _BAD_RECORD:
         return None, _UNREADABLE, {}
     if proof.get("gpu_ready") is not True:
         return None, _CHECK_FAILED, record
     try:
         path = _inference_path(record, checks)
         reason = _stale(path)
-    except (AttributeError, KeyError, TypeError, ValueError):
+    except (OSError, RecursionError, UnicodeDecodeError):  # The proof is sound: a package record its check read no longer reads.
+        return None, _PACKAGES_CHANGED, record
+    except _BAD_RECORD:
         return None, _UNREADABLE, record
     return None if reason else path, reason, record
 
 
 def _label(name, record):
     gpu_name = record.get("gpu_name")
-    return gpu_name if isinstance(gpu_name, str) and gpu_name else name
+    return gpu_name if _showable(gpu_name) else name
 
 
 def _is_added(name):
