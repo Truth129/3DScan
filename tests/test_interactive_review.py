@@ -1035,6 +1035,28 @@ def test_a_replay_with_no_named_path_stays_on_the_draft_card(example, paths):
     assert queue(example, draft, replay=True)["inference_path"] == binding("nvidia")
 
 
+def test_a_replay_leaves_a_removed_card_for_the_default_and_every_step_repeats(example, paths, tmp_path):
+    # The way out of a draft whose card was taken out of the workstation.
+    service, case, _, _ = example
+    first, _ = paths
+    draft = bound_draft(example)
+    calls = len(service.interactive_runtime.calls)
+    first.proof.rename(tmp_path / "moved-out.json")
+    queued = queue(example, draft, inference_path="default", replay=True)
+    assert queued["payload"]["batches"] == draft["batches"] and queued["inference_path"] == binding("default")
+    assert execute_next(service, queued)["status"] == "completed"
+    prompts, request = sent(example)
+    assert len(service.interactive_runtime.calls) == calls + 1 and len(draft["batches"]) == 2
+    assert prompts == draft["prompts"] and request["batches"] == draft["batches"] and "inference_path" not in request
+    state = current(example, draft)
+    assert state["inference_path"] == binding("default") and state["candidate"]["gpu_name"] == DEFAULT_GPU
+    assert state["batches"] == draft["batches"] and not public_review(state)["dirty"]
+    accepted = execute_next(service, service.reviews.accept(case["id"], draft["id"], state["generation"]))
+    assert accepted["status"] == "completed", accepted
+    published = service.store.revision(case["id"], accepted["revision_id"])["operation"]
+    assert published["batches"] == draft["batches"] and published["runtime"]["inference_path"] == "default"
+
+
 def test_a_replay_can_return_to_the_draft_card_after_a_failure_elsewhere(example, paths):
     draft = bound_draft(example)
     fail_next_run(example)
