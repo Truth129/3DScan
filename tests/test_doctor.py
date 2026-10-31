@@ -137,6 +137,11 @@ def test_the_proof_location_follows_the_setting_per_call(proof, monkeypatch, tmp
     assert doctor.proof_path() == tmp_path / ".runtime" / "gpu-proof.json"
 
 
+def test_the_suite_reads_no_proof_this_checkout_holds():
+    # A proof names this machine's card, and tests/conftest.py keeps every test and child off it.
+    assert doctor.proof_path() != doctor.ROOT / ".runtime" / "gpu-proof.json" and not doctor.proof_path().exists()
+
+
 def test_a_proof_can_be_compared_with_another_environments_packages(proof):
     theirs = {"torch": "2.14.0", "cuda-toolkit": "13.0.3"}
 
