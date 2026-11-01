@@ -717,6 +717,83 @@ describe('a draft that moves under a job this page follows', () => {
     await reads(reader, saved(1, { status: 'ready', job_id: undefined }));
     expect(controller.job?.id).toBe('prediction');
   });
+  it('lets a Discard land while the re-read is out, with nothing left to wait for', async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, refusal));
+    const read = held<InteractiveReview>();
+    reader.interactiveReview.mockReturnValueOnce(read.reply);
+    const run = controller.apply(true);
+    await vi.advanceTimersByTimeAsync(0);
+    const answer = held<Awaited<ReturnType<typeof reader.discardInteractive>>>();
+    reader.discardInteractive.mockReturnValueOnce(answer.reply);
+    const discard = controller.discard();
+    await vi.advanceTimersByTimeAsync(0);
+    read.release(running()); // Read just before the discard landed.
+    await run;
+    answer.release({ ...saved(2), status: 'discarded' });
+    await discard;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect([controller.working, controller.conflict, controller.error]).toEqual([false, false, refusal]);
+    expect(controller.review).toBeUndefined();
+  });
+  it('follows on when that Discard is refused, because the job is still running', async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, refusal));
+    const read = held<InteractiveReview>();
+    reader.interactiveReview.mockReturnValueOnce(read.reply);
+    const run = controller.apply(true);
+    await vi.advanceTimersByTimeAsync(0);
+    const answer = held<InteractiveReview>();
+    reader.discardInteractive.mockImplementationOnce(() => answer.reply.then(() => Promise.reject(new Error('Workstation offline'))));
+    const discard = controller.discard();
+    await vi.advanceTimersByTimeAsync(0);
+    read.release(running());
+    await run;
+    answer.release(saved());
+    await discard;
+    expect(controller.working).toBe(true);
+    await reads(reader, saved(1, { status: 'ready' }));
+    expect(controller.working).toBe(false);
+  });
+  it('leaves nothing to wait for when Reload saved work finds the draft has gone', async () => {
+    const { controller, reader } = await followedWithAMark('accepting');
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Wait for acceptance to finish or cancel it before editing'));
+    await vi.advanceTimersByTimeAsync(300);
+    expect([controller.working, controller.conflict]).toEqual([true, true]);
+    reader.interactiveReviews.mockResolvedValueOnce([]); // Accepted, so it has left the open drafts.
+    await controller.reload();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect([controller.working, controller.conflict, controller.error]).toEqual([false, false, '']);
+    expect(controller.review).toBeUndefined();
+    expect(controller.prompts).toEqual([]);
+  });
+  it('reads no more once a Reload has ended the follow, whatever a read still out then says', async () => {
+    const { controller, reader } = await followedWithAMark('accepting');
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Wait for acceptance to finish or cancel it before editing'));
+    const read = held<InteractiveReview>();
+    reader.interactiveReview.mockReturnValueOnce(read.reply);
+    await vi.advanceTimersByTimeAsync(900);
+    reader.interactiveReviews.mockResolvedValueOnce([saved()]);
+    await controller.reload();
+    expect(controller.working).toBe(false);
+    reader.interactiveReview.mockClear();
+    read.release(running(1, 'accepting'));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(controller.working, 'the reload read later than that reply').toBe(false);
+    expect(reader.interactiveReview).not.toHaveBeenCalled();
+  });
+  it('follows on when Reload saved work finds the job still running', async () => {
+    const { controller, reader } = await followedWithAMark('accepting');
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Wait for acceptance to finish or cancel it before editing'));
+    await vi.advanceTimersByTimeAsync(300);
+    reader.interactiveReviews.mockResolvedValueOnce([running(1, 'accepting')]);
+    await controller.reload();
+    expect([controller.working, controller.conflict]).toEqual([true, false]);
+    await reads(reader, saved(1, { status: 'accepted' }));
+    expect(controller.working).toBe(false);
+  });
 });
 
 describe('direct paint and erase drafts', () => {

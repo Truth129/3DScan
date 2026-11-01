@@ -168,6 +168,10 @@ export class InteractiveController {
     this.notify();
   }
   private install(value?: InteractiveReview) {
+    // A Discard or a Reload can land during a follow, and what was being followed belonged to the
+    // record this replaces. A poll left running would stop on a missing review with the spinner on.
+    clearTimeout(this.pollTimer);
+    this.working = false;
     this.review = value;
     this.prompts = structuredClone(value?.prompts ?? []);
     this.options = { ...(value?.options ?? initialOptions()) };
