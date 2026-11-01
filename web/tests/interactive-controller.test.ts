@@ -775,35 +775,35 @@ describe('a draft that moves under a job this page follows', () => {
       expect(reader.interactiveReview, 'nothing is being followed').not.toHaveBeenCalled();
     };
     /** A poll is out when Cancel is pressed, and that poll ends the follow before Cancel answers. */
-    async function cancelOutlasts(answer: Promise<unknown>) {
+    async function cancelOutlasts(answer: Promise<unknown>, ended: InteractiveReview = saved()) {
       const { controller, reader } = await ownJob();
       const read = held<InteractiveReview>();
       reader.interactiveReview.mockReturnValueOnce(read.reply);
       await vi.advanceTimersByTimeAsync(900);
       reader.cancel.mockReturnValueOnce(answer as never);
       const cancelling = controller.cancel();
-      read.release(saved());
+      read.release(ended);
       await vi.advanceTimersByTimeAsync(0);
       expect(controller.working).toBe(false);
       return { controller, reader, cancelling };
     }
     /** The same order the other way round: Cancel answers first, so its timer outlasts the follow. */
-    async function cancelArmed() {
+    async function cancelArmed(ended: InteractiveReview = saved()) {
       const { controller, reader } = await ownJob();
       const read = held<InteractiveReview>();
       reader.interactiveReview.mockReturnValueOnce(read.reply);
       await vi.advanceTimersByTimeAsync(900);
       await controller.cancel();
-      read.release(saved());
+      read.release(ended);
       await vi.advanceTimersByTimeAsync(0);
       expect(controller.working).toBe(false);
       return { controller, reader };
     }
     /** Two polls out at once, which Cancel's timer can do on a slow link. The first ends the follow. */
-    async function twoPolls<T extends InteractiveReview | never>(second: Promise<T>, ended = saved() as InteractiveReview) {
+    async function twoPolls(second: Promise<InteractiveReview>, ended: InteractiveReview = saved()) {
       const { controller, reader } = await ownJob();
       const first = held<InteractiveReview>();
-      reader.interactiveReview.mockReturnValueOnce(first.reply).mockReturnValueOnce(second as never);
+      reader.interactiveReview.mockReturnValueOnce(first.reply).mockReturnValueOnce(second);
       await vi.advanceTimersByTimeAsync(900);
       await controller.cancel();
       await vi.advanceTimersByTimeAsync(900);
@@ -894,16 +894,7 @@ describe('a draft that moves under a job this page follows', () => {
         return { controller, reader, answer, finishing };
       };
       it('drops a timer the last follow left', async () => {
-        const { controller, reader, answer, finishing } = await ready(async ended => {
-          const { controller, reader } = await ownJob();
-          const read = held<InteractiveReview>();
-          reader.interactiveReview.mockReturnValueOnce(read.reply);
-          await vi.advanceTimersByTimeAsync(900);
-          await controller.cancel();
-          read.release(ended);
-          await vi.advanceTimersByTimeAsync(0);
-          return { controller, reader };
-        });
+        const { controller, reader, answer, finishing } = await ready(cancelArmed);
         await quiet(reader);
         expect(controller.working, 'the page stays held').toBe(true);
         answer.release(job());
@@ -913,15 +904,9 @@ describe('a draft that moves under a job this page follows', () => {
         const reply = held<ReturnType<typeof cancelled>>();
         let cancelling!: Promise<void>;
         const { controller, reader, answer, finishing } = await ready(async ended => {
-          const { controller, reader } = await ownJob();
-          const read = held<InteractiveReview>();
-          reader.interactiveReview.mockReturnValueOnce(read.reply);
-          await vi.advanceTimersByTimeAsync(900);
-          reader.cancel.mockReturnValueOnce(reply.reply as never);
-          cancelling = controller.cancel();
-          read.release(ended);
-          await vi.advanceTimersByTimeAsync(0);
-          return { controller, reader };
+          const page = await cancelOutlasts(reply.reply, ended);
+          cancelling = page.cancelling;
+          return page;
         });
         reply.release(cancelled());
         await cancelling;
@@ -934,15 +919,9 @@ describe('a draft that moves under a job this page follows', () => {
         const reply = failing<ReturnType<typeof cancelled>>();
         let cancelling!: Promise<void>;
         const { controller, answer, finishing } = await ready(async ended => {
-          const { controller, reader } = await ownJob();
-          const read = held<InteractiveReview>();
-          reader.interactiveReview.mockReturnValueOnce(read.reply);
-          await vi.advanceTimersByTimeAsync(900);
-          reader.cancel.mockReturnValueOnce(reply.reply as never);
-          cancelling = controller.cancel();
-          read.release(ended);
-          await vi.advanceTimersByTimeAsync(0);
-          return { controller, reader };
+          const page = await cancelOutlasts(reply.reply, ended);
+          cancelling = page.cancelling;
+          return page;
         });
         reply.release();
         await cancelling;
