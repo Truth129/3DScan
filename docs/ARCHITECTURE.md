@@ -242,10 +242,11 @@ needs no restart. `GET /api/segmentation-options` and `GET /api/interactive/stat
 read when a panel opens, so it imports no PyTorch and starts no process: opening a panel must never touch a busy
 card. It compares each proof with what is installed, and the first mismatch gives that row one fixed sentence,
 never proof text: an unreadable record, a failed check, an install that did not finish, a missing interpreter,
-changed packages, a TotalSegmentator, nnU-Net or nnInteractive version that differs from the API's, cupy or cucim
-present, or a different set of that vendor's cards in sysfs. A bad file disables only its own row. `available`
-therefore means installed as proven and last check passed. It never means a scan will fit, and the device check
-at job start stays the live authority.
+a changed PyTorch or GPU runtime package, a TotalSegmentator, nnU-Net or nnInteractive version that differs from
+the API's, cupy or cucim present, or a different set of that vendor's cards in sysfs. A bad file disables only
+its own row. `available` therefore means that what the proof records is still installed and its last check
+passed. No other package is compared. It never means a scan will fit, and the device check at job start stays
+the live authority.
 
 A package's record is no sign that its files arrived, so comparing packages cannot see a stopped install.
 `scripts/add_inference_path.sh` marks an environment it makes with `.scan3d-inference-path`, removes

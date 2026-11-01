@@ -447,7 +447,7 @@ loads PyTorch or touches a GPU, and no row holds a local path or proof text. `GE
 | `label`          | The GPU's name. `default` falls back to `Default device`, and shows `CPU` when `SCAN3D_DEVICE` is `cpu`. An added path whose proof names no GPU shows its `id` |
 | `memory_gib`     | The GPU's memory to the nearest GiB, or null if unknown                                  |
 | `shares_display` | True when a GPU of this vendor has a connected display now, so its free memory depends on what is on screen. False when that cannot be read |
-| `available`      | Whether a request may name this path: installed as proven, and its last check passed. It never means a scan will fit. Always true for `default` |
+| `available`      | Whether a request may name this path: what its proof records is still installed, and its last check passed. It never means a scan will fit. Always true for `default` |
 | `reason`         | A fixed sentence, or null                                                                |
 
 An added path with `available: false` gives the first of these that applies:
@@ -460,6 +460,9 @@ An added path with `available: false` gives the first of these that applies:
 - `Its TotalSegmentator or nnInteractive version differs from this workstation's.`
 - `It has cupy or cucim installed, which would change resampling.`
 - `The GPUs in this workstation changed after the last GPU check.`
+
+The packages sentence means PyTorch and its GPU runtime packages, the only ones a proof records. The version
+sentence also covers nnU-Net and `nninteractive-client`.
 
 `default` gives null or the caution `Its last GPU check failed or is out of date.`, which blocks nothing. A proof
 taken before its vendor's cards changed earns that caution and loses its card: `label` is `Default device` and

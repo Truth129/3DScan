@@ -82,13 +82,14 @@ NVIDIA card or CUDA build. These facilities show what the code does, not what a 
   and in every child it spawns. Neither variable is a `Settings` field, so a temporary data
   directory isolates neither. A test that wants added paths or a default proof sets the
   variable to its own.
-- **Browser gates** start their own servers, so that fixture does not reach them.
-  `web/tests/interactive_test_server.py` defaults `SCAN3D_INFERENCE_PATH_DIR` to a folder
-  inside its temporary data that need not exist, and `web/tests/dicom_seg_import_smoke.py`
-  sets the same, so a gate lists one path whatever this checkout has added.
-  `web/tests/inference_path_smoke.py` sets its own. They cover only that folder: a gate that
-  does not set `SCAN3D_DEVICE=cpu` still shows this checkout's default card, and a plain
-  `scan3d serve` behind `--base-url` lists whatever the checkout has.
+- **Browser gates** run outside pytest, so that fixture does not reach them, whether a gate
+  starts its own server or takes `--base-url`. `web/tests/interactive_test_server.py`
+  defaults `SCAN3D_INFERENCE_PATH_DIR` to a folder inside its temporary data that need not
+  exist, and `web/tests/dicom_seg_import_smoke.py` sets the same, so a gate on either server
+  lists one path whatever this checkout has added. `web/tests/inference_path_smoke.py` sets
+  its own. They cover only that folder: a gate that does not set `SCAN3D_DEVICE=cpu` still
+  shows this checkout's default card, and a plain `scan3d serve` behind `--base-url` lists
+  whatever the checkout has.
 - **`tests/inference_path_stub.py`** builds a real second interpreter with no second
   PyTorch. `stand_in()` makes a venv with package metadata and a passing proof, `activate()`
   makes it discoverable, and `shadow()` gives its children a module of your choice. A

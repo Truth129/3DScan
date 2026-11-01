@@ -177,9 +177,9 @@ scripts/add_inference_path.sh nvidia
 A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk.
 
 **Your existing install needs the AI packages too.** Every path must use the same
-TotalSegmentator and nnInteractive versions, and the script does not check yours. An
-install made with `--torch none` has neither, so the GPU stays unavailable even after its
-check passes. Add them first with `scripts/bootstrap.sh --torch cpu`.
+TotalSegmentator, nnU-Net and nnInteractive versions, and the script does not check
+yours. An install made with `--torch none` has none of them, so the GPU stays unavailable
+even after its check passes. Add them first with `scripts/bootstrap.sh --torch cpu`.
 
 **What it never touches.** It leaves every other Python environment, the viewer, the
 DICOM converter, TotalSegmentator's settings, `scan3d.env` and the running app alone.
@@ -199,9 +199,9 @@ writes a proof to `.runtime/inference-paths/nvidia.json`, or under
 `SCAN3D_INFERENCE_PATH_DIR` if you set it. That file is the whole registration. When the
 check passes, a running app that reads that folder offers the GPU the next time a panel
 opens, with no restart and no setting to change, provided your existing install's
-TotalSegmentator and nnInteractive versions equal this environment's. If they differ, the
-app shows the GPU as unavailable and says why. The script cannot compare them, because it
-cannot tell which Python serves the app.
+TotalSegmentator, nnU-Net and nnInteractive versions equal this environment's. If they
+differ, the app shows the GPU as unavailable and says why. The script cannot compare them,
+because it cannot tell which Python serves the app.
 
 A passing check proves that this PyTorch build sees the card and ran a small 3D
 convolution on it, and that this environment can import what the app's AI processes
@@ -216,30 +216,41 @@ that results are good, or that they match another GPU's.
 
 **Run the script again** after changing the NVIDIA driver, after anything changes that
 environment, and whenever the app shows the GPU as unavailable. If its last install
-finished and it equals the lock, the environment stays: the script installs nothing and
-needs no network. Anything else is rebuilt from empty, from what uv has already fetched
-where it can, because uv cannot repair what a stopped install leaves. Either way the
-script then repeats the GPU check.
+finished and its package names and versions equal the lock, the environment stays: the
+script installs nothing and needs no network. Anything else is rebuilt from empty, from
+what uv has already fetched where it can, because uv cannot repair what a stopped install
+leaves. Either way the script then repeats the GPU check.
 
 A finished environment may be in use, so the script rebuilds it only when no job is
 queued or running, by the same rule as the GPU check, and uv can plan the rebuild.
 Otherwise it stops with nothing changed. `scripts/check_gpu.py --queue` runs that queue
 rule alone. No job can start from an unfinished environment, so a first install and a
-stopped install do not wait for the queue.
+stopped install do not wait for the queue. An idle nnInteractive process is not a job, so
+it does not hold a rebuild back. It keeps what it had loaded until a segmentation, AI
+assist on another GPU or a restart stops it, and if the GPU check records no change it
+goes on serving that GPU.
 
-If an install stops, no check runs. Until a run finishes, the app shows the GPU as
-unavailable, or not at all if it was never checked, and running the script again starts
-from empty. Only one run can use an environment at a time, so a second stops with nothing
-changed. If uv cannot read the environment, the script stops with nothing changed too. If
-the fault is in the environment itself, move the directory aside, and the next run
-installs it from empty.
+If an install stops, no check runs. Until an install finishes, the app shows the GPU as
+unavailable if it was last checked on that environment, or not at all if it was never
+checked, and running the script again starts from empty. Only one run can use an
+environment at a time, so a second stops with nothing changed.
 
-The app notices changed PyTorch and engine packages by itself, but it cannot see a driver
-change, so until you re-run the script, only the device check at the start of each job
-can catch a broken driver. A job that stops there says that PyTorch cannot access a GPU
-and that no other GPU was tried. Check the driver, then run the script again to repeat
-the GPU check. If the reason shown is a TotalSegmentator or nnInteractive version, update
-your existing install too: every path must use the same versions.
+Two faults in a finished environment survive a re-run. If uv cannot read it, the script
+stops with nothing changed. If files are missing or damaged but its package names and
+versions still equal the lock, the script keeps it, and the GPU check can then fail on
+every run. When the fault is in the environment itself, wait until no job is queued or
+running and move the directory aside. The next run is then a first install: it starts
+from empty, needs the free space above, and does not wait for the queue.
+
+The app notices changed PyTorch and engine packages by itself. It cannot see other
+packages or a driver change, so until you re-run the script, only the device check a job
+makes as PyTorch loads can catch a broken driver. A job that stops there because PyTorch
+sees no GPU says so, and that no other GPU was tried. If PyTorch hangs or crashes there,
+the error names the device check or the nnInteractive worker instead. Check the driver,
+then run the script again to repeat the GPU check. If the reason shown is a
+TotalSegmentator or nnInteractive version, which also covers nnU-Net and the nnInteractive
+client, a re-run fixes only this environment, so update your existing install too: every
+path must use the same versions.
 
 **To remove a path**, move its proof out of the folder. The GPU leaves the app the next
 time a panel opens, with no restart, and a job already queued on it fails, naming the
@@ -256,10 +267,11 @@ the card's memory, which is what you want back if you are removing a card that m
 
 **Two cards of one vendor** can share an environment, so the script is not needed.
 Running `scripts/check_gpu.py --path second --device gpu:1` with that environment's
-Python records the second card as its own path. `N` counts within one PyTorch build.
-This has only run against a fake PyTorch. A task with a crop model, currently `teeth`,
-cannot run on an index above 0, because TotalSegmentator starts that model on the first
-GPU, so the job fails and says so.
+Python records the second card as its own path. `N` counts within one PyTorch build. The
+script repeats only its own path's check, so repeat this command after a re-run. This has
+only run against a fake PyTorch. A task with a crop model, currently `teeth`, cannot run
+on an index above 0, because TotalSegmentator starts that model on the first GPU, so the
+job fails and says so.
 
 ## AI models
 
@@ -329,8 +341,8 @@ See the [user guide](USER_GUIDE.md) for what a backup contains and how to restor
 | `Invalid host header`                   | Add the name you browse to in `SCAN3D_ALLOWED_HOSTS`.                                       |
 | The app shows **GPU setup required**    | Run `scripts/check_gpu.py`, or set `SCAN3D_DEVICE=auto` or `cpu`.                           |
 | Import by path is refused               | Add the folder to `SCAN3D_IMPORT_ROOTS`. Browser upload needs no entry.                     |
-| AI task fails with an out-of-memory error | Close other GPU work, choose a larger GPU, or set `SCAN3D_DEVICE=cpu`.                    |
-| A GPU shows **· unavailable**           | Read its reason, then run `scripts/add_inference_path.sh nvidia` again.                     |
+| AI task fails with an out-of-memory error | Close other GPU work, choose a larger GPU, or set `SCAN3D_DEVICE=cpu`, which moves only the default path. |
+| A GPU shows **· unavailable**           | Read its reason, then run `scripts/add_inference_path.sh nvidia` again. A version reason also needs your existing install updated. |
 | Port 9010 is taken                      | Set `SCAN3D_PORT` in `scan3d.env`.                                                          |
 
 `.venv/bin/scan3d doctor` reports the device, PyTorch build, `dcm2niix` status and
