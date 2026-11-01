@@ -679,6 +679,8 @@ async function process() {
     actionBusy.value = false;
   }
 }
+// Retry tasks keeps what the person set wherever a run's re-read can have failed, which takes more
+// than one row. One path restores the revision's settings, as it always has.
 async function loadSegmentationOptions(preserveCurrent = false) {
   if (!revision.value || !activeCase.value) return;
   const scope = () => sourceScope(activeCase.value?.id ?? '', revision.value);
@@ -1742,7 +1744,7 @@ onBeforeUnmount(() => {
           :error="segmentationError"
           @run="segment"
           @close="segmentationOpen = false"
-          @retry="loadSegmentationOptions"
+          @retry="loadSegmentationOptions(segmentationPaths.length > 1)"
           @recheck="loadSegmentationOptions(true)"
           @license-changed="loadSegmentationOptions(true)"
         />

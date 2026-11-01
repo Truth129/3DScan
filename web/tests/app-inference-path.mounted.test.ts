@@ -285,6 +285,43 @@ describe('a segmentation that is refused', () => {
     await submit(root);
     expect(robustCrop().props.checked).toBe(true);
   });
+  it('keeps what the person set through Retry tasks when the read after a refusal failed too', async () => {
+    const server = workstation([amd, nvidia]);
+    const root = await openPanel();
+    const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
+    (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
+    await settled();
+    server.segment.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    vi.mocked(api.segmentationOptions).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await submit(root);
+    expect(root.named('segmentation-error')?.content).toContain('Failed to fetch');
+    await press(root.button('Retry tasks'));
+    expect(robustCrop().props.checked).toBe(true);
+    expect(runButton(root)?.props.disabled).toBeFalsy();
+  });
+  it('keeps them through Retry tasks after a Check again that failed', async () => {
+    workstation([amd, broken]);
+    const root = await openPanel();
+    const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
+    (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
+    await settled();
+    vi.mocked(api.segmentationOptions).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await press(form(root).button('Check again'));
+    await press(root.button('Retry tasks'));
+    expect(robustCrop().props.checked).toBe(true);
+  });
+  it("leaves one path's Retry tasks restoring the revision's settings, as it did", async () => {
+    workstation([amd]);
+    const root = await openPanel();
+    const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
+    (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
+    await settled();
+    await press(root.button('×'));
+    vi.mocked(api.segmentationOptions).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await press(root.button('Segment CT…'));
+    await press(root.button('Retry tasks'));
+    expect(robustCrop().props.checked).toBe(false);
+  });
   it('asks for nothing new with one path, which named no card', async () => {
     const server = workstation([amd]);
     const root = await openPanel();
