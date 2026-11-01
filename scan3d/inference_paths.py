@@ -83,7 +83,9 @@ _BAD_RECORD = (AttributeError, KeyError, OSError, RecursionError, TypeError, Val
 # because its `//host/...` reads as a path: PyTorch's out-of-memory error ends with one. With no
 # host it is only a path with a prefix, so it falls through to the path rule.
 _PATH_CHAR = r"""[^\s'"`,;:()<>\[\]{}]"""
-_LOCAL_PATH = re.compile(rf"""(https?://(?!/){_PATH_CHAR}+)|'/[^']*'|"/[^"]*"|(?<![\w.~-])/{_PATH_CHAR}+(?:(?: +{_PATH_CHAR}+)* +{_PATH_CHAR}*/{_PATH_CHAR}*)?""")
+_LOCAL_PATH = re.compile(
+    rf"""(https?://(?!/){_PATH_CHAR}+)|'/[^']*'|"/[^"]*"|(?<![\w.~-])/{_PATH_CHAR}+(?:(?: +{_PATH_CHAR}+)* +{_PATH_CHAR}*/{_PATH_CHAR}*)?"""
+)
 
 
 def installed(site, name):
