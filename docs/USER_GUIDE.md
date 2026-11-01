@@ -339,11 +339,15 @@ serves as an overlap-preserving export for 3D Slicer.
 
 ### DICOM SEG
 
-**DICOM SEG…** needs a configured Orthanc, and the CT must have been imported from that archive.
+**Export SEG…** needs a configured Orthanc, and the CT must have been imported from that archive.
 Select the masks, then choose **Archive in Orthanc**, or pick a **Send destination** and choose
 **Send to** it. All masks go into one SEG object with overlaps preserved. Reopening the dialog
 never sends anything, and **Send again** deliberately resends the same instances. See
 [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back).
+
+The dialog starts with every nonempty mask selected. **Select visible** narrows that to the masks
+currently switched on in the anatomy list. It takes a snapshot, so hiding a mask later leaves the
+selection alone until you choose it again.
 
 To give each voxel to one structure, tick **Resolve overlaps in this export** and rank the masks
 with the arrows. Where masks overlap, the higher mask keeps those voxels. The smallest masks start

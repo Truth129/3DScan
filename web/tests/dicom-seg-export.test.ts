@@ -13,6 +13,7 @@ import {
   type DicomSegExportJob,
 } from '../src/lib/dicom-seg';
 import { useDicomSegExport } from '../src/lib/use-dicom-seg-export';
+import { visibleVolumeMaskIds } from '../src/lib/volume-mask';
 import type { InteractiveReview, Revision, Structure } from '../src/types';
 
 const job = (status: DicomSegExportJob['status'], values: Partial<DicomSegExportJob> = {}): DicomSegExportJob => ({
@@ -63,6 +64,22 @@ describe('saved mask export scope', () => {
       { id: 'lung', voxel_count: 13 },
     ] as Structure[];
     expect(nonemptySavedStructures(structures).map(item => item.id)).toEqual(['heart', 'lung']);
+  });
+  it('offers only nonempty masks that are switched on in the anatomy list', () => {
+    const structures = [
+      { id: 'heart', voxel_count: 24 },
+      { id: 'empty', voxel_count: 0 },
+      { id: 'lung', voxel_count: 13 },
+      { id: 'aorta', voxel_count: 8 },
+      { id: 'unknown', voxel_count: 5 },
+    ] as Structure[];
+    const display = {
+      heart: { visible: true, opacity: 1 },
+      empty: { visible: true, opacity: 1 },
+      lung: { visible: false, opacity: 1 },
+      aorta: { visible: true, opacity: 0 },
+    };
+    expect(visibleVolumeMaskIds(nonemptySavedStructures(structures), display)).toEqual(['heart', 'aorta']);
   });
   it('explains busy, comparison and unsaved draft restrictions without blocking unrelated drafts', () => {
     expect(savedRevisionExportBlockReason({ ...options, busy: true })).toContain('current operation');
