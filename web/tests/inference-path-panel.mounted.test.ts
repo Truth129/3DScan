@@ -159,6 +159,8 @@ async function openAI() {
 }
 // The documented rollback removes the last added card, which leaves one row and this draft.
 const stranded = () => resultOn(nvidia);
+/** It goes by the words of the label around it, which change once a result locks the draft. */
+const chooser = (root: FakeElement) => root.select('Run on') ?? root.select('Re-run draft on');
 /** The status lines of Options +, in the order they read. */
 const statusLines = (root: FakeElement) =>
   root
@@ -187,7 +189,7 @@ describe('choosing a card', () => {
     expect(section().props['data-inference-path']).toBeUndefined();
     expect(root.named('review-ai-path')).toBeUndefined();
     await press(root.button('Options +'));
-    expect(root.select('Inference path')).toBeUndefined();
+    expect(chooser(root)).toBeUndefined();
     panel.value.addGesture(stroke);
     await settled();
     await press(root.button('Apply edits'));
@@ -199,7 +201,7 @@ describe('choosing a card', () => {
     expect(section().props['data-inference-path']).toBeUndefined();
     expect(root.named('review-ai-path')).toBeUndefined();
     await press(root.button('Options +'));
-    expect(root.select('Inference path')).toBeUndefined();
+    expect(chooser(root)).toBeUndefined();
     panel.value.addPrompt(point);
     await settled();
     await press(root.button('Run AI'));
@@ -222,7 +224,7 @@ describe('choosing a card', () => {
     expect(root.named('review-advanced')?.content).toContain('The first AI result keeps this draft on this GPU.');
     expect(root.named('review-advanced')?.content).toContain('One AI job runs at a time across GPUs.');
     expect(root.button('Re-run on this GPU')).toBeUndefined();
-    await choose(root.select('Inference path'), 'nvidia');
+    await choose(root.select('Run on'), 'nvidia');
     expect(server.stored.get(REVIEW_PATH_KEY)).toBe('nvidia');
     expect(section().props['data-inference-path']).toBe('nvidia');
     expect(root.named('review-ai-path')?.content).toBe('AI · NVIDIA Test GPU');
@@ -305,10 +307,10 @@ describe('choosing a card', () => {
     await press(root.button('Options +'));
     expect(root.button('Refine whole mask')?.props.disabled).toBe(true);
     expect(root.named('review-advanced')?.content).toContain('Broken Test GPU is unavailable');
-    expect(root.select('Inference path')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB · unavailable']);
+    expect(root.select('Run on')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB · unavailable']);
     expect(
       root
-        .select('Inference path')
+        .select('Run on')
         ?.all.filter(node => node.tag === 'option')
         .map(node => node.props.disabled),
     ).toEqual([false, true]);
@@ -339,7 +341,7 @@ describe('choosing a card', () => {
     expect(section().props['data-inference-path']).toBe('default');
     expect(root.named('review-messages')?.content).toContain('no longer set up on this workstation, so AMD Test GPU is selected.');
     await press(root.button('Options +'));
-    await choose(root.select('Inference path'), 'nvidia');
+    await choose(root.select('Run on'), 'nvidia');
     expect(root.named('review-messages')?.content).not.toContain('no longer set up');
   });
   it('reports a removed card once, and leaves what was stored for the person to replace', async () => {
@@ -362,7 +364,7 @@ describe('choosing a card', () => {
         throw new DOMException('full', 'QuotaExceededError');
       },
     });
-    await choose(root.select('Inference path'), 'nvidia');
+    await choose(root.select('Run on'), 'nvidia');
     await press(root.button('Direct edit'));
     await press(root.button('AI assist'));
     expect(section().props['data-inference-path']).toBe('nvidia');
@@ -438,7 +440,7 @@ describe('a card that cannot be picked', () => {
     server.interactiveStatus.mockImplementation(async () => status([amd, fixed]));
     await press(root.named('review-advanced')?.button('Check again'));
     expect(server.interactiveStatus).toHaveBeenCalledOnce();
-    expect(root.select('Inference path')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB']);
+    expect(root.select('Run on')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB']);
     expect(statusLines(root)).toEqual([]);
     expect(root.named('review-advanced')?.button('Check again'), 'nothing left to check').toBeUndefined();
     expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 1');
@@ -860,7 +862,7 @@ describe('a draft with a result', () => {
     expect(root.named('review-advanced')?.content).toContain('Marks are never lost.');
     expect(root.named('review-advanced')?.content).not.toContain('The first AI result keeps this draft on this GPU.');
     expect(root.named('review-result-summary')?.content).toContain('AI result from NVIDIA Test GPU');
-    await choose(root.select('Inference path'), 'default');
+    await choose(root.select('Re-run draft on'), 'default');
     expect(section().props['data-inference-path']).toBe('nvidia');
     expect(root.named('review-ai-path')?.content).toBe('AI · NVIDIA Test GPU');
     panel.value.addPrompt(point);
@@ -873,7 +875,7 @@ describe('a draft with a result', () => {
     const { root } = await openAI();
     await press(root.button('Options +'));
     expect(root.named('review-advanced')?.content).toContain('This GPU also drives the display');
-    expect(root.select('Inference path')?.props.value).toBe('nvidia');
+    expect(root.select('Re-run draft on')?.props.value).toBe('nvidia');
   });
   it('locks a full refine with no marks, which has no applied count', async () => {
     workstation([amd, nvidia], resultOn(nvidia, { prompts: [], applied_prompt_count: 0, batches: [{ end: 0, autozoom: true, full_refine: true }] }));
@@ -886,7 +888,7 @@ describe('a draft with a result', () => {
     const { root } = await openAI();
     await press(root.button('Options +'));
     expect(root.named('review-rerun')?.props.disabled).toBe(true);
-    await choose(root.select('Inference path'), 'default');
+    await choose(root.select('Re-run draft on'), 'default');
     await press(root.button('Re-run on this GPU'));
     expect(server.predict).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'default', replay: true });
   });
@@ -983,7 +985,7 @@ describe('a draft with a result', () => {
     const span = () => root.named('review-ai-path');
     expect(span()?.content).toBe('AI · NVIDIA Test GPU');
     expect(span()?.props.title).toBe('NVIDIA Test GPU');
-    expect(root.select('Inference path')?.props.disabled).toBe(true);
+    expect(root.select('Re-run draft on')?.props.disabled).toBe(true);
     expect(root.named('review-rerun')?.props.disabled).toBe(true);
     expect(root.named('review-messages')?.content, 'a running re-run is not told to start one').not.toContain(rerunHint);
     expect(section().props['data-inference-path']).toBe('default');
@@ -1014,7 +1016,7 @@ describe('a re-run that failed', () => {
     await vi.waitFor(() => expect(root.named('review-messages')?.content).toContain(rerunHint), nextPoll);
     expect(root.named('review-save')?.props.disabled).toBe(true);
     expect(root.named('review-apply')?.props.disabled).toBe(true);
-    await choose(root.select('Inference path'), 'default');
+    await choose(root.select('Re-run draft on'), 'default');
     expect(root.named('review-rerun')?.props.disabled, 'the only card known to work').toBeFalsy();
   });
   it('re-runs a full refine, which has no marks to fall back on', async () => {
@@ -1106,8 +1108,8 @@ describe('a draft whose card has gone', () => {
     await press(root.button('Options +'));
     expect(root.named('review-advanced')?.content).toContain('Re-run draft on');
     expect(root.named('review-advanced')?.content).toContain("This draft's AI results came from NVIDIA Test GPU");
-    expect(root.select('Inference path')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB']);
-    expect(root.select('Inference path')?.props.value).toBe('default');
+    expect(root.select('Re-run draft on')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB']);
+    expect(root.select('Re-run draft on')?.props.value).toBe('default');
     expect(root.button('Re-run on this GPU')?.props.disabled).toBeFalsy();
   });
   it('moves the draft to that row with the same request as any re-run, and pending marks go with it', async () => {
@@ -1130,7 +1132,7 @@ describe('a draft whose card has gone', () => {
     await vi.waitFor(() => expect(section().props['data-inference-path']).toBeUndefined(), nextPoll);
     expect(root.named('review-ai-path')).toBeUndefined();
     expect(message(root)).not.toContain('no longer set up');
-    expect(root.select('Inference path')).toBeUndefined();
+    expect(chooser(root)).toBeUndefined();
     expect(root.named('review-rerun')).toBeUndefined();
     expect(root.named('review-save')?.props.disabled).toBeFalsy();
     expect(root.named('review-result-summary')?.content).toContain('AI result from AMD Test GPU');
@@ -1195,7 +1197,7 @@ describe('a draft whose card has gone', () => {
       expect(root.named('review-ai-path')).toBeUndefined();
       expect(message(root)).not.toContain('no longer set up');
       await press(root.button('Options +'));
-      expect(root.select('Inference path')).toBeUndefined();
+      expect(chooser(root)).toBeUndefined();
       panel.value.addPrompt(point);
       await settled();
       await press(root.button('Run AI'));
@@ -1212,7 +1214,7 @@ describe('a draft whose card has gone', () => {
     expect(message(root)).not.toContain('no longer set up');
     expect(section().props['data-inference-path']).toBeUndefined();
     await press(root.button('Options +'));
-    expect(root.select('Inference path')).toBeUndefined();
+    expect(chooser(root)).toBeUndefined();
   });
   it('shows nothing in Direct edit, which has no card to lose', async () => {
     const server = workstation([amd], resultOn(nvidia, { method: 'direct' }));
@@ -1221,7 +1223,7 @@ describe('a draft whose card has gone', () => {
     expect(section().props['data-inference-path']).toBeUndefined();
     expect(root.named('review-ai-path')).toBeUndefined();
     await press(root.button('Options +'));
-    expect(root.select('Inference path')).toBeUndefined();
+    expect(chooser(root)).toBeUndefined();
   });
   it('shows nothing on a draft that has no result yet', async () => {
     const server = workstation([amd], draft({ inference_path: { id: 'nvidia', label: 'NVIDIA Test GPU', identity: 'nvidia|gpu|NVIDIA Test GPU' } }));

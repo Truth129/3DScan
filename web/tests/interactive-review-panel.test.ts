@@ -38,6 +38,6 @@ describe('review toolbar', () => {
     vi.stubGlobal('localStorage', { getItem: () => null });
     const html = await renderToString(createSSRApp(InteractiveReviewPanel, { ...props, active: true }));
     expect(status).not.toHaveBeenCalled();
-    for (const text of ['Inference path', 'Run on', 'Re-run', 'AI ·', 'data-inference-path']) expect(html).not.toContain(text);
+    for (const text of ['Run on', 'Re-run', 'AI ·', 'data-inference-path']) expect(html).not.toContain(text);
   });
 });

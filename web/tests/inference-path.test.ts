@@ -663,7 +663,7 @@ describe('the segmentation panel', () => {
   it('renders nothing new with one path', async () => {
     const one = await render([amd], 'default');
     expect(one).toBe(await render(undefined));
-    for (const text of ['Inference path', 'Run on', 'across GPUs']) expect(one).not.toContain(text);
+    for (const text of ['Run on', 'across GPUs']) expect(one).not.toContain(text);
   });
   it("keeps a lone row's caution off the panel, because there is nothing to choose", async () => {
     const cautioned = row('default', 'AMD Test GPU', { reason: 'Its last GPU check failed or is out of date.', shares_display: true });
@@ -673,14 +673,17 @@ describe('the segmentation panel', () => {
   it('offers Run on after Task, which stays the first select', async () => {
     const html = await render([amd, nvidia, broken], 'nvidia');
     expect(firstSelect(html)).toBe('Segmentation task');
-    expect(html.indexOf('aria-label="Inference path"')).toBeGreaterThan(html.indexOf('aria-label="Segmentation task"'));
+    expect(html.indexOf('Run on<select')).toBeGreaterThan(html.indexOf('aria-label="Segmentation task"'));
     expect(html).toContain('AMD Test GPU · 32 GiB');
     expect(html).toMatch(/<option value="broken" disabled[^>]*>Broken Test GPU · 16 GiB · unavailable/);
     expect(html).toContain('One AI job runs at a time across GPUs. Each GPU keeps its own saved results, and results can differ between GPUs.');
     expect(runDisabled(html)).toBe(false);
   });
+  it('lets the word on screen name the chooser, which an aria-label would replace', async () => {
+    expect(/<label[^>]*>Run on<select[^>]*>/.exec(await render([amd, nvidia], 'nvidia'))?.[0]).not.toContain('aria-label');
+  });
   it('holds the choice still while a job starts or the list loads', async () => {
-    const pathSelect = (html: string) => /<select[^>]*aria-label="Inference path"[^>]*>/.exec(html)?.[0];
+    const pathSelect = (html: string) => /Run on<select[^>]*>/.exec(html)?.[0];
     expect(pathSelect(await render([amd, nvidia], 'nvidia'))).not.toContain('disabled');
     expect(pathSelect(await render([amd, nvidia], 'nvidia', '', { busy: true }))).toContain('disabled');
     expect(pathSelect(await render([amd, nvidia], 'nvidia', '', { loading: true }))).toContain('disabled');
@@ -716,7 +719,7 @@ describe('the segmentation panel', () => {
     it('offers Check again beside the chooser, which never submits the form', async () => {
       const html = await render([amd, broken], 'default');
       expect(checkAgain(html)).toContain('type="button"');
-      expect(html.indexOf('aria-label="Inference path"')).toBeLessThan(html.indexOf('Check again'));
+      expect(html.indexOf('Run on<select')).toBeLessThan(html.indexOf('Check again'));
       expect(html.indexOf('Check again')).toBeLessThan(html.indexOf('<fieldset'));
     });
     it('offers Check again for the selected card too, whose reason is the only one', async () => {

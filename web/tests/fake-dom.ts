@@ -36,8 +36,13 @@ export class FakeElement {
           .includes(name),
     );
   }
+  /** An aria-label replaces the label around a control, so a select answers to one or the other. */
+  private get name() {
+    const around = this.parent?.tag === 'label' ? this.parent.children.filter(child => child !== this) : [];
+    return this.props['aria-label'] ?? around.map(child => child.content).join('');
+  }
   select(label: string) {
-    return this.all.find(node => node.tag === 'select' && node.props['aria-label'] === label);
+    return this.all.find(node => node.tag === 'select' && node.name === label);
   }
   button(start: string) {
     return this.all.find(node => node.tag === 'button' && node.content.trim().startsWith(start));

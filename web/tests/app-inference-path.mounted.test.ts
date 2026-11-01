@@ -140,9 +140,9 @@ describe('running segmentation', () => {
   it('sends the chosen card', async () => {
     const server = workstation([amd, nvidia]);
     const root = await openPanel();
-    await choose(root.select('Inference path'), 'nvidia');
+    await choose(root.select('Run on'), 'nvidia');
     expect(server.stored.get(SEGMENT_PATH_KEY)).toBe('nvidia');
-    expect(root.select('Inference path')?.props.value).toBe('nvidia');
+    expect(root.select('Run on')?.props.value).toBe('nvidia');
     await submit(root);
     expect(server.segment).toHaveBeenCalledExactlyOnceWith('case', { ...settings, inference_path: 'nvidia' });
   });
@@ -156,7 +156,7 @@ describe('running segmentation', () => {
   it("keeps one path's request exactly as it was", async () => {
     const server = workstation([amd]);
     const root = await openPanel();
-    expect(root.select('Inference path')).toBeUndefined();
+    expect(root.select('Run on')).toBeUndefined();
     await submit(root);
     expect(server.segment).toHaveBeenCalledExactlyOnceWith('case', settings);
   });
@@ -182,7 +182,7 @@ describe('running segmentation', () => {
   it('runs by that same route once the card is one that works', async () => {
     const server = workstation([amd, broken], { remembered: 'broken' });
     const root = await openPanel();
-    await choose(root.select('Inference path'), 'default');
+    await choose(root.select('Run on'), 'default');
     expect(runButton(root)?.props.disabled).toBeFalsy();
     await emitRun(root);
     expect(server.segment).toHaveBeenCalledExactlyOnceWith('case', { ...settings, inference_path: 'default' });
@@ -208,7 +208,7 @@ describe('a card that cannot be picked', () => {
   it('says why with nothing remembered, one line for each card', async () => {
     workstation([amd, broken, second]);
     const root = await openPanel();
-    expect(root.select('Inference path')?.props.value).toBe('default');
+    expect(root.select('Run on')?.props.value).toBe('default');
     expect(statusLines(root)).toEqual([
       'Broken Test GPU is unavailable: Its last GPU check failed.',
       'Second Test GPU is unavailable: Its Python environment is missing.',
@@ -226,7 +226,7 @@ describe('a card that cannot be picked', () => {
     await press(form(root).button('Check again'));
     expect(options).toHaveBeenCalledOnce();
     expect(statusLines(root)).toEqual([]);
-    expect(root.select('Inference path')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB']);
+    expect(root.select('Run on')?.optionTexts()).toEqual(['AMD Test GPU · 16 GiB', 'Broken Test GPU · 16 GiB']);
     expect(form(root).button('Check again'), 'nothing left to check').toBeUndefined();
     expect(robustCrop(root).props.checked).toBe(true);
   });
@@ -234,7 +234,7 @@ describe('a card that cannot be picked', () => {
     workstation([amd, nvidia, broken], { remembered: 'nvidia' });
     const root = await openPanel();
     await press(form(root).button('Check again'));
-    expect(root.select('Inference path')?.props.value).toBe('nvidia');
+    expect(root.select('Run on')?.props.value).toBe('nvidia');
     expect(statusLines(root)).toEqual(['Broken Test GPU is unavailable: Its last GPU check failed.']);
   });
   it('offers it only with more than one row, and while one of them is unavailable', async () => {
@@ -260,7 +260,7 @@ describe('a segmentation that is refused', () => {
     server.segment.mockRejectedValueOnce(new ApiError(400, refusal));
     await submit(root);
     expect(options).toHaveBeenCalledOnce();
-    expect(root.select('Inference path')?.props.value).toBe('default');
+    expect(root.select('Run on')?.props.value).toBe('default');
     expect(root.named('segmentation-status')?.content).toContain('no longer set up on this workstation, so AMD Test GPU is selected.');
     expect(root.named('segmentation-panel'), 'it stays open for the next try').toBeDefined();
     expect(root.content).toContain(refusal);

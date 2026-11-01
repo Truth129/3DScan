@@ -899,12 +899,7 @@ defineExpose({
         <template v-if="runPath.id">
           <label
             >{{ runPath.locked ? 'Re-run draft on' : 'Run on'
-            }}<select
-              aria-label="Inference path"
-              :value="reviewPath"
-              :disabled="current.working || discarding"
-              @change="chooseReviewPath(($event.target as HTMLSelectElement).value)"
-            >
+            }}<select :value="reviewPath" :disabled="current.working || discarding" @change="chooseReviewPath(($event.target as HTMLSelectElement).value)">
               <option v-for="row in runPath.paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
             </select></label
           >

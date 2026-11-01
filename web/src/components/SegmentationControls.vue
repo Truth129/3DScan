@@ -102,12 +102,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
         </select></label
       >
       <label v-if="paths.length > 1" class="segmentation-task"
-        >Run on<select
-          aria-label="Inference path"
-          :value="inferencePath"
-          :disabled="working || loading"
-          @change="emit('update:inferencePath', ($event.target as HTMLSelectElement).value)"
-        >
+        >Run on<select :value="inferencePath" :disabled="working || loading" @change="emit('update:inferencePath', ($event.target as HTMLSelectElement).value)">
           <option v-for="row in paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
         </select></label
       >
