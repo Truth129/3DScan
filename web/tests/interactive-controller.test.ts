@@ -1166,6 +1166,40 @@ describe('a draft that moves under a job this page follows', () => {
         await reads(reader, saved(1, { error: said }));
         expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
       });
+      it('stays with the job when the read fails and then the Cancel request fails too', async () => {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        const read = failing<InteractiveReview>();
+        const post = failing<ReturnType<typeof job>>();
+        reader.interactiveReview.mockReturnValueOnce(read.reply);
+        reader.cancel.mockReturnValueOnce(post.reply as never);
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(0);
+        const cancelling = controller.cancel();
+        read.release();
+        await run;
+        post.release();
+        await cancelling;
+        expect([controller.working, controller.error]).toEqual([true, 'Cancellation could not be requested. Failed to fetch']);
+        await reads(reader, saved(1, { error: said }));
+        expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
+      });
+      it('frees the page when Cancel reached an older job and this run has none to follow', async () => {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        reader.interactiveReview.mockRejectedValueOnce(new Error('Failed to fetch'));
+        await controller.apply(true);
+        expect([controller.working, controller.review?.status]).toEqual([false, 'predicting']);
+        const predict = failing<ReturnType<typeof job>>();
+        reader.predictInteractive.mockReturnValueOnce(predict.reply as never);
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(0);
+        await controller.cancel();
+        predict.release();
+        await run;
+        expect([controller.working, controller.error]).toEqual([false, 'Failed to fetch']);
+        await quiet(reader);
+      });
       it('frees the page as it always has when no poll is going', async () => {
         const { controller, reader } = fixture(saved());
         await controller.load();
