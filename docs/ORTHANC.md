@@ -146,6 +146,27 @@ to compare hashes. Sending does the same, then asks Orthanc to perform C-STORE t
 - Delivery is only ever started by a request. If 3DScan cannot confirm an outcome it says so. A
   retry reuses the same instances and first checks any known Orthanc job.
 
+## Send a 3D view back
+
+**DICOM ↗** in the 3D view exports what **PNG ↗** saves. One capture is one image, and it arrives as a
+new series with one instance in the original patient and study. Archiving and sending work as they
+do for a segmentation, with the same read-back and the same rules for retries and **Send again**.
+
+At the receiver the instance is a Secondary Capture with modality `OT`, so the study then lists
+`CT\OT`. Its series description is `3DScan view` and the start of the revision ID, and its series
+number is 501, which repeats if you export more views.
+
+- **It is a picture, not a measurement.** It has no pixel spacing, position, orientation or frame of
+  reference, so viewers cannot calibrate it, and it carries no orientation labels or left and right
+  markers. A symmetric view can be read from either side.
+- It needs a classic CT imported from this same Orthanc, like a SEG, but no masks.
+- Patient and study values are copied exactly from the source images. If Orthanc holds the study
+  under a different patient ID, nothing is stored. This happens when a source's bytes disagree with
+  its declared character set. If Orthanc files the upload outside the original study, nothing is
+  sent, and the stored instance stays in Orthanc for you to check.
+- A retry needs the same image. A new capture is a new series, so if an earlier delivery was not
+  confirmed but did arrive, the receiver has both.
+
 ## Open in 3DScan from Orthanc Explorer 2
 
 An optional button on each series in Orthanc Explorer 2 opens that series in 3DScan. Generate the
@@ -212,6 +233,11 @@ SEG also appears differently in the OsiriX database from ROIs drawn in OsiriX.
   study are preserved rather than rewritten.
 - **"Unknown" study description.** OsiriX's database column can show "Unknown" for a SEG series even
   though Study Description `(0008,1030)` is present and correct, as its metadata view confirms.
+
+- **3D views in viewers.** Real Orthanc 1.13.0 has stored and previewed a synthetic view and passed it
+  to a second Orthanc by C-STORE. OsiriX display is not yet verified: how MD 14.3 lists an `OT` color
+  Secondary Capture in a CT study, or treats its empty Patient Orientation and repeated series
+  number 501, has not been checked. Other viewers are untested.
 
 ## Security
 
