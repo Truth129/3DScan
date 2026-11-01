@@ -31,6 +31,15 @@ stopped() {
   fail "$1 Until a run finishes, the app shows this GPU as unavailable, or not at all if it was never checked. Fix what was reported above, then run this again."
 }
 
+# The marker alone lets this script use a directory that exists, whatever its name or however
+# empty it is: `uv pip sync` removes what the lock does not list, so another environment would
+# be destroyed. A link that points nowhere still holds the name.
+refuse_unmarked() {
+  if [[ -e "$venv" || -L "$named" ]] && [[ ! -f "$marker" ]]; then
+    fail "$venv already exists and this script did not make it, so nothing was changed. Name a new directory with --venv."
+  fi
+}
+
 # Free bytes where a directory is, or where it would be created.
 free_bytes() {
   local place="$1"
@@ -95,12 +104,7 @@ finished="$venv/.scan3d-inference-path-finished"
 lock="$root/requirements/cuda-py314.lock"
 cd "$root"
 
-# The marker alone lets this script use a directory that exists, whatever its name or however
-# empty it is: `uv pip sync` removes what the lock does not list, so another environment would
-# be destroyed. A link that points nowhere still holds the name.
-if [[ -e "$venv" || -L "$named" ]] && [[ ! -f "$marker" ]]; then
-  fail "$venv already exists and this script did not make it, so nothing was changed. Name a new directory with --venv."
-fi
+refuse_unmarked
 
 uv="$root/.tools/bin/uv"
 if [[ ! -x "$uv" ]]; then
@@ -190,6 +194,27 @@ if (( dry_run )); then
   exit 0
 fi
 
+# A new directory comes from plain mkdir, which cannot succeed on anything that arrived after the
+# guard above, so a directory this script did not make is never adopted. If mkdir loses to another
+# run of this script, the marker says so and the lock below settles it. Otherwise mkdir said why.
+if [[ ! -f "$marker" ]]; then
+  mkdir -p -- "$(dirname -- "$venv")"
+  if mkdir -- "$venv"; then
+    echo "Made by scripts/add_inference_path.sh $chosen." >"$marker"
+  else
+    refuse_unmarked
+    [[ -f "$marker" ]] || exit 1
+  fi
+fi
+
+# One run at a time, or a second wipe would empty the environment under the first run's uv, which
+# would then mark it finished. The lock is on the marker, which the wipe keeps and which is the same
+# file however the directory is spelled. Every child inherits the descriptor, so a killed run's uv
+# keeps it until that has gone too. It is opened only to read because that cannot create a marker.
+exec 9<"$marker" || fail "$marker cannot be read, so nothing was changed."
+flock --nonblock 9 ||
+  fail 'Another run is using this environment, so nothing was changed. Run this again when it has finished.'
+
 # Only a finished environment that equals the lock stays, and `uv pip sync` cannot judge that. It
 # reads a pin by PEP 440, so ==2.14.0 accepts an installed 2.14.0+cu126, the wheel the lock exists
 # to keep out. And it asks the index even when nothing differs, so a re-run could not reach the
@@ -209,14 +234,16 @@ else
     "$interpreter" -B -P "$root/scripts/check_gpu.py" --queue ||
       fail 'This environment needs a rebuild and a job may be using it, so nothing was changed. Run this again when the queue is empty.'
   fi
-  # The marker stays through the wipe, so that a stop at any point leaves a directory this script
-  # still owns. The finished mark goes first, so that discovery withdraws the path before anything
-  # changes.
-  mkdir -p "$venv"
-  echo "Made by scripts/add_inference_path.sh $chosen." >"$marker"
-  rm -f -- "$finished"
-  find "$venv" -mindepth 1 -maxdepth 1 ! -name "${marker##*/}" -exec rm -rf -- {} + ||
+  # This happens from inside the directory, after a last look that its marker is the one this run
+  # locked, so that the wipe cannot land anywhere else whatever becomes of the name. The marker
+  # stays, so that a stop at any point leaves a directory this script still owns. The finished mark
+  # goes first, so that discovery withdraws the path before anything changes.
+  cd -- "$venv" && [[ "${marker##*/}" -ef /dev/fd/9 ]] ||
+    fail "$venv changed during this run, so nothing was changed. Run this again."
+  rm -f -- "${finished##*/}"
+  find . -mindepth 1 -maxdepth 1 ! -name "${marker##*/}" -exec rm -rf -- {} + ||
     stopped 'The old environment could not be cleared.'
+  cd "$root"
   "$uv" venv --python "$interpreter" --allow-existing "$venv" ||
     stopped 'The environment could not be created.'
   # --require-hashes covers what is installed, and acvl-utils's build requirements are outside
