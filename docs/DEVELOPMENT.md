@@ -93,10 +93,9 @@ card or CUDA build. These facilities show what the code does, not what a card do
   defaults `SCAN3D_INFERENCE_PATH_DIR` to a folder inside its temporary data that need not
   exist, and `web/tests/dicom_seg_import_smoke.py` and `web/tests/dicom_view_export_smoke.py`
   set the same, so a gate on any of these servers lists one path whatever this checkout has
-  added. `web/tests/inference_path_smoke.py` sets
-  its own. They cover only that folder: a gate that does not set `SCAN3D_DEVICE=cpu` still
-  shows this checkout's default card, and a plain `scan3d serve` behind `--base-url` lists
-  whatever the checkout has.
+  added. `web/tests/inference_path_smoke.py` sets its own. They cover only that folder: a
+  gate that does not set `SCAN3D_DEVICE=cpu` still shows this checkout's default card, and a
+  plain `scan3d serve` behind `--base-url` lists whatever the checkout has.
 - **`tests/inference_path_stub.py`** builds a real second interpreter with no second
   PyTorch. `stand_in()` makes a venv with package metadata and a passing proof, `activate()`
   makes it discoverable, and `shadow()` gives its children a module of your choice. A
@@ -111,8 +110,8 @@ card or CUDA build. These facilities show what the code does, not what a card do
   `test_everything_a_child_imports_is_in_the_lock` fails. Add the package to
   `requirements/cuda-py314.in` and recompile with the command at the top of the lock. Pins
   outside the GPU family must also equal the AMD lock.
-- **`web/tests/fake-dom.ts`** is a smaller stand-in that a `*.mounted.test.ts` suite renders
-  into, because server rendering cannot exercise a component's clicks.
+- **`web/tests/fake-dom.ts`** is a small stand-in for the DOM that a `*.mounted.test.ts`
+  suite renders into, because server rendering cannot exercise a component's clicks.
 - **`web/tests/inference_path_smoke.py`** is a browser gate that always renders with
   SwiftShader, so it needs no flag. It starts its own server, chromedriver and temporary
   data, by default on ports 9035 and 9535, and it refuses `web/dist`, so give it a scratch

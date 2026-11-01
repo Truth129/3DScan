@@ -153,11 +153,12 @@ changes. To use the new GPU, see the [user guide](USER_GUIDE.md#choose-a-gpu).
 
 **This has run on one real card, on synthetic data only:** an RTX 5070 Ti on CachyOS with
 driver 615.78. Both engines ran there, on volumes up to 512 x 512 x 400 voxels. `total` on
-that size peaked at about 4.4 GiB of the card's memory, and loading AI assist at about
-5 GiB, both sampled once a second and on top of the 1.8 GiB the desktop held. That shows
-the stack runs, not that results are good or that they match another GPU's. The project's
-tests use a fake PyTorch, so they cover how the app behaves, not whether this stack works on
-your card. The GPU check at the end of the script is the first real evidence on your machine.
+that size peaked at about 4.4 GiB of the card's memory. Loading AI assist, on a smaller
+volume, peaked at about 5 GiB. Both were sampled once a second and sit on top of the
+1.8 GiB the desktop held. That shows the stack runs, not that results are good or that they
+match another GPU's. The project's tests use a fake PyTorch, so they cover how the app
+behaves, not whether this stack works on your card. The GPU check at the end of the script
+is the first real evidence on your machine.
 
 ```bash
 scripts/add_inference_path.sh nvidia --dry-run
