@@ -1149,6 +1149,23 @@ describe('a draft that moves under a job this page follows', () => {
         expect([controller.working, controller.error]).toEqual([false, 'Failed to fetch']);
         await quiet(reader);
       });
+      it('stays with the job when the read fails with the Cancel request still out', async () => {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        const read = failing<InteractiveReview>();
+        const post = held<ReturnType<typeof job>>();
+        reader.interactiveReview.mockReturnValueOnce(read.reply);
+        reader.cancel.mockReturnValueOnce(post.reply as never);
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(0);
+        const cancelling = controller.cancel();
+        read.release();
+        await run;
+        post.release(job());
+        await cancelling;
+        await reads(reader, saved(1, { error: said }));
+        expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
+      });
       it('frees the page as it always has when no poll is going', async () => {
         const { controller, reader } = fixture(saved());
         await controller.load();
@@ -1332,7 +1349,7 @@ describe('a draft that moves under a job this page follows', () => {
         reader.interactiveReviews.mockReturnValueOnce(list);
         const slow = controller.reload();
         await controller.reload();
-        return { controller, slow };
+        return { controller, reader, slow };
       }
       /** A first load that a Discard lands ahead of, which leaves nothing else to end the load. */
       async function firstLoad(list: Promise<InteractiveReview[]>) {
@@ -1351,6 +1368,35 @@ describe('a draft that moves under a job this page follows', () => {
         await slow;
         expect(controller.prompts.map(item => item.id)).toEqual(['saved', 'since']);
         expect(controller.canUndo).toBe(true);
+      });
+      it('holds nothing when the list it dropped says a job is running', async () => {
+        const list = held<InteractiveReview[]>();
+        const { controller, reader, slow } = await overtaken(list.reply);
+        list.release([running()]);
+        await slow;
+        expect(controller.working).toBe(false);
+        await quiet(reader);
+      });
+      it('leaves the message that is on screen', async () => {
+        const list = held<InteractiveReview[]>();
+        const { controller, reader, slow } = await overtaken(list.reply);
+        reader.interactivePrompts.mockRejectedValueOnce(new Error('Failed to fetch'));
+        controller.append(point('since'));
+        await vi.advanceTimersByTimeAsync(250);
+        expect(controller.error).toBe('Failed to fetch');
+        list.release([saved()]);
+        await slow;
+        expect(controller.error).toBe('Failed to fetch');
+      });
+      it('lets a failed Reload leave the follow it was pressed in going', async () => {
+        const { controller, reader } = fixture(running());
+        await controller.load();
+        expect(controller.working).toBe(true);
+        reader.interactiveReviews.mockRejectedValueOnce(new Error('Failed to fetch'));
+        await controller.reload();
+        expect([controller.working, controller.error]).toEqual([true, 'Failed to fetch']);
+        await reads(reader, saved());
+        expect(controller.working).toBe(false);
       });
       it('says nothing when it fails, because the list that answered is still good', async () => {
         const list = failing<InteractiveReview[]>();

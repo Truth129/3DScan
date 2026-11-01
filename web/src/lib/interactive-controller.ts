@@ -64,7 +64,7 @@ export class InteractiveController {
   private follow = 0;
   /** The last follow to have a job to read about, which a run or a Save has only once it answers. */
   private reading = 0;
-  /** The last follow to have a poll, which Cancel can start before the read after predict lands. */
+  /** The last follow to have a poll, or a Cancel that ends in one, before the read after predict lands. */
   private polled = 0;
   /** What the end of a follow kept on screen for the save it is retrying, which ends with that save. */
   private retrying = '';
@@ -480,6 +480,8 @@ export class InteractiveController {
       follow = this.follow;
     try {
       if (id) {
+        // Either way out of this ends in restart(), so a failed read in the meantime must not free the page.
+        if (this.reading === follow) this.polled = follow;
         await this.reader.cancel(id);
         this.restart();
       } else if (this.working) this.cancelRequested = true;
