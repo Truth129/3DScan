@@ -229,21 +229,30 @@ picks at run time. `scan3d/inference_paths.py` holds the rules.
 
 `default` is the API's own interpreter with `SCAN3D_DEVICE` and the proof in `SCAN3D_GPU_PROOF`. It is implicit,
 so adding a path never changes what it means, and it is always available: a stale proof earns a caution and
-blocks nothing. An added path is one proof file, `<SCAN3D_INFERENCE_PATH_DIR>/<id>.json`, written by
-`scripts/check_gpu.py --path ID` from inside that interpreter. The file is the whole registration. There is no
-list to edit and no restart, a failed check still appears with its reason, and moving the file out removes the
-path. With one path there is nothing to choose, so the viewer shows no chooser and its requests name no path.
-The exception is a draft whose added path was removed, which keeps its re-run control so it has a way out.
+blocks nothing. A proof taken before that vendor's cards changed counts as stale and names no card, so a frozen
+job label cannot name one that has left. An added path is one proof file,
+`<SCAN3D_INFERENCE_PATH_DIR>/<id>.json`, written by `scripts/check_gpu.py --path ID` from inside that interpreter.
+The file is the whole registration. There is no list to edit and no restart, a failed check still appears with
+its reason, and moving the file out removes the path. With one path there is nothing to choose, so the viewer
+shows no chooser and its requests name no path. The exception is a draft whose added path was removed, which
+keeps its re-run control so it has a way out.
 
 **Discovery.** `rows()` runs in the API process and reads the folder on every call, which is why a new proof
 needs no restart. `GET /api/segmentation-options` and `GET /api/interactive/status` merge it in, and those are
 read when a panel opens, so it imports no PyTorch and starts no process: opening a panel must never touch a busy
 card. It compares each proof with what is installed, and the first mismatch gives that row one fixed sentence,
-never proof text: an unreadable record, a failed check, a missing interpreter, changed packages, a
-TotalSegmentator, nnU-Net or nnInteractive version that differs from the API's, cupy or cucim present, or a
-different set of that vendor's cards in sysfs. A bad file disables only its own row. `available` therefore means
-installed as proven and last check passed. It never means a scan will fit, and the device check at job start
-stays the live authority.
+never proof text: an unreadable record, a failed check, an install that did not finish, a missing interpreter,
+changed packages, a TotalSegmentator, nnU-Net or nnInteractive version that differs from the API's, cupy or cucim
+present, or a different set of that vendor's cards in sysfs. A bad file disables only its own row. `available`
+therefore means installed as proven and last check passed. It never means a scan will fit, and the device check
+at job start stays the live authority.
+
+A package's record is no sign that its files arrived, so comparing packages cannot see a stopped install.
+`scripts/add_inference_path.sh` marks an environment it makes with `.scan3d-inference-path`, removes
+`.scan3d-inference-path-finished` before it changes anything, and writes that back only when uv has finished. An
+environment with the first file and not the second therefore reads as an install that did not finish, however
+much of it is left. It takes two file checks and loads nothing. A hand-made environment has neither file and is
+unaffected.
 
 **One lane.** The GPU lane stays serial across cards: one AI job runs at a time, whichever card it uses, and a
 job on one card waits for a job on the other. That is what keeps TotalSegmentator's shared settings and
@@ -273,9 +282,11 @@ variables, which could select another stack's cards, break this stack's librarie
 any record. [CONFIGURATION.md](CONFIGURATION.md#ai-compute) lists them and why. It also puts the venv's `bin`
 first on `PATH`, moves `XDG_CACHE_HOME` to `.cache/inference-paths/<id>`, and sets `SCAN3D_DEVICE` to the path's
 device, because nnInteractive reads that from its environment while TotalSegmentator is told on its command
-line. Children of the default path inherit the API's environment untouched. All paths share the weights, the
-license, the nnInteractive model and the data directory, and discovery holds the engine versions equal, so the
-task catalog and the version recorded in a DICOM SEG stay true for every path.
+line. It sets `SCAN3D_INFERENCE_PATH` to the path's `id`, which means only that the child belongs to an added
+path. The device check alone reads it, because the default path's advice to set `SCAN3D_DEVICE=cpu` cannot help
+a path that sets its own device. Children of the default path inherit the API's environment untouched. All paths
+share the weights, the license, the nnInteractive model and the data directory, and discovery holds the engine
+versions equal, so the task catalog and the version recorded in a DICOM SEG stay true for every path.
 
 ## Corrections
 

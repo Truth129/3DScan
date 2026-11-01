@@ -136,8 +136,8 @@ exercise the GPU once:
 This runs a small 3D convolution and records the result in `.runtime/gpu-proof.json`,
 which the app reads to show the GPU's name. It does not prove that a model produces
 good results. The check is repeated automatically only when you run it, so run it again
-after changing the PyTorch or driver version. It will not run while a job is queued or
-running.
+after changing the PyTorch or driver version, or that vendor's cards. It will not run
+while a job is queued or running.
 
 For scale, the `total` task on a very small synthetic phantom took just under two
 minutes on a 32-thread CPU, and one nnInteractive point took about 13 seconds. Full-size

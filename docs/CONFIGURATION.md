@@ -103,8 +103,10 @@ for these:
 
 An added path's workers also get their own `XDG_CACHE_HOME`, under
 `.cache/inference-paths/<id>`, so that they never read another stack's kernels. They get
-`SCAN3D_DEVICE` set to that path's device, and that environment's `bin` folder first on
-`PATH`. Every path shares the weights, the license and the nnInteractive model.
+`SCAN3D_DEVICE` set to that path's device, `SCAN3D_INFERENCE_PATH` set to its ID, which is
+not a setting and only changes the advice a failed device check gives, and that
+environment's `bin` folder first on `PATH`. Every path shares the weights, the license and
+the nnInteractive model.
 
 Keep those four visibility variables out of `scan3d.env` and any launcher. Each stack
 sees only its own vendor's cards, so nothing needs them to choose a card, and HIP reads

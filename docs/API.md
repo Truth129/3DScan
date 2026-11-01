@@ -454,13 +454,17 @@ An added path with `available: false` gives the first of these that applies:
 
 - `Its GPU check record cannot be read.`
 - `Its last GPU check failed.`
+- `Its last install did not finish.`
 - `Its Python environment is missing.`
 - `Its installed packages changed after the last GPU check.`
 - `Its TotalSegmentator or nnInteractive version differs from this workstation's.`
 - `It has cupy or cucim installed, which would change resampling.`
 - `The GPUs in this workstation changed after the last GPU check.`
 
-`default` gives null or the caution `Its last GPU check failed or is out of date.`, which blocks nothing.
+`default` gives null or the caution `Its last GPU check failed or is out of date.`, which blocks nothing. A proof
+taken before its vendor's cards changed earns that caution and loses its card: `label` is `Default device` and
+`memory_gib` is null, so a job queued then freezes that label, not a card that has left. `identity` stays
+`default`. A proof with no record of the cards is not compared.
 
 ### Choosing a path
 
@@ -541,6 +545,9 @@ errors name the cause:
   tried.`
 - A different card or device under that ID: `<label> changed after this job was queued. Nothing ran and no other
   GPU was tried. Start it again.`
+- A device check where PyTorch reports no GPU: `GPU inference was requested but PyTorch cannot access a GPU; check
+  the driver, then repeat this GPU's check (see Add a second GPU in docs/INSTALL.md). No other GPU was tried.` Both
+  engines give this. `SCAN3D_DEVICE=cpu`, which the default path's sentence offers, cannot change an added path.
 - A device check that measures anything else: `Expected <label>, but the GPU check found <name> (<device>,
   <build>). No result was kept and no other GPU was tried.` `<build>` is `CUDA` or `no CUDA`.
 - A crop-model task such as `teeth` on a GPU index above 0: `TotalSegmentator would run part of <task> on the
@@ -552,7 +559,8 @@ errors name the cause:
 
 None of these apply on `default`, whose errors keep their existing text. On a job that named a path, `default`
 included, a child that will not stop gives `The AI process did not stop in time.`, and an absolute path in any
-other error becomes `<local path>`. The service log keeps the detail.
+other error becomes `<local path>`. A web address with a host stays, such as the link that ends PyTorch's
+out-of-memory error. The service log keeps the detail.
 
 ## Viewer data
 
