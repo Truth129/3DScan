@@ -383,6 +383,10 @@ The file is named after the revision and export, not the patient, but inside it 
 patient and study details, so handle it like the study. Preparing the same masks again gives the same
 file. Changing the selection or the ranking asks you to prepare a new one.
 
+**Cancel export** stops an export in progress. Closing the dialog does not. A SEG that has already reached
+Orthanc stays there, and once Orthanc has started a send the button goes away, because the send can no
+longer be stopped.
+
 If the CT came from a configured Orthanc, you can also choose **Archive in Orthanc**, or pick a
 **Send destination** and choose **Send to** it. A file and an archive of the same selection are the
 same SEG object. Reopening the dialog never sends anything, and **Send again** deliberately resends

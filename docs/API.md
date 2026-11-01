@@ -125,10 +125,12 @@ an empty mask. Structures from DICOM SEG also carry a `dicom_seg` provenance obj
 ```text
 {id, case_id, kind, status, stage, error, revision_id, created_at, started_at?, completed_at?,
  progress?: {phase, completed, total, timings_seconds?, bytes?},
- result?, review_session_id?, source_revision_id?}
+ result?, review_session_id?, source_revision_id?, delivery_started?}
 ```
 
 `status` is `queued`, `running`, `completed`, `failed` or `cancelled`. `stage` is display text.
+`delivery_started` is `true` once an export job has started a send through Orthanc, after which cancelling
+cannot stop it.
 `revision_id` is the new revision once committed. For `orthanc_export` and `orthanc_view_export` it is the
 exported revision. `orthanc_export` is the kind of every SEG export job, including one that only prepares a
 file.
@@ -693,8 +695,10 @@ mask checks still apply. A file and an archive of the same selection and ranking
 carry the same SOP instance, whichever came first.
 
 Polling stops after 120 seconds with an unconfirmed outcome. Startup marks interrupted and queued exports
-failed locally and never contacts Orthanc. Cancelling before delivery stops the export. After C-STORE has
-started, stopping the local wait cannot cancel the remote transfer, and the job says so.
+failed locally and never contacts Orthanc. Cancelling before delivery stops the export, and a later request
+for the same selection reuses a finished artifact. A SEG already uploaded stays in Orthanc, and its `result`
+still says `archived`. After C-STORE has started, stopping the local wait cannot cancel the remote transfer,
+and the job says so.
 
 ## DICOM view export
 

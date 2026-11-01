@@ -16,6 +16,7 @@ import {
 import { useDicomSegExport } from '../src/lib/use-dicom-seg-export';
 import { visibleVolumeMaskIds } from '../src/lib/volume-mask';
 import type { InteractiveReview, Revision, Structure } from '../src/types';
+import { deferred } from './mounted';
 
 const job = (status: DicomSegExportJob['status'], values: Partial<DicomSegExportJob> = {}): DicomSegExportJob => ({
   id: 'export-1',
@@ -103,6 +104,9 @@ describe('saved mask export scope', () => {
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: result } }))).toContain('2 masks archived');
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: { ...result, sent: true, destination: 'OsiriX' } } }))).toContain('sent to OsiriX');
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: { ...result, archived: false } } }))).toContain('not been confirmed');
+    expect(dicomSegExportSummary(job('cancelled', { result: { dicom_seg: { ...result, archived: false } } }))).toBe('Export cancelled.');
+    expect(dicomSegExportSummary(job('cancelled'))).toBe('Export cancelled.');
+    expect(dicomSegExportSummary(job('cancelled', { result: { dicom_seg: result } }))).toContain('stays there. Nothing was sent.');
   });
   it('reports eight independent masks inside one delivered DICOM instance', () => {
     const result = {
@@ -562,5 +566,84 @@ describe('explicit DICOM SEG export lifecycle', () => {
   });
   it('encodes every part of a prepared file address', () => {
     expect(dicomSegFileUrl('case/a', 'revision b', 'seg?x')).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-seg/seg%3Fx/segment.dcm');
+  });
+});
+
+describe('cancelling an export', () => {
+  async function following(current: DicomSegExportJob) {
+    vi.useFakeTimers();
+    const { scope, state, storage } = fixture();
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ exports: [current] }));
+    await state.load();
+    return { scope, state, storage };
+  }
+
+  it('waits for a running job to stop, then stops following it', async () => {
+    const { scope, state, storage } = await following(job('running'));
+    expect(state.cancellable.value).toBe(true);
+    const cancel = vi.spyOn(api, 'cancel').mockResolvedValue(job('running')),
+      poll = vi.spyOn(api, 'job').mockResolvedValue(job('cancelled'));
+    await state.cancel();
+    expect(cancel).toHaveBeenCalledExactlyOnceWith('export-1');
+    expect(state.pending.value && state.cancelling.value).toBe(true);
+    await state.cancel();
+    expect(cancel).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(poll).toHaveBeenCalledOnce();
+    expect(state.job.value?.status).toBe('cancelled');
+    expect(state.pending.value || state.cancelling.value).toBe(false);
+    expect(storage.size).toBe(0);
+    scope.stop();
+  });
+  it('lets no status answer sent before the cancel overwrite its result', async () => {
+    const { scope, state } = await following(job('queued'));
+    const poll = deferred<DicomSegExportJob>();
+    vi.spyOn(api, 'job').mockReturnValue(poll.promise);
+    vi.spyOn(api, 'cancel').mockResolvedValue(job('cancelled'));
+    const polling = state.resume();
+    await state.cancel();
+    poll.resolve(job('queued'));
+    await polling;
+    expect(state.job.value?.status).toBe('cancelled');
+    scope.stop();
+  });
+  it('reports a refused cancel and keeps following the job', async () => {
+    const { scope, state } = await following(job('running'));
+    vi.spyOn(api, 'cancel').mockRejectedValue(new Error('The server did not answer.'));
+    const poll = vi.spyOn(api, 'job').mockResolvedValue(job('completed'));
+    await state.cancel();
+    expect(state.error.value).toBe('The server did not answer. The export may still be running.');
+    expect(state.cancelling.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(poll).toHaveBeenCalledOnce();
+    expect(state.job.value?.status).toBe('completed');
+    scope.stop();
+  });
+  it('clears a lost status check once the cancel answers', async () => {
+    const { scope, state } = await following(job('running'));
+    vi.spyOn(api, 'job').mockRejectedValueOnce(new Error('Status lost.'));
+    await state.resume();
+    expect(state.statusError.value).toContain('Status lost.');
+    vi.spyOn(api, 'cancel').mockResolvedValue(job('cancelled'));
+    await state.cancel();
+    expect(state.statusError.value).toBe('');
+    scope.stop();
+  });
+  it('does not ask once Orthanc holds the send', async () => {
+    const { scope, state } = await following(job('running', { delivery_started: true }));
+    const cancel = vi.spyOn(api, 'cancel');
+    expect(state.pending.value).toBe(true);
+    expect(state.cancellable.value).toBe(false);
+    await state.cancel();
+    expect(cancel).not.toHaveBeenCalled();
+    scope.stop();
+  });
+  it('refuses a cancel answer for a different job', async () => {
+    const { scope, state } = await following(job('running'));
+    vi.spyOn(api, 'cancel').mockResolvedValue(job('cancelled', { id: 'export-2' }));
+    await state.cancel();
+    expect(state.job.value?.id).toBe('export-1');
+    expect(state.error.value).toContain('different job');
+    scope.stop();
   });
 });

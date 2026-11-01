@@ -288,6 +288,39 @@ def test_demo_masks_have_no_source_series_to_reference(tmp_path):
     assert available["file"]["available"] is False and "no verified original DICOM CT series" in available["file"]["reason"]
 
 
+def test_cancelling_a_queued_file_stops_it_and_a_new_request_can_finish(rig):
+    queued = prepare(rig)
+    cancelled = rig.http.post(f"/api/jobs/{queued['id']}/cancel").json()
+    assert cancelled["status"] == "cancelled" and cancelled["error"] is None
+    assert rig.service.store.claim("cpu") is None
+    assert rig.http.get(file_url(rig, queued)).status_code == 404
+    again = prepare(rig)
+    assert again["id"] != queued["id"]
+    finished = execute(rig, again)
+    assert finished["status"] == "completed" and rig.http.get(file_url(rig, finished)).status_code == 200
+
+
+def test_cancelling_while_encoding_publishes_nothing_and_a_new_request_can_finish(rig, monkeypatch):
+    job = prepare(rig)
+    update = rig.service.store.update_job
+
+    def cancel_at_first_progress(job_id, **changes):
+        if "progress" in changes:
+            assert rig.http.post(f"/api/jobs/{job_id}/cancel").json()["status"] == "running"
+        return update(job_id, **changes)
+
+    monkeypatch.setattr(rig.service.store, "update_job", cancel_at_first_progress)
+    cancelled = execute(rig, job)
+    monkeypatch.undo()
+    assert cancelled["status"] == "cancelled" and cancelled["stage"] == "Cancelled before delivery" and cancelled["error"] is None
+    assert "completed" not in {item["status"] for item in rig.http.get(rig.endpoint).json()["exports"]}
+    assert rig.http.get(file_url(rig, job)).status_code == 404
+    export = rig.service.orthanc_exports._directory(rig.case["id"], job["result"]["dicom_seg"]["export_id"])
+    assert not (export / "export.json").exists()
+    finished = execute(rig, prepare(rig))
+    assert finished["status"] == "completed" and rig.http.get(file_url(rig, finished)).status_code == 200
+
+
 def test_an_interrupted_file_job_does_not_mention_orthanc(rig):
     queued = prepare(rig)
     rig.service.orthanc_exports.recover()

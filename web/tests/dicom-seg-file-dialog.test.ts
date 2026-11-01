@@ -125,6 +125,54 @@ describe('a folder case with no Orthanc', () => {
   });
 });
 
+describe('cancelling from the dialog', () => {
+  const running = (values: Partial<DicomSegExportJob> = {}) => {
+    const current = fileJob('running', values);
+    vi.spyOn(api, 'job').mockResolvedValue(current);
+    return dialog(availability({ exports: [current] }));
+  };
+
+  it('stops a queued export at once and offers it again', async () => {
+    const queued = fileJob('queued');
+    vi.spyOn(api, 'job').mockResolvedValue(queued);
+    const view = await dialog(availability({ exports: [queued] }));
+    const cancel = vi.spyOn(api, 'cancel').mockResolvedValue(fileJob('cancelled'));
+    click(view.button('Cancel export'));
+    await settled();
+    expect(cancel).toHaveBeenCalledExactlyOnceWith('export-1');
+    expect(view.text()).toContain('Export cancelled.');
+    expect(view.button('Cancel export')).toBeUndefined();
+    expect(disabled(view.button('Prepare SEG file'))).toBe(false);
+    view.unmount();
+  });
+  it('shows a running export stopping until it has', async () => {
+    const view = await running();
+    expect(view.text()).toContain('Closing does not cancel the export.');
+    vi.spyOn(api, 'cancel').mockResolvedValue(fileJob('running'));
+    click(view.button('Cancel export'));
+    await settled();
+    expect(view.text()).toContain('Cancelling export');
+    expect(disabled(view.button('Cancelling…'))).toBe(true);
+    expect(disabled(view.button('Prepare SEG file'))).toBe(true);
+    view.unmount();
+  });
+  it('takes the button away once Orthanc holds the send, and says why', async () => {
+    const view = await running({ delivery_started: true });
+    expect(view.button('Cancel export')).toBeUndefined();
+    expect(view.text()).toContain('Orthanc has started this send, so it can no longer be cancelled.');
+    view.unmount();
+  });
+  it('shows a refused cancel and lets it be tried again', async () => {
+    const view = await running();
+    vi.spyOn(api, 'cancel').mockRejectedValue(new Error('The server did not answer.'));
+    click(view.button('Cancel export'));
+    await settled();
+    expect(view.text()).toContain('The export may still be running.');
+    expect(disabled(view.button('Cancel export'))).toBe(false);
+    view.unmount();
+  });
+});
+
 describe('a case that cannot produce a file', () => {
   it('shows why and keeps the mask choice closed', async () => {
     const view = await dialog(availability({ file: { available: false, reason: 'This saved revision has no verified original DICOM CT series.' } }));

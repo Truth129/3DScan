@@ -608,4 +608,8 @@ def public_revision(record):
 
 
 def public_job(record):
-    return {k: v for k, v in record.items() if k not in ("payload", "cancel_requested", "measurements")}
+    public = {k: v for k, v in record.items() if k not in ("payload", "cancel_requested", "measurements")}
+    # A send Orthanc has started runs to its end, so a client must stop offering Cancel.
+    if (record.get("payload") or {}).get("delivery_state"):
+        public["delivery_started"] = True
+    return public

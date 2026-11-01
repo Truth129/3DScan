@@ -23,7 +23,7 @@ from scan3d.config import Settings
 from scan3d.orthanc import OrthancDeliveryUnknown, OrthancError
 from scan3d.orthanc_exports import ExportUnavailable
 from scan3d.service import Service
-from scan3d.store import identifier, job_lane
+from scan3d.store import identifier, job_lane, public_job
 from test_orthanc_imports import SyntheticArchive, SERIES, SERIES_UID, STUDY_UID, FRAME_UID, oid
 
 
@@ -655,6 +655,21 @@ def test_cancellation_after_remote_start_observes_success_instead_of_claiming_ca
     finished = execute(rig, job)
     assert finished["status"] == "completed" and finished["cancel_requested"]
     assert finished["result"]["dicom_seg"]["sent"] is True
+
+
+def test_the_public_job_says_once_cancelling_can_no_longer_stop_a_send(rig):
+    job = start(rig, destination="osirix")
+    assert "delivery_started" not in job
+    seen = []
+    rig.archive.on_upload = lambda: seen.append(public_job(rig.service.store.get("jobs", job["id"])))
+    rig.archive.on_start = lambda: seen.append(public_job(rig.service.store.get("jobs", job["id"])))
+    finished = execute(rig, job)
+    assert ["delivery_started" in item for item in seen] == [False, True]
+    assert public_job(finished)["delivery_started"] is True
+
+
+def test_an_archive_never_reports_a_send_started(rig):
+    assert "delivery_started" not in public_job(execute(rig, start(rig)))
 
 
 def test_known_remote_job_survives_restart_and_retry_polls_it_without_resending(rig):

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { dicomSegFileUrl } from '../lib/api';
 import { defaultOverlapOrder, dicomSegExportSummary, moveOverlapRank, nonemptySavedStructures, unfinishedOverlapRanking } from '../lib/dicom-seg';
 import { prettyName } from '../lib/geometry';
@@ -10,6 +10,7 @@ import type { Revision, ReviewStatus, StructureDisplay } from '../types';
 const props = defineProps<{ caseId: string; revision: Revision; display: StructureDisplay; disabledReason: string }>();
 const dialog = ref<HTMLDialogElement>(),
   rankingList = ref<HTMLOListElement>(),
+  cancelButton = ref<HTMLButtonElement>(),
   opened = ref(false),
   selected = ref<string[]>([]),
   destination = ref(''),
@@ -23,6 +24,8 @@ const {
   checking,
   submitting,
   pending,
+  cancellable,
+  cancelling,
   locked,
   error,
   statusError,
@@ -33,6 +36,7 @@ const {
   resume,
   start,
   prepareFile,
+  cancel,
 } = useDicomSegExport({
   source: () => ({ caseId: props.caseId, revisionId: props.revision.id }),
   blocked: () => props.disabledReason,
@@ -60,6 +64,13 @@ const summary = computed(() => (job.value ? dicomSegExportSummary(job.value) : '
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
 const structureName = (id: string) => prettyName(structures.value.find(item => item.id === id)?.name ?? id);
 let previousFocus: HTMLElement | undefined;
+
+// The button leaves with the job it stops, which would otherwise drop keyboard focus.
+watch(cancellable, value => {
+  if (!value && cancelButton.value && document.activeElement === cancelButton.value) {
+    dialog.value?.querySelector<HTMLButtonElement>('[aria-label="Close DICOM SEG export"]')?.focus();
+  }
+});
 
 async function open() {
   if (disabled.value) return;
@@ -207,16 +218,32 @@ onBeforeUnmount(() => dialog.value?.close());
       <template v-if="pending"
         ><span class="spinner"></span>
         <div>
-          <strong>{{ job.status === 'queued' ? 'Export queued' : 'Exporting DICOM SEG' }}</strong>
+          <strong>{{ cancelling ? 'Cancelling export' : job.status === 'queued' ? 'Export queued' : 'Exporting DICOM SEG' }}</strong>
           <p>{{ job.stage }}</p>
-        </div></template
+        </div>
+        <button
+          v-if="cancellable"
+          ref="cancelButton"
+          class="button secondary compact cancel-export"
+          type="button"
+          :disabled="cancelling || checking || submitting"
+          @click="cancel"
+        >
+          {{ cancelling ? 'Cancelling…' : 'Cancel export' }}
+        </button></template
       >
       <template v-else-if="job.status === 'completed'">{{ summary || 'Export completed. Refresh status for archive and delivery details.' }}</template>
       <template v-else-if="job.status === 'failed'">{{ job.error || 'The export failed. Refresh status before retrying.' }}</template>
-      <template v-else>Export cancelled.</template>
+      <template v-else>{{ summary }}</template>
     </div>
     <p v-if="fileReady" class="help">A saved file carries the CT's patient details, so handle it like the study.</p>
-    <p v-if="pending" class="help">You may close this panel. Closing does not cancel an archive or send already in progress.</p>
+    <p v-if="pending" class="help">
+      {{
+        cancellable
+          ? 'You may close this panel. Closing does not cancel the export.'
+          : 'You may close this panel. Orthanc has started this send, so it can no longer be cancelled.'
+      }}
+    </p>
     <p v-else-if="repeatDelivery" class="help">This selection has already been sent. Send again starts a new delivery of the same DICOM instances.</p>
     <p v-else-if="unfinishedRanking" class="help">
       {{ retryMatches ? 'A retry repeats this ranking and reuses the same SEG.' : 'These settings differ from the unfinished export, so they make a new SEG.' }}
@@ -390,6 +417,10 @@ legend {
 }
 .export-status p {
   margin: 4px 0 0;
+}
+.cancel-export {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .export-error {
   color: #edbdaf;

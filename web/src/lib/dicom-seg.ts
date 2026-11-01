@@ -22,6 +22,8 @@ export interface DicomSegExportResult {
 }
 export interface DicomSegExportJob extends Job {
   result?: { dicom_seg?: DicomSegExportResult };
+  /** Orthanc holds the send now, and cancelling this job cannot stop it. */
+  delivery_started?: boolean;
 }
 export interface DicomSegAvailability {
   encoding_version?: number;
@@ -84,6 +86,7 @@ export const unfinishedOverlapRanking = (job?: DicomSegExportJob) =>
   job && ['failed', 'queued', 'running'].includes(job.status) ? job.result?.dicom_seg?.overlap_priority : undefined;
 
 export const pendingDicomSegExport = (job?: Job) => !!job && ['queued', 'running'].includes(job.status);
+export const cancellableDicomSegExport = (job?: DicomSegExportJob) => pendingDicomSegExport(job) && !job?.delivery_started;
 export const matchesDicomSegExport = (job: Job, caseId: string, revisionId: string) =>
   job.kind === 'orthanc_export' && job.case_id === caseId && job.revision_id === revisionId;
 
@@ -131,6 +134,8 @@ function overlapSummary(result: DicomSegExportResult): string {
 
 export function dicomSegExportSummary(job: DicomSegExportJob): string {
   const result = job.result?.dicom_seg;
+  if (job.status === 'cancelled')
+    return result?.archived ? 'Export cancelled. The SEG had already reached Orthanc and stays there. Nothing was sent.' : 'Export cancelled.';
   if (job.status !== 'completed' || !result) return '';
   const masks = `${result.segments_count} ${result.segments_count === 1 ? 'mask' : 'masks'}`,
     overlaps = overlapSummary(result);

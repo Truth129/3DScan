@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { api, ApiError } from './api';
 import {
+  cancellableDicomSegExport,
   matchesDicomSegExport,
   pendingDicomSegExport,
   preparedDicomSegFile,
@@ -18,8 +19,12 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     submitting = ref(false),
     error = ref(''),
     statusError = ref(''),
-    needsRefresh = ref(false);
+    needsRefresh = ref(false),
+    cancelledId = ref<string>();
   const pending = computed(() => pendingDicomSegExport(job.value));
+  const cancellable = computed(() => cancellableDicomSegExport(job.value));
+  /** A running job stops at its next check, so the request alone does not end it. */
+  const cancelling = computed(() => pending.value && cancelledId.value === job.value?.id);
   const locked = computed(() => checking.value || submitting.value || pending.value || needsRefresh.value);
   const history = computed(() => {
     const records = (availability.value?.exports ?? []).filter(value => matchesDicomSegExport(value, options.source().caseId, options.source().revisionId));
@@ -193,6 +198,26 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       if (attempt.current()) submitting.value = false;
     }
   }
+  async function cancel() {
+    const id = job.value?.id;
+    if (disposed || !id || !cancellable.value || cancelling.value || checking.value || submitting.value) return;
+    // Stop polling first: an answer sent before the cancel must not overwrite its result.
+    const attempt = begin();
+    cancelledId.value = id;
+    error.value = '';
+    try {
+      const value = (await api.cancel(id)) as DicomSegExportJob;
+      if (!attempt.current()) return;
+      if (value.id !== id) throw new Error('The export status returned a different job. Refresh export status.');
+      accept(value, attempt.caseId, attempt.revisionId);
+      statusError.value = '';
+    } catch (reason) {
+      cancelledId.value = undefined;
+      if (!attempt.current()) return;
+      error.value = `${message(reason)} The export may still be running.`;
+    }
+    schedule();
+  }
   watch(
     sourceKey,
     () => {
@@ -215,6 +240,8 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     checking,
     submitting,
     pending,
+    cancellable,
+    cancelling,
     locked,
     error,
     statusError,
@@ -225,5 +252,6 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     resume,
     start,
     prepareFile,
+    cancel,
   };
 }
