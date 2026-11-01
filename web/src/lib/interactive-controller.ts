@@ -354,10 +354,17 @@ export class InteractiveController {
       this.job = await (choice
         ? this.reader.predictInteractive(this.caseId, id, generation, fullRefine, choice)
         : this.reader.predictInteractive(this.caseId, id, generation, fullRefine));
-      this.review = { ...this.review, status: 'predicting', job_id: this.job.id };
+      const seen: InteractiveReview = { ...this.review, status: 'predicting', job_id: this.job.id };
+      this.review = seen;
       this.notify();
       if (this.cancelRequested) await this.reader.cancel(this.job.id);
-      if (!this.takeOn(this.review, await this.reader.interactiveReview(this.caseId, this.review.id))) return;
+      const value = await this.reader.interactiveReview(this.caseId, seen.id);
+      // As in poll(): a save of this page's can be in the reply already, or have landed after it.
+      if (this.saving || this.review !== seen) {
+        if (this.working) this.poll();
+        return;
+      }
+      if (!this.takeOn(seen, value)) return;
       this.notify();
       this.poll();
     } catch (reason) {
