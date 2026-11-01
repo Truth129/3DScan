@@ -38,7 +38,7 @@ FIRST_RUN = [*PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]
 LATER_PREFLIGHT = ["uv python find", "nvidia-smi", "system-python"]  # A later run needs no room.
 RE_RUN = [*LATER_PREFLIGHT, "uv pip freeze", "venv-python"]  # It equals the lock: no index.
 RESTARTED = [*LATER_PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]  # No install has finished.
-TRIAL = ["queue", "uv cache dir", "uv trial", "queue"]  # A finished environment is at stake.
+TRIAL = ["queue", "uv cache dir", "uv trial", "uv offline trial", "queue"]  # A finished environment is at stake.
 TRIED = [*TRIAL, "find", "uv venv", "uv pip sync", "venv-python"]
 REBUILT = [*LATER_PREFLIGHT, "uv pip freeze", *TRIED]
 MARKER = ".scan3d-inference-path"
@@ -75,7 +75,7 @@ scenario = json.loads((rig / "scenario.json").read_text())
 if "--queue" in arguments:
     step = "queue"
 elif "--target" in arguments:
-    step = f"{tool} trial"
+    step = f"{tool} offline trial" if "--offline" in arguments else f"{tool} trial"
 elif tool.endswith("uv"):  # What ran, with its subcommand named.
     step = " ".join((tool, *(word for word in arguments[:2] if not word.startswith("-"))))
 else:
@@ -86,6 +86,9 @@ call = {"tool": tool, "step": step, "arguments": arguments, "cwd": os.getcwd(), 
 if tool == "find" or arguments[:1] == ["venv"]:
     target = Path(arguments[0] if tool == "find" else arguments[-1])
     call["held"] = sorted(entry.name for entry in target.iterdir())
+if "--target" in arguments:
+    folder = Path(arguments[arguments.index("--target") + 1])
+    call["held"] = sorted(entry.name for entry in folder.iterdir()) if folder.exists() else []
 with (rig / "calls.jsonl").open("a") as calls:
     calls.write(json.dumps(call) + "\n")
 
@@ -155,9 +158,21 @@ if arguments[0] == "venv":
 if arguments[:2] == ["pip", "sync"] and "<<<<<<<" in Path(arguments[-1]).read_text():
     print("error: Unexpected '<', expected '-c', '-e', '-r' or the start of a requirement", file=sys.stderr)
     sys.exit(2)
+if arguments[:2] == ["pip", "sync"]:
+    # What real uv does: offline it has only what it kept, and online it reads the index even with
+    # all it needs in its cache.
+    keeps_nothing = scenario["cache_keeps_nothing"] or os.environ.get("UV_NO_CACHE")
+    if "--offline" in arguments:
+        if keeps_nothing or not (rig / "uv-kept-the-lock").exists():
+            print("error: Because alpha was not found in the cache and you require alpha==1.0, ...", file=sys.stderr)
+            sys.exit(1)
+    elif scenario["index_down"]:
+        print("error: Failed to fetch: `https://pypi.org/simple/alpha/`", file=sys.stderr)
+        sys.exit(2)
+    elif not keeps_nothing:
+        (rig / "uv-kept-the-lock").touch()
 if "--target" in arguments:
-    folder = Path(arguments[arguments.index("--target") + 1])
-    (folder / "alpha").mkdir()
+    (folder / "alpha").mkdir(parents=True, exist_ok=True)  # uv makes the folder if it has gone.
     (folder / "alpha" / "__init__.py").touch()
     (folder / ".lock").touch()
     sys.exit(scenario["trial_status"])
@@ -259,6 +274,8 @@ class Rig:
             "free_at": {},
             "freeze_status": 0,
             "cache_dir_status": 0,
+            "index_down": False,
+            "cache_keeps_nothing": False,
             "trial_status": 0,
             "wipe_status": 0,
             "killed_after_the_wipe": False,
@@ -1230,6 +1247,10 @@ def a_cache_that_cannot_be_made(rig):
     (rig.root / ".cache").write_text("a file where the folder should be")
 
 
+def a_cache_that_keeps_nothing(rig):
+    rig.scenario["cache_keeps_nothing"] = True  # no-cache in a uv.toml, or an index that forbids storing.
+
+
 def a_merge_conflict_in_the_lock(rig):
     rig.lock.write_text(f"<<<<<<< HEAD\n{STUB_LOCK}=======\nalpha==1.1 \\\n    --hash=sha256:dddd\n>>>>>>> other\n")
 
@@ -1238,6 +1259,7 @@ def a_merge_conflict_in_the_lock(rig):
     "obstacle, steps",
     [
         (uv_cannot_reach_a_package, TRIAL[:3]),
+        (a_cache_that_keeps_nothing, TRIAL[:4]),
         (a_merge_conflict_in_the_lock, TRIAL[:3]),
         (uv_cannot_name_its_cache, TRIAL[:2]),
         (a_cache_that_cannot_be_made, TRIAL[:2]),
@@ -1286,11 +1308,37 @@ def test_a_rebuild_is_tried_for_real_in_uvs_cache_before_anything_is_wiped(rig):
     assert rig.in_the_cache() == []
 
 
+def test_a_trial_installs_again_from_empty_with_no_network(rig):
+    # What the rebuild will do. A sync over the first install reads only index pages, and passes with
+    # every wheel gone.
+    a_rebuild(rig)
+    assert rig.run("nvidia").returncode == 0
+    trial, offline = rig.step("uv trial"), rig.step("uv offline trial")
+    assert offline["arguments"] == ["pip", "sync", "--offline", *trial["arguments"][2:]]
+    assert offline["held"] == []
+
+
+def test_an_index_that_fails_after_the_trial_cannot_stop_the_rebuild(rig):
+    # uv has all it needs by then, yet online it would read again any index page past its age.
+    a_rebuild(rig)
+    rig.scenario["during"] = {"uv offline trial": "(rig / 'scenario.json').write_text(json.dumps({**scenario, 'index_down': True}))"}
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert rig.steps()[-3:] == ["uv venv", "uv pip sync", "venv-python"]
+    assert rig.packages() == LOCKED and (rig.venv / FINISHED).is_file()
+
+
+def test_a_first_install_has_no_cache_to_rest_on(rig):
+    assert rig.run("nvidia").returncode == 0
+    assert "--offline" not in rig.step("uv pip sync")["arguments"]
+
+
 def test_a_person_is_told_why_a_rebuild_waits(rig):
     a_rebuild(rig)
     told = said(rig.run("nvidia").stdout)
     assert "Trying the rebuild in a folder of its own first, so that this environment stays unless uv can finish" in told
     assert "That can take many minutes if uv has to fetch packages" in told
+    assert "It then tries once more with no network, because the rebuild itself will use none" in told
 
 
 def test_the_trial_finds_the_cache_with_colour_forced(rig):
@@ -1320,11 +1368,12 @@ def test_an_environment_past_reading_is_tried_too(rig):
     assert rig.snapshot() == before
 
 
+@pytest.mark.parametrize("step", ["uv trial", "uv offline trial"])
 @pytest.mark.parametrize("stop", [signal.SIGINT, signal.SIGHUP, signal.SIGTERM], ids=["ctrl-c", "closed-terminal", "terminated"])
-def test_a_trial_that_is_stopped_takes_its_folder_with_it(rig, stop):
+def test_a_trial_that_is_stopped_takes_its_folder_with_it(rig, stop, step):
     # The whole group, as a terminal sends it. A signal to the script alone leaves uv writing there.
     a_rebuild(rig)
-    rig.scenario["during"] = {"uv trial": "hold()"}
+    rig.scenario["during"] = {step: "Path(arguments[arguments.index('--target') + 1]).mkdir(exist_ok=True); hold()"}
     first = rig.start("nvidia")
     rig.wait_until_held()
     assert len(rig.in_the_cache()) == 1
@@ -1361,6 +1410,7 @@ def test_nothing_is_at_stake_after_a_stop_so_no_trial_is_run(rig, stop):
     uv_cannot_reach_a_package(rig)  # A trial would stop this run, and it has nothing to protect.
     assert rig.run("nvidia").returncode == 0
     assert rig.steps() == RESTARTED
+    assert "--offline" not in rig.step("uv pip sync")["arguments"]  # No trial, so nothing says uv holds it.
 
 
 # One run at a time
@@ -1430,7 +1480,7 @@ def test_a_dry_run_can_look_while_another_run_works(rig):
     assert first.wait(timeout=60) == 0
 
 
-@pytest.mark.parametrize("step", ["uv trial", "uv pip sync"])
+@pytest.mark.parametrize("step", ["uv trial", "uv offline trial", "uv pip sync"])
 def test_a_killed_run_keeps_the_environment_until_its_uv_has_gone(rig, step):
     # Only the script dies, and its uv goes on writing. Starting again now would wipe around it.
     a_rebuild(rig)
@@ -1837,7 +1887,10 @@ def test_the_plan_says_when_a_hash_is_checked(rig):
 def test_the_plan_says_what_a_re_run_does_to_anything_but_an_environment_equal_to_the_lock(rig):
     plan = said(rig.run("nvidia", "--dry-run").stdout)
     assert "is rebuilt from empty, from what uv has already fetched where it can" in plan
-    assert "A finished environment waits for an empty queue, and stays until a trial has fetched and built all that the rebuild needs" in plan
+    assert (
+        "A finished environment waits for an empty queue, and stays until a trial has fetched and built all that the rebuild needs, then done it again with no network"
+        in plan
+    )
 
 
 def test_usage_says_what_a_re_run_does_and_what_it_cannot_fix(rig):

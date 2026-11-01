@@ -192,8 +192,10 @@ that changes `.venv`, and rebuilds the viewer and the converter. All paths share
 AI weights, the license and your cases, so nothing downloads twice.
 
 `target` and `prefix` under `[pip]` in a `uv.toml`, the checkout's or your own, are not
-supported. uv would install somewhere else and the environment would be left empty. With
-`no-cache` set there, a rebuild fetches everything a second time after its trial.
+supported. uv would install somewhere else and the environment would be left empty.
+`no-cache` there is not supported either, nor is an index that forbids storing what it
+serves. uv then keeps nothing, so a finished environment fails its trial, described below,
+and stays as it is until you move it aside.
 
 The script installs only into a directory it made, which it marks with a
 `.scan3d-inference-path` file. It refuses any other directory that already exists,
@@ -238,16 +240,19 @@ leaves. Either way the script then repeats the GPU check.
 
 A finished environment may be in use, so the script rebuilds it only when no job is
 queued or running, by the same rule as the GPU check, and only after a trial has built its
-replacement. The trial is a real install into a temporary folder inside uv's cache. It
-fetches and builds everything the rebuild needs, and its hard links cost no extra data. If
-it fails, the environment stays as it was. The script reads the queue before the trial, so
-that a busy queue never sets off a download, and again after it, because a trial can take
-many minutes when uv has to fetch packages. `scripts/check_gpu.py --queue` runs that queue
-rule alone. No job can start from an unfinished environment, so a first install and a
-stopped install do not wait for the queue, and they run no trial. An idle nnInteractive
-process is not a job, so it does not hold a rebuild back. It keeps what it had loaded until
-a segmentation, AI assist on another GPU or a restart stops it, and if the GPU check records
-no change it goes on serving that GPU.
+replacement. The trial is two real installs into a temporary folder inside uv's cache, and
+their hard links cost no extra data. The first fetches and builds everything the rebuild
+needs. The second starts from empty with no network, as the rebuild then does, because
+online, uv reads again any index page past its age, and could fail on that with everything
+it needs already in its cache. If either install fails, the environment stays as it was.
+The script reads the queue before the trial, so that a busy queue never sets off a
+download, and again after it, because a trial can take many minutes when uv has to fetch
+packages. `scripts/check_gpu.py --queue` runs that queue rule alone. No job can start from
+an unfinished environment, so a first install and a stopped install do not wait for the
+queue, and they run no trial. An idle nnInteractive process is not a job, so it does not
+hold a rebuild back. It keeps what it had loaded until a segmentation, AI assist on another
+GPU or a restart stops it, and if the GPU check records no change it goes on serving that
+GPU.
 
 If an install stops, no check runs. Until an install finishes, the app shows the GPU as
 unavailable if it was last checked on that environment, or not at all if it was never

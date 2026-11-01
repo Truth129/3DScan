@@ -80,20 +80,28 @@ matches_lock() {
   [[ "$packages" == "$pins" ]]
 }
 
-# Whether uv can build this whole lock, found out by doing it in a folder nobody will use. So by the
-# time this passes, uv has fetched and built everything a rebuild needs, and no download can stop
-# one after its wipe, though a full disk or a kill still can. A dry run would not show that: it reads
-# index pages alone, and passes with every wheel gone. The folder is in uv's cache because a hard
-# link costs no data within a disk, and --target lets uv take a base Python. Ctrl-C takes the folder
-# with it. A kill, or a signal that leaves uv running, can leave it, as links `uv cache clean` removes.
+# Whether uv can build this whole lock, found out by doing it in a folder nobody will use, then again
+# from empty with no network, as the rebuild will. The first install fetches and builds what uv lacks.
+# A dry run would not show that: it reads index pages alone, and passes with every wheel gone. The
+# second shows that uv kept all of it, which no-cache in a uv.toml or an index that forbids storing
+# would prevent. A sync over the first install would not show that either: it reads only those pages.
+# So by the time this passes, no download can stop a rebuild after its wipe, though a full disk or a
+# kill still can. The folder is in uv's cache because a hard link costs no data within a disk, and
+# --target lets uv take a base Python. Ctrl-C takes the folder with it. A kill, or a signal that
+# leaves uv running, can leave it, as links `uv cache clean` removes.
+install_in_trial() {
+  "$uv" pip sync "$@" --link-mode hardlink --python "$interpreter" --target "$trial" --require-hashes "$lock"
+}
+
 can_rebuild() {
   local cache status=0
   cache="$("$uv" cache dir --color never)" && mkdir -p -- "$cache" || return 1
   trial="$(mktemp -d -p "$cache" scan3d-trial.XXXXXXXXXX)" || return 1
   trap 'rm -rf -- "$trial"' EXIT
   echo 'Trying the rebuild in a folder of its own first, so that this environment stays unless uv can'
-  echo 'finish. That can take many minutes if uv has to fetch packages.'
-  "$uv" pip sync --link-mode hardlink --python "$interpreter" --target "$trial" --require-hashes "$lock" || status=$?
+  echo 'finish. That can take many minutes if uv has to fetch packages. It then tries once more with'
+  echo 'no network, because the rebuild itself will use none.'
+  install_in_trial && rm -rf -- "$trial" && install_in_trial --offline || status=$?
   rm -rf -- "$trial"
   trap - EXIT
   return "$status"
@@ -164,7 +172,7 @@ export UV_LINK_MODE=copy
 # Each of these reaches `uv venv` alone, and so would stop a rebuild only after its wipe: one refuses
 # --allow-existing, and the other fetches pip.
 unset UV_VENV_CLEAR UV_VENV_SEED
-# With no cache a trial keeps nothing, so a rebuild would have to fetch it all again after its wipe.
+# With no cache a trial keeps nothing, and a rebuild has only what its trial kept.
 unset UV_NO_CACHE
 # A checkout's own Python, when it has one.
 if [[ -d "$root/.tools/python" ]]; then
@@ -232,9 +240,10 @@ a full copy.
 A re-run leaves an environment that equals the lock alone, and needs no network to do so.
 Anything else, such as an install that did not finish, is rebuilt from empty, from what uv has
 already fetched where it can. A finished environment waits for an empty queue, and stays until
-a trial has fetched and built all that the rebuild needs. uv checks a package's hash when it
-fetches it, not when it reuses its cache, and there is one gap: acvl-utils is published only as
-source, and the tools that build it are fetched without hashes.
+a trial has fetched and built all that the rebuild needs, then done it again with no network.
+uv checks a package's hash when it fetches it, not when it reuses its cache, and there is one
+gap: acvl-utils is published only as source, and the tools that build it are fetched without
+hashes.
 
 It will not touch any other Python environment, the viewer, the DICOM converter,
 TotalSegmentator's settings, scan3d.env or the running app, and it does not install a Python.
@@ -292,11 +301,15 @@ else
   # and never from an unfinished one, which discovery refuses. So it alone waits, and it goes only
   # after a trial has built its replacement. The queue comes first so that a busy one never sets off
   # a download, and again after, because a cold trial can take many minutes.
+  offline=()
   if [[ -f "$finished" ]]; then
     refuse_unless_idle
     can_rebuild ||
       fail 'uv cannot rebuild this environment from what it can reach, so it was left as it is. Fix what uv reported above, then run this again.'
     refuse_unless_idle
+    # uv holds it all now, yet online it would read again any index page past its age, and a failure
+    # to would stop this rebuild after its wipe.
+    offline=(--offline)
   fi
   # This happens from inside the directory, after a last look that its marker is the one this run
   # locked, by the test `marked` uses, so that the wipe stays in the directory it checked. A hard
@@ -314,7 +327,7 @@ else
     stopped 'The environment could not be created.'
   # --require-hashes covers what is installed, and acvl-utils's build requirements are outside
   # it: it has no wheel, and they come from the index unhashed.
-  "$uv" pip sync --python "$python" --require-hashes "$lock" ||
+  "$uv" pip sync "${offline[@]}" --python "$python" --require-hashes "$lock" ||
     stopped 'The install did not finish, so no GPU check ran.'
   echo 'The last install finished.' >"$finished"
 fi
