@@ -69,9 +69,13 @@ class OrthancViewExports(OrthancExports):
     result_key = "dicom_view"
     encoding_version = VIEW_ENCODING_VERSION
     label = "DICOM view"
-    short_label = "view"
-    interrupted_error = "Export interrupted. Retry to reuse its exact view image and check any existing Orthanc delivery job."
-    failed_error = "DICOM view export failed. Check the original CT, then retry."
+    # A job can end after its dialog closed, and only that dialog can retry, because only it
+    # holds the image. So these state the outcome, and the dialog adds the retry while it can.
+    interrupted_error = "Export interrupted. Check the study in Orthanc."
+    failed_error = "DICOM view export failed. Check the original CT."
+    undelivered_error = "Orthanc could not deliver this view. Check the destination."
+    unconfirmed_error = "Delivery is not confirmed. Check the destination."
+    still_active_error = "An earlier Orthanc delivery may still be active. Check the destination."
 
     def _inputs(self, case_id, revision_id, structure_ids=None):
         revision, case, reference = self._reference(case_id, revision_id)

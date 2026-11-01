@@ -382,7 +382,7 @@ describe('the dialog', () => {
   it('says a retry reuses the image and a new capture does not', async () => {
     const posts = server(),
       view = await dialog({ job: job('failed', { error: 'Delivery not confirmed.' }) });
-    expect(view.text()).toContain('Delivery not confirmed. Retry from this dialog reuses the same image. A new capture makes a new series.');
+    expect(view.text()).toContain('Delivery not confirmed. Retry from this dialog reuses the same image. A capture of a different image makes a new series.');
     click(view.button('Archive in Orthanc'));
     await settled();
     expect((posts[0].form.get('image') as File).size).toBe(capture.image.size);
@@ -406,6 +406,10 @@ describe('the dialog', () => {
   ])('notes %s earlier export of this revision', async (_name, earlier, text) => {
     server({ available: availability({ exports: [earlier] }) });
     expect((await dialog()).text()).toContain(text);
+  });
+  it('does not promise a new series for a capture that may be the same image', async () => {
+    server({ available: availability({ exports: [job('failed', { id: 'earlier' })] }) });
+    expect((await dialog()).text()).toContain('This capture makes a new series unless it is the same image.');
   });
   it('notes nothing for a finished earlier export, or for this capture’s own job', async () => {
     const failed = job('failed', { id: 'own' });

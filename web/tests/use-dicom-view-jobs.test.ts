@@ -16,6 +16,7 @@ const job = (status: DicomViewExportJob['status'], values: Partial<DicomViewExpo
   ...values,
 });
 const archived = { dicom_view: { export_id: 'view', archived: true, sent: false, instance_count: 1 } };
+const AFTERWARDS = 'A capture of the same image reuses this export, and a different image makes a new series.';
 const sent = { dicom_view: { export_id: 'view', archived: true, sent: true, instance_count: 1, destination: 'OsiriX', destination_id: 'osirix' } };
 
 function fixture() {
@@ -92,7 +93,7 @@ describe('view export watcher', () => {
     const { watcher, success, failure } = fixture();
     watcher.follow(job('running'));
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith('Delivery not confirmed. A new capture makes a new series.');
+    expect(failure).toHaveBeenCalledExactlyOnceWith(`Delivery not confirmed. ${AFTERWARDS}`);
     expect(success).not.toHaveBeenCalled();
   });
   it.each([
@@ -116,7 +117,7 @@ describe('view export watcher', () => {
     watcher.follow(job('running'));
     active.value = 'case-b';
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith('Case A: Delivery not confirmed. A new capture makes a new series.');
+    expect(failure).toHaveBeenCalledExactlyOnceWith(`Case A: Delivery not confirmed. ${AFTERWARDS}`);
     watcher.follow(job('running', { id: 'view-2' }));
     await vi.advanceTimersByTimeAsync(1400);
     expect(success).toHaveBeenCalledExactlyOnceWith('Case A: View archived in Orthanc. Nothing was sent to another viewer.');
@@ -210,7 +211,7 @@ describe('view export watcher', () => {
     await vi.advanceTimersByTimeAsync(1400);
     expect(poll).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith('Interrupted. A new capture makes a new series.');
+    expect(failure).toHaveBeenCalledExactlyOnceWith(`Interrupted. ${AFTERWARDS}`);
   });
   it('lets a failed seed pass, so that opening a case still works', async () => {
     vi.spyOn(api, 'jobs').mockRejectedValue(new TypeError('Failed to fetch'));

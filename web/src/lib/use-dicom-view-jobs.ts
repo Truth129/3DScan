@@ -38,8 +38,8 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
           : job.status === 'cancelled'
             ? 'The DICOM view export was cancelled.'
             : dicomViewExportSummary(job) || 'The DICOM view export finished without confirming delivery.';
-      // The job's own text can offer a retry, which needs the image the closed dialog held.
-      options.failure(named(`${reason} A new capture makes a new series.`, job.case_id));
+      // Nothing can retry now, because the image went with the dialog. A capture is all that is left.
+      options.failure(named(`${reason} A capture of the same image reuses this export, and a different image makes a new series.`, job.case_id));
     }
   }
   function schedule(id: string) {

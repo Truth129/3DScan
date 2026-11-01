@@ -234,7 +234,7 @@ def test_retry_after_a_failed_upload_reuses_the_exact_sop(view):
     view.archive.upload_error = OrthancError("private filename /patient/DICOM.dcm")
     failed = execute(view, post(view, destination="osirix"))
     assert failed["status"] == "failed" and failed["stage"] == "Export failed" and "/patient" not in failed["error"]
-    assert failed["error"] == "DICOM view export failed. Check the original CT, then retry."
+    assert failed["error"] == "DICOM view export failed. Check the original CT."
     assert not view.archive.sends and len(view.archive.blobs) == 1
     original = (export_directory(view, failed) / "export.json").read_bytes()
     retried = post(view, destination="osirix")
@@ -249,7 +249,7 @@ def test_unknown_delivery_never_resends_itself_and_retry_reuses_the_sop(view):
     view.archive.start_error = OrthancDeliveryUnknown("Synthetic lost start response")
     failed = execute(view, post(view, destination="osirix"))
     assert failed["status"] == "failed" and failed["stage"] == "Delivery not confirmed"
-    assert "exact view instances" in failed["error"] and failed["result"]["dicom_view"]["archived"] is True
+    assert failed["error"] == view.manager.unconfirmed_error and failed["result"]["dicom_view"]["archived"] is True
     receipt = json.loads((export_directory(view, failed) / "delivery.json").read_text())
     assert receipt["destinations"]["osirix"]["state"] == "unknown"
     view.service.store.recover()
@@ -269,9 +269,19 @@ def test_a_known_remote_job_is_polled_by_retry_without_a_second_send(view):
     view.service.store.recover()
     view.manager.recover()
     recovered = private_job(view, failed)
-    assert recovered["stage"] == "Interrupted" and recovered["error"] == view.manager.interrupted_error and "view image" in recovered["error"]
+    assert recovered["stage"] == "Interrupted" and recovered["error"] == view.manager.interrupted_error
     finished = execute(view, post(view, destination="osirix"))
     assert finished["status"] == "completed" and len(view.archive.sends) == 1
+
+
+def test_no_job_text_offers_a_retry_the_banner_cannot_give(view):
+    """A job can end after its dialog closed, and then its text is all there is: the image has gone."""
+    manager = view.manager
+    for text in (manager.interrupted_error, manager.failed_error, manager.undelivered_error, manager.unconfirmed_error, manager.still_active_error):
+        assert "retry" not in text.lower()
+    view.archive.remote_state = "Failure"
+    failed = execute(view, post(view, destination="osirix"))
+    assert failed["status"] == "failed" and failed["error"] == manager.undelivered_error
 
 
 def test_resend_requires_a_confirmed_send_of_this_capture_to_this_destination(view):
@@ -331,7 +341,7 @@ def test_restart_interrupts_queued_view_jobs_and_never_sends_them(view):
     view.service.start(lanes=())
     view.service.worker_lock.close()
     recovered = private_job(view, queued)
-    assert recovered["status"] == "failed" and recovered["stage"] == "Interrupted" and "view image" in recovered["error"]
+    assert recovered["status"] == "failed" and recovered["stage"] == "Interrupted" and recovered["error"] == view.manager.interrupted_error
     assert view.service.store.claim("cpu") is None and not view.archive.uploads and not view.archive.sends
     assert execute(view, post(view, destination="osirix"))["status"] == "completed"
 

@@ -137,7 +137,7 @@ onBeforeUnmount(() => {
       {{
         pendingDicomViewExport(earlier)
           ? 'An earlier export of this revision is still in progress. It carries on separately from this capture.'
-          : 'An earlier export of this revision did not finish, and it may still have reached the receiver. This capture makes a new series.'
+          : 'An earlier export of this revision did not finish, and it may still have reached the receiver. This capture makes a new series unless it is the same image.'
       }}
     </p>
 
@@ -165,7 +165,7 @@ onBeforeUnmount(() => {
       >
       <template v-else-if="job.status === 'completed'">{{ summary }}</template>
       <template v-else-if="job.status === 'failed'">
-        {{ job.error || 'The export failed.' }} Retry from this dialog reuses the same image. A new capture makes a new series.
+        {{ job.error || 'The export failed.' }} Retry from this dialog reuses the same image. A capture of a different image makes a new series.
       </template>
       <template v-else>Export cancelled.</template>
     </div>

@@ -163,9 +163,13 @@ class OrthancExports:
     result_key = "dicom_seg"
     encoding_version = EXPORT_ENCODING_VERSION
     label = "DICOM SEG"
-    short_label = "SEG"
     interrupted_error = "Export interrupted. Retry to reuse its exact SEG bytes and check any existing Orthanc delivery job."
     failed_error = "DICOM SEG export failed. Check the original CT and saved masks, then retry."
+    undelivered_error = "Orthanc could not deliver every SEG instance. An explicit retry reuses the same SOP instances."
+    unconfirmed_error = (
+        "Delivery is not confirmed. Check the destination before retrying; a retry reuses the exact SEG instances and checks any known Orthanc job."
+    )
+    still_active_error = "An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status."
 
     def __init__(self, service):
         self.service = service
@@ -566,7 +570,7 @@ class OrthancExports:
                 job.update(
                     status="failed" if active else "cancelled",
                     stage="Stopped waiting; delivery may continue" if active else "Cancelled before delivery",
-                    error="An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status." if active else None,
+                    error=self.still_active_error if active else None,
                     completed_at=now(),
                 )
             con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job, allow_nan=False), job_id))
@@ -679,9 +683,7 @@ class OrthancExports:
                                 job["payload"]["delivery_state"] = delivery.state
                                 self.service.store.update_job(job["id"], payload=job["payload"])
                                 if not success:
-                                    raise ExportUnavailable(
-                                        f"Orthanc could not deliver every {self.short_label} instance. An explicit retry reuses the same SOP instances."
-                                    )
+                                    raise ExportUnavailable(self.undelivered_error)
                                 break
                             if time.monotonic() >= deadline:
                                 raise OrthancError("The Orthanc delivery job is still pending")
@@ -699,15 +701,7 @@ class OrthancExports:
             )
         except Exception as exc:
             cancelled = isinstance(exc, InterruptedError) and not sending
-            error = (
-                str(exc)
-                if isinstance(exc, ExportUnavailable)
-                else (
-                    f"Delivery is not confirmed. Check the destination before retrying; a retry reuses the exact {self.short_label} instances and checks any known Orthanc job."
-                    if sending
-                    else self.failed_error
-                )
-            )
+            error = str(exc) if isinstance(exc, ExportUnavailable) else (self.unconfirmed_error if sending else self.failed_error)
             if not cancelled:
                 log.warning("%s export %s failed (%s)", self.label, job["id"], type(exc).__name__)
             if sending and receipt and destination in receipt.destinations and receipt.destinations[destination].state == "starting":
