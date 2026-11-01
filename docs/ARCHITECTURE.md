@@ -314,8 +314,9 @@ then stays on that card, so every step of a saved correction ran on one card. A 
 to continue from, so one added mark on another card would rebuild reviewed work from the original mask. The
 lock is derived, not stored: it is non-empty `batches`, which only a published result writes. A failed or
 cancelled first run therefore never locks a draft. Undoing back past the first step frees it, unless that step
-was a whole-mask refine with no marks, which undo cannot remove, and changing `options` always frees it. Direct
-and relationship-only Apply run no model, so they ignore the choice, and a relationship-only result leaves the
+was a whole-mask refine with no marks, which undo cannot remove, and changing `options` always frees it. The
+stored card goes when `batches` empties, so nothing is left for a later step to be mistaken for. Direct and
+relationship-only Apply run no model, so they ignore the choice, and a relationship-only result leaves the
 draft's card as it was.
 
 To change card, a client re-runs the draft with `replay: true` on the predict route. The job repeats the exact

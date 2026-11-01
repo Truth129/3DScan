@@ -176,7 +176,7 @@ def public_review(record):
         pending_count=max(0, len(record["prompts"]) - applied),
         dirty=not candidate or candidate["generation"] != record["generation"],
     )
-    # Only `batches` decides, because undoing every step leaves a binding that no longer means anything.
+    # Only `batches` decides, because a row from before undo cleared its card can still hold one.
     result["inference_path"] = record.get("inference_path") if record.get("batches") else None
     result["relationship_dirty"] = relationship_dirty(record)
     result["new_structure"] = bool(record.get("new_structure"))

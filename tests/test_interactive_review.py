@@ -837,6 +837,41 @@ def test_undoing_every_step_frees_the_draft(example, paths):
     assert ran(example, redone, inference_path="second")["inference_path"] == binding("second")
 
 
+def stored_card(example, draft):
+    """The card in the row itself. `public_review` hides it on an empty draft, and older code reads the row."""
+    with example[0].store.connection() as connection:
+        row = connection.execute("SELECT data FROM review_sessions WHERE id=?", (draft["id"],)).fetchone()
+    return json.loads(row["data"])["inference_path"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda service, case, draft: service.reviews.update(case["id"], draft["id"], draft["generation"], []),
+        lambda service, case, draft: service.reviews.update(
+            case["id"], draft["id"], draft["generation"], draft["prompts"], options={"autozoom": False, "start_empty": False}
+        ),
+        lambda service, case, draft: service.reviews.discard(case["id"], draft["id"], draft["generation"]),
+    ],
+    ids=["undone", "options-changed", "discarded"],
+)
+def test_a_draft_left_with_no_steps_keeps_no_card_in_its_row(example, paths, change):
+    service, case, _, _ = example
+    draft = ran(example, marked(example), inference_path="nvidia")
+    assert stored_card(example, draft) == binding("nvidia")
+    change(service, case, draft)
+    assert stored_card(example, draft) is None
+
+
+def test_a_draft_with_steps_left_keeps_its_card_in_its_row(example, paths):
+    service, case, _, _ = example
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    draft = ran(example, draft)
+    service.reviews.update(case["id"], draft["id"], draft["generation"], draft["prompts"][:1])
+    assert stored_card(example, draft) == binding("nvidia")
+
+
 def test_changing_an_option_frees_the_draft(example, paths):
     service, case, _, _ = example
     draft = ran(example, marked(example), inference_path="nvidia")
@@ -919,11 +954,17 @@ def test_a_card_swapped_under_a_locked_draft_is_not_treated_as_the_same_card(exa
     )
 
 
-def test_a_session_and_a_job_saved_before_paths_existed_run_as_the_default(example, paths):
+@pytest.mark.parametrize(
+    "stored",
+    [lambda state: {key: value for key, value in state.items() if key != "inference_path"}, lambda state: {**state, "inference_path": None}],
+    ids=["no-key", "null"],
+)
+def test_a_session_and_a_job_saved_before_paths_existed_run_as_the_default(example, paths, stored):
+    # A master-made draft has no key, and a null one is what clearing a card leaves.
     service, case, _, _ = example
     draft = ran(example, marked(example))
     add_mark(example, draft)
-    service.store.save("review_sessions", {key: value for key, value in current(example, draft).items() if key != "inference_path"})
+    service.store.save("review_sessions", stored(current(example, draft)))
     assert public_review(current(example, draft))["inference_path"] is None  # Its batches lock it, to no named card.
     with pytest.raises(ReviewConflict, match="came from"):
         queue(example, draft, inference_path="nvidia")

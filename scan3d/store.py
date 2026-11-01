@@ -354,6 +354,9 @@ class Store:
                 prompts=next_prompts,
                 options=next_options,
                 batches=batches,
+                # With no step left nothing here came from a card, and an older build that later
+                # fills `batches` would leave this in place, so that a re-upgrade would misread it.
+                inference_path=review["inference_path"] if batches else None,
                 relationship=next_relationship,
                 status="discarded" if discard else "ready" if candidate and candidate["generation"] == generation + 1 else "draft",
                 updated_at=now(),
