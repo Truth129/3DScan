@@ -866,6 +866,20 @@ describe('a draft that moves under a job this page follows', () => {
       expect(reader.interactiveReview).toHaveBeenCalledOnce();
     });
   });
+  it('cancels the job a Reload found running, not the one this page held before', async () => {
+    const { controller, reader } = await ownJob();
+    await reads(reader, saved(1, { status: 'ready', job_id: 'prediction' }));
+    expect(controller.job?.id).toBe('prediction');
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'The correction draft changed; reload its current prompts'));
+    controller.append(point('mine'));
+    await expect(controller.flush()).rejects.toThrow('reload');
+    reader.interactiveReviews.mockResolvedValueOnce([saved(3, { status: 'predicting', job_id: 'theirs' })]);
+    await controller.reload();
+    expect(controller.working).toBe(true);
+    expect(controller.job, 'that job belonged to the record this replaced').toBeUndefined();
+    await controller.cancel();
+    expect(reader.cancel).toHaveBeenCalledExactlyOnceWith('theirs');
+  });
   it('reads no more once a Reload has ended the follow, whatever a read still out then says', async () => {
     const { controller, reader } = await followedWithAMark('accepting');
     reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Wait for acceptance to finish or cancel it before editing'));
