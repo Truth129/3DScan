@@ -170,7 +170,8 @@ def test_availability_has_the_dicom_seg_shape(view):
         "exports": [],
         "encoding_version": 1,
     }
-    assert set(available.json()) == set(view.http.get(view.url.replace("/dicom-view", "/dicom-seg")).json())
+    # Only a SEG can be saved as a file.
+    assert set(available.json()) == set(view.http.get(view.url.replace("/dicom-view", "/dicom-seg")).json()) - {"file"}
     case = view.service.store.get("cases", view.case["id"])
     case["references"] = {}
     view.service.store.save("cases", case)

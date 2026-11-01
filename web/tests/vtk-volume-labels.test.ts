@@ -225,6 +225,30 @@ describe('VTKVolumeLabels ownership', () => {
     expect(colouring.stats().labels).toEqual(['aorta', 'liver']);
     colouring.dispose();
   });
+  it('leaves the CT shader alone until the first label texture can be bound with it', async () => {
+    const { colouring, mapper, program, parameters, node, properties, existing } = setup();
+    let release!: () => void;
+    const pending = provider();
+    pending.readSlab = vi.fn(() => new Promise<ArrayBuffer>(resolve => (release = () => resolve(new ArrayBuffer(24)))));
+    const loading = colouring.set(pending, style);
+    await vi.waitFor(() => expect(pending.readSlab).toHaveBeenCalledOnce());
+    // A sampler3D with no texture of its own would sit on unit 0, where vtk's sampler2D
+    // depth texture lives beside any surface, and every CT draw would fail until the upload.
+    expect(properties.OpenGL.ShaderReplacements).toEqual([existing]);
+    expect(mapper.modified).not.toHaveBeenCalled();
+    parameters();
+    expect(program.setUniformi).not.toHaveBeenCalled();
+    release();
+    await loading;
+    expect(properties.OpenGL.ShaderReplacements).toHaveLength(3);
+    expect(mapper.modified).toHaveBeenCalledOnce();
+    parameters();
+    expect(program.setUniformi).toHaveBeenCalledWith('scan3dLabelTexture', 11);
+    fake.trace = [];
+    node.renderPieceDraw();
+    expect(fake.trace).toEqual(['activate', 'draw', 'deactivate']);
+    colouring.dispose();
+  });
 });
 
 describe('native mapper hook composition', () => {

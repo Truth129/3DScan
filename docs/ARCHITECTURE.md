@@ -403,7 +403,9 @@ overlays drawn on a canvas.
 ### Native 3D: Cornerstone3D and vtk.js
 
 Full orthogonal CT defaults to a `VOLUME_3D` viewport in Cornerstone's rendering engine, using vtk.js ray
-casting. `acquireCornerstoneSource` gives each CT session one image volume, texture, context and memory
+casting. Every build rewrites two lines of the vtk.js volume shader (`web/vite-vtk-ray-guard.ts`), so that
+axis-aligned rays, which include every slice view, never divide by an exact zero, and ambient-occlusion rays
+spread over a fixed sequence rather than the sample array vtk.js never fills. `acquireCornerstoneSource` gives each CT session one image volume, texture, context and memory
 reservation. MPR and 3D are independent consumers: either can open first, and closing one keeps the other
 without a download. The last consumer releases the native resources. This sharing is why the view uses
 Cornerstone's engine: a separate 3D renderer would hold a second GPU copy of the CT beside MPR.
@@ -419,7 +421,8 @@ Cornerstone's engine: a separate 3D renderer would hold a second GPU copy of the
   showing the wrong tissue.
 - **Color segments.** A label union stores which structure covers each crop voxel, largest first so
   contained anatomy stays visible. A shader hook tints the transfer-function colour before lighting, leaving
-  opacity and shading to the CT. The native view colours up to 64 structures.
+  opacity and shading to the CT. The hook goes in only with its uploaded texture, so the CT keeps drawing
+  untinted while labels load. The native view colours up to 64 structures.
 - **Lighting.** Preset, Standard, Cinematic and Ambient occlusion modes expose vtk.js scattering and ambient
   occlusion. A manual light can follow the camera or stay fixed in patient space.
 
@@ -496,8 +499,12 @@ no DICOM listener, and Orthanc owns its own archive and setup. See [ORTHANC.md](
 **SEG export** turns chosen structures of a saved revision into one binary SEG instance on the CPU lane,
 with overlaps preserved. Masks are processed one at a time, so memory stays bounded. A manifest pins the
 SEG, mask and reference hashes before any upload, and Orthanc keeps and sends the same bytes to allowlisted
-modality IDs. Export never changes a revision. It requires an original classic CT imported through the
-configured archive. A ranked export claims voxels in rank order against one boolean grid, so each voxel
+modality IDs. Export never changes a revision. Archive and send require an original classic CT imported
+through the configured archive. A prepared file needs only the case's own copy of the series: the encoder reads
+source headers and never source pixels, and every import route keeps those files. For a folder, a ZIP or an
+upload, the digest of the series bytes stands in for the archive manifest, because preparation already names
+the reference image with it. The job kind stays `orthanc_export` so saved jobs keep working, and all routes
+share `orthanc_exports.py`, including its queue, artifact reuse and retries. A ranked export claims voxels in rank order against one boolean grid, so each voxel
 stays in one structure. It is a derived copy for viewers: the saved masks remain the authority.
 
 **View export** turns one capture of the 3D view into a Secondary Capture series in the source study, on
@@ -557,8 +564,9 @@ and the nnInteractive model has an explicit script.
   closing a view frees capacity.
 - The native masking bridge depends on the exact pinned Cornerstone3D and vtk.js versions.
 - Native 3D shows opaque surfaces when CT is visible, and surfaces cast no shadows into the volume.
-- SEG export needs an original classic CT imported through Orthanc. SEG import is limited to binary,
-  uncompressed segmentations on the exact native grid.
+- SEG archive and send need an original classic CT imported through Orthanc. A SEG file needs only the
+  case's own copy of that CT. SEG import is limited to binary, uncompressed segmentations on the exact native
+  grid.
 - The nnInteractive checkpoint is licensed CC BY-NC-SA 4.0 (noncommercial), and some TotalSegmentator tasks
   need a separate license.
 - 3DScan has not been evaluated for clinical accuracy and is not a medical device.

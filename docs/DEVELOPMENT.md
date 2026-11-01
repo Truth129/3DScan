@@ -34,10 +34,11 @@ npx vitest run
 `npm run format` and `ruff format` apply the formatting. `pre-commit install` runs the
 same tools on each commit.
 
-Files matching `web/tests/dicom-view-*.test.ts` or `web/tests/**/*.mounted.test.ts` run in
-Vitest's `mounted` project, whose environment compiles Vue components for the client.
-Vitest otherwise compiles them for the server, which leaves nothing to mount, and these
-tests check the real wiring between templates, refs and watchers.
+Files matching `web/tests/dicom-view-*.test.ts` or `web/tests/**/*.mounted.test.ts`, and
+`web/tests/dicom-seg-file-dialog.test.ts`, run in Vitest's `mounted` project, whose environment
+compiles Vue components for the client. Vitest otherwise compiles them for the server, which
+leaves nothing to mount, and these tests check the real wiring between templates, refs and
+watchers.
 
 `scan3d serve` serves the built files in `web/dist`. While working on the viewer, run the
 backend and then `npm run dev` in `web/`. Vite proxies `/api` to the port in
@@ -133,6 +134,14 @@ card or CUDA build. These facilities show what the code does, not what a card do
   axis-aligned or orthogonal grids: oblique and reflected series are normal, and the viewer
   handles sheared stacks, although DICOM import refuses gantry-tilted CT. Masks are
   authoritative; meshes and display unions never feed measurements.
+- **Shaders.** Software rendering cannot prove a shader works on a real GPU. GLSL leaves
+  some results undefined, such as division by zero, and drivers differ. Axis-aligned rays
+  reach those cases in every slice view, so check any shader or vtk.js change in an ordinary
+  browser on real hardware. A gate's `--native` uses Vulkan, which is a different driver path
+  from a browser's default on Linux. `web/vite-vtk-ray-guard.ts` patches two lines of the
+  vtk.js volume shader in every build, this one and the ambient-occlusion kernel, and it
+  fails the build if either moves or an unguarded copy ships. Keep each patch until vtk.js
+  handles the case itself.
 - **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `ReviewConflict` and
   `ImportConflict` to 409, and schema errors to 422. Any other exception is a logged 500,
   so do not raise a bare `KeyError` for "not found".

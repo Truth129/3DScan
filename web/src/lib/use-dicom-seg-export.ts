@@ -1,6 +1,15 @@
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { api, ApiError } from './api';
-import { matchesDicomSegExport, pendingDicomSegExport, successfulDicomSegDelivery, type DicomSegAvailability, type DicomSegExportJob } from './dicom-seg';
+import {
+  cancellableDicomSegExport,
+  matchesDicomSegExport,
+  pendingDicomSegExport,
+  preparedDicomSegFile,
+  successfulDicomSegDelivery,
+  type DicomSegAvailability,
+  type DicomSegExportJob,
+  type DicomSegExportRequest,
+} from './dicom-seg';
 
 /** Export jobs never activate a revision or enter the processing/review job poller. */
 export function useDicomSegExport(options: { source: () => { caseId: string; revisionId: string }; blocked: () => string }) {
@@ -10,8 +19,12 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     submitting = ref(false),
     error = ref(''),
     statusError = ref(''),
-    needsRefresh = ref(false);
+    needsRefresh = ref(false),
+    cancelledId = ref<string>();
   const pending = computed(() => pendingDicomSegExport(job.value));
+  const cancellable = computed(() => cancellableDicomSegExport(job.value));
+  /** A running job stops at its next check, so the request alone does not end it. */
+  const cancelling = computed(() => pending.value && cancelledId.value === job.value?.id);
   const locked = computed(() => checking.value || submitting.value || pending.value || needsRefresh.value);
   const history = computed(() => {
     const records = (availability.value?.exports ?? []).filter(value => matchesDicomSegExport(value, options.source().caseId, options.source().revisionId));
@@ -25,6 +38,8 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
   });
   const alreadySent = (structureIds: string[], destination: string, overlapPriority?: string[]) =>
     successfulDicomSegDelivery(history.value, structureIds, destination, availability.value?.encoding_version, overlapPriority);
+  const preparedFile = (structureIds: string[], overlapPriority?: string[]) =>
+    preparedDicomSegFile(history.value, structureIds, availability.value?.encoding_version, overlapPriority);
   const sourceKey = computed(() => JSON.stringify([options.source().caseId, options.source().revisionId]));
   const storageKey = () => `scan3d-dicom-seg:${sourceKey.value}`;
   let disposed = false,
@@ -143,32 +158,65 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       (resend && (destination === null || !alreadySent(structureIds, destination, overlapPriority)))
     )
       return;
+    await submit(
+      {
+        structure_ids: [...new Set(structureIds)],
+        destination,
+        ...(resend ? { resend: true } : {}),
+        ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
+      },
+      'Refresh export status before trying again; the request may already have reached the workstation.',
+    );
+  }
+  async function prepareFile(structureIds: string[], overlapPriority?: string[]) {
+    if (disposed || options.blocked() || locked.value || statusError.value || !availability.value?.file?.available || !structureIds.length) return;
+    await submit(
+      {
+        structure_ids: [...new Set(structureIds)],
+        destination: null,
+        delivery: 'file',
+        ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
+      },
+      'Refresh export status before trying again.',
+    );
+  }
+  async function submit(body: DicomSegExportRequest, recovery: string) {
     const attempt = begin();
     submitting.value = true;
     error.value = '';
     try {
-      const value = await api.exportDicomSeg(
-        attempt.caseId,
-        attempt.revisionId,
-        {
-          structure_ids: [...new Set(structureIds)],
-          destination,
-          ...(resend ? { resend: true } : {}),
-          ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
-        },
-        attempt.request.signal,
-      );
+      const value = await api.exportDicomSeg(attempt.caseId, attempt.revisionId, body, attempt.request.signal);
       if (!attempt.current()) return;
       accept(value, attempt.caseId, attempt.revisionId);
       schedule();
     } catch (reason) {
       if (attempt.current()) {
-        error.value = `${message(reason)} Refresh export status before trying again; the request may already have reached the workstation.`;
+        error.value = `${message(reason)} ${recovery}`;
         needsRefresh.value = true;
       }
     } finally {
       if (attempt.current()) submitting.value = false;
     }
+  }
+  async function cancel() {
+    const id = job.value?.id;
+    if (disposed || !id || !cancellable.value || cancelling.value || checking.value || submitting.value) return;
+    // Stop polling first: an answer sent before the cancel must not overwrite its result.
+    const attempt = begin();
+    cancelledId.value = id;
+    error.value = '';
+    try {
+      const value = (await api.cancel(id)) as DicomSegExportJob;
+      if (!attempt.current()) return;
+      if (value.id !== id) throw new Error('The export status returned a different job. Refresh export status.');
+      accept(value, attempt.caseId, attempt.revisionId);
+      statusError.value = '';
+    } catch (reason) {
+      cancelledId.value = undefined;
+      if (!attempt.current()) return;
+      error.value = `${message(reason)} The export may still be running.`;
+    }
+    schedule();
   }
   watch(
     sourceKey,
@@ -186,5 +234,24 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     generation++;
     stop();
   });
-  return { availability, job, checking, submitting, pending, locked, error, statusError, needsRefresh, alreadySent, load, resume, start };
+  return {
+    availability,
+    job,
+    checking,
+    submitting,
+    pending,
+    cancellable,
+    cancelling,
+    locked,
+    error,
+    statusError,
+    needsRefresh,
+    alreadySent,
+    preparedFile,
+    load,
+    resume,
+    start,
+    prepareFile,
+    cancel,
+  };
 }

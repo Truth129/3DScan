@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import importlib
 from io import BytesIO
@@ -23,7 +23,7 @@ from scan3d.config import Settings
 from scan3d.orthanc import OrthancDeliveryUnknown, OrthancError
 from scan3d.orthanc_exports import ExportUnavailable
 from scan3d.service import Service
-from scan3d.store import identifier, job_lane
+from scan3d.store import identifier, job_lane, public_job
 from test_orthanc_imports import SyntheticArchive, SERIES, SERIES_UID, STUDY_UID, FRAME_UID, oid
 
 
@@ -224,6 +224,7 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
         "destinations": [{"id": "osirix", "name": "OsiriX", "aet": "SYNTHETIC_OSIRIX"}],
         "exports": [],
         "encoding_version": 3,
+        "file": {"available": True},
     }
     job = start(rig)
     assert job["kind"] == "orthanc_export" and job["revision_id"] == rig.revision["id"]
@@ -254,6 +255,61 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
     encoded = json.dumps(history)
     assert history[0]["result"] == finished["result"] and history[0]["revision_id"] == rig.revision["id"]
     assert str(rig.root) not in encoded and "private-password" not in encoded and "private-user" not in encoded
+
+
+def test_file_delivery_of_an_orthanc_case_shares_its_artifact_and_touches_no_archive(rig):
+    archived = execute(rig, start(rig))
+    uploads = list(rig.archive.uploads)
+    prepared = rig.http.post(rig.endpoint, json={"delivery": "file"}).json()
+    assert prepared["id"] != archived["id"]
+    finished = execute(rig, prepared)
+    assert finished["status"] == "completed" and finished["payload"]["export_id"] == archived["payload"]["export_id"]
+    assert len(rig.calls) == 1 and rig.archive.uploads == uploads and not rig.archive.sends
+    assert finished["result"]["dicom_seg"]["file"] is True and finished["result"]["dicom_seg"]["archived"] is False
+    served = rig.http.get(f"{rig.endpoint}/{finished['payload']['export_id']}/segment.dcm")
+    directory, _ = artifact(rig, finished)
+    assert served.status_code == 200 and served.content == (directory / "dicom" / "segment-0001.dcm").read_bytes()
+
+
+def test_a_prepared_file_reuses_its_artifact_for_a_later_archive(rig):
+    prepared = execute(rig, rig.http.post(rig.endpoint, json={"delivery": "file"}).json())
+    assert not rig.archive.uploads
+    archived = execute(rig, start(rig))
+    assert archived["result"]["dicom_seg"]["archived"] is True
+    assert archived["payload"]["export_id"] == prepared["payload"]["export_id"] and len(rig.calls) == 1
+
+
+def test_an_archive_job_alone_serves_no_file(rig):
+    archived = execute(rig, start(rig))
+    assert rig.http.get(f"{rig.endpoint}/{archived['payload']['export_id']}/segment.dcm").status_code == 404
+
+
+def test_an_orthanc_case_still_saves_a_file_when_its_archive_is_unreachable(rig, monkeypatch):
+    def unreachable():
+        raise OrthancError("Synthetic archive offline")
+
+    monkeypatch.setattr(rig.service.orthanc, "client", unreachable)
+    available = rig.http.get(rig.endpoint).json()
+    assert available["available"] is False and available["file"] == {"available": True}
+    finished = execute(rig, rig.http.post(rig.endpoint, json={"delivery": "file"}).json())
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["file"] is True
+
+
+def test_an_orthanc_case_still_saves_a_file_without_a_configured_archive(rig, monkeypatch):
+    monkeypatch.setattr(rig.service, "settings", replace(rig.settings, orthanc_url=None))
+    available = rig.http.get(rig.endpoint).json()
+    assert available["available"] is False and "Configure Orthanc" in available["reason"] and available["file"] == {"available": True}
+    finished = execute(rig, rig.http.post(rig.endpoint, json={"delivery": "file"}).json())
+    assert finished["status"] == "completed" and not rig.archive.uploads
+
+
+def test_changed_orthanc_source_bytes_stop_a_file_job(rig):
+    prepared = rig.http.post(rig.endpoint, json={"delivery": "file"}).json()
+    source = Path(rig.case["source_dir"])
+    victim = next(iter(sorted(source.iterdir())))
+    victim.write_bytes(victim.read_bytes() + b"\0")
+    failed = execute(rig, prepared)
+    assert failed["status"] == "failed" and not rig.calls
 
 
 def test_configured_send_deduplicates_jobs_and_reuses_archive_artifact(rig):
@@ -599,6 +655,21 @@ def test_cancellation_after_remote_start_observes_success_instead_of_claiming_ca
     finished = execute(rig, job)
     assert finished["status"] == "completed" and finished["cancel_requested"]
     assert finished["result"]["dicom_seg"]["sent"] is True
+
+
+def test_the_public_job_says_once_cancelling_can_no_longer_stop_a_send(rig):
+    job = start(rig, destination="osirix")
+    assert "delivery_started" not in job
+    seen = []
+    rig.archive.on_upload = lambda: seen.append(public_job(rig.service.store.get("jobs", job["id"])))
+    rig.archive.on_start = lambda: seen.append(public_job(rig.service.store.get("jobs", job["id"])))
+    finished = execute(rig, job)
+    assert ["delivery_started" in item for item in seen] == [False, True]
+    assert public_job(finished)["delivery_started"] is True
+
+
+def test_an_archive_never_reports_a_send_started(rig):
+    assert "delivery_started" not in public_job(execute(rig, start(rig)))
 
 
 def test_known_remote_job_survives_restart_and_retry_polls_it_without_resending(rig):

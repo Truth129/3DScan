@@ -25,7 +25,7 @@ SCAN3D_ORTHANC_EXPORT_DESTINATIONS=workstation
 ```
 
 Leave `SCAN3D_ORTHANC_URL` unset to turn the integration off. The import dialog then says so, and
-DICOM SEG export is unavailable.
+**Export SEG…** offers only a [local file](USER_GUIDE.md#dicom-seg).
 
 **`SCAN3D_ORTHANC_URL`** is the address the 3DScan server uses, not the browser.
 
@@ -133,8 +133,9 @@ In a saved revision, choose **Export SEG…**, select nonempty masks, then choos
 or pick a **Send destination** and choose **Send to** it. Archiving uploads the SEG and reads it back
 to compare hashes. Sending does the same, then asks Orthanc to perform C-STORE to that modality.
 
-- Export needs classic CT imported from this same Orthanc. Local-folder sources and MR are not
-  supported. To reuse masks in the other direction, see
+- Archive and send need classic CT imported from this same Orthanc. Local-folder sources and MR are
+  not supported, but a local-folder CT can still be
+  [saved as a SEG file](USER_GUIDE.md#dicom-seg). To reuse masks in the other direction, see
   [Import DICOM SEG](USER_GUIDE.md#import-existing-dicom-seg-masks), which works from local files.
 - The SEG references the original patient, study, frame of reference and source images, and source
   pixels are not sent again.

@@ -1,7 +1,10 @@
-"""Saved-mask DICOM SEG artifacts and explicit, restart-safe Orthanc delivery.
+"""Saved-mask DICOM SEG artifacts and explicit, restart-safe delivery.
 
 Encoding and upload run only on the CPU lane. A prepared artifact is immutable;
 delivery receipts are separate so a retry always uses the original SOP bytes.
+Orthanc delivery needs a CT imported from Orthanc. A file delivery needs only
+the retained source series, so a folder or ZIP import can use it, and it reaches
+no archive.
 """
 
 from dataclasses import dataclass, replace
@@ -15,6 +18,7 @@ from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
+from .dicom_seg_jobs import prepared_digest, series_files
 from .errors import NotFound
 from .fileio import atomic_json
 from .image_assets import reference_image
@@ -82,14 +86,15 @@ class _Artifact:
     reference_sha256: Digest
     source_manifest_sha256: Digest
     source_content_sha256: Digest
-    source_snapshot: Digest
-    archive_key: Digest
     source_kind: str
     series_instance_uid: DicomUID
     study_instance_uid: DicomUID
     frame_of_reference_uid: DicomUID
     created_at: str
     files: Annotated[tuple[_File | _LegacyFile, ...], Field(min_length=1, max_length=1000)]
+    # A folder or ZIP import was never in an archive, so it has neither.
+    source_snapshot: Digest | None = None
+    archive_key: Digest | None = None
     encoding_version: Positive = 1
     overlap_priority: Annotated[tuple[str, ...], Field(min_length=2, max_length=1000)] | None = None
 
@@ -119,12 +124,31 @@ _RECEIPT = TypeAdapter(_Receipt)
 
 
 @dataclass(frozen=True, slots=True)
+class _SegSource:
+    """What a SEG binds to, whichever way its CT arrived.
+
+    A folder or ZIP import has no manifest, so the digest of its bytes names it
+    in both roles. That digest also names the prepared reference, which is what
+    ties these files to the saved image.
+    """
+
+    paths: tuple[Path, ...]
+    manifest_sha256: Digest
+    content_sha256: Digest
+    study_uid: DicomUID
+    frame_of_reference_uid: DicomUID
+    snapshot: Digest | None = None
+    archive_key: Digest | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _Inputs:
     revision: dict
     reference: dict
-    source: SourceManifest
-    source_dir: Path
+    source: SourceManifest | None
+    source_dir: Path | None
     structures: tuple[dict, ...]
+    seg_source: _SegSource | None = None
 
 
 def _hash(path, cancelled=None):
@@ -134,6 +158,18 @@ def _hash(path, cancelled=None):
             if cancelled and cancelled():
                 raise InterruptedError("DICOM SEG export cancelled before delivery")
             digest.update(block)
+    return digest.hexdigest()
+
+
+def _hash_series(paths, cancelled):
+    """The stream a prepared reference is named after: every file, in sorted path order."""
+    digest = hashlib.sha256()
+    for path in sorted(paths, key=str):
+        with Path(path).open("rb") as stream:
+            for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                if cancelled():
+                    raise InterruptedError("DICOM SEG export cancelled before delivery")
+                digest.update(block)
     return digest.hexdigest()
 
 
@@ -170,6 +206,8 @@ class OrthancExports:
         "Delivery is not confirmed. Check the destination before retrying; a retry reuses the exact SEG instances and checks any known Orthanc job."
     )
     still_active_error = "An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status."
+    file_interrupted_error = "Export interrupted. Retry to reuse its exact SEG bytes."
+    offers_file = True
 
     def __init__(self, service):
         self.service = service
@@ -177,32 +215,59 @@ class OrthancExports:
     def _directory(self, case_id, export_id):
         return self.service.store.case_dir(case_id) / "dicom-exports" / export_id
 
-    def _reference(self, case_id, revision_id):
+    def _reference(self, case_id, revision_id, *, archive=True):
         store = self.service.store
         revision = store.revision(case_id, revision_id)
         case = store.get("cases", case_id)
-        if not self.service.settings.orthanc_url:
+        if archive and not self.service.settings.orthanc_url:
             raise ExportUnavailable(f"Configure Orthanc before exporting {self.label}.")
         try:
             reference = reference_image(revision)
         except (KeyError, OSError, ValueError):
             raise ExportUnavailable("This saved revision's reference image cannot be verified.") from None
         if reference["modality"] != "CT":
-            raise ExportUnavailable(f"{self.label} return currently supports original classic CT sources only.")
+            raise ExportUnavailable(f"{self.label} export currently supports original classic CT sources only.")
         return revision, case, reference
 
-    def _inputs(self, case_id, revision_id, structure_ids=None):
-        revision, case, reference = self._reference(case_id, revision_id)
+    def _inputs(self, case_id, revision_id, structure_ids=None, *, delivery="orthanc"):
+        archive = delivery == "orthanc"
+        revision, case, reference = self._reference(case_id, revision_id, archive=archive)
         structures = {item["id"]: item for item in revision["structures"]}
         selected = sorted(structure_ids if structure_ids is not None else (key for key, item in structures.items() if item.get("voxel_count", 1)))
         if not selected or len(selected) != len(set(selected)) or any(key not in structures for key in selected):
             raise ExportUnavailable("Select one or more distinct structures from this saved revision.")
         if any(not structures[key].get("voxel_count", 1) for key in selected):
             raise ExportUnavailable("Empty masks cannot be exported as DICOM SEG.")
-        source, directory = self._source(case_id, case, reference)
-        return _Inputs(revision, reference, source, directory, tuple(structures[key] for key in selected))
+        selection = tuple(structures[key] for key in selected)
+        if archive or "source_manifest_sha256" in reference["source"]:
+            source, directory = self._source(case_id, case, reference, connect=archive)
+            seg_source = _SegSource(
+                tuple(directory / item.path for item in source.files),
+                reference["source"]["source_manifest_sha256"],
+                source.content_digest,
+                source.snapshot.study_uid,
+                source.frame_of_reference_uid,
+                source.snapshot.snapshot,
+                source.snapshot.source_key,
+            )
+            return _Inputs(revision, reference, source, directory, selection, seg_source)
+        return _Inputs(revision, reference, None, None, selection, self._local_source(case_id, case, revision, reference))
 
-    def _source(self, case_id, case, reference):
+    def _local_source(self, case_id, case, revision, reference):
+        """A folder or ZIP import. Its bytes are hashed in the job, not on each request."""
+        metadata = reference["source"]
+        try:
+            digest = prepared_digest(self.service, case_id, revision["ct_file"])
+            if digest is None:
+                raise ValueError()
+            paths = tuple(series_files(self.service, case_id, case, metadata))
+        except (KeyError, OSError, ValueError):
+            raise ExportUnavailable(
+                f"This saved revision has no verified original DICOM CT series. {self.label} needs a CT imported and prepared from DICOM."
+            ) from None
+        return _SegSource(paths, digest, digest, metadata["study_uid"], metadata["frame_of_reference_uid"])
+
+    def _source(self, case_id, case, reference, *, connect=True):
         store = self.service.store
         source_metadata = reference["source"]
         try:
@@ -224,9 +289,10 @@ class OrthancExports:
                 or source.snapshot.modality != "CT"
             ):
                 raise ValueError()
-            with self.service.orthanc.client() as client:
-                if client.source_key != source.snapshot.source_key:
-                    raise ValueError()
+            if connect:
+                with self.service.orthanc.client() as client:
+                    if client.source_key != source.snapshot.source_key:
+                        raise ValueError()
         except (KeyError, OSError, ValueError):
             raise ExportUnavailable(
                 "This saved revision has no verified original Orthanc CT source. Reimport and prepare its original CT before export."
@@ -244,18 +310,32 @@ class OrthancExports:
                 destinations = client.destinations(self.service.settings.orthanc_export_destinations)
         except (ExportUnavailable, OrthancError, NotFound) as exc:
             reason = str(exc) if isinstance(exc, ExportUnavailable) else "The configured Orthanc archive is unavailable. Retry its connection."
-            return {"available": False, "reason": reason, "destinations": [], "exports": exports, "encoding_version": self.encoding_version}
-        return {"available": True, "destinations": destinations, "exports": exports, "encoding_version": self.encoding_version}
+            result = {"available": False, "reason": reason, "destinations": [], "exports": exports, "encoding_version": self.encoding_version}
+        else:
+            result = {"available": True, "destinations": destinations, "exports": exports, "encoding_version": self.encoding_version}
+        if self.offers_file:
+            result["file"] = self._file_availability(case_id, revision_id)
+        return result
 
-    def start(self, case_id, revision_id, structure_ids=None, destination=None, *, resend=False, overlap_priority=None):
-        inputs = self._inputs(case_id, revision_id, structure_ids)
+    def _file_availability(self, case_id, revision_id):
+        try:
+            self._inputs(case_id, revision_id, delivery="file")
+        except ExportUnavailable as exc:
+            return {"available": False, "reason": str(exc)}
+        return {"available": True}
+
+    def start(self, case_id, revision_id, structure_ids=None, destination=None, *, resend=False, overlap_priority=None, delivery="orthanc"):
+        file_delivery = delivery == "file"
+        if file_delivery and (destination is not None or resend):
+            raise ExportUnavailable(f"A {self.label} file has no destination.")
+        inputs = self._inputs(case_id, revision_id, structure_ids, delivery=delivery)
         if overlap_priority is not None and (len(overlap_priority) < 2 or sorted(overlap_priority) != [item["id"] for item in inputs.structures]):
             raise ExportUnavailable("Rank every selected structure exactly once to resolve overlaps.")
         display_name = self._destination(destination, resend)
         identity = {
             "revision_id": revision_id,
             "reference_image_id": inputs.reference["id"],
-            "source_manifest_sha256": inputs.reference["source"]["source_manifest_sha256"],
+            "source_manifest_sha256": inputs.seg_source.manifest_sha256,
             "structures": [_frozen_structure(item) for item in inputs.structures],
         }
         selection = {**identity, "structures": [{key: value for key, value in item.items() if key != "mask_stamp"} for item in identity["structures"]]}
@@ -267,7 +347,8 @@ class OrthancExports:
         if overlap_priority is not None:
             encoding["overlap_priority"] = overlap_priority
         artifact_key = hashlib.sha256(json.dumps(encoding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        export_key = hashlib.sha256((artifact_key + ":" + (destination or "")).encode()).hexdigest()
+        # A destination cannot contain a colon, so a file never shares its key.
+        export_key = hashlib.sha256((artifact_key + ":" + ("file:" if file_delivery else destination or "")).encode()).hexdigest()
 
         def changed_inputs(previous):
             # Encoding upgrades create fresh SOPs, but cannot make a changed
@@ -288,6 +369,8 @@ class OrthancExports:
             "export_key": export_key,
         }
         extras = {"overlap_priority": overlap_priority} if overlap_priority is not None else {}
+        if file_delivery:
+            extras["delivery"] = "file"
 
         def summarize(payload):
             summary = {
@@ -301,6 +384,8 @@ class OrthancExports:
             }
             if destination:
                 summary.update(destination=display_name, destination_id=destination)
+            if file_delivery:
+                summary["file"] = True
             if overlap_priority is not None:
                 summary["overlap_priority"] = overlap_priority
             return summary
@@ -386,14 +471,17 @@ class OrthancExports:
         payload = job["payload"]
         if payload.get("encoding_version", 1) != EXPORT_ENCODING_VERSION:
             raise ExportUnavailable("The DICOM SEG encoder was updated. Refresh export status and start a new export from the saved revision.")
-        inputs = self._inputs(job["case_id"], job["revision_id"], [item["id"] for item in payload["structures"]])
+        inputs = self._inputs(job["case_id"], job["revision_id"], [item["id"] for item in payload["structures"]], delivery=payload.get("delivery", "orthanc"))
         if (
             inputs.reference["id"] != payload["reference_image_id"]
-            or inputs.reference["source"]["source_manifest_sha256"] != payload["source_manifest_sha256"]
+            or inputs.seg_source.manifest_sha256 != payload["source_manifest_sha256"]
             or [_frozen_structure(item) for item in inputs.structures] != payload["structures"]
         ):
             raise ExportUnavailable("The saved revision changed after this export was queued. Start a fresh export from a saved revision.")
-        self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=lambda: self.service.cancelled(job))
+        if inputs.source is not None:
+            self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=lambda: self.service.cancelled(job))
+        elif _hash_series(inputs.seg_source.paths, lambda: self.service.cancelled(job)) != inputs.seg_source.content_sha256:
+            raise ExportUnavailable("The original CT files no longer match the saved reference image. Reimport and prepare the CT before export.")
         return inputs
 
     def _artifact(self, job, directory):
@@ -409,7 +497,7 @@ class OrthancExports:
             segments = tuple(SegmentInput(item["id"], item["name"], item["color"], Path(item["mask_file"])) for item in inputs.structures)
             try:
                 result = export_segmentation(
-                    [inputs.source_dir / item.path for item in inputs.source.files],
+                    list(inputs.seg_source.paths),
                     Path(inputs.revision["ct_file"]),
                     segments,
                     directory / "dicom",
@@ -431,10 +519,10 @@ class OrthancExports:
                 revision_id=job["revision_id"],
                 reference_image_id=inputs.reference["id"],
                 reference_sha256=result.reference_sha256,
-                source_manifest_sha256=inputs.reference["source"]["source_manifest_sha256"],
-                source_content_sha256=inputs.source.content_digest,
-                source_snapshot=inputs.source.snapshot.snapshot,
-                archive_key=inputs.source.snapshot.source_key,
+                source_manifest_sha256=inputs.seg_source.manifest_sha256,
+                source_content_sha256=inputs.seg_source.content_sha256,
+                source_snapshot=inputs.seg_source.snapshot,
+                archive_key=inputs.seg_source.archive_key,
                 source_kind=inputs.revision["source"],
                 series_instance_uid=result.series_instance_uid,
                 study_instance_uid=result.study_instance_uid,
@@ -480,13 +568,13 @@ class OrthancExports:
             or artifact.revision_id != job["revision_id"]
             or artifact.reference_image_id != inputs.reference["id"]
             or artifact.reference_sha256 != inputs.reference["content_sha256"]
-            or artifact.source_manifest_sha256 != inputs.reference["source"]["source_manifest_sha256"]
-            or artifact.source_content_sha256 != inputs.source.content_digest
-            or artifact.source_snapshot != inputs.source.snapshot.snapshot
-            or artifact.archive_key != inputs.source.snapshot.source_key
+            or artifact.source_manifest_sha256 != inputs.seg_source.manifest_sha256
+            or artifact.source_content_sha256 != inputs.seg_source.content_sha256
+            or artifact.source_snapshot != inputs.seg_source.snapshot
+            or artifact.archive_key != inputs.seg_source.archive_key
             or artifact.source_kind != inputs.revision["source"]
-            or artifact.study_instance_uid != inputs.source.snapshot.study_uid
-            or artifact.frame_of_reference_uid != inputs.source.frame_of_reference_uid
+            or artifact.study_instance_uid != inputs.seg_source.study_uid
+            or artifact.frame_of_reference_uid != inputs.seg_source.frame_of_reference_uid
             or len(artifact.files) != 1
             or any(not isinstance(item, _File) for item in artifact.files)
             or [segment.structure_id for segment in segments] != [item["id"] for item in encoded]
@@ -530,6 +618,28 @@ class OrthancExports:
         job["payload"]["artifact_manifest_sha256"] = _hash(manifest_path)
         self.service.store.update_job(job["id"], payload=job["payload"])
 
+    def prepared_file(self, case_id, revision_id, export_id):
+        """The verified bytes of a finished file export, or NotFound for anything else."""
+        self.service.store.revision(case_id, revision_id)
+        job = next(
+            (
+                job
+                for job in self.service.store.list("jobs", case_id)
+                if job["kind"] == self.kind
+                and job.get("revision_id") == revision_id
+                and job["status"] == "completed"
+                and job["payload"].get("delivery") == "file"
+                and job["payload"]["export_id"] == export_id
+            ),
+            None,
+        )
+        if job is None:
+            raise NotFound(f"No prepared {self.label} file")
+        directory = self._directory(case_id, export_id)
+        artifact = self._cached_manifest(job, directory / "export.json", _ARTIFACT)
+        self._check_files(job, directory, artifact)
+        return directory / "dicom" / artifact.files[0].path
+
     def _check_upload(self, job, upload):
         """Runs after each upload, before its receipt is saved or any send starts."""
 
@@ -544,7 +654,7 @@ class OrthancExports:
                     status="failed",
                     stage="Interrupted",
                     completed_at=now(),
-                    error=self.interrupted_error,
+                    error=self.file_interrupted_error if job["payload"].get("delivery") == "file" else self.interrupted_error,
                 )
 
     def cancel(self, job_id):
@@ -600,6 +710,7 @@ class OrthancExports:
         directory = self._directory(job["case_id"], job["payload"]["export_id"])
         artifact, receipt, sending = None, None, False
         destination = job["payload"]["destination"]
+        file_delivery = job["payload"].get("delivery") == "file"
         receipt_path = directory / "delivery.json"
 
         def save_receipt():
@@ -616,7 +727,7 @@ class OrthancExports:
                 directory = self._directory(job["case_id"], job["payload"]["export_id"])
                 directory.mkdir(parents=True, exist_ok=True)
                 receipt_path = directory / "delivery.json"
-            if receipt_path.exists():
+            if receipt_path.exists() and not file_delivery:
                 try:
                     receipt = _RECEIPT.validate_json(receipt_path.read_bytes())
                 except (OSError, ValidationError):
@@ -624,6 +735,12 @@ class OrthancExports:
                 previous_delivery = receipt.destinations.get(destination)
                 sending = previous_delivery is not None and previous_delivery.state != "failure"
             artifact = self._artifact(job, directory)
+            if file_delivery:
+                # Nothing leaves this machine, so there is no delivery to record.
+                result = self._result(artifact, _Receipt(job["payload"]["artifact_manifest_sha256"], {}, {}), None, None)
+                result[self.result_key]["file"] = True
+                self.service.store.update_job(job["id"], status="completed", stage=f"{self.label} file ready", error=None, completed_at=now(), result=result)
+                return
             if receipt:
                 if receipt.manifest_sha256 != job["payload"]["artifact_manifest_sha256"] or not set(receipt.uploaded).issubset(
                     item.path for item in artifact.files

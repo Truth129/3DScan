@@ -49,6 +49,31 @@ def _fingerprint(path, aggregate=None):
     return {"path": str(path), "sha256": digest, "size": after.st_size}
 
 
+def series_files(service, case_id, case, source):
+    """The retained files of a reference's original CT series, proven to lie inside this case."""
+    series = next((entry for entry in case["series"] if entry["uid"] == source.get("series_uid")), None)
+    if not series or series.get("modality") != "CT" or not series.get("files") or len(series["files"]) > 100_000:
+        raise ValueError("The prepared CT has no complete original DICOM series for SEG matching")
+    for key in ("study_uid", "frame_of_reference_uid"):
+        if not source.get(key) or source[key] != series.get(key):
+            raise ValueError("The prepared CT has no verified DICOM study and coordinate frame; prepare its original series again")
+    directory = Path(case.get("source_dir", ""))
+    if directory.is_symlink() or not directory.resolve().is_relative_to(service.store.case_dir(case_id).resolve()):
+        raise ValueError("The original CT source is unavailable")
+    paths = sorted((_owned_file(path, directory) for path in series["files"]), key=str)
+    if len({path.resolve() for path in paths}) != len(paths):
+        raise ValueError("The original CT contains repeated source files")
+    return paths
+
+
+def prepared_digest(service, case_id, ct_file):
+    """The complete sorted DICOM byte stream names a normally prepared reference."""
+    converted = Path(ct_file).parent
+    if converted.parent == service.store.case_dir(case_id) / "converted" and re.fullmatch(r"[a-f0-9]{64}", converted.name):
+        return converted.name
+    return None
+
+
 def _inputs(service, case_id, revision_id):
     parent = service.store.revision(case_id, revision_id)
     case = service.store.get("cases", case_id)
@@ -62,18 +87,7 @@ def _inputs(service, case_id, revision_id):
     _owned_file(parent["ct_file"], service.store.case_dir(case_id))
     assert_reference_image(reference, Path(parent["ct_file"]), parent["geometry"])
     source = reference["source"]
-    series = next((entry for entry in case["series"] if entry["uid"] == source.get("series_uid")), None)
-    if not series or series.get("modality") != "CT" or not series.get("files") or len(series["files"]) > 100_000:
-        raise ValueError("The prepared CT has no complete original DICOM series for SEG matching")
-    for key in ("study_uid", "frame_of_reference_uid"):
-        if not source.get(key) or source[key] != series.get(key):
-            raise ValueError("The prepared CT has no verified DICOM study and coordinate frame; prepare its original series again")
-    directory = Path(case.get("source_dir", ""))
-    if directory.is_symlink() or not directory.resolve().is_relative_to(service.store.case_dir(case_id).resolve()):
-        raise ValueError("The original CT source is unavailable")
-    paths = sorted((_owned_file(path, directory) for path in series["files"]), key=str)
-    if len({path.resolve() for path in paths}) != len(paths):
-        raise ValueError("The original CT contains repeated source files")
+    paths = series_files(service, case_id, case, source)
     for path in paths:
         try:
             header = pydicom.dcmread(path, stop_before_pixels=True, specific_tags=["StudyInstanceUID", "SeriesInstanceUID", "FrameOfReferenceUID"])
@@ -111,12 +125,9 @@ def stage_import(service, case_id, revision_id, uploads):
         raise ValueError("The same DICOM SEG file was selected more than once")
     aggregate = hashlib.sha256()
     sources = [_fingerprint(path, aggregate) for path in source_paths]
-    converted = Path(parent["ct_file"]).parent
-    # The normal preparation cache names the reference by the complete sorted
-    # DICOM byte stream. Check that binding even for edits made before enqueue.
-    if converted.parent == service.store.case_dir(case_id) / "converted" and re.fullmatch(r"[a-f0-9]{64}", converted.name):
-        if converted.name != aggregate.hexdigest():
-            raise ValueError("The original CT bytes no longer match the prepared source image")
+    # Check the preparation cache's binding even for edits made before enqueue.
+    if prepared_digest(service, case_id, parent["ct_file"]) not in (None, aggregate.hexdigest()):
+        raise ValueError("The original CT bytes no longer match the prepared source image")
     masks = [_fingerprint(Path(entry["mask_file"])) for entry in parent["structures"]]
     payload = {
         "revision_id": revision_id,

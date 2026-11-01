@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, ref } from 'vue';
-import { api, ApiError } from '../src/lib/api';
+import { api, ApiError, dicomSegFileUrl } from '../src/lib/api';
 import {
   defaultOverlapOrder,
   dicomSegExportSummary,
   moveOverlapRank,
   nonemptySavedStructures,
+  preparedDicomSegFile,
   savedRevisionExportBlockReason,
   unfinishedOverlapRanking,
   successfulDicomSegDelivery,
@@ -15,6 +16,7 @@ import {
 import { useDicomSegExport } from '../src/lib/use-dicom-seg-export';
 import { visibleVolumeMaskIds } from '../src/lib/volume-mask';
 import type { InteractiveReview, Revision, Structure } from '../src/types';
+import { deferred } from './mounted';
 
 const job = (status: DicomSegExportJob['status'], values: Partial<DicomSegExportJob> = {}): DicomSegExportJob => ({
   id: 'export-1',
@@ -102,6 +104,9 @@ describe('saved mask export scope', () => {
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: result } }))).toContain('2 masks archived');
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: { ...result, sent: true, destination: 'OsiriX' } } }))).toContain('sent to OsiriX');
     expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: { ...result, archived: false } } }))).toContain('not been confirmed');
+    expect(dicomSegExportSummary(job('cancelled', { result: { dicom_seg: { ...result, archived: false } } }))).toBe('Export cancelled.');
+    expect(dicomSegExportSummary(job('cancelled'))).toBe('Export cancelled.');
+    expect(dicomSegExportSummary(job('cancelled', { result: { dicom_seg: result } }))).toContain('stays there. Nothing was sent.');
   });
   it('reports eight independent masks inside one delivered DICOM instance', () => {
     const result = {
@@ -134,6 +139,28 @@ describe('saved mask export scope', () => {
     expect(successfulDicomSegDelivery([delivered], ['heart'], 'osirix')).toBe(false);
     expect(successfulDicomSegDelivery([delivered], ['heart', 'lung'], 'other')).toBe(false);
     expect(successfulDicomSegDelivery([{ ...delivered, status: 'failed' }, delivered], ['heart', 'lung'], 'osirix')).toBe(false);
+  });
+  it('says a prepared file went nowhere, including what a ranking removed', () => {
+    const result = { export_id: 'seg-a', archived: false, sent: false, file: true, segments_count: 1, instance_count: 1, structure_ids: ['heart'] };
+    expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: result } }))).toBe(
+      '1 mask ready as one DICOM SEG file. Nothing was archived or sent.',
+    );
+    const ranked = { ...result, segments_count: 2, overlap_priority: ['heart', 'lung'], removed_voxels: { heart: 0, lung: 3 } };
+    expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: ranked } }))).toContain('3 overlapping voxels removed from 1 mask');
+  });
+  it('finds a prepared file only for the exact selection, ranking and encoding', () => {
+    const base = { export_id: 'seg-a', archived: false, sent: false, file: true, segments_count: 2, instance_count: 1, structure_ids: ['lung', 'heart'] };
+    const plain = job('completed', { result: { dicom_seg: { ...base, encoding_version: 3 } } }),
+      ranked = job('completed', { result: { dicom_seg: { ...base, encoding_version: 3, overlap_priority: ['lung', 'heart'] } } }),
+      archive = job('completed', { result: { dicom_seg: { ...base, encoding_version: 3, archived: true, file: undefined } } });
+    expect(preparedDicomSegFile([plain], ['heart', 'lung'], 3)?.export_id).toBe('seg-a');
+    expect(preparedDicomSegFile([plain], ['heart'], 3)).toBeUndefined();
+    expect(preparedDicomSegFile([plain], ['heart', 'lung'], 4)).toBeUndefined();
+    expect(preparedDicomSegFile([plain], ['heart', 'lung'], 3, ['lung', 'heart'])).toBeUndefined();
+    expect(preparedDicomSegFile([ranked], ['heart', 'lung'], 3)).toBeUndefined();
+    expect(preparedDicomSegFile([ranked], ['heart', 'lung'], 3, ['lung', 'heart'])).toBeDefined();
+    expect(preparedDicomSegFile([archive], ['heart', 'lung'], 3)).toBeUndefined();
+    expect(preparedDicomSegFile([{ ...plain, status: 'failed' }, plain], ['heart', 'lung'], 3)).toBeUndefined();
   });
   it('starts the overlap ranking with the smallest masks, breaking ties by ID', () => {
     const structures = [
@@ -282,6 +309,48 @@ describe('explicit DICOM SEG export lifecycle', () => {
       { structure_ids: ['heart', 'lung'], destination: 'osirix', resend: true, overlap_priority: ['lung', 'heart'] },
       expect.any(AbortSignal),
     );
+    scope.stop();
+  });
+  it('asks for a file only when the server offers one, and sends no destination', async () => {
+    const answer = vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ available: false, destinations: [] })),
+      create = vi.spyOn(api, 'exportDicomSeg').mockResolvedValue(job('queued')),
+      { scope, blocked, state } = fixture();
+    await state.load();
+    await state.prepareFile(['heart']);
+    expect(create).not.toHaveBeenCalled();
+    answer.mockResolvedValue(availability({ available: false, destinations: [], file: { available: true } }));
+    await state.load();
+    await state.prepareFile([]);
+    blocked.value = 'Save the draft.';
+    await state.prepareFile(['heart']);
+    expect(create).not.toHaveBeenCalled();
+    blocked.value = '';
+    await state.prepareFile(['heart', 'lung', 'heart'], ['lung', 'heart']);
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      'case-a',
+      'revision-a',
+      { structure_ids: ['heart', 'lung'], destination: null, delivery: 'file', overlap_priority: ['lung', 'heart'] },
+      expect.any(AbortSignal),
+    );
+    scope.stop();
+  });
+  it('keeps archive refused while only a file is available', async () => {
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ available: false, destinations: [], file: { available: true } }));
+    const create = vi.spyOn(api, 'exportDicomSeg'),
+      { scope, state } = fixture();
+    await state.load();
+    await state.start(['heart'], null);
+    expect(create).not.toHaveBeenCalled();
+    scope.stop();
+  });
+  it('treats a lost file request as unknown, without implying a workstation received anything', async () => {
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ file: { available: true } }));
+    vi.spyOn(api, 'exportDicomSeg').mockRejectedValue(new Error('Connection closed'));
+    const { scope, state } = fixture();
+    await state.load();
+    await state.prepareFile(['heart']);
+    expect(state.needsRefresh.value).toBe(true);
+    expect(state.error.value).toBe('Connection closed Refresh export status before trying again.');
     scope.stop();
   });
   it('retains the availability reason and never queues an unavailable export', async () => {
@@ -494,5 +563,87 @@ describe('explicit DICOM SEG export lifecycle', () => {
     await api.exportDicomSeg('case/a', 'revision b', { structure_ids: ['heart'], destination: 'osirix' });
     expect(fetch.mock.calls[0][0]).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-seg');
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ structure_ids: ['heart'], destination: 'osirix' });
+  });
+  it('encodes every part of a prepared file address', () => {
+    expect(dicomSegFileUrl('case/a', 'revision b', 'seg?x')).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-seg/seg%3Fx/segment.dcm');
+  });
+});
+
+describe('cancelling an export', () => {
+  async function following(current: DicomSegExportJob) {
+    vi.useFakeTimers();
+    const { scope, state, storage } = fixture();
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ exports: [current] }));
+    await state.load();
+    return { scope, state, storage };
+  }
+
+  it('waits for a running job to stop, then stops following it', async () => {
+    const { scope, state, storage } = await following(job('running'));
+    expect(state.cancellable.value).toBe(true);
+    const cancel = vi.spyOn(api, 'cancel').mockResolvedValue(job('running')),
+      poll = vi.spyOn(api, 'job').mockResolvedValue(job('cancelled'));
+    await state.cancel();
+    expect(cancel).toHaveBeenCalledExactlyOnceWith('export-1');
+    expect(state.pending.value && state.cancelling.value).toBe(true);
+    await state.cancel();
+    expect(cancel).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(poll).toHaveBeenCalledOnce();
+    expect(state.job.value?.status).toBe('cancelled');
+    expect(state.pending.value || state.cancelling.value).toBe(false);
+    expect(storage.size).toBe(0);
+    scope.stop();
+  });
+  it('lets no status answer sent before the cancel overwrite its result', async () => {
+    const { scope, state } = await following(job('queued'));
+    const poll = deferred<DicomSegExportJob>();
+    vi.spyOn(api, 'job').mockReturnValue(poll.promise);
+    vi.spyOn(api, 'cancel').mockResolvedValue(job('cancelled'));
+    const polling = state.resume();
+    await state.cancel();
+    poll.resolve(job('queued'));
+    await polling;
+    expect(state.job.value?.status).toBe('cancelled');
+    scope.stop();
+  });
+  it('reports a refused cancel and keeps following the job', async () => {
+    const { scope, state } = await following(job('running'));
+    vi.spyOn(api, 'cancel').mockRejectedValue(new Error('The server did not answer.'));
+    const poll = vi.spyOn(api, 'job').mockResolvedValue(job('completed'));
+    await state.cancel();
+    expect(state.error.value).toBe('The server did not answer. The export may still be running.');
+    expect(state.cancelling.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(poll).toHaveBeenCalledOnce();
+    expect(state.job.value?.status).toBe('completed');
+    scope.stop();
+  });
+  it('clears a lost status check once the cancel answers', async () => {
+    const { scope, state } = await following(job('running'));
+    vi.spyOn(api, 'job').mockRejectedValueOnce(new Error('Status lost.'));
+    await state.resume();
+    expect(state.statusError.value).toContain('Status lost.');
+    vi.spyOn(api, 'cancel').mockResolvedValue(job('cancelled'));
+    await state.cancel();
+    expect(state.statusError.value).toBe('');
+    scope.stop();
+  });
+  it('does not ask once Orthanc holds the send', async () => {
+    const { scope, state } = await following(job('running', { delivery_started: true }));
+    const cancel = vi.spyOn(api, 'cancel');
+    expect(state.pending.value).toBe(true);
+    expect(state.cancellable.value).toBe(false);
+    await state.cancel();
+    expect(cancel).not.toHaveBeenCalled();
+    scope.stop();
+  });
+  it('refuses a cancel answer for a different job', async () => {
+    const { scope, state } = await following(job('running'));
+    vi.spyOn(api, 'cancel').mockResolvedValue(job('cancelled', { id: 'export-2' }));
+    await state.cancel();
+    expect(state.job.value?.id).toBe('export-1');
+    expect(state.error.value).toContain('different job');
+    scope.stop();
   });
 });

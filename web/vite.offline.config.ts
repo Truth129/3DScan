@@ -1,12 +1,14 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { readFileSync } from 'node:fs';
+import { vtkRayGuard } from './vite-vtk-ray-guard';
 
 const slicerLicense = readFileSync(new URL('./public/licenses/Slicer-LICENSE.txt', import.meta.url), 'utf8');
 
 export default defineConfig({
   plugins: [
     vue(),
+    vtkRayGuard(),
     {
       name: 'portable-slicer-preset-notice',
       // Append after minification so every self-contained export retains the

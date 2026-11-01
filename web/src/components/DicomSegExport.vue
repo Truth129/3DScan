@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { dicomSegFileUrl } from '../lib/api';
 import { defaultOverlapOrder, dicomSegExportSummary, moveOverlapRank, nonemptySavedStructures, unfinishedOverlapRanking } from '../lib/dicom-seg';
 import { prettyName } from '../lib/geometry';
 import { useDicomSegExport } from '../lib/use-dicom-seg-export';
@@ -9,6 +10,7 @@ import type { Revision, ReviewStatus, StructureDisplay } from '../types';
 const props = defineProps<{ caseId: string; revision: Revision; display: StructureDisplay; disabledReason: string }>();
 const dialog = ref<HTMLDialogElement>(),
   rankingList = ref<HTMLOListElement>(),
+  cancelButton = ref<HTMLButtonElement>(),
   opened = ref(false),
   selected = ref<string[]>([]),
   destination = ref(''),
@@ -16,22 +18,59 @@ const dialog = ref<HTMLDialogElement>(),
   overlapOrder = ref<string[]>([]);
 const structures = computed(() => nonemptySavedStructures(props.revision.structures));
 const visibleIds = computed(() => visibleVolumeMaskIds(structures.value, props.display));
-const { availability, job, checking, submitting, pending, locked, error, statusError, needsRefresh, alreadySent, load, resume, start } = useDicomSegExport({
+const {
+  availability,
+  job,
+  checking,
+  submitting,
+  pending,
+  cancellable,
+  cancelling,
+  locked,
+  error,
+  statusError,
+  needsRefresh,
+  alreadySent,
+  preparedFile,
+  load,
+  resume,
+  start,
+  prepareFile,
+  cancel,
+} = useDicomSegExport({
   source: () => ({ caseId: props.caseId, revisionId: props.revision.id }),
   blocked: () => props.disabledReason,
 });
 const disabled = computed(() => props.disabledReason || (!structures.value.length ? 'This saved revision has no nonempty masks to export.' : ''));
-const actionDisabled = computed(() => !!disabled.value || locked.value || !!statusError.value || !availability.value?.available || !selected.value.length);
+const orthancReady = computed(() => !!availability.value?.available);
+const fileReady = computed(() => !!availability.value?.file?.available);
+const blocked = computed(() => !!disabled.value || locked.value || !!statusError.value || !selected.value.length);
+const actionDisabled = computed(() => blocked.value || !orthancReady.value);
+/** Hide what this case cannot use, unless the disabled buttons are all that is left to explain it. */
+const showOrthanc = computed(() => orthancReady.value || !fileReady.value);
+const description = computed(() =>
+  orthancReady.value
+    ? 'Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.'
+    : 'Choose the masks from this saved revision, then save them as a DICOM SEG file.',
+);
 const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
 const ranked = computed(() => overlapOrder.value.filter(id => selected.value.includes(id)));
 const overlapPriority = computed(() => (resolveOverlaps.value && ranked.value.length > 1 ? ranked.value : undefined));
 const repeatDelivery = computed(() => !!target.value && alreadySent(selected.value, target.value.id, overlapPriority.value));
+const prepared = computed(() => preparedFile(selected.value, overlapPriority.value));
 const unfinishedRanking = computed(() => unfinishedOverlapRanking(job.value));
 const retryMatches = computed(() => JSON.stringify(unfinishedRanking.value) === JSON.stringify(overlapPriority.value));
 const summary = computed(() => (job.value ? dicomSegExportSummary(job.value) : ''));
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
 const structureName = (id: string) => prettyName(structures.value.find(item => item.id === id)?.name ?? id);
 let previousFocus: HTMLElement | undefined;
+
+// The button leaves with the job it stops, which would otherwise drop keyboard focus.
+watch(cancellable, value => {
+  if (!value && cancelButton.value && document.activeElement === cancelButton.value) {
+    dialog.value?.querySelector<HTMLButtonElement>('[aria-label="Close DICOM SEG export"]')?.focus();
+  }
+});
 
 async function open() {
   if (disabled.value) return;
@@ -68,6 +107,16 @@ async function moveRank(id: string, offset: -1 | 1) {
     pressed = buttons?.[offset < 0 ? 0 : 1];
   (pressed?.disabled ? buttons?.[offset < 0 ? 1 : 0] : pressed)?.focus();
 }
+/** Preparing can outlast the dialog, so saving is a second click rather than a surprise download. */
+function saveFile() {
+  if (!prepared.value) return void prepareFile(selected.value, overlapPriority.value);
+  const link = document.createElement('a');
+  link.href = dicomSegFileUrl(props.caseId, props.revision.id, prepared.value.export_id);
+  link.download = '';
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
 onBeforeUnmount(() => dialog.value?.close());
 </script>
 
@@ -93,16 +142,16 @@ onBeforeUnmount(() => dialog.value?.close());
       <span class="eyebrow">DICOM SEG</span><button class="icon-button" type="button" aria-label="Close DICOM SEG export" @click="close">×</button>
     </header>
     <h2 id="dicom-seg-title">Export saved masks.</h2>
-    <p id="dicom-seg-description">Choose the masks from this saved revision. Archive them in Orthanc, or send them to a configured DICOM viewer.</p>
+    <p id="dicom-seg-description">{{ description }}</p>
     <p class="revision-scope">Revision {{ revision.id.slice(0, 8) }} · {{ reviewLabels[revision.review_status] }} · original source-image coordinates</p>
 
     <p v-if="checking" role="status">Checking export availability…</p>
-    <p v-if="availability && !availability.available" class="export-error" role="status">
-      {{ availability.reason || 'DICOM SEG export is unavailable for this saved revision.' }}
+    <p v-if="availability && !orthancReady && !fileReady" class="export-error" role="status">
+      {{ availability.file?.reason || availability.reason || 'DICOM SEG export is unavailable for this saved revision.' }}
     </p>
     <p v-if="disabled" class="export-error" role="status">{{ disabled }}</p>
 
-    <fieldset :disabled="locked || !!disabled || !availability?.available">
+    <fieldset :disabled="locked || !!disabled || (!orthancReady && !fileReady)">
       <legend>Masks · {{ selected.length }} of {{ structures.length }} selected</legend>
       <div class="selection-actions">
         <button type="button" class="text-button" @click="selected = structures.map(item => item.id)">Select all</button
@@ -151,30 +200,50 @@ onBeforeUnmount(() => dialog.value?.close());
           </ol>
         </template>
       </div>
-      <label class="destination-field"
-        >Send destination<select v-model="destination">
-          <option value="">Choose a destination…</option>
-          <option v-for="item in availability?.destinations ?? []" :key="item.id" :value="item.id">
-            {{ item.name }}{{ item.aet ? ` · ${item.aet}` : '' }}
-          </option>
-        </select></label
-      >
-      <p v-if="availability && !availability.destinations.length" class="help">No send destination is configured. You can still archive in Orthanc.</p>
+      <template v-if="showOrthanc">
+        <label class="destination-field"
+          >Send destination<select v-model="destination">
+            <option value="">Choose a destination…</option>
+            <option v-for="item in availability?.destinations ?? []" :key="item.id" :value="item.id">
+              {{ item.name }}{{ item.aet ? ` · ${item.aet}` : '' }}
+            </option>
+          </select></label
+        >
+        <p v-if="availability && !availability.destinations.length" class="help">No send destination is configured. You can still archive in Orthanc.</p>
+      </template>
+      <p v-else-if="availability?.reason" class="help">Archive and send are unavailable. {{ availability.reason }}</p>
     </fieldset>
 
     <div v-if="job" class="export-status" :class="{ 'export-error': job.status === 'failed' }" role="status" aria-live="polite">
       <template v-if="pending"
         ><span class="spinner"></span>
         <div>
-          <strong>{{ job.status === 'queued' ? 'Export queued' : 'Exporting DICOM SEG' }}</strong>
+          <strong>{{ cancelling ? 'Cancelling export' : job.status === 'queued' ? 'Export queued' : 'Exporting DICOM SEG' }}</strong>
           <p>{{ job.stage }}</p>
-        </div></template
+        </div>
+        <button
+          v-if="cancellable"
+          ref="cancelButton"
+          class="button secondary compact cancel-export"
+          type="button"
+          :disabled="cancelling || checking || submitting"
+          @click="cancel"
+        >
+          {{ cancelling ? 'Cancelling…' : 'Cancel export' }}
+        </button></template
       >
       <template v-else-if="job.status === 'completed'">{{ summary || 'Export completed. Refresh status for archive and delivery details.' }}</template>
       <template v-else-if="job.status === 'failed'">{{ job.error || 'The export failed. Refresh status before retrying.' }}</template>
-      <template v-else>Export cancelled.</template>
+      <template v-else>{{ summary }}</template>
     </div>
-    <p v-if="pending" class="help">You may close this panel. Closing does not cancel an archive or send already in progress.</p>
+    <p v-if="fileReady" class="help">A saved file carries the CT's patient details, so handle it like the study.</p>
+    <p v-if="pending" class="help">
+      {{
+        cancellable
+          ? 'You may close this panel. Closing does not cancel the export.'
+          : 'You may close this panel. Orthanc has started this send, so it can no longer be cancelled.'
+      }}
+    </p>
     <p v-else-if="repeatDelivery" class="help">This selection has already been sent. Send again starts a new delivery of the same DICOM instances.</p>
     <p v-else-if="unfinishedRanking" class="help">
       {{ retryMatches ? 'A retry repeats this ranking and reuses the same SEG.' : 'These settings differ from the unfinished export, so they make a new SEG.' }}
@@ -193,16 +262,20 @@ onBeforeUnmount(() => dialog.value?.close());
     <footer>
       <button class="button secondary" type="button" @click="close">Close</button>
       <div class="export-actions">
-        <button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null, false, overlapPriority)">
-          {{ submitting ? 'Queuing…' : 'Archive in Orthanc' }}</button
-        ><button
-          class="button primary"
-          type="button"
-          :disabled="actionDisabled || !target"
-          @click="target && start(selected, target.id, repeatDelivery, overlapPriority)"
+        <button v-if="fileReady" class="button" :class="orthancReady ? 'secondary' : 'primary'" type="button" :disabled="blocked" @click="saveFile">
+          {{ prepared ? 'Download SEG file' : 'Prepare SEG file' }}</button
+        ><template v-if="showOrthanc"
+          ><button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null, false, overlapPriority)">
+            {{ submitting ? 'Queuing…' : 'Archive in Orthanc' }}</button
+          ><button
+            class="button primary"
+            type="button"
+            :disabled="actionDisabled || !target"
+            @click="target && start(selected, target.id, repeatDelivery, overlapPriority)"
+          >
+            {{ target ? `${repeatDelivery ? 'Send again' : 'Send'} to ${target.name}` : 'Send to viewer' }}
+          </button></template
         >
-          {{ target ? `${repeatDelivery ? 'Send again' : 'Send'} to ${target.name}` : 'Send to viewer' }}
-        </button>
       </div>
     </footer>
   </dialog>
@@ -344,6 +417,10 @@ legend {
 }
 .export-status p {
   margin: 4px 0 0;
+}
+.cancel-export {
+  flex-shrink: 0;
+  margin-left: auto;
 }
 .export-error {
   color: #edbdaf;
