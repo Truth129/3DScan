@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import type { Plugin, UserConfig } from 'vite';
 import volumeShader from '@kitware/vtk.js/Rendering/OpenGL/glsl/vtkVolumeFS.glsl.js';
-import { GUARDED, guardVolumeShader, vtkRayGuard, vtkRayGuardOptimizer } from '../vite-vtk-ray-guard';
+import { FIXED_KERNEL, GUARDED, guardVolumeShader, vtkRayGuard, vtkRayGuardOptimizer } from '../vite-vtk-ray-guard';
 import appConfig from '../vite.config';
 import fixtureConfig from '../vite.cornerstone-volume.config';
 import offlineConfig from '../vite.offline.config';
 
 const UNGUARDED = 'vec3 invDir = 1.0 / rayDirIS;';
+const UNFILLED_KERNEL = 'vec2 rayRandomness = kernelSample[rayIndex];';
+const SHADER = `${UNGUARDED}\n${UNFILLED_KERNEL}`;
 const transform = (code: string, id: string) => (vtkRayGuard().transform as unknown as (code: string, id: string) => { code: string } | undefined)(code, id);
 
 describe('vtk ray direction guard', () => {
@@ -15,7 +17,14 @@ describe('vtk ray direction guard', () => {
     const guarded = guardVolumeShader(volumeShader);
     expect(guarded).not.toContain(UNGUARDED);
     expect(guarded.split(GUARDED)).toHaveLength(2);
-    expect(guarded.length).toBe(volumeShader.length + GUARDED.length - UNGUARDED.length);
+    expect(guarded.length).toBe(volumeShader.length + GUARDED.length - UNGUARDED.length + FIXED_KERNEL.length - UNFILLED_KERNEL.length);
+  });
+
+  it('gives occlusion rays a fixed sequence instead of the kernel vtk.js never fills', () => {
+    const guarded = guardVolumeShader(volumeShader);
+    expect(guarded).not.toContain(UNFILLED_KERNEL);
+    expect(guarded.split(FIXED_KERNEL)).toHaveLength(2);
+    expect(() => guardVolumeShader(UNGUARDED)).toThrow('occlusion kernel guard');
   });
 
   it('never inverts an exact zero, whichever sign it has', () => {
@@ -26,13 +35,13 @@ describe('vtk ray direction guard', () => {
 
   it('fails the build when a vtk.js upgrade moves or repeats the line', () => {
     expect(() => guardVolumeShader('void main() {}')).toThrow('ray direction guard');
-    expect(() => guardVolumeShader(`${UNGUARDED}\n${UNGUARDED}`)).toThrow('ray direction guard');
-    expect(() => guardVolumeShader(guardVolumeShader(UNGUARDED))).toThrow('ray direction guard');
+    expect(() => guardVolumeShader(`${UNGUARDED}\n${SHADER}`)).toThrow('ray direction guard');
+    expect(() => guardVolumeShader(guardVolumeShader(SHADER))).toThrow('ray direction guard');
   });
 
   it('patches only the volume shader module', () => {
-    expect(transform(UNGUARDED, '/x/node_modules/@kitware/vtk.js/Rendering/OpenGL/glsl/vtkVolumeFS.glsl.js')?.code).toBe(GUARDED);
-    expect(transform(UNGUARDED, 'C:\\x\\glsl\\vtkVolumeFS.glsl.js?v=1')?.code).toBe(GUARDED);
+    expect(transform(SHADER, '/x/node_modules/@kitware/vtk.js/Rendering/OpenGL/glsl/vtkVolumeFS.glsl.js')?.code).toBe(`${GUARDED}\n${FIXED_KERNEL}`);
+    expect(transform(SHADER, 'C:\\x\\glsl\\vtkVolumeFS.glsl.js?v=1')?.code).toBe(`${GUARDED}\n${FIXED_KERNEL}`);
     expect(transform(UNGUARDED, '/x/glsl/vtkVolumeVS.glsl.js')).toBeUndefined();
   });
 
@@ -41,6 +50,7 @@ describe('vtk ray direction guard', () => {
     const chunk = (code: string) => ({ a: { type: 'chunk', fileName: 'a.js', code } });
     expect(() => generate({}, chunk(GUARDED))).not.toThrow();
     expect(() => generate({}, chunk(`x${UNGUARDED}y`))).toThrow('a.js still holds');
+    expect(() => generate({}, chunk(`x${UNFILLED_KERNEL}y`))).toThrow('a.js still holds');
     expect(() => generate({}, { b: { type: 'asset', fileName: 'b.js', source: UNGUARDED } })).toThrow('b.js still holds');
     expect(() => generate({}, { c: { type: 'asset', fileName: 'c.bin', source: new Uint8Array(4) } })).not.toThrow();
   });
@@ -80,5 +90,6 @@ describe('vtk ray direction guard', () => {
     // Editing the guard must refresh the optimizer cache, which is keyed on plugin names.
     expect(config.optimizeDeps?.esbuildOptions?.plugins?.map(plugin => plugin.name)).toContain(vtkRayGuardOptimizer().name);
     expect(vtkRayGuardOptimizer().name).toContain(GUARDED);
+    expect(vtkRayGuardOptimizer().name).toContain(FIXED_KERNEL);
   });
 });

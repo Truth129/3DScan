@@ -91,9 +91,10 @@ server you point them at.
   some results undefined, such as division by zero, and drivers differ. Axis-aligned rays
   reach those cases in every slice view, so check any shader or vtk.js change in an ordinary
   browser on real hardware. A gate's `--native` uses Vulkan, which is a different driver path
-  from a browser's default on Linux. `web/vite-vtk-ray-guard.ts` patches one such line in
-  vtk.js in every build, and it fails the build if that line moves or an unguarded copy
-  ships. Keep the guard until vtk.js handles the case itself.
+  from a browser's default on Linux. `web/vite-vtk-ray-guard.ts` patches two lines of the
+  vtk.js volume shader in every build, this one and the ambient-occlusion kernel, and it
+  fails the build if either moves or an unguarded copy ships. Keep each patch until vtk.js
+  handles the case itself.
 - **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `ReviewConflict` and
   `ImportConflict` to 409, and schema errors to 422. Any other exception is a logged 500,
   so do not raise a bare `KeyError` for "not found".

@@ -308,8 +308,9 @@ overlays drawn on a canvas.
 ### Native 3D: Cornerstone3D and vtk.js
 
 Full orthogonal CT defaults to a `VOLUME_3D` viewport in Cornerstone's rendering engine, using vtk.js ray
-casting. Every build rewrites one line of the vtk.js volume shader (`web/vite-vtk-ray-guard.ts`) so that
-axis-aligned rays, which include every slice view, never divide by an exact zero. `acquireCornerstoneSource` gives each CT session one image volume, texture, context and memory
+casting. Every build rewrites two lines of the vtk.js volume shader (`web/vite-vtk-ray-guard.ts`), so that
+axis-aligned rays, which include every slice view, never divide by an exact zero, and ambient-occlusion rays
+spread over a fixed sequence rather than the sample array vtk.js never fills. `acquireCornerstoneSource` gives each CT session one image volume, texture, context and memory
 reservation. MPR and 3D are independent consumers: either can open first, and closing one keeps the other
 without a download. The last consumer releases the native resources. This sharing is why the view uses
 Cornerstone's engine: a separate 3D renderer would hold a second GPU copy of the CT beside MPR.
