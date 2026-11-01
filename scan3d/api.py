@@ -47,12 +47,12 @@ class SelectiveGZip:
 
     GLB routes negotiate cached gzip files themselves. Pre-gzipped CT chunks and
     review frames declare Content-Encoding and pass through unchanged.
-    Slicer ZIPs are already compressed, and HTML exports keep
+    Slicer ZIPs are already compressed, and HTML and SEG exports keep
     Content-Length so browsers can show download progress.
     Level 5 is within 0.5% of level 9's size on the viewer bundles at half the CPU.
     """
 
-    _skip = re.compile(r"/(?:slicer\.zip|export\.html)$")
+    _skip = re.compile(r"/(?:slicer\.zip|export\.html|segment\.dcm)$")
     _glb = re.compile(r"^/api/cases/[^/]+/revisions/[^/]+/(?:model\.glb|surfaces/[^/]+\.glb)$")
 
     def __init__(self, app):
@@ -134,7 +134,7 @@ def create_app(settings: Settings | None = None):
         private = (
             request.url.path == "/api/totalsegmentator/license"
             or request.url.path.startswith("/api/orthanc/")
-            or request.url.path.endswith("/dicom-seg")
+            or request.url.path.endswith(("/dicom-seg", "/segment.dcm"))
             or view_export
         )
         origin = request.headers.get("origin")

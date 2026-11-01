@@ -57,6 +57,7 @@ class DicomSegExport(Input):
     destination: str | None = Field(None, strict=True, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     resend: bool = Field(False, strict=True)
     overlap_priority: list[Annotated[str, Field(strict=True, min_length=1, max_length=200)]] | None = Field(None, min_length=2, max_length=1000)
+    delivery: Literal["orthanc", "file"] = "orthanc"
 
 
 class Process(Input):

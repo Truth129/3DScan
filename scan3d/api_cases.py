@@ -3,7 +3,7 @@
 import uuid
 
 from fastapi import File, Form, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .api_models import Activate, DicomSegExport, Process, Refine, Review, Segment
 from .errors import NotFound
@@ -90,9 +90,17 @@ def add_routes(app, service):
     def dicom_seg_export(case_id: str, revision_id: str, body: DicomSegExport):
         return public_job(
             service.orthanc_exports.start(
-                case_id, revision_id, body.structure_ids, body.destination, resend=body.resend, overlap_priority=body.overlap_priority
+                case_id, revision_id, body.structure_ids, body.destination, resend=body.resend, overlap_priority=body.overlap_priority, delivery=body.delivery
             )
         )
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg/{export_id}/segment.dcm")
+    def dicom_seg_file(case_id: str, revision_id: str, export_id: str):
+        path = service.orthanc_exports.prepared_file(case_id, revision_id, export_id)
+        # Names no patient: the file may leave this machine without its case. IDs
+        # open with a timestamp, so only the export ID's tail tells two files apart.
+        name = f"scan3d-seg-{revision_id[:8]}-{export_id[-8:]}.dcm"
+        return FileResponse(path, media_type="application/dicom", filename=name)
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view")
     def dicom_view_availability(case_id: str, revision_id: str):

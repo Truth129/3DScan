@@ -44,13 +44,14 @@ submitted key.
 
 - **Origin.** A non-GET request whose `Origin` differs from `Host` gets 403. Hosts must appear in
   `SCAN3D_ALLOWED_HOSTS`.
-- **Private responses.** `/api/orthanc/*`, the license route, `.../dicom-seg` and `.../dicom-view` use
-  `Cache-Control: no-store`, including their errors. Candidate records, descriptors, agreement reports and
+- **Private responses.** `/api/orthanc/*`, the license route, `.../dicom-seg`, a prepared `segment.dcm`
+  and `.../dicom-view` use `Cache-Control: no-store`, including their errors. Candidate records, descriptors, agreement reports and
   frames use `private, no-store`.
 - **Chunks.** Volume chunks are gzip with `Cache-Control: private, max-age=31536000, immutable`, keyed by
   content.
 - **Compression.** JSON and viewer assets of at least 1 KiB use dynamic gzip. GLB routes negotiate stored
-  gzip files. `slicer.zip` and `export.html` are left alone, so downloads keep `Content-Length`.
+  gzip files. `slicer.zip`, `export.html` and `segment.dcm` are left alone, so downloads keep
+  `Content-Length`.
 
 ## Data model
 
@@ -129,7 +130,8 @@ an empty mask. Structures from DICOM SEG also carry a `dicom_seg` provenance obj
 
 `status` is `queued`, `running`, `completed`, `failed` or `cancelled`. `stage` is display text.
 `revision_id` is the new revision once committed. For `orthanc_export` and `orthanc_view_export` it is the
-exported revision.
+exported revision. `orthanc_export` is the kind of every SEG export job, including one that only prepares a
+file.
 
 `kind` is `process`, `segment`, `refine`, `correction`, `include_all` (from the `scan3d include-all` command
 only), `review_predict`, `review_accept`, `orthanc_import`, `orthanc_export`, `orthanc_view_export` or
@@ -213,6 +215,7 @@ Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 | `GET .../slicer.zip`                               | Slicer bundle                    | No              |
 | `GET`, `POST .../export.html`                      | Offline HTML viewer              | No              |
 | `GET`, `POST .../dicom-seg`                        | SEG export status and start      | No              |
+| `GET .../dicom-seg/{export_id}/segment.dcm`        | Prepared SEG file                | No              |
 | `GET`, `POST .../dicom-view`                       | 3D view export status and start  | No              |
 
 ## System routes
@@ -628,24 +631,36 @@ duplicate requests reuse the queued or running job.
 
 ### DICOM SEG export
 
-Export needs a configured Orthanc and a saved revision whose reference image is an original classic CT
-imported from that archive. `SCAN3D_ORTHANC_EXPORT_DESTINATIONS` is an allowlist of configured Orthanc
-modality IDs; leaving it empty allows archive-only export.
+A SEG has two routes. Archive and send need a configured Orthanc and a saved revision whose reference image
+is an original classic CT imported from that archive. `SCAN3D_ORTHANC_EXPORT_DESTINATIONS` is an allowlist of
+configured Orthanc modality IDs; leaving it empty allows archive-only export. A file needs no Orthanc: any
+saved revision whose reference image was prepared from a classic CT that this case still holds qualifies,
+whether it came from a folder, a ZIP, a browser upload or Orthanc.
 
 **`GET .../dicom-seg`** returns `{available, reason?, destinations: [{id, name, aet}], exports: Job[],
-encoding_version}`. `exports` is scoped to the revision, newest first, and addresses stay server-side. An
-unavailable revision has a `reason`, for example a local-only source, an MR image or an image-only revision.
+encoding_version, file: {available, reason?}}`. `available` and `reason` describe archive and send, and `file`
+describes the file route on its own. `exports` is scoped to the revision, newest first, and addresses stay
+server-side. An unavailable route has a `reason`, for example a local-only source, an MR image or an
+image-only revision.
 
-**`POST .../dicom-seg`** takes `{structure_ids?, destination?, resend?, overlap_priority?}` and returns an
-`orthanc_export` job. Omitted IDs select all nonempty masks. A null destination archives only. Export never changes review
-status, adds a revision or activates one.
+**`POST .../dicom-seg`** takes `{structure_ids?, destination?, resend?, overlap_priority?, delivery?}` and
+returns an `orthanc_export` job. Omitted IDs select all nonempty masks. A null destination archives only.
+`delivery` is `orthanc` by default. `file` prepares the SEG here without contacting any archive, takes no
+`destination` or `resend`, and never needs a connection, even for a CT imported from Orthanc. Export never
+changes review status, adds a revision or activates one.
+
+**`GET .../dicom-seg/{export_id}/segment.dcm`** returns the prepared bytes as an `application/dicom`
+attachment named `scan3d-seg-<revision>-<export>.dcm`, which holds no patient text. It answers 404 unless a
+completed file job of this revision has that `export_id`. The bytes are hashed against `export.json` on every
+request, and a mismatch answers 400 and leaves the file in place. The file itself carries the source's patient
+and study identity.
 
 **Encoding.** All selected structures become numbered segments of one binary SEG instance in a new series,
 keeping original patient, study, frame and source references, names and colours. Overlaps are preserved, and
 segment identification is written on each frame. The grid is never resampled. Source pixels must map to
 unique integer native voxels within the tolerances above, and dimensions, axis correspondence and complete
 slice coverage are mandatory. A combined export is capped at 512 MiB and 100,000 frames, and exceeding that
-fails before upload. Corrected masks are described as semiautomatic. The private coding scheme `99SCAN3D`
+fails before upload or download. Corrected masks are described as semiautomatic. The private coding scheme `99SCAN3D`
 defines `REGION` and `SEGMENTATION`, which can produce unknown-vocabulary validator warnings.
 
 **Overlap resolution.** `overlap_priority` ranks every selected structure once, highest first, and needs at
@@ -660,16 +675,22 @@ ranking is a separate artifact of the same saved inputs, so **Send again** needs
 
 **Identity.** Enqueue freezes mask file identities, and later changes are refused. `export.json` pins the
 source, reference, mask and SEG hashes before any network write, and `delivery.json` holds transfer
-receipts.
+receipts. A CT from a folder, a ZIP or a browser upload has no archive manifest, so the SHA-256 of its series
+files in sorted path order identifies it. Preparation names the reference image with that same digest, which
+is what ties the files to the saved image. The job hashes the files again and refuses a mismatch, and a
+reference that this digest does not name cannot make a file. `export.json` then has no `source_snapshot` or
+`archive_key`.
 
 **Result.** `result.dicom_seg` has `export_id`, `encoding_version`, `archived`, `sent`, `segments_count`,
 `instance_count`, `structure_ids` and optional `destination` and `destination_id`. It has no patient fields,
-paths or credentials. `sent` is true only after an exact successful C-STORE count.
+paths or credentials. `sent` is true only after an exact successful C-STORE count. A file job adds `file: true`,
+with `archived` and `sent` false.
 
 **Retries.** A duplicate request reuses the job and artifact. An explicit retry reuses the exact SOP bytes
 and checks any known remote job. `resend: true` needs a destination and a known successful send, and creates
 a new delivery attempt with the same SOPs. A new encoder version creates fresh SOPs on explicit export, and
-mask checks still apply.
+mask checks still apply. A file and an archive of the same selection and ranking share one artifact, so they
+carry the same SOP instance, whichever came first.
 
 Polling stops after 120 seconds with an unconfirmed outcome. Startup marks interrupted and queued exports
 failed locally and never contacts Orthanc. Cancelling before delivery stops the export. After C-STORE has
