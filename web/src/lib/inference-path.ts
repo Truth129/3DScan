@@ -59,10 +59,10 @@ export function usePathChoice(key: string) {
 }
 
 /**
- * Read AI assist's status and apply each reply unless a newer one has been applied: opening review
- * asks twice, the first answer enables the tools, and the second must not wait on or undo a later
- * one. A failed read is an answer too, so that Check again can clear it. `overlapped` says a reply
- * landed while this read was out.
+ * Read AI assist's status and apply each reply unless a newer one has been applied. Opening review
+ * asks twice: the first answer enables the tools without waiting for the second, and a slow first
+ * answer cannot undo the second. A failed read is an answer too, so that Check again can clear it.
+ * `overlapped` says a reply landed while this read was out.
  */
 export function statusReader(read: () => Promise<InteractiveStatus>, apply: (status: InteractiveStatus, overlapped: boolean) => void) {
   let newest = 0,
