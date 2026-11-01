@@ -551,6 +551,8 @@ errors name the cause:
 - A device check where PyTorch reports no GPU: `GPU inference was requested but PyTorch cannot access a GPU; check
   the driver, then repeat this GPU's check (see Add a second GPU in docs/INSTALL.md). No other GPU was tried.` Both
   engines give this. `SCAN3D_DEVICE=cpu`, which the default path's sentence offers, cannot change an added path.
+- A proof that asks for a card this build cannot see, such as `gpu:1` with one card in view: `Requested GPU index
+  is unavailable`. This one names no card.
 - A device check that measures anything else: `Expected <label>, but the GPU check found <name> (<device>,
   <build>). No result was kept and no other GPU was tried.` `<build>` is `CUDA` or `no CUDA`.
 - A crop-model task such as `teeth` on a GPU index above 0: `TotalSegmentator would run part of <task> on the
