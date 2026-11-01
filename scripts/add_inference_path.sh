@@ -71,8 +71,9 @@ matches_lock() {
   [[ -f "$finished" ]] && has_environment || return 1
   local packages
   # A failed read says nothing about the lock, and treating it as a difference would wipe an
-  # environment that may equal it. --quiet drops only the line naming the environment.
-  packages="$("$uv" pip freeze --python "$python" --quiet | sort)" ||
+  # environment that may equal it. --quiet drops only the line naming the environment. A forced
+  # colour reaches through a pipe and bolds every name, and then no name equals its pin.
+  packages="$("$uv" pip freeze --python "$python" --quiet --color never | sort)" ||
     fail 'uv could not read this environment, so nothing was changed. Fix what it reported above, then run this again. If the fault is in the environment itself, move the directory aside first, and the run after that installs it from empty.'
   [[ "$packages" == "$pins" ]]
 }
@@ -145,7 +146,7 @@ fi
 
 # --system, or an active environment or a .venv here could answer instead of a Python to build
 # on. --no-cache, because uv would otherwise record the answer, and these checks write nothing.
-interpreter="$("$uv" python find --no-cache --system 3.14)" ||
+interpreter="$("$uv" python find --no-cache --system --color never 3.14)" ||
   fail 'Python 3.14 was not found, and this script does not install one. Install it, then run this again.'
 
 command -v nvidia-smi >/dev/null ||

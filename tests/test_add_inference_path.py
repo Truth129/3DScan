@@ -89,6 +89,15 @@ with (rig / "calls.jsonl").open("a") as calls:
     calls.write(json.dumps(call) + "\n")
 
 
+# What real uv does to a name when colour is forced, even through a pipe, unless told never to.
+def painted(text, start, stop):
+    forced = os.environ.get("FORCE_COLOR") or os.environ.get("CLICOLOR_FORCE", "0") not in ("", "0")
+    told = arguments[arguments.index("--color") + 1] if "--color" in arguments else None
+    if told == "never" or (told is None and os.environ.get("NO_COLOR")) or not (forced or told == "always"):
+        return text
+    return f"\x1b[{start}m{text}\x1b[{stop}m"
+
+
 # Stays here until the test lets go, with its descriptors open, as a real step's are.
 def hold():
     (rig / "held").touch()
@@ -146,7 +155,7 @@ if arguments[:2] == ["pip", "freeze"]:
     if scenario["freeze_status"]:
         print("error: Failed to read metadata", file=sys.stderr)
         sys.exit(scenario["freeze_status"])
-    print("".join(f"{name}=={package['version']}\n" for name, package in sorted(packages.items())), end="")
+    print("".join(f"{painted(name, 1, 0)}=={package['version']}\n" for name, package in sorted(packages.items())), end="")
 if arguments[:2] == ["pip", "sync"]:
     if scenario["sync_status"]:
         sys.exit(scenario["sync_status"])
@@ -502,7 +511,7 @@ def test_room_is_measured_where_the_environment_and_the_cache_will_go(rig):
 def test_uv_cannot_fetch_or_cache_a_python_during_preflight(rig):
     rig.run("nvidia", "--dry-run")
     find = rig.step("uv python find")
-    assert find["arguments"] == ["python", "find", "--no-cache", "--system", "3.14"]
+    assert find["arguments"] == ["python", "find", "--no-cache", "--system", "--color", "never", "3.14"]
     assert find["env"]["UV_PYTHON_DOWNLOADS"] == "never"
 
 
@@ -783,6 +792,30 @@ def test_a_re_run_keeps_the_environment_and_repeats_the_check(rig):
 def test_a_re_run_does_not_name_the_environment_it_read(rig):
     installed(rig)
     assert "Using Python" not in rig.run("nvidia").stderr
+
+
+FORCED_COLOUR = ({"FORCE_COLOR": "1"}, {"FORCE_COLOR": "0"}, {"CLICOLOR_FORCE": "1"})
+
+
+@pytest.mark.parametrize("variable", FORCED_COLOUR, ids=lambda variable: "=".join(*variable.items()))
+def test_forced_colour_never_reads_as_a_difference_from_the_lock(rig, variable):
+    # The bold names would equal no pin, so every re-run would wipe a healthy environment.
+    installed(rig)
+    completed = rig.run("nvidia", env=variable)
+    assert completed.returncode == 0, completed.stderr
+    assert rig.steps() == RE_RUN
+    assert "nothing was installed" in completed.stdout
+
+
+@pytest.mark.parametrize("variable", FORCED_COLOUR, ids=lambda variable: "=".join(*variable.items()))
+def test_this_uv_bolds_its_names_as_real_uv_does(rig, variable):
+    # Without this the test above could pass on a fake that had lost the habit.
+    installed(rig)
+    command, environment = [rig.bin / "uv", "pip", "freeze", "--python", rig.venv / "bin" / "python"], rig.prepared(variable)[1]
+    bold = "\x1b[1malpha\x1b[0m==1.0\n\x1b[1mbeta\x1b[0m==2.0.post1\n"
+    assert subprocess.run(command, env=environment, capture_output=True, text=True).stdout == bold
+    command += ["--color", "never"]
+    assert subprocess.run(command, env=environment, capture_output=True, text=True).stdout == "alpha==1.0\nbeta==2.0.post1\n"
 
 
 def test_a_re_run_repairs_a_failed_check(rig):
