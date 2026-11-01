@@ -12,8 +12,8 @@ trust boundary.
 This runs in the API process and in a venv holding only the NVIDIA stack, so it imports the
 standard library and two torch-free scan3d modules, and it starts no process: opening a
 panel must never load torch or touch a busy card. The device check at job start is the live
-authority. 'Available' means installed as proven and last check passed, never that a scan
-will fit.
+authority. 'Available' means that what the proof records is still installed and its last check
+passed, never that a scan will fit.
 """
 
 from dataclasses import dataclass
@@ -67,8 +67,8 @@ _UNREADABLE = "Its GPU check record cannot be read."
 _CHECK_FAILED = "Its last GPU check failed."
 _INSTALL_STOPPED = "Its last install did not finish."
 _NO_PYTHON = "Its Python environment is missing."
-_PACKAGES_CHANGED = "Its installed packages changed after the last GPU check."
-_ENGINE_DIFFERS = "Its TotalSegmentator or nnInteractive version differs from this workstation's."
+_PACKAGES_CHANGED = "Its PyTorch or GPU runtime packages changed after the last GPU check."
+_ENGINE_DIFFERS = "Its TotalSegmentator, nnU-Net or nnInteractive version differs from this workstation's."
 _RESAMPLER_PRESENT = "It has cupy or cucim installed, which would change resampling."
 _HARDWARE_CHANGED = "The GPUs in this workstation changed after the last GPU check."
 _DEFAULT_STALE = "Its last GPU check failed or is out of date."

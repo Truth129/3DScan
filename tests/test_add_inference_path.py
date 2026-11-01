@@ -1531,7 +1531,7 @@ def test_a_check_that_dies_after_writing_is_reported_as_that(rig):
     assert "unavailable" not in completed.stderr and "recorded nothing" not in completed.stderr
 
 
-OFFERED = "provided the existing install's TotalSegmentator and nnInteractive versions equal {}. If they differ, {} as unavailable and says why."
+OFFERED = "provided the existing install's TotalSegmentator, nnU-Net and nnInteractive versions equal {}. If they differ, {} as unavailable and says why."
 
 
 def test_the_plan_offers_the_card_only_on_a_condition_it_cannot_check(rig):
@@ -1557,12 +1557,14 @@ def test_usage_says_what_a_re_run_does_and_what_it_cannot_fix(rig):
         "after a driver change or when the app shows this GPU as unavailable",
         "An environment that equals the lock stays, anything else is rebuilt from empty",
         "the GPU check runs again",
-        "If the reason is a TotalSegmentator or nnInteractive version, update the existing install as well",
+        "If the reason is a TotalSegmentator, nnU-Net or nnInteractive version, update the existing install as well",
     ):
         assert words in usage
 
 
-UNAVAILABLE_UNTIL_FINISHED = "Until a run finishes, the app shows this GPU as unavailable, or not at all if it was never checked."
+UNAVAILABLE_UNTIL_FINISHED = (
+    "Until an install finishes, the app shows this GPU as unavailable if it was last checked on this environment, or not at all if it was never checked."
+)
 
 
 @pytest.mark.parametrize(

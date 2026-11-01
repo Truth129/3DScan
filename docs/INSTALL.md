@@ -248,9 +248,8 @@ makes as PyTorch loads can catch a broken driver. A job that stops there because
 sees no GPU says so, and that no other GPU was tried. If PyTorch hangs or crashes there,
 the error names the device check or the nnInteractive worker instead. Check the driver,
 then run the script again to repeat the GPU check. If the reason shown is a
-TotalSegmentator or nnInteractive version, which also covers nnU-Net and the nnInteractive
-client, a re-run fixes only this environment, so update your existing install too: every
-path must use the same versions.
+TotalSegmentator, nnU-Net or nnInteractive version, a re-run fixes only this environment,
+so update your existing install too: every path must use the same versions.
 
 **To remove a path**, move its proof out of the folder. The GPU leaves the app the next
 time a panel opens, with no restart, and a job already queued on it fails, naming the

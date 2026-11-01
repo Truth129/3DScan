@@ -456,13 +456,12 @@ An added path with `available: false` gives the first of these that applies:
 - `Its last GPU check failed.`
 - `Its last install did not finish.`
 - `Its Python environment is missing.`
-- `Its installed packages changed after the last GPU check.`
-- `Its TotalSegmentator or nnInteractive version differs from this workstation's.`
+- `Its PyTorch or GPU runtime packages changed after the last GPU check.`
+- `Its TotalSegmentator, nnU-Net or nnInteractive version differs from this workstation's.`
 - `It has cupy or cucim installed, which would change resampling.`
 - `The GPUs in this workstation changed after the last GPU check.`
 
-The packages sentence means PyTorch and its GPU runtime packages, the only ones a proof records. The version
-sentence also covers nnU-Net and `nninteractive-client`.
+A proof records no other package, and the version sentence also covers `nninteractive-client`.
 
 `default` gives null or the caution `Its last GPU check failed or is out of date.`, which blocks nothing. A proof
 taken before its vendor's cards changed earns that caution and loses its card: `label` is `Default device` and

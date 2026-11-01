@@ -15,8 +15,8 @@ Usage: scripts/add_inference_path.sh nvidia [options]
 
 Run it again after a driver change or when the app shows this GPU as unavailable. An environment
 that equals the lock stays, anything else is rebuilt from empty, and the GPU check runs again. If
-the reason is a TotalSegmentator or nnInteractive version, update the existing install as well,
-because this script cannot fix that.
+the reason is a TotalSegmentator, nnU-Net or nnInteractive version, update the existing install as
+well, because this script cannot fix that.
 USAGE
 }
 
@@ -28,7 +28,7 @@ fail() {
 # For a run stopped past the finished mark: discovery now refuses the path, and with no proof yet
 # there is no row to refuse.
 stopped() {
-  fail "$1 Until a run finishes, the app shows this GPU as unavailable, or not at all if it was never checked. Fix what was reported above, then run this again."
+  fail "$1 Until an install finishes, the app shows this GPU as unavailable if it was last checked on this environment, or not at all if it was never checked. Fix what was reported above, then run this again."
 }
 
 # A link is not the marker, wherever it points: a copy of an environment can be made of links.
@@ -209,9 +209,10 @@ TotalSegmentator's settings, scan3d.env or the running app, and it does not inst
 
 Last, it runs a short GPU check on the NVIDIA card. The proof that check writes is the
 registration: when it passes, a running app that reads the proof's folder offers the card the
-next time a panel opens, with no restart, provided the existing install's TotalSegmentator and
-nnInteractive versions equal the lock's. If they differ, the app shows the card as unavailable
-and says why. This script cannot tell which Python serves the app, so it cannot compare them.
+next time a panel opens, with no restart, provided the existing install's TotalSegmentator,
+nnU-Net and nnInteractive versions equal the lock's. If they differ, the app shows the card as
+unavailable and says why. This script cannot tell which Python serves the app, so it cannot
+compare them.
 
 PLAN
 if (( dry_run )); then
@@ -299,9 +300,9 @@ elif (( status == 0 )); then
   echo "The GPU check passed and wrote $proof."
   echo 'That file is the whole registration: a running app that reads its folder offers this GPU'
   echo "the next time a panel opens, with no restart, provided the existing install's"
-  echo "TotalSegmentator and nnInteractive versions equal this environment's. If they differ, the"
-  echo 'app shows this GPU as unavailable and says why. To remove the path, move the file out of'
-  echo 'that folder. The environment stays until you delete it.'
+  echo "TotalSegmentator, nnU-Net and nnInteractive versions equal this environment's. If they"
+  echo 'differ, the app shows this GPU as unavailable and says why. To remove the path, move the'
+  echo 'file out of that folder. The environment stays until you delete it.'
 elif (( status == 1 )); then
   echo "The GPU check failed and wrote $proof." >&2
   fail 'A running app that reads its folder now shows this GPU as unavailable, with its reason. Fix what the check reported above, then run this again.'
