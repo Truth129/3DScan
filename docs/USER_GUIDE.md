@@ -339,8 +339,9 @@ not changed captures the same image, so it reuses that series: exporting it agai
 result and delivers nothing new. Reopening the dialog never sends anything, and **Send again**
 deliberately resends the same image. After a failure, retrying from the dialog reuses the same image.
 Once the dialog has gone there is nothing to retry from, so check the study in Orthanc and capture the
-view again. If the connection drops during a request, **Refresh export status** finds the job if the
-request reached the server.
+view again. If the connection drops during a request, the dialog says the outcome is unknown. Press the
+same button again: the server recognises the same image and destination and answers with the export it
+already has, or starts one if the first request never arrived.
 
 While an export runs you can close the dialog, and the button reopens it unless the button is
 disabled. Changing case or revision lets go of the capture, so the button then takes a new one.

@@ -136,11 +136,6 @@ export function unfinishedEarlierDicomView(jobs: DicomViewExportJob[], caseId: s
   return latest && latest.id !== current?.id && (pendingDicomViewExport(latest) || latest.status === 'failed') ? latest : undefined;
 }
 
-/** What a lost POST left behind, if anything: the newest job of this revision that the listing before it did not have. */
-export function jobOfLostRequest(before: DicomViewExportJob[], after: DicomViewExportJob[], caseId: string, revisionId: string) {
-  return after.find(job => matchesDicomViewExport(job, caseId, revisionId) && !before.some(item => item.id === job.id));
-}
-
 /** Finished is not the same as delivered: only these two flags say where the image went. */
 export const dicomViewDelivered = (job: DicomViewExportJob) =>
   job.status === 'completed' && (job.result?.dicom_view?.sent === true || job.result?.dicom_view?.archived === true);

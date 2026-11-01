@@ -4,7 +4,6 @@ import { api, ApiError } from '../lib/api';
 import {
   dicomViewAlreadySent,
   dicomViewExportSummary,
-  jobOfLostRequest,
   matchesDicomViewExport,
   pendingDicomViewExport,
   unfinishedEarlierDicomView,
@@ -31,11 +30,10 @@ const dialog = ref<HTMLDialogElement>(),
   checking = ref(false),
   submitting = ref(false),
   error = ref(''),
-  statusError = ref(''),
-  needsRefresh = ref(false);
+  statusError = ref('');
 const job = computed(() => (props.job && matchesDicomViewExport(props.job, capture.caseId, capture.revisionId) ? props.job : undefined));
 const pending = computed(() => pendingDicomViewExport(job.value));
-const locked = computed(() => checking.value || submitting.value || pending.value || needsRefresh.value);
+const locked = computed(() => checking.value || submitting.value || pending.value);
 const actionDisabled = computed(() => locked.value || !!statusError.value || !availability.value?.available);
 const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
 const repeatDelivery = computed(() => !!target.value && dicomViewAlreadySent(job.value, target.value.id));
@@ -54,16 +52,9 @@ async function load() {
   try {
     const result = await api.dicomViewAvailability(capture.caseId, capture.revisionId, request.signal);
     if (request.signal.aborted) return;
-    const exports = result.exports ?? [],
-      // Only a listing can name a job whose response was lost. A job listed before that
-      // request stays separate: it may be another image, so this dialog must not claim it.
-      lost = needsRefresh.value ? jobOfLostRequest(availability.value?.exports ?? [], exports, capture.caseId, capture.revisionId) : undefined;
     availability.value = result;
-    error.value = '';
-    needsRefresh.value = false;
-    if (lost) props.follow(lost, capture);
     // Nothing else may be watching these, and each one still has to report how it ends.
-    for (const item of exports) if (pendingDicomViewExport(item)) props.observe(item);
+    for (const item of result.exports ?? []) if (pendingDicomViewExport(item)) props.observe(item);
   } catch (reason) {
     if (!request.signal.aborted) statusError.value = reason instanceof Error ? reason.message : 'Export status could not be read.';
   } finally {
@@ -83,21 +74,24 @@ async function start(chosen?: string, resend = false) {
       ...(chosen ? { destination: chosen } : {}),
       ...(resend ? { resend: true } : {}),
     });
-    if (!matchesDicomViewExport(queued, capture.caseId, capture.revisionId))
-      throw new ApiError(502, 'The export job does not match this capture. Refresh export status.');
+    if (!matchesDicomViewExport(queued, capture.caseId, capture.revisionId)) throw new ApiError(400, 'The export job does not match this capture.');
     props.follow(queued, capture);
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : 'The export request could not finish.',
-      // An answer from the server settles it. A lost connection does not: the job may exist.
-      answered = reason instanceof ApiError;
+      // A refusal settles it. Anything else may have queued the job before its answer was lost.
+      refused = reason instanceof ApiError && reason.status < 500;
     if (gone)
       props.report(
-        answered ? message : `${message} Check the study in Orthanc before exporting again; the request may already have reached the workstation.`,
+        refused ? message : `${message} Check the study in Orthanc before exporting again; the request may already have reached the workstation.`,
         capture,
       );
     else {
-      error.value = answered ? message : `${message} Refresh export status before trying again; the request may already have reached the workstation.`;
-      needsRefresh.value = !answered;
+      // No listing can say which image a job holds, so only the repeat can find this capture's
+      // own job. The server answers it with that job, because the image and destination match.
+      error.value = refused
+        ? message
+        : `${message} The request may already have reached the workstation. Repeating it is safe: the server recognises this image and destination.`;
+      if (!refused) void load();
     }
   } finally {
     submitting.value = false;
@@ -192,9 +186,7 @@ onBeforeUnmount(() => {
     <p v-else-if="repeatDelivery" class="help">This image has already been sent there. Send again starts a new delivery of the same DICOM instance.</p>
     <p v-if="error" class="export-error" role="alert">{{ error }}</p>
     <p v-if="statusError" class="export-error" role="alert">{{ statusError }}</p>
-    <button v-if="statusError || needsRefresh" class="button secondary compact" type="button" :disabled="checking || submitting" @click="load">
-      Refresh export status
-    </button>
+    <button v-if="statusError" class="button secondary compact" type="button" :disabled="checking || submitting" @click="load">Refresh export status</button>
     <footer>
       <button class="button secondary" type="button" @click="close">Close</button>
       <div class="export-actions">

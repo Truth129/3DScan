@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { shallowReactive } from 'vue';
 import DicomViewExport from '../src/components/DicomViewExport.vue';
-import { api, ApiError } from '../src/lib/api';
+import { api, ApiError, request as apiRequest } from '../src/lib/api';
 import {
   DICOM_VIEW_MAX_BYTES,
   dicomViewAlreadySent,
@@ -91,6 +91,19 @@ const disabled = (element: MountedElement | undefined) => (element as unknown as
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('an error answer with no text', () => {
+  it.each([
+    ['a proxy page over HTTP/2', () => new Response('Bad gateway', { status: 502, statusText: '' })],
+    ['JSON with no detail', () => Response.json({}, { status: 500 })],
+  ])('still says something for %s', async (_name, answer) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => answer()),
+    );
+    await expect(apiRequest('/api/anything')).rejects.toThrow('The server answered with status 5');
+  });
 });
 
 describe('the capture', () => {
@@ -437,53 +450,72 @@ describe('the dialog', () => {
     server({ available: availability({ exports: [failed] }) });
     expect((await dialog({ job: failed })).text()).not.toContain('earlier export');
   });
-  it('does not guess after losing the response to a submission', async () => {
-    const posts: PostedForm[] = [];
-    vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string, init: RequestInit) => {
-        posts.push({ url, form: init.body as FormData });
-        throw new TypeError('Connection closed');
-      }),
-    );
-    const view = await dialog();
-    click(view.button('Archive in Orthanc'));
-    await settled();
-    expect(view.text()).toContain('may already have reached the workstation');
-    expect(disabled(view.button('Archive in Orthanc'))).toBe(true);
-    expect(posts).toHaveLength(1);
-    click(view.button('Refresh export status'));
-    await settled();
-    expect(api.dicomViewAvailability).toHaveBeenCalledTimes(2);
-    expect(disabled(view.button('Archive in Orthanc'))).toBe(false);
-    expect(view.text()).not.toContain('may already have reached');
-    expect(posts).toHaveLength(1);
-  });
   describe('after losing the response to a submission', () => {
-    async function lost(listing: DicomViewExportJob[], earlier: DicomViewExportJob[] = []) {
+    async function lost(listing: DicomViewExportJob[] = [], failure: Error = new TypeError('Connection closed')) {
       vi.spyOn(api, 'dicomViewAvailability')
-        .mockResolvedValueOnce(availability({ exports: earlier }))
+        .mockResolvedValueOnce(availability())
         .mockResolvedValue(availability({ exports: listing }));
+      const post = vi.spyOn(api, 'exportDicomView').mockRejectedValueOnce(failure);
+      const view = await dialog();
+      click(view.button('Archive in Orthanc'));
+      await settled();
+      return Object.assign(view, { post });
+    }
+    it('says the outcome is unknown, and that repeating the request is safe', async () => {
+      const view = await lost();
+      expect(view.text()).toContain('may already have reached the workstation');
+      expect(view.text()).toContain('Repeating it is safe');
+      expect(disabled(view.button('Archive in Orthanc'))).toBe(false);
+      expect(view.text()).not.toContain('Refresh export status');
+    });
+    it.each(['running', 'failed', 'completed'] as const)(
+      'never takes a %s job in a listing as its own, because a listing cannot name an image',
+      async status => {
+        const other = job(status, { id: 'other' }),
+          view = await lost([other]);
+        expect(view.state.follow).not.toHaveBeenCalled();
+        expect(view.text()).toContain('Repeating it is safe');
+        expect(view.text()).not.toContain('View archived');
+      },
+    );
+    it('watches whatever is running, so its end is reported even if nobody repeats the request', async () => {
+      const running = job('running', { id: 'perhaps-own' }),
+        view = await lost([running]);
+      expect(view.state.observe).toHaveBeenCalledWith(running);
+      expect(view.state.follow).not.toHaveBeenCalled();
+    });
+    it('gets this capture’s job from the repeat, as the server’s answer', async () => {
+      const view = await lost(),
+        own = job('running', { id: 'own' });
+      view.post.mockResolvedValue(own);
+      click(view.button('Archive in Orthanc'));
+      await settled();
+      expect(view.post).toHaveBeenCalledTimes(2);
+      expect(view.post.mock.calls[1][2].image).toBe(view.post.mock.calls[0][2].image);
+      expect(view.state.follow).toHaveBeenCalledExactlyOnceWith(own, capture);
+      expect(view.text()).not.toContain('may already have reached');
+    });
+    it('treats a 5xx as an unknown outcome, since a gateway can lose a queued answer', async () => {
+      const view = await lost([], new ApiError(502, 'Bad gateway'));
+      expect(view.text()).toContain('Repeating it is safe');
+      expect(api.dicomViewAvailability).toHaveBeenCalledTimes(2);
+    });
+    it('offers Refresh when the listing it tried next fails too', async () => {
+      vi.spyOn(api, 'dicomViewAvailability')
+        .mockResolvedValueOnce(availability())
+        .mockRejectedValueOnce(new TypeError('Still offline'))
+        .mockResolvedValue(availability());
       vi.spyOn(api, 'exportDicomView').mockRejectedValue(new TypeError('Connection closed'));
       const view = await dialog();
       click(view.button('Archive in Orthanc'));
       await settled();
+      expect(view.text()).toContain('Repeating it is safe');
+      expect(view.text()).toContain('Still offline');
+      expect(disabled(view.button('Archive in Orthanc'))).toBe(true);
       click(view.button('Refresh export status'));
       await settled();
-      return view;
-    }
-    it.each(['running', 'failed', 'completed'] as const)('takes a %s job that was not listed before as this capture’s own', async status => {
-      const own = job(status, { id: 'lost' }),
-        view = await lost([own, job('completed', { id: 'older' })], [job('completed', { id: 'older' })]);
-      expect(view.state.follow).toHaveBeenCalledExactlyOnceWith(own, capture);
-    });
-    it('never claims a job that was already listed, which may be another image', async () => {
-      const earlier = job('running', { id: 'earlier' }),
-        view = await lost([earlier], [earlier]);
-      expect(view.state.follow).not.toHaveBeenCalled();
-      expect(view.state.observe).toHaveBeenCalledWith(earlier);
-      expect(view.text()).toContain('still in progress');
+      expect(disabled(view.button('Archive in Orthanc'))).toBe(false);
+      expect(view.text()).toContain('Repeating it is safe');
     });
   });
   it('watches every unfinished export it lists, since one with no dialog may have no watcher', async () => {

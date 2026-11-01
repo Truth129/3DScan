@@ -523,6 +523,8 @@ function followViewJob(next: DicomViewExportJob, capture: ViewCapture) {
 }
 function reportViewExport(message: string, capture: ViewCapture) {
   error.value = capture.caseId === activeCase.value?.id ? message : `${capture.caseLabel}: ${message}`;
+  // With no answer the job may exist anyway, and the dialog that could have found it has gone.
+  void viewJobs.seed(capture.caseId);
 }
 function closeViewExport() {
   viewExportOpen.value = false;

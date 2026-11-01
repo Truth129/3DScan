@@ -625,7 +625,10 @@ describe('following a job', () => {
     await settled();
     expect(view.banner()).toContain('Export interrupted.');
   });
-  it('follows the job of a lost response to its end, and reports it once the dialog has closed', async () => {
+  it('reports the end of a job left by a lost response, once the dialog has closed', async () => {
+    vi.mocked(api.dicomViewAvailability)
+      .mockResolvedValueOnce(availability)
+      .mockResolvedValue({ ...availability, exports: [job('running')] });
     vi.mocked(fetch).mockImplementation((async () => {
       throw new TypeError('Failed to fetch');
     }) as typeof fetch);
@@ -633,12 +636,21 @@ describe('following a job', () => {
     await view.export();
     click(view.button('Archive in Orthanc'));
     await settled();
-    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running')] });
-    click(view.button('Refresh export status'));
-    await settled();
-    expect(view.text()).toContain('Exporting DICOM view');
-    expect(view.text()).not.toContain('still in progress');
+    expect(view.text()).toContain('Repeating it is safe');
     click(view.labelled('Close DICOM view export'));
+    await settled();
+    polled = async () => job('failed', { error: 'Delivery is not confirmed.' });
+    await settled();
+    expect(view.banner()).toContain('Delivery is not confirmed.');
+  });
+  it('looks for a job that a lost response may have left after the dialog has gone', async () => {
+    const answer = deferred<Response>();
+    vi.mocked(fetch).mockImplementation((async () => answer.promise) as typeof fetch);
+    const view = await start();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    listed = [job('running')];
+    answer.reject(new TypeError('Failed to fetch'));
     await settled();
     polled = async () => job('failed', { error: 'Delivery is not confirmed.' });
     await settled();
