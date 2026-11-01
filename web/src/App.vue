@@ -33,6 +33,7 @@ import SegmentationControls from './components/SegmentationControls.vue';
 import ExportViewerDialog from './components/ExportViewerDialog.vue';
 import DicomSegExport from './components/DicomSegExport.vue';
 import DicomSegImport from './components/DicomSegImport.vue';
+import DicomViewExport from './components/DicomViewExport.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
@@ -56,8 +57,21 @@ import {
 } from './lib/image-workspace';
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
-import { recoverCaseJob } from './lib/jobs';
+import { outboundExportKinds, recoverCaseJob } from './lib/jobs';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
+import {
+  freezeViewCapture,
+  pendingDicomViewExport,
+  VIEW_CHANGED_MESSAGE,
+  VIEW_NOT_READY_MESSAGE,
+  viewExportScopeHeld,
+  viewExportScopeReady,
+  type DicomViewExportJob,
+  type ViewCapture,
+  type ViewCaptureRequest,
+  type ViewExportScope,
+} from './lib/dicom-view';
+import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
 import { useFloatingDetails } from './lib/use-floating-details';
@@ -277,6 +291,12 @@ function createVolumeView() {
 }
 const CornerstoneVolumeView = shallowRef(createVolumeView());
 const exportSnapshot = shallowRef<PortableRenderSnapshot>();
+// The held capture and its latest job. A capture leaves here with the revision it shows;
+// its job does not, because the watcher below follows it to the end regardless.
+const viewCapture = shallowRef<ViewCapture>(),
+  viewExportOpen = ref(false),
+  viewCapturing = ref(false),
+  viewJobId = ref('');
 const interactivePanel = ref<InstanceType<typeof InteractiveReviewPanel>>();
 const catalogGate = new SourceRequestGate();
 let revisionRequest = 0;
@@ -433,6 +453,78 @@ function toast(message: string) {
     notice.value = '';
   }, 5000);
 }
+const viewJobs = useDicomViewJobs({
+  activeCaseId: () => activeCase.value?.id,
+  caseLabel: id => cases.value.find(item => item.id === id)?.label,
+  showing: id => viewExportOpen.value && viewJobId.value === id,
+  success: toast,
+  failure: message => {
+    error.value = message;
+  },
+});
+const viewJob = computed(() => (viewJobId.value ? viewJobs.job(viewJobId.value) : undefined));
+function viewExportScope(): ViewExportScope {
+  return {
+    caseId: activeCase.value?.id,
+    revisionId: revision.value?.id,
+    revisionCaseId: revision.value?.case_id,
+    shownRevisionId: shownRevision.value?.id,
+    ctRevisionId: ctRevisionId.value,
+    generation: caseGeneration,
+    blockReason: savedExportDisabledReason.value,
+    reviewing: workspaceMode.value === 'review',
+  };
+}
+function dropViewCapture() {
+  viewCapture.value = undefined;
+  viewExportOpen.value = false;
+  viewJobId.value = '';
+}
+/**
+ * Everything about the capture is frozen from this one tick's state, and it is only kept if
+ * that state still holds in the tick the frame arrives. A held frame cannot be retargeted.
+ */
+async function exportView() {
+  if (viewCapturing.value) return;
+  if (viewCapture.value && pendingDicomViewExport(viewJob.value)) {
+    viewExportOpen.value = true;
+    return;
+  }
+  const frozen = viewExportScope(),
+    viewport = model.value,
+    caseLabel = activeCase.value?.label ?? '',
+    referenceImageId = revision.value?.reference_image_id ?? revision.value?.image_asset?.id;
+  if (!viewport || !viewExportScopeReady(frozen) || !referenceImageId) {
+    fail(new Error(VIEW_NOT_READY_MESSAGE));
+    return;
+  }
+  const request: ViewCaptureRequest = { caseId: frozen.caseId!, revisionId: frozen.revisionId!, referenceImageId };
+  viewCapturing.value = true;
+  try {
+    const frame = await viewport.captureView(request);
+    if (!viewExportScopeHeld(frozen, viewExportScope())) throw new Error(VIEW_CHANGED_MESSAGE);
+    dropViewCapture();
+    viewCapture.value = freezeViewCapture(request, frame, caseLabel);
+    viewExportOpen.value = true;
+  } catch (reason) {
+    fail(viewExportScopeHeld(frozen, viewExportScope()) ? reason : new Error(VIEW_CHANGED_MESSAGE));
+  } finally {
+    viewCapturing.value = false;
+  }
+}
+function followViewJob(next: DicomViewExportJob, capture: ViewCapture) {
+  if (viewCapture.value === capture) viewJobId.value = next.id;
+  viewJobs.follow(next);
+}
+function closeViewExport() {
+  viewExportOpen.value = false;
+  if (!pendingDicomViewExport(viewJob.value)) dropViewCapture();
+}
+watch(() => `${activeCase.value?.id}:${revision.value?.id}`, dropViewCapture);
+// A closed dialog only stays to be reopened while its job runs.
+watch(viewJob, next => {
+  if (viewCapture.value && !viewExportOpen.value && !pendingDicomViewExport(next)) dropViewCapture();
+});
 async function refreshCases() {
   cases.value = await api.cases();
 }
@@ -528,6 +620,7 @@ async function openCase(id: string) {
     if (generation !== caseGeneration || !alive) return;
     if (pending) track(pending);
     else localStorage.removeItem(`scan3d-job:${id}`);
+    void viewJobs.seed(id);
   } catch (reason) {
     if (generation === caseGeneration) fail(reason);
   } finally {
@@ -621,7 +714,7 @@ function poll() {
         return;
       }
       localStorage.removeItem(`scan3d-job:${next.case_id}`);
-      if (next.kind === 'orthanc_export') return;
+      if (outboundExportKinds.includes(next.kind)) return;
       await refreshCases();
       if (!alive || generation !== caseGeneration || job.value?.id !== id) return;
       if (next.status === 'completed') {
@@ -1484,6 +1577,8 @@ onBeforeUnmount(() => {
               :compare="compare"
               :window="displayWindow"
               :level="displayLevel"
+              :dicom-view-block-reason="viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
+              @export-view="exportView"
               @pick="picked"
               @point="setPoint"
               @gesture="interactivePanel?.addGesture($event)"
@@ -1779,6 +1874,15 @@ onBeforeUnmount(() => {
       :modality="sourceLabel"
       :has-structures="!!revision.structures.length"
       @close="exportSnapshot = undefined"
+    />
+    <DicomViewExport
+      v-if="viewCapture"
+      :key="viewCapture.id"
+      :capture="viewCapture"
+      :job="viewJob"
+      :open="viewExportOpen"
+      :follow="followViewJob"
+      @close="closeViewExport"
     />
   </div>
 </template>
