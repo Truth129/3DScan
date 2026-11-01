@@ -121,6 +121,12 @@ async function present() {
   await nextTick();
   dialog.value?.querySelector<HTMLButtonElement>('[aria-label="Close DICOM view export"]')?.focus();
 }
+/** A click on this dialog's own padding also targets it, so only a point outside the box is the backdrop. */
+function backdrop(event: MouseEvent) {
+  const box = dialog.value?.getBoundingClientRect();
+  if (box && event.target === dialog.value && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom))
+    close();
+}
 function close() {
   dialog.value?.close();
   if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
@@ -150,7 +156,7 @@ onBeforeUnmount(() => {
     aria-labelledby="dicom-view-title"
     aria-describedby="dicom-view-description"
     @cancel.prevent="close"
-    @click="$event.target === dialog && close()"
+    @click="backdrop"
   >
     <header>
       <span class="eyebrow">DICOM VIEW</span><button class="icon-button" type="button" aria-label="Close DICOM view export" @click="close">×</button>

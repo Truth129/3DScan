@@ -581,4 +581,15 @@ describe('the dialog', () => {
     view.root.children[0].dispatchEvent(new Event('cancel'));
     expect(view.closed).toHaveBeenCalledOnce();
   });
+  it('closes on the backdrop, and not on a click in its own padding', async () => {
+    server();
+    const view = await dialog(),
+      element = view.root.children[0];
+    Object.assign(element, { getBoundingClientRect: () => ({ left: 100, right: 300, top: 100, bottom: 300 }) });
+    const at = (clientX: number, clientY: number) => element.dispatchEvent(Object.assign(new Event('click'), { clientX, clientY }));
+    at(108, 200);
+    expect(view.closed).not.toHaveBeenCalled();
+    at(90, 200);
+    expect(view.closed).toHaveBeenCalledOnce();
+  });
 });
