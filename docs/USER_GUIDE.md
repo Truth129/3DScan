@@ -291,7 +291,7 @@ with results from that GPU says it is no longer set up, and it keeps **Re-run dr
 **With a draft open in two tabs**, a refused **Run AI** brings this page up to date with the other
 tab's result or job. If the other tab has changed the draft, the page offers **Reload saved work**
 and saves nothing over it. A mark that could not be saved while the other tab's job ran is tried
-again when that job ends, and its message stays until then.
+again when that job ends, and its message stays until the mark is saved.
 
 ### Add a missing structure
 

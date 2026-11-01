@@ -64,6 +64,8 @@ export class InteractiveController {
   private follow = 0;
   /** The follow whose reads have started, which a run or a Save does only once it has its job. */
   private reading = 0;
+  /** What the end of a follow kept on screen for the save it is retrying, which ends with that save. */
+  private retrying = '';
   private stopped = false;
   private cancelRequested = false;
   private initialRelationship = normalizeRelationship();
@@ -315,6 +317,7 @@ export class InteractiveController {
           );
           this.review = value;
           this.persisted = signature(requested);
+          if (this.error === this.retrying) this.error = '';
           this.notify();
         }
       } catch (reason) {
@@ -529,7 +532,10 @@ export class InteractiveController {
           // Reload saved work sits inside the message, so a conflict must keep one. A save that
           // failed during the follow keeps its message too, and only this can bring it back.
           this.error = value.error ?? (this.conflict || this.unsaved ? this.error : '');
-          if (this.unsaved) this.schedule();
+          if (this.unsaved) {
+            this.retrying = value.error ? '' : this.error;
+            this.schedule();
+          }
         }
         this.notify();
         if (this.working) this.poll();

@@ -1262,7 +1262,7 @@ describe('a draft that moves under a job this page follows', () => {
       expect(reader.interactivePrompts).toHaveBeenCalledOnce();
       expect(reader.interactivePrompts.mock.calls[0][2], 'at the generation the job left').toBe(1);
       expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['saved', 'later']);
-      expect(controller.unsaved).toBe(false);
+      expect([controller.unsaved, controller.error], 'nothing is wrong any more').toEqual([false, '']);
     });
     it('does not try again while the job runs, when a save would cancel it', async () => {
       const { controller, reader } = await failedSave();
@@ -1280,6 +1280,17 @@ describe('a draft that moves under a job this page follows', () => {
       reader.interactivePrompts.mockResolvedValueOnce(marked());
       await vi.advanceTimersByTimeAsync(250);
       expect(reader.interactivePrompts).toHaveBeenCalledOnce();
+      expect(controller.error, 'the job still failed').toBe('Ran out of GPU memory');
+    });
+    it('leaves a newer message alone when the save lands, which is not its own', async () => {
+      const { controller, reader } = await failedSave();
+      await ends(reader, saved(1, { status: 'ready' }));
+      controller.append({ id: 'cut', kind: 'scissors' } as never); // Refused here, and the page says why.
+      expect(controller.error).toContain('3D scissors');
+      reader.interactivePrompts.mockResolvedValueOnce(marked());
+      await vi.advanceTimersByTimeAsync(250);
+      expect(controller.unsaved).toBe(false);
+      expect(controller.error).toContain('3D scissors');
     });
     it('says so if that fails too, and leaves the marks in place', async () => {
       const { controller, reader } = await failedSave();
