@@ -62,7 +62,7 @@ export class InteractiveController {
    * before that belongs to something that is over, and must leave what came after it alone.
    */
   private follow = 0;
-  /** The follow whose reads have started, which a run or a Save does only once it has its job. */
+  /** The last follow to have a job to read about, which a run or a Save has only once it answers. */
   private reading = 0;
   /** What the end of a follow kept on screen for the save it is retrying, which ends with that save. */
   private retrying = '';
@@ -369,6 +369,7 @@ export class InteractiveController {
       // The record that was asked about has gone, and this job says nothing about what replaced it.
       if (follow !== this.follow) return;
       this.job = job;
+      this.reading = follow;
       const seen: InteractiveReview = { ...this.review, status: 'predicting', job_id: job.id };
       this.review = seen;
       this.notify();
@@ -465,22 +466,24 @@ export class InteractiveController {
   async cancel() {
     const id = this.job?.id ?? (this.review && ['predicting', 'accepting'].includes(this.review.status) ? this.review.job_id : undefined),
       follow = this.follow;
-    // Its reply can land after the follow has ended, or inside the next one, which reads for itself
-    // once it has a job. A read before that would see no job and free the page under the request.
-    const restart = () => {
-      if (this.working && this.reading === follow && this.follow === follow) this.poll();
-    };
     try {
       if (id) {
         await this.reader.cancel(id);
-        restart();
+        this.restart();
       } else if (this.working) this.cancelRequested = true;
     } catch (reason) {
       if (follow !== this.follow) return;
       this.error = `Cancellation could not be requested. ${reason instanceof Error ? reason.message : reason}`;
       this.notify();
-      restart();
+      this.restart();
     }
+  }
+  /**
+   * Cancel's reply can land after the follow has ended, or before a run or a Save has a job to
+   * read about. A read then would find no job and free the page under that request.
+   */
+  private restart() {
+    if (this.working && this.reading === this.follow) this.poll();
   }
   async discard() {
     if (this.working) return;

@@ -733,6 +733,16 @@ describe('a draft that moves under a job this page follows', () => {
       expect(reader.interactiveReview).toHaveBeenCalledOnce();
       expect(controller.working).toBe(false);
     });
+    it('lets Cancel start the reads of a run that has its job, as it always has', async () => {
+      const { controller, reader, run, read } = await readHeld();
+      await controller.cancel();
+      expect(reader.cancel).toHaveBeenCalledExactlyOnceWith('prediction');
+      reader.interactiveReview.mockClear();
+      await vi.advanceTimersByTimeAsync(900);
+      expect(reader.interactiveReview).toHaveBeenCalledOnce();
+      read.release(running());
+      await run;
+    });
     it('reads the job on from the record it has taken on', async () => {
       const { controller, reader, run, read } = await readHeld();
       read.release(running());
@@ -819,6 +829,7 @@ describe('a draft that moves under a job this page follows', () => {
       const { reader, cancelling } = await cancelOutlasts(answer.reply);
       answer.release(cancelled());
       await cancelling;
+      expect(vi.getTimerCount(), 'no timer is left waiting').toBe(0);
       await quiet(reader);
     });
     it('lets a timer Cancel armed run out, once the follow it was for has ended', async () => {
