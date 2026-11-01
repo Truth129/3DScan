@@ -712,10 +712,32 @@ describe('a draft that moves under a job this page follows', () => {
     expect(controller.review?.generation).toBe(2);
     expect(controller.unsaved, 'that save is not waiting to be made again').toBe(false);
   });
+  it('keeps Reload saved work when the job it follows ends after a save was refused, because it sits inside the message', async () => {
+    const { controller, reader } = await followedWithAMark('accepting');
+    const message = 'Wait for acceptance to finish or cancel it before editing';
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, message));
+    await vi.advanceTimersByTimeAsync(300);
+    expect([controller.conflict, controller.error]).toEqual([true, message]);
+    await reads(reader, saved(1, { status: 'accepted', job_id: 'prediction' }));
+    expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, message]);
+  });
+  it("still shows the job's own error then, which says more", async () => {
+    const { controller, reader } = await followedWithAMark('accepting');
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Wait for acceptance to finish or cancel it before editing'));
+    await vi.advanceTimersByTimeAsync(300);
+    await reads(reader, saved(1, { status: 'ready', error: 'Saving the correction failed' }));
+    expect([controller.conflict, controller.error]).toEqual([true, 'Saving the correction failed']);
+  });
   it('keeps the job it knows when the reply names none, because a save clears that field', async () => {
     const { controller, reader } = await ownJob();
     await reads(reader, saved(1, { status: 'ready', job_id: undefined }));
     expect(controller.job?.id).toBe('prediction');
+  });
+  it('clears the refusal when a job ends with no conflict', async () => {
+    const { controller, reader } = await followed();
+    expect(controller.error).toBe(refusal);
+    await reads(reader, saved(1, { status: 'ready' }));
+    expect(controller.error).toBe('');
   });
   it('lets a Discard land while the re-read is out, with nothing left to wait for', async () => {
     const { controller, reader } = fixture(saved());
