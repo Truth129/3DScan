@@ -1324,6 +1324,16 @@ def test_a_marker_that_cannot_be_opened_stops_the_run(rig):
     assert rig.snapshot() == before
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write to anything")
+def test_the_lock_only_reads_the_marker(rig):
+    # Opened to write, it could create a marker in a directory that took the name a moment ago.
+    a_rebuild(rig)
+    (rig.venv / MARKER).chmod(0o400)
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert rig.packages() == LOCKED
+
+
 def swapped_in(rig, step, marked=False):
     """The environment moves aside as `step` starts, and another directory takes its name."""
     aside = rig.elsewhere / "aside"
