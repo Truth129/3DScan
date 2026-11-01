@@ -45,7 +45,9 @@ export async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new ApiError(response.status, typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail));
+    const detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+    // HTTP/2 has no status text, so a proxy's error page would otherwise leave nothing to show.
+    throw new ApiError(response.status, detail || `The server answered with status ${response.status}.`);
   }
   return response.json() as Promise<T>;
 }
