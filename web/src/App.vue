@@ -1154,6 +1154,7 @@ onBeforeUnmount(() => {
             :key="`${activeCase.id}:${revision.id}`"
             :case-id="activeCase.id"
             :revision="revision"
+            :display="display"
             :disabled-reason="savedExportDisabledReason"
           /><button
             class="button primary compact export-viewer-button"
