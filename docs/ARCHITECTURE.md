@@ -280,11 +280,12 @@ was, and an omitted path and an explicit `default` share one key.
 device check, each TotalSegmentator task and the nnInteractive worker. It copies the API's environment, minus
 the GPU visibility variables, `LD_LIBRARY_PATH`, `LD_PRELOAD`, `nnUNet_compile` and the compiled-kernel cache
 variables, which could select another stack's cards, break this stack's libraries or change a result without
-any record. [CONFIGURATION.md](CONFIGURATION.md#ai-compute) lists them and why. It also puts the venv's `bin`
-first on `PATH`, moves `XDG_CACHE_HOME` to `.cache/inference-paths/<id>`, and sets `SCAN3D_DEVICE` to the path's
-device, because nnInteractive reads that from its environment while TotalSegmentator is told on its command
-line. It sets `SCAN3D_INFERENCE_PATH` to the path's `id`, which means only that the child belongs to an added
-path. The device check alone reads it, because the default path's advice to set `SCAN3D_DEVICE=cpu` cannot help
+any record. [CONFIGURATION.md](CONFIGURATION.md#ai-compute) lists them and why. `check_gpu.py --path` removes
+the same names before it loads PyTorch, so a proof measures what a job sees. `environment()` also puts the
+venv's `bin` first on `PATH`, moves `XDG_CACHE_HOME` to `.cache/inference-paths/<id>`, and sets `SCAN3D_DEVICE`
+to the path's device, because nnInteractive reads that from its environment while TotalSegmentator is told on
+its command line. It sets `SCAN3D_INFERENCE_PATH` to the path's `id`, which means only that the child belongs
+to an added path. The device check alone reads it, because the default path's advice to set `SCAN3D_DEVICE=cpu` cannot help
 a path that sets its own device. Children of the default path inherit the API's environment untouched. All paths
 share the weights, the license, the nnInteractive model and the data directory, and discovery holds the engine
 versions equal, so the task catalog and the version recorded in a DICOM SEG stay true for every path.

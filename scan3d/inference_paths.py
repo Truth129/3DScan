@@ -42,7 +42,8 @@ _RESAMPLERS = ("cupy", "cucim")
 # A child inherits the API's environment except what selects another stack's card, breaks its
 # libraries or points at its caches. Only these can change a result, while an allowlist would
 # drop settings a person put in scan3d.env. A visibility variable is never set either: each
-# stack sees only its own vendor, and HIP reads CUDA_VISIBLE_DEVICES too.
+# stack sees only its own vendor, and HIP reads CUDA_VISIBLE_DEVICES too. A path's GPU check
+# removes the same names, so that its proof measures what a job sees.
 _WITHHELD = (
     "CUDA_VISIBLE_DEVICES",
     "HIP_VISIBLE_DEVICES",

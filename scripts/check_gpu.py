@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scan3d.config import ROOT, Settings, device_request, load_environment
 from scan3d.doctor import proof_path
-from scan3d.inference_paths import DEFAULT, GPU_REQUEST, ID_PATTERN, directory, gpu_cards, installed
+from scan3d.inference_paths import _WITHHELD, DEFAULT, GPU_REQUEST, ID_PATTERN, directory, gpu_cards, installed
 
 # What a child on this runtime imports at the top of its entry point, and the two engines. They
 # fail here, in a check, and not at the first job.
@@ -84,6 +84,11 @@ def main():
     # The install script asks this with a bare Python, which has nothing the rest needs.
     if args.queue:
         return 0
+    # A job on this path never gets these, so a proof taken with them measures something no job
+    # sees. The loader has read the two LD_ names already, so for those this reaches only children.
+    if args.path:
+        for name in _WITHHELD:
+            os.environ.pop(name, None)
     # SCAN3D_DEVICE belongs to the default path: gpu:N counts within one build, so it says nothing
     # about an added runtime. A GPU check needs a GPU, so auto and cpu mean the best one.
     configured = "gpu" if args.path else device_request()

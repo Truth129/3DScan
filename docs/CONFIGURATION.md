@@ -101,6 +101,11 @@ for these:
 - `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR`, because they point at another stack's
   compiled kernels.
 
+`scripts/check_gpu.py --path` removes the same variables before it loads PyTorch, so a
+proof measures what a job will see. A process cannot take `LD_LIBRARY_PATH` or `LD_PRELOAD`
+back from itself, so `scripts/add_inference_path.sh` clears those two before it starts the
+check. Clear them yourself if you run the check by hand.
+
 An added path's workers also get their own `XDG_CACHE_HOME`, under
 `.cache/inference-paths/<id>`, so that they never read another stack's kernels. They get
 `SCAN3D_DEVICE` set to that path's device, `SCAN3D_INFERENCE_PATH` set to its ID, which is

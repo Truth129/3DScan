@@ -1640,6 +1640,39 @@ def test_a_path_proof_cannot_be_sent_anywhere_else(check, tmp_path):
     assert not (tmp_path / "elsewhere.json").exists()
 
 
+# An empty LD_PRELOAD, because the loader would complain about a file that is not there.
+FROM_ANOTHER_STACK = {name: "" if name == "LD_PRELOAD" else "1" for name in inference_paths._WITHHELD}
+
+
+def what_pytorch_saw(tmp_path):
+    return json.loads((tmp_path / "environment-seen.json").read_text())
+
+
+@pytest.mark.parametrize("source", ["shell", "settings-file"])
+def test_a_proof_measures_the_view_a_job_gets(check, tmp_path, monkeypatch, source):
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH_ENVIRONMENT", str(tmp_path / "environment-seen.json"))
+    monkeypatch.setenv("KEPT_FOR_THE_CHILDREN", "1")
+    if source == "shell":
+        for name, value in FROM_ANOTHER_STACK.items():
+            monkeypatch.setenv(name, value)
+    else:
+        (tmp_path / "settings.env").write_text("".join(f"{name}={value}\n" for name, value in FROM_ANOTHER_STACK.items()))
+        monkeypatch.setenv("SCAN3D_CONFIG", str(tmp_path / "settings.env"))
+    completed = check("--path", "nvidia")
+    assert completed.returncode == 0, completed.stderr
+    seen = what_pytorch_saw(tmp_path)
+    assert not FROM_ANOTHER_STACK.keys() & seen.keys() and seen["KEPT_FOR_THE_CHILDREN"] == "1"
+    assert not FROM_ANOTHER_STACK.keys() & require(binding("nvidia")).environment().keys()
+
+
+def test_a_default_check_keeps_the_environment_its_workers_keep(check, tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH_ENVIRONMENT", str(tmp_path / "environment-seen.json"))
+    for name, value in FROM_ANOTHER_STACK.items():
+        monkeypatch.setenv(name, value)
+    assert check("--output", str(tmp_path / "proof.json")).returncode == 0
+    assert FROM_ANOTHER_STACK.items() <= what_pytorch_saw(tmp_path).items()
+
+
 def test_a_default_check_writes_to_the_setting_and_adds_a_census_but_no_path(check, tmp_path):
     assert check().returncode == 0
     record = json.loads((tmp_path / "gpu-proof.json").read_text())
