@@ -311,13 +311,34 @@ below 1. Segments added by a reviewer have no model original and are not compare
 
 ## Export
 
-The HTML and DICOM SEG exports read the saved revision: first save or discard any draft, return to
-the current revision and turn off comparison. Exports can contain patient images and metadata, so
-treat them like the study itself.
+The HTML, DICOM SEG and DICOM view exports read the saved revision: first save or discard any
+draft, return to the current revision and turn off comparison. Exports can contain patient images
+and metadata, so treat them like the study itself.
 
 ### PNG
 
 **PNG ↗** in the 3D view saves the current view, including any review marks.
+
+### DICOM view
+
+**DICOM ↗** in the 3D view adds the current view to the original study as a new series with one
+image. It needs a configured Orthanc, and the CT must have been imported from that archive. The
+dialog shows the exact image, its case and its revision. Choose **Archive in Orthanc**, or pick a
+**Send destination** and choose **Send to** it. See
+[send a 3D view back](ORTHANC.md#send-a-3d-view-back).
+
+The image is a picture. It has no calibration and no orientation labels, so do not measure on it,
+and nothing in it marks left from right.
+
+The button is disabled during review and for the same reasons as the other exports. A capture is
+refused while the view is still updating or showing an error, and discarded if the case or revision
+changes while it is taken.
+
+One capture makes one series, and a new capture makes another. Reopening the dialog never sends
+anything, and **Send again** deliberately resends the same image. After a failure, retrying from the
+dialog reuses the same image. While an export runs you can close the dialog or change case. The
+button then reopens the dialog, and the result appears as a notice, or in the error banner if the
+export fails or cannot be confirmed.
 
 ### Portable offline HTML
 

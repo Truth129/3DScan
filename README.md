@@ -26,8 +26,8 @@ other service.
   exports.
 - **Measurements.** Volumes from masks in patient space, and AI-agreement metrics that
   compare corrected masks with the original model output.
-- **Exchange.** DICOM SEG import and export, 3D Slicer exchange, PNG, and portable offline
-  HTML.
+- **Exchange.** DICOM SEG import and export, 3D views as new DICOM series in the original
+  study, 3D Slicer exchange, PNG, and portable offline HTML.
 
 ## Quick start
 
