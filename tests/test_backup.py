@@ -24,6 +24,8 @@ def library(tmp_path):
     data = service.settings.data_dir
     (data / "review-cache" / "volumes").mkdir(parents=True, exist_ok=True)
     (data / "review-cache" / "volumes" / "slab").write_bytes(b"rebuilt on demand")
+    (data / "orthanc-staging").mkdir()
+    (data / "orthanc-staging" / "transfer").write_bytes(b"an import in progress")
     (data / "worker.lock").touch()
     return service, case, data
 
@@ -44,7 +46,8 @@ def test_backup_snapshots_database_and_case_files_and_skips_rebuildable_caches(l
     assert originals and copies.keys() == originals.keys()
     assert all(copies[name].read_bytes() == originals[name].read_bytes() for name in originals)
     assert (data / "surface-cache").is_dir() and files(snapshot / "surface-cache").keys() == files(data / "surface-cache").keys()
-    assert {"review-cache", "worker.lock"} <= set(manifest["skipped"]) and not (snapshot / "review-cache").exists()
+    assert {"review-cache", "orthanc-staging", "worker.lock"} <= set(manifest["skipped"])
+    assert not (snapshot / "review-cache").exists() and not (snapshot / "orthanc-staging").exists()
     assert json.loads((snapshot / "manifest.json").read_text()) == manifest
 
 

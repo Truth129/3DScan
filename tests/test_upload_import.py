@@ -19,7 +19,7 @@ import pytest
 from scan3d import dicom
 from scan3d.api import create_app
 from scan3d.config import Settings
-from scan3d.uploads import MAX_PARTS
+from scan3d.uploads import MAX_PARTS, Uploads
 
 
 @pytest.fixture
@@ -178,3 +178,13 @@ def test_starting_an_import_discards_only_idle_staged_uploads(rig):
         recent = start(rig, 1, 4)
     assert not staged(rig, idle).exists()
     assert staged(rig, busy).is_dir() and staged(rig, recent).is_dir()
+
+
+def test_an_abandoned_upload_is_removed_when_the_app_starts(tmp_path):
+    abandoned = tmp_path / "import-uploads" / ("a" * 32)
+    abandoned.mkdir(parents=True)
+    (abandoned / "lock").touch()
+    (abandoned / "state.json").write_text("{}")
+    os.utime(abandoned / "state.json", (0, 0))
+    Uploads(SimpleNamespace(settings=SimpleNamespace(data_dir=tmp_path)))
+    assert not abandoned.exists()

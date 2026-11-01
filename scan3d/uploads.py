@@ -53,6 +53,8 @@ class Uploads:
     def __init__(self, service):
         self.service = service
         self.root = service.settings.data_dir / "import-uploads"
+        # An abandoned upload holds scans, which should not wait for someone to start another.
+        self._discard_stale()
 
     @contextmanager
     def _locked(self, upload_id):

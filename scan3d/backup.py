@@ -21,7 +21,7 @@ import sys
 from . import __version__
 
 DATABASE = "scan3d.sqlite3"
-REBUILT_ON_DEMAND = ("review-cache", "analysis-cache", "cinematic-cache", "import-uploads")
+REBUILT_ON_DEMAND = ("review-cache", "analysis-cache", "cinematic-cache", "import-uploads", "orthanc-staging")
 _SNAPSHOT = re.compile(r"scan3d-\d{8}T\d{6}Z")
 
 
