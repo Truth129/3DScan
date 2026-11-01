@@ -61,9 +61,10 @@ def add_routes(app, service):
         if job["kind"] == "orthanc_import":
             return public_job(service.orthanc.cancel(job_id))
         if job["kind"] in ("orthanc_export", "orthanc_view_export"):
-            # Cancelling has no kind-specific step, but the generic path below
-            # would report a remote delivery as cancelled while it may still run.
-            return public_job(service.orthanc_exports.cancel(job_id))
+            # The generic path below would report a remote delivery as cancelled
+            # while it may still run, and each kind words that in its own way.
+            manager = service.orthanc_exports if job["kind"] == "orthanc_export" else service.orthanc_view_exports
+            return public_job(manager.cancel(job_id))
         if job["status"] in ("queued", "running"):
             changes = dict(cancel_requested=True)
             if job["status"] == "queued":

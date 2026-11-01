@@ -307,6 +307,7 @@ def test_cancelling_a_queued_retry_never_claims_an_active_delivery_was_cancelled
     response = view.http.post(f"/api/jobs/{retry['id']}/cancel")
     assert response.status_code == 200
     assert response.json()["status"] == "failed" and "delivery may continue" in response.json()["stage"]
+    assert response.json()["error"] == view_exports.OrthancViewExports.still_active_error and "retry" not in response.json()["error"]
     assert view.service.store.claim("cpu") is None and len(view.archive.sends) == 1
 
 
