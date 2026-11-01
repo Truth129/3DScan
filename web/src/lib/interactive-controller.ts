@@ -489,8 +489,10 @@ export class InteractiveController {
         this.working = ['predicting', 'accepting'].includes(value.status);
         if (!this.working) {
           this.persisted = saved(value);
-          // Reload saved work sits inside the message, so a conflict must keep one.
-          this.error = value.error ?? (this.conflict ? this.error : '');
+          // Reload saved work sits inside the message, so a conflict must keep one. A save that
+          // failed during the follow keeps its message too, and only this can bring it back.
+          this.error = value.error ?? (this.conflict || this.unsaved ? this.error : '');
+          if (this.unsaved) this.schedule();
         }
         this.notify();
         if (this.working) this.poll();

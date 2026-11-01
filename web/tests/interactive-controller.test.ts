@@ -761,6 +761,61 @@ describe('a draft that moves under a job this page follows', () => {
     await reads(reader, saved(1, { status: 'ready', error: 'Saving the correction failed' }));
     expect([controller.conflict, controller.error]).toEqual([true, 'Saving the correction failed']);
   });
+  describe('a save that failed during a follow', () => {
+    const offline = 'Failed to fetch';
+    async function failedSave() {
+      const { controller, reader } = await followedWithAMark();
+      reader.interactivePrompts.mockRejectedValueOnce(new Error(offline));
+      await vi.advanceTimersByTimeAsync(300);
+      expect([controller.saving, controller.unsaved, controller.conflict, controller.error]).toEqual([false, true, false, offline]);
+      return { controller, reader };
+    }
+    const marked = () => saved(2, { prompts: [point('saved'), point('later')] });
+    it('keeps its message and tries again once the job has ended', async () => {
+      const { controller, reader } = await failedSave();
+      await reads(reader, saved(1, { status: 'ready' }));
+      expect([controller.working, controller.error, controller.unsaved]).toEqual([false, offline, true]);
+      reader.interactivePrompts.mockClear();
+      reader.interactivePrompts.mockResolvedValueOnce(marked());
+      await vi.advanceTimersByTimeAsync(250);
+      expect(reader.interactivePrompts).toHaveBeenCalledOnce();
+      expect(reader.interactivePrompts.mock.calls[0][2], 'at the generation the job left').toBe(1);
+      expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['saved', 'later']);
+      expect(controller.unsaved).toBe(false);
+    });
+    it('does not try again while the job runs, when a save would cancel it', async () => {
+      const { controller, reader } = await failedSave();
+      reader.interactivePrompts.mockClear();
+      await reads(reader, running());
+      await reads(reader, running());
+      expect(controller.working).toBe(true);
+      expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    });
+    it("shows the job's own error over it, which says more, and still tries again", async () => {
+      const { controller, reader } = await failedSave();
+      await reads(reader, saved(1, { status: 'ready', error: 'Ran out of GPU memory' }));
+      expect(controller.error).toBe('Ran out of GPU memory');
+      reader.interactivePrompts.mockClear();
+      reader.interactivePrompts.mockResolvedValueOnce(marked());
+      await vi.advanceTimersByTimeAsync(250);
+      expect(reader.interactivePrompts).toHaveBeenCalledOnce();
+    });
+    it('says so if that fails too, and leaves the marks in place', async () => {
+      const { controller, reader } = await failedSave();
+      await reads(reader, saved(1, { status: 'ready' }));
+      reader.interactivePrompts.mockRejectedValueOnce(new Error('Still offline'));
+      await vi.advanceTimersByTimeAsync(250);
+      expect([controller.error, controller.unsaved, controller.conflict]).toEqual(['Still offline', true, false]);
+      expect(controller.prompts.map(item => item.id)).toEqual(['saved', 'later']);
+    });
+    it('sends nothing when nothing is waiting, as any other job ends', async () => {
+      const { controller, reader } = await ownJob();
+      await reads(reader, saved(1, { status: 'ready' }));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(controller.unsaved).toBe(false);
+      expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    });
+  });
   it('keeps the job it knows when the reply names none, because a save clears that field', async () => {
     const { controller, reader } = await ownJob();
     await reads(reader, saved(1, { status: 'ready', job_id: undefined }));
