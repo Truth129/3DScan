@@ -250,6 +250,10 @@ mkdir -p .runtime/archive
 mv .runtime/inference-paths/nvidia.json .runtime/archive/
 ```
 
+An idle nnInteractive process on that GPU stays until the next AI job runs, a segmentation
+or AI assist on another GPU, or until the app restarts. No job can reach it, but it keeps
+the card's memory, which is what you want back if you are removing a card that misbehaves.
+
 **Two cards of one vendor** can share an environment, so the script is not needed.
 Running `scripts/check_gpu.py --path second --device gpu:1` with that environment's
 Python records the second card as its own path. `N` counts within one PyTorch build.
