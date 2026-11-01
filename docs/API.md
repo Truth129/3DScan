@@ -476,7 +476,7 @@ taken before its vendor's cards changed earns that caution and loses its card: `
 `inference_path` is optional on `POST .../segment` and `POST .../reviews/{sid}/predict`. It must match
 `^[a-z0-9][a-z0-9-]{0,31}$`, and it never goes inside `options` or `batches`. On a segmentation, leaving it out
 and sending `default` run the same way and share saved results. `scan3d segment --inference-path ID` takes the
-same IDs and gets the same refusals, and `scan3d doctor` lists the rows.
+same IDs and refuses a path for the same reasons, and `scan3d doctor` lists the rows.
 
 A job's path is frozen when it is queued, and an added path is checked again as the job starts. A job on an
 added path never moves to another path or to the CPU. `default` follows `SCAN3D_DEVICE`, so under `auto` it can
