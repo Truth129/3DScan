@@ -128,6 +128,12 @@ if arguments[:2] == ["python", "find"]:
         print(rig / "system-python")
     sys.exit(0 if scenario["python"] else 2)
 if arguments[0] == "venv":
+    if os.environ.get("UV_VENV_CLEAR"):
+        print("error: the argument '--allow-existing' cannot be used with '--clear'", file=sys.stderr)
+        sys.exit(2)
+    if os.environ.get("UV_VENV_SEED"):
+        print("error: Failed to install seed packages into virtual environment", file=sys.stderr)
+        sys.exit(1)
     # The script itself dies, so nothing of its own runs after this moment.
     if scenario["killed_after_the_wipe"]:
         os.kill(os.getppid(), signal.SIGKILL)
@@ -1422,6 +1428,15 @@ def test_the_finished_mark_goes_from_the_directory_it_checked_too(rig):
     rig.run("nvidia")
     assert (rig.venv / FINISHED).exists()  # It belongs to the directory that took the name.
     assert not (aside / FINISHED).exists()
+
+
+@pytest.mark.parametrize("variable", ["UV_VENV_CLEAR", "UV_VENV_SEED"])
+def test_a_setting_only_uv_venv_reads_cannot_stop_a_rebuild_after_its_wipe(rig, variable):
+    a_rebuild(rig)
+    completed = rig.run("nvidia", env={variable: "1"})
+    assert completed.returncode == 0, completed.stderr
+    assert rig.packages() == LOCKED
+    assert all(variable not in call["env"] for call in rig.calls() if call["tool"] == "uv")
 
 
 def test_uv_rebuilds_from_the_checkout_as_it_installs_from_it(rig):

@@ -143,6 +143,9 @@ export UV_PYTHON_DOWNLOADS=never
 # and in any environment built from the same wheel, and a rebuild would put the edit back. A clone
 # is a file of its own for no more data. Where a disk cannot clone, uv warns and copies instead.
 export UV_LINK_MODE=clone
+# Each of these reaches `uv venv` alone, and so would stop a rebuild only after its wipe: one refuses
+# --allow-existing, and the other fetches pip.
+unset UV_VENV_CLEAR UV_VENV_SEED
 # A checkout's own Python, when it has one.
 if [[ -d "$root/.tools/python" ]]; then
   export UV_PYTHON_INSTALL_DIR="$root/.tools/python"

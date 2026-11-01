@@ -191,6 +191,9 @@ DICOM converter, TotalSegmentator's settings, `scan3d.env` and the running app a
 that changes `.venv`, and rebuilds the viewer and the converter. All paths share the
 AI weights, the license and your cases, so nothing downloads twice.
 
+`target` and `prefix` under `[pip]` in a `uv.toml`, the checkout's or your own, are not
+supported. uv would install somewhere else and the environment would be left empty.
+
 The script installs only into a directory it made, which it marks with a
 `.scan3d-inference-path` file. It refuses any other directory that already exists,
 however empty, and a link with that name does not count, because a rebuild removes
