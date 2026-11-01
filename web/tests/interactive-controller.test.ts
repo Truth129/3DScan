@@ -492,6 +492,25 @@ describe('a 409 from predict', () => {
     expect(controller.conflict).toBe(true);
     expect(controller.error).toBe(refusal);
   });
+  it('keeps a newer message when it asks for a reload, because the refusal is the older news', async () => {
+    const { controller, run, release } = await refusedAndWaiting();
+    controller.append({ id: 'cut', kind: 'scissors' } as never); // Refused here, and the page says why.
+    expect(controller.error).toContain('3D scissors');
+    release(saved(2));
+    await run;
+    expect(controller.conflict).toBe(true);
+    expect(controller.error).toContain('3D scissors');
+  });
+  it('resolves only once the re-read has landed, so a caller reads the state it left', async () => {
+    const { run, release } = await refusedAndWaiting();
+    let done = false;
+    void run.then(() => (done = true));
+    await new Promise(resolve => setTimeout(resolve));
+    expect(done, 'still waiting for the re-read').toBe(false);
+    release(saved());
+    await run;
+    expect(done).toBe(true);
+  });
   it('reads nothing after any other refusal', async () => {
     const { controller, reader } = fixture(saved());
     await controller.load();
@@ -645,6 +664,20 @@ describe('a draft that moves under a job this page follows', () => {
     });
   });
 
+  it('reads the review and then the job, the order the page has always asked in', async () => {
+    const { reader } = await ownJob();
+    reader.interactiveReview.mockClear();
+    reader.job.mockClear();
+    await reads(reader, running());
+    expect(reader.interactiveReview.mock.invocationCallOrder[0]).toBeLessThan(reader.job.mock.invocationCallOrder[0]);
+  });
+  it('leaves the job it knows alone when it refuses the record', async () => {
+    const { controller, reader } = await ownJob();
+    reader.job.mockResolvedValueOnce({ id: 'theirs', case_id: 'case', kind: 'review_predict', status: 'queued', stage: 'Queued', created_at: '' });
+    await reads(reader, { ...theirs(), job_id: 'theirs' });
+    expect(controller.conflict).toBe(true);
+    expect(controller.job?.id, 'a refused record says nothing about the job this page holds').toBe('prediction');
+  });
   it('asks for a reload when the first read of a job it has just started finds another tab has saved', async () => {
     const { controller, reader } = fixture(saved());
     await controller.load();

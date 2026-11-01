@@ -154,6 +154,9 @@ describe("one chooser's card", () => {
     choice.settle([amd], true);
     expect(choice.selected.value).toBe('default');
     expect(choice.notice.value).toContain('no longer set up');
+    choice.settle([nvidia], true);
+    expect(choice.selected.value).toBe('nvidia');
+    expect(choice.notice.value, 'what is selected now').toContain('so NVIDIA Test GPU is selected');
   });
   it('clears a notice when a person chooses', () => {
     stored('second');

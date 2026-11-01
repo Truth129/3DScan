@@ -550,6 +550,19 @@ describe('a run that ends badly', () => {
     vi.mocked(api.job).mockImplementation(async () => ({ ...server.job, id: 'prediction-2', status: 'failed' }));
     await vi.waitFor(() => expect(reads(server)).toBe(before + 2), nextPoll);
   });
+  it('reads nothing when the next run starts, which says nothing about a card', async () => {
+    const server = workstation([amd, nvidia], free(), 'nvidia');
+    const { root } = await openAI();
+    server.acceptRerun();
+    await press(root.button('Run AI'));
+    const before = reads(server);
+    jobEnds(server, 'failed');
+    server.setRemote(free({ error: 'Ran out of GPU memory', job_id: 'prediction' }));
+    await vi.waitFor(() => expect(reads(server)).toBe(before + 1), nextPoll);
+    server.acceptRerun();
+    await press(root.button('Run AI'));
+    expect(reads(server)).toBe(before + 1);
+  });
   it('does not read for a job that finished or was cancelled', async () => {
     for (const ending of ['completed', 'cancelled'] as const) {
       const server = workstation([amd, nvidia], free(), 'nvidia');
