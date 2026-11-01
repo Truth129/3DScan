@@ -70,7 +70,7 @@ function server(answers: { available?: DicomViewAvailability; queued?: DicomView
   return posts;
 }
 async function dialog(values: Record<string, unknown> = {}) {
-  const state = shallowReactive<Record<string, any>>({ capture, open: true, follow: vi.fn(), ...values }),
+  const state = shallowReactive<Record<string, any>>({ capture, open: true, follow: vi.fn(), report: vi.fn(), ...values }),
     closed = vi.fn(),
     mounted = mount(DicomViewExport, () => ({ ...state, onClose: closed }));
   await settled();
@@ -305,6 +305,24 @@ describe('the dialog', () => {
     queued.resolve(job('queued'));
     await settled();
     expect(view.state.follow).toHaveBeenCalledOnce();
+  });
+  it('hands a failure over after it has gone, naming the capture, and keeps it while it is showing', async () => {
+    vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
+    const refused = deferred<DicomViewExportJob>(),
+      send = vi.spyOn(api, 'exportDicomView').mockReturnValue(refused.promise);
+    const view = await dialog();
+    click(view.button('Archive in Orthanc'));
+    await settled();
+    view.unmount();
+    refused.reject(new ApiError(400, 'The view does not match this revision.'));
+    await settled();
+    expect(view.state.report).toHaveBeenCalledExactlyOnceWith('The view does not match this revision.', capture);
+
+    send.mockRejectedValue(new ApiError(400, 'The view does not match this revision.'));
+    const shown = await dialog();
+    click(shown.button('Archive in Orthanc'));
+    await settled();
+    expect(shown.state.report).not.toHaveBeenCalled();
   });
   it('locks while a request is on its way or the job is pending', async () => {
     const queued = deferred<DicomViewExportJob>(),

@@ -16,8 +16,9 @@ const props = defineProps<{
   capture: ViewCapture;
   job?: DicomViewExportJob;
   open: boolean;
-  /** A function, because a queued job must reach the watcher even if this dialog has gone. */
+  /** Functions, because how a request ended must reach someone even if this dialog has gone. */
   follow: (job: DicomViewExportJob, capture: ViewCapture) => void;
+  report: (message: string, capture: ViewCapture) => void;
 }>();
 const emit = defineEmits<{ close: [] }>();
 // Read once: App keys this dialog by capture, and nothing here may follow a live identity.
@@ -38,7 +39,9 @@ const target = computed(() => availability.value?.destinations.find(item => item
 const repeatDelivery = computed(() => !!target.value && dicomViewAlreadySent(job.value, target.value.id));
 const summary = computed(() => (job.value ? dicomViewExportSummary(job.value) : ''));
 const earlier = computed(() => unfinishedEarlierDicomView(availability.value?.exports ?? [], capture.caseId, capture.revisionId, job.value));
-let requests: AbortController | undefined, previousFocus: HTMLElement | undefined;
+let requests: AbortController | undefined,
+  previousFocus: HTMLElement | undefined,
+  gone = false;
 
 async function load() {
   requests?.abort();
@@ -75,11 +78,17 @@ async function start(chosen?: string, resend = false) {
       throw new ApiError(502, 'The export job does not match this capture. Refresh export status.');
     props.follow(queued, capture);
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : 'The export request could not finish.';
-    // An answer from the server settles it. A lost connection does not: the job may exist.
-    if (!(reason instanceof ApiError)) {
-      error.value += ' Refresh export status before trying again; the request may already have reached the workstation.';
-      needsRefresh.value = true;
+    const message = reason instanceof Error ? reason.message : 'The export request could not finish.',
+      // An answer from the server settles it. A lost connection does not: the job may exist.
+      answered = reason instanceof ApiError;
+    if (gone)
+      props.report(
+        answered ? message : `${message} Check the study in Orthanc before exporting again; the request may already have reached the workstation.`,
+        capture,
+      );
+    else {
+      error.value = answered ? message : `${message} Refresh export status before trying again; the request may already have reached the workstation.`;
+      needsRefresh.value = !answered;
     }
   } finally {
     submitting.value = false;
@@ -107,6 +116,7 @@ onMounted(() => {
   void load();
 });
 onBeforeUnmount(() => {
+  gone = true;
   requests?.abort();
   dialog.value?.close();
 });

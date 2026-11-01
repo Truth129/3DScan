@@ -449,6 +449,62 @@ describe('a held capture', () => {
   });
 });
 
+describe('a request that fails after its dialog has gone', () => {
+  const REFUSED = 'The captured view is blank. Check the 3D view and capture it again.';
+  /** Archive, and hold the POST open while the test takes the dialog away. */
+  async function posted() {
+    const answer = deferred<Response>();
+    vi.mocked(fetch).mockImplementation((async (url: string, init: RequestInit) => {
+      posts.push({ url, form: init.body as FormData });
+      return answer.promise;
+    }) as typeof fetch);
+    const view = await app();
+    await view.export();
+    click(view.button('Archive in Orthanc'));
+    await settled();
+    expect(view.text()).toContain('Queuing…');
+    return Object.assign(view, { answer });
+  }
+  const refusal = () => Response.json({ detail: REFUSED }, { status: 400 });
+
+  it('puts a refusal on the banner, as closing mid-request leaves nothing else to show it', async () => {
+    const view = await posted();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    expect(view.dialog()).toBeUndefined();
+    view.answer.resolve(refusal());
+    await settled();
+    expect(view.banner()).toContain(REFUSED);
+    expect(view.banner()).not.toContain('Synthetic A');
+    expect(view.toast()).toBe('');
+  });
+  it('warns that a lost connection may still have queued the job', async () => {
+    const view = await posted();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    view.answer.reject(new TypeError('Failed to fetch'));
+    await settled();
+    expect(view.banner()).toContain('Failed to fetch');
+    expect(view.banner()).toContain('may already have reached the workstation');
+  });
+  it('names the case when the workspace has moved on', async () => {
+    const view = await posted();
+    view.open('case-b');
+    await settled();
+    expect(view.dialog()).toBeUndefined();
+    view.answer.resolve(refusal());
+    await settled();
+    expect(view.banner()).toContain(`Synthetic A: ${REFUSED}`);
+  });
+  it('leaves a failure to a dialog that is still showing', async () => {
+    const view = await posted();
+    view.answer.resolve(refusal());
+    await settled();
+    expect(view.text()).toContain(REFUSED);
+    expect(view.banner()).toBe('');
+  });
+});
+
 describe('following a job', () => {
   beforeEach(() => {
     // The poll interval is real time. Everything else about these flows is, too.

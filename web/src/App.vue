@@ -516,6 +516,9 @@ function followViewJob(next: DicomViewExportJob, capture: ViewCapture) {
   if (viewCapture.value === capture) viewJobId.value = next.id;
   viewJobs.follow(next);
 }
+function reportViewExport(message: string, capture: ViewCapture) {
+  error.value = capture.caseId === activeCase.value?.id ? message : `${capture.caseLabel}: ${message}`;
+}
 function closeViewExport() {
   viewExportOpen.value = false;
   if (!pendingDicomViewExport(viewJob.value)) dropViewCapture();
@@ -1882,6 +1885,7 @@ onBeforeUnmount(() => {
       :job="viewJob"
       :open="viewExportOpen"
       :follow="followViewJob"
+      :report="reportViewExport"
       @close="closeViewExport"
     />
   </div>
