@@ -65,7 +65,8 @@ npx vite build --outDir /tmp/scan3d-stage/dist --emptyOutDir
 
 Read each script's `--help` before running it. Some use software rendering by default,
 and pass `--native` to use a GPU. Others need a Vulkan-capable GPU unless they offer
-`--software`.
+`--software`. `dicom_view_export_smoke.py` also starts two scratch Orthancs, so it needs
+`--orthanc-binary`, a `--scratch` directory and `dcm2niix` on `PATH`.
 
 A watcher closes each session's browser and removes its temporary profile when the gate
 exits, even if the gate is killed. After SIGKILL, a chromedriver or server that the gate
