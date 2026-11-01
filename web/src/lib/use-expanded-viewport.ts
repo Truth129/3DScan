@@ -19,7 +19,8 @@ export function useExpandedViewport(viewport: Ref<HTMLElement | undefined>, butt
       while (branch.parentElement) {
         const parent = branch.parentElement;
         for (const sibling of parent.children) {
-          if (sibling === branch || !(sibling instanceof HTMLElement)) continue;
+          // A closed dialog shows nothing, but one left inert here would open as a modal that takes no input.
+          if (sibling === branch || !(sibling instanceof HTMLElement) || sibling.tagName === 'DIALOG') continue;
           siblings.push({ element: sibling, inert: sibling.inert });
           sibling.inert = true;
         }
@@ -42,7 +43,8 @@ export function useExpandedViewport(viewport: Ref<HTMLElement | undefined>, butt
   }
 
   function keyboard(event: KeyboardEvent) {
-    if (event.isComposing) return;
+    // The viewport is inert behind a modal, so a modal keeps its own Tab and Escape.
+    if (event.isComposing || document.querySelector('dialog:modal')) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
