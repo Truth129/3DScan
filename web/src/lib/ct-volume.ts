@@ -5,6 +5,7 @@ import { gpuVolumeSlabRange } from './gpu-volume-data';
 import type { GPUOverlaySources, GPUVolumeSource } from './gpu-volume-data';
 import type { Plane, Point } from '../types';
 import { MAX_CT_FRAME_BYTES, MAX_FULL_FRAME_PIXELS } from './ct-frame-budget';
+import { apiFetch } from './api-fetch';
 
 export type { CTOverlay, LocalSlice, VolumeDescriptor } from './ct-reslice';
 export type CTSelection = string | readonly string[] | null;
@@ -552,7 +553,7 @@ export class LocalCTSession {
   }
 
   private async json<T>(url: string, signal: AbortSignal): Promise<T> {
-    const response = await fetch(url, { signal, cache: 'no-store', priority: this.quality === 'full' ? 'low' : 'high' });
+    const response = await apiFetch(url, { signal, cache: 'no-store', priority: this.quality === 'full' ? 'low' : 'high' });
     if (!response.ok) throw new Error(`Local CT data request failed (${response.status})`);
     return response.json() as Promise<T>;
   }
@@ -571,7 +572,7 @@ export class LocalCTSession {
         try {
           // Immutable private chunks can reuse the browser's HTTP cache. Bulk
           // downloads yield network priority to navigation and detail.
-          const response = await fetch(entry.chunk.url, { signal, cache: 'default', priority: this.quality === 'full' ? 'low' : 'high' });
+          const response = await apiFetch(entry.chunk.url, { signal, cache: 'default', priority: this.quality === 'full' ? 'low' : 'high' });
           if (!response.ok) throw new Error(`Local CT chunk request failed (${response.status})`);
           const bytes = await response.arrayBuffer();
           if (signal.aborted) throw new LocalCTSupersededError();
@@ -757,7 +758,7 @@ export async function fetchCTDetail(
   const ids = selectedIds(structure ?? null);
   if (typeof structure === 'string') query.set('structure_id', structure);
   else for (const id of ids) query.append('structure_ids', id);
-  const response = await fetch(`${base.replace(/\/$/, '')}/review-frame?${query}`, { signal, cache: 'no-store', priority: 'high' });
+  const response = await apiFetch(`${base.replace(/\/$/, '')}/review-frame?${query}`, { signal, cache: 'no-store', priority: 'high' });
   if (!response.ok) throw new Error(`CT detail request failed (${response.status})`);
   const header = response.headers.get('X-CT-Frame');
   if (!header) throw new Error('CT detail metadata is missing');

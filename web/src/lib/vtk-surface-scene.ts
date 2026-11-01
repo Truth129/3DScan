@@ -7,6 +7,7 @@ import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { Point, Structure, StructureDisplay, SurfaceManifest } from '../types';
 import { decodeSurfaceGLB, type VTKSurfacePartData } from './vtk-surface-data';
+import { apiFetch } from './api-fetch';
 
 interface SurfacePart {
   id: string;
@@ -217,7 +218,7 @@ export class VTKSurfaceScene {
         while (cursor < changed.length) {
           if (!current()) throw cancelled();
           const item = changed[cursor++],
-            response = await (options.fetcher ?? fetch)(item.url, { signal: active.signal });
+            response = await (options.fetcher ?? apiFetch)(item.url, { signal: active.signal });
           if (!response.ok) throw new Error(`Could not load anatomical surfaces (${response.status}).`);
           if (!current()) throw cancelled();
           const declaredBytes = Number(response.headers.get('Content-Length'));

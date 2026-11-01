@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { PortableRenderSnapshot } from '../lib/portable-viewer';
+import { apiFetch } from '../lib/api-fetch';
 
 const props = defineProps<{ base: string; label: string; snapshot: PortableRenderSnapshot; hasStructures: boolean; modality?: string }>();
 const modalityLabel = computed(() => props.modality ?? 'CT');
@@ -53,7 +54,7 @@ async function download() {
   total.value = undefined;
   downloaded.value = 0;
   try {
-    const response = await fetch(`${props.base}/export.html`, {
+    const response = await apiFetch(`${props.base}/export.html`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ layers: { ...layers.value }, state: props.snapshot.state }),

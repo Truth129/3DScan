@@ -1,5 +1,6 @@
 import type { Case } from '../types';
 import { ApiError, request } from './api';
+import { reportStatus } from './api-fetch';
 
 export interface ImportProgress {
   phase: 'uploading' | 'retrying' | 'indexing';
@@ -79,6 +80,7 @@ function sendForm<T>(url: string, body: FormData, progress: (fraction: number) =
       if (event.lengthComputable && event.total) progress(event.loaded / event.total);
     };
     xhr.onload = settle(() => {
+      reportStatus(xhr.status);
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(xhr.response as T);
         return;

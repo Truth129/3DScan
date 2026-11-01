@@ -18,6 +18,7 @@ import { isVolumeLabelUnion } from '../lib/gpu-volume-data';
 import type { VolumeColorRequest } from '../lib/volume-colors';
 import { revisionUrl } from '../lib/api';
 import { VIEW_NOT_READY_MESSAGE, type ViewCaptureRequest, type ViewportCapture } from '../lib/dicom-view';
+import { apiFetch } from '../lib/api-fetch';
 
 const props = defineProps<{
   session?: RenderCTSession;
@@ -588,13 +589,13 @@ async function loadSurfaces() {
     if (!visibleStructures.value.length) scene.clear();
     else if (props.modelData) scene.loadBuffer(props.modelData, visibleStructures.value);
     else if (props.manifestUrl) {
-      const response = await fetch(props.manifestUrl, { signal: active.signal });
+      const response = await apiFetch(props.manifestUrl, { signal: active.signal });
       if (!response.ok) throw new Error(`Surface information could not load (${response.status}).`);
       const manifest = (await response.json()) as SurfaceManifest;
       if (!current()) return;
       await scene.load(manifest, visibleStructures.value, { signal: active.signal });
     } else if (props.modelUrl) {
-      const response = await fetch(props.modelUrl, { signal: active.signal });
+      const response = await apiFetch(props.modelUrl, { signal: active.signal });
       if (!response.ok) throw new Error(`Surfaces could not load (${response.status}).`);
       const buffer = await response.arrayBuffer();
       if (!current()) return;

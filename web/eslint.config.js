@@ -50,6 +50,11 @@ export default defineConfig([
     rules: { '@typescript-eslint/no-explicit-any': 'off' },
   },
   {
+    // apiFetch sees every response, so a bare fetch would hide a session that has ended.
+    files: ['src/**'],
+    rules: { 'no-restricted-globals': ['error', { name: 'fetch', message: 'Use apiFetch from lib/api-fetch.' }] },
+  },
+  {
     // validStructureId() rejects control characters on purpose.
     files: ['src/lib/display-appearance.ts'],
     rules: { 'no-control-regex': 'off' },

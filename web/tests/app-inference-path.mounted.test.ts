@@ -405,3 +405,25 @@ describe('the revision history', () => {
     expect(historyLines(root)).toEqual([]);
   });
 });
+
+describe('a case that has gone', () => {
+  it('closes it and forgets it in this browser', async () => {
+    const { stored } = workstation([amd]);
+    stored.set('scan3d-case', 'case');
+    stored.set('scan3d-job:case', 'segmenting');
+    vi.spyOn(api, 'case').mockRejectedValue(new ApiError(404, 'Case not found'));
+    await start();
+    expect(stored.has('scan3d-case')).toBe(false);
+    expect(stored.has('scan3d-job:case')).toBe(false);
+    expect(api.revision).not.toHaveBeenCalled();
+    expect(api.cases).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a case open when only a part of it is missing', async () => {
+    const { stored } = workstation([amd]);
+    stored.set('scan3d-case', 'case');
+    vi.spyOn(api, 'revision').mockRejectedValue(new ApiError(404, 'Revision does not belong to this case'));
+    await start();
+    expect(stored.get('scan3d-case')).toBe('case');
+  });
+});

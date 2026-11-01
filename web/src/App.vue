@@ -58,7 +58,7 @@ import {
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
 import { pathBlocked, pathField, runSummary, SEGMENT_PATH_KEY, usePathChoice } from './lib/inference-path';
-import { outboundExportKinds, recoverCaseJob } from './lib/jobs';
+import { caseIsGone, outboundExportKinds, pollCanRecover, recoverCaseJob } from './lib/jobs';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import {
   freezeViewCapture,
@@ -600,8 +600,7 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   if (preserve) setPoint([...point.value]);
   else point.value = [...next.geometry.center_ras];
 }
-async function openCase(id: string) {
-  const generation = ++caseGeneration;
+function resetCaseView() {
   catalogGate.invalidate();
   segmentationCatalog.value = undefined;
   segmentationLoading.value = false;
@@ -632,6 +631,10 @@ async function openCase(id: string) {
   mobilePanel.value = panels.value.model ? 'model' : 'review';
   acquisition.value = acquisitionSelection();
   seriesUid.value = '';
+}
+async function openCase(id: string) {
+  const generation = ++caseGeneration;
+  resetCaseView();
   try {
     const next = await api.case(id);
     if (generation !== caseGeneration) return;
@@ -647,9 +650,26 @@ async function openCase(id: string) {
     else localStorage.removeItem(`scan3d-job:${id}`);
     void viewJobs.seed(id);
   } catch (reason) {
-    if (generation === caseGeneration) fail(reason);
+    if (generation !== caseGeneration) return;
+    if (caseIsGone(reason)) await closeCase(id);
+    else fail(reason);
   } finally {
     if (generation === caseGeneration) loading.value = false;
+  }
+}
+/** Nothing of a case that has gone stays on screen or names it in this browser. */
+async function closeCase(id: string) {
+  caseGeneration++;
+  resetCaseView();
+  activeCase.value = undefined;
+  loading.value = false;
+  localStorage.removeItem(`scan3d-job:${id}`);
+  if (localStorage.getItem('scan3d-case') === id) localStorage.removeItem('scan3d-case');
+  toast('That case is no longer available.');
+  try {
+    await refreshCases();
+  } catch (reason) {
+    fail(reason);
   }
 }
 async function imported(next: Case) {
@@ -759,10 +779,13 @@ function poll() {
       } else if (next.status === 'failed') error.value = next.error || 'Processing failed. See the worker logs for details.';
       else toast('Processing cancelled. Completed stages remain cached.');
     } catch (reason) {
-      if (alive && generation === caseGeneration && job.value?.id === id) {
-        fail(reason);
-        poll();
+      if (!alive || generation !== caseGeneration || job.value?.id !== id) return;
+      if (caseIsGone(reason)) {
+        await closeCase(job.value.case_id);
+        return;
       }
+      fail(reason);
+      if (pollCanRecover(reason)) poll();
     }
   }, 1400);
 }

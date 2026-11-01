@@ -61,6 +61,7 @@ import {
   type ViewCaptureRequest,
   type ViewportCapture,
 } from '../lib/dicom-view';
+import { apiFetch } from '../lib/api-fetch';
 const props = defineProps<{
   modelUrl?: string;
   manifestUrl?: string;
@@ -1040,7 +1041,7 @@ async function load() {
       return;
     }
     if (props.manifestUrl && !props.modelData) {
-      const response = await fetch(props.manifestUrl, { signal: controller.signal });
+      const response = await apiFetch(props.manifestUrl, { signal: controller.signal });
       if (!response.ok) throw new Error(`Could not load surface information (${response.status}).`);
       const manifest = (await response.json()) as SurfaceManifest;
       if (id !== loadId) return;
@@ -1054,7 +1055,7 @@ async function load() {
     } else {
       let data = props.modelData;
       if (!data && props.modelUrl) {
-        const response = await fetch(props.modelUrl, { signal: controller.signal });
+        const response = await apiFetch(props.modelUrl, { signal: controller.signal });
         if (!response.ok) throw new Error(`Could not load the model (${response.status}).`);
         data = await response.arrayBuffer();
       }

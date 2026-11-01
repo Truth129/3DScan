@@ -31,6 +31,7 @@ import type {
 } from './orthanc';
 import type { DicomSegAvailability, DicomSegExportJob, DicomSegExportRequest } from './dicom-seg';
 import { DICOM_VIEW_MAX_BYTES, type DicomViewAvailability, type DicomViewExportJob, type DicomViewExportRequest } from './dicom-view';
+import { apiFetch } from './api-fetch';
 
 export class ApiError extends Error {
   constructor(
@@ -43,7 +44,7 @@ export class ApiError extends Error {
 }
 
 export async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
+  const response = await apiFetch(url, init);
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: response.statusText }));
     const detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);

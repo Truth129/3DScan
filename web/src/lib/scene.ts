@@ -26,6 +26,7 @@ import {
   scissorsScreenPoint,
   type ScissorsCapture,
 } from './scissors';
+import { apiFetch } from './api-fetch';
 
 declare global {
   interface Window {
@@ -971,7 +972,7 @@ export class AnatomyScene {
       const worker = async () => {
         while (cursor < changed.length && !stale()) {
           const item = changed[cursor++];
-          const response = await fetch(item.url, { signal: controller.signal });
+          const response = await apiFetch(item.url, { signal: controller.signal });
           if (!response.ok) throw new Error(`Could not load ${records.get(item.id)!.name} (${response.status}).`);
           const buffer = await response.arrayBuffer();
           if (stale()) break;

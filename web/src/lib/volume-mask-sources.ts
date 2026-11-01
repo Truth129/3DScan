@@ -1,6 +1,7 @@
 import { validateDescriptor, type VolumeChunk, type VolumeDescriptor } from './ct-reslice';
 import { GPU_VOLUME_SLAB_BYTES, gpuVolumeSlabRange, isVolumeDisplayUnion, isVolumeLabelUnion, type GPUOverlaySources } from './gpu-volume-data';
 import { normalizeVolumeMaskMargin } from './volume-mask';
+import { apiFetch } from './api-fetch';
 
 const MAX_DESCRIPTORS = 256;
 const MAX_MASKS = 128;
@@ -280,7 +281,7 @@ export class VolumeMaskSources {
       await this.acquire(controller.signal);
       acquired = true;
       this.assertCurrent(epoch, signals);
-      const response = await fetch(url, { signal: controller.signal, cache, priority: 'low' });
+      const response = await apiFetch(url, { signal: controller.signal, cache, priority: 'low' });
       if (!response.ok) throw new Error(`Volume mask request failed (${response.status})`);
       const value = await consume(response, controller.signal);
       this.assertCurrent(epoch, [...signals, controller.signal]);

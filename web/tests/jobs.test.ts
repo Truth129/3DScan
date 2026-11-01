@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { recoverCaseJob } from '../src/lib/jobs';
-import { api } from '../src/lib/api';
+import { caseIsGone, pollCanRecover, recoverCaseJob } from '../src/lib/jobs';
+import { api, ApiError } from '../src/lib/api';
 import type { Job } from '../src/types';
 
 const job = (id: string, caseId: string, status: Job['status']): Job => ({
@@ -57,5 +57,20 @@ describe('case job recovery', () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe('a failed poll', () => {
+  it('stops on answers that asking again cannot change', () => {
+    expect(pollCanRecover(new ApiError(401, 'Sign in'))).toBe(false);
+    expect(pollCanRecover(new ApiError(404, 'Job not found'))).toBe(false);
+    expect(pollCanRecover(new ApiError(503, 'Busy'))).toBe(true);
+    expect(pollCanRecover(new TypeError('Failed to fetch'))).toBe(true);
+  });
+
+  it('closes a case only when the case itself has gone', () => {
+    expect(caseIsGone(new ApiError(404, 'Case not found'))).toBe(true);
+    expect(caseIsGone(new ApiError(404, 'Revision does not belong to this case'))).toBe(false);
+    expect(caseIsGone(new ApiError(500, 'Case not found'))).toBe(false);
   });
 });
