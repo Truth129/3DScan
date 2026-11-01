@@ -11,9 +11,16 @@ export default defineConfig({
   build: { chunkSizeWarningLimit: 850 },
   test: {
     projects: [
-      { extends: true, test: { name: 'node', exclude: ['tests/dicom-view-*.test.ts', '**/node_modules/**'] } },
+      { extends: true, test: { name: 'node', exclude: ['tests/dicom-view-*.test.ts', 'tests/dicom-seg-file-dialog.test.ts', '**/node_modules/**'] } },
       // Vitest compiles SFCs for the server by default, which leaves nothing that can be mounted.
-      { extends: true, test: { name: 'mounted', include: ['tests/dicom-view-*.test.ts'], environment: './tests/client-sfc-environment.ts' } },
+      {
+        extends: true,
+        test: {
+          name: 'mounted',
+          include: ['tests/dicom-view-*.test.ts', 'tests/dicom-seg-file-dialog.test.ts'],
+          environment: './tests/client-sfc-environment.ts',
+        },
+      },
     ],
   },
 });

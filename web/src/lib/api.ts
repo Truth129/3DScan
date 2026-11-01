@@ -55,6 +55,7 @@ const json = (method: string, value: unknown): RequestInit => ({ method, headers
 const caseUrl = (id: string) => `/api/cases/${encodeURIComponent(id)}`;
 const reviewUrl = (id: string, session: string) => `${caseUrl(id)}/reviews/${encodeURIComponent(session)}`;
 export const revisionUrl = (id: string, rid: string) => `${caseUrl(id)}/revisions/${encodeURIComponent(rid)}`;
+export const dicomSegFileUrl = (id: string, rid: string, exportId: string) => `${revisionUrl(id, rid)}/dicom-seg/${encodeURIComponent(exportId)}/segment.dcm`;
 export interface CinematicReference {
   schema_version: 1;
   myocardium_hu: number;

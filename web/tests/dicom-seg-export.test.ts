@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, ref } from 'vue';
-import { api, ApiError } from '../src/lib/api';
+import { api, ApiError, dicomSegFileUrl } from '../src/lib/api';
 import {
   defaultOverlapOrder,
   dicomSegExportSummary,
   moveOverlapRank,
   nonemptySavedStructures,
+  preparedDicomSegFile,
   savedRevisionExportBlockReason,
   unfinishedOverlapRanking,
   successfulDicomSegDelivery,
@@ -134,6 +135,28 @@ describe('saved mask export scope', () => {
     expect(successfulDicomSegDelivery([delivered], ['heart'], 'osirix')).toBe(false);
     expect(successfulDicomSegDelivery([delivered], ['heart', 'lung'], 'other')).toBe(false);
     expect(successfulDicomSegDelivery([{ ...delivered, status: 'failed' }, delivered], ['heart', 'lung'], 'osirix')).toBe(false);
+  });
+  it('says a prepared file went nowhere, including what a ranking removed', () => {
+    const result = { export_id: 'seg-a', archived: false, sent: false, file: true, segments_count: 1, instance_count: 1, structure_ids: ['heart'] };
+    expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: result } }))).toBe(
+      '1 mask ready as one DICOM SEG file. Nothing was archived or sent.',
+    );
+    const ranked = { ...result, segments_count: 2, overlap_priority: ['heart', 'lung'], removed_voxels: { heart: 0, lung: 3 } };
+    expect(dicomSegExportSummary(job('completed', { result: { dicom_seg: ranked } }))).toContain('3 overlapping voxels removed from 1 mask');
+  });
+  it('finds a prepared file only for the exact selection, ranking and encoding', () => {
+    const base = { export_id: 'seg-a', archived: false, sent: false, file: true, segments_count: 2, instance_count: 1, structure_ids: ['lung', 'heart'] };
+    const plain = job('completed', { result: { dicom_seg: { ...base, encoding_version: 3 } } }),
+      ranked = job('completed', { result: { dicom_seg: { ...base, encoding_version: 3, overlap_priority: ['lung', 'heart'] } } }),
+      archive = job('completed', { result: { dicom_seg: { ...base, encoding_version: 3, archived: true, file: undefined } } });
+    expect(preparedDicomSegFile([plain], ['heart', 'lung'], 3)?.export_id).toBe('seg-a');
+    expect(preparedDicomSegFile([plain], ['heart'], 3)).toBeUndefined();
+    expect(preparedDicomSegFile([plain], ['heart', 'lung'], 4)).toBeUndefined();
+    expect(preparedDicomSegFile([plain], ['heart', 'lung'], 3, ['lung', 'heart'])).toBeUndefined();
+    expect(preparedDicomSegFile([ranked], ['heart', 'lung'], 3)).toBeUndefined();
+    expect(preparedDicomSegFile([ranked], ['heart', 'lung'], 3, ['lung', 'heart'])).toBeDefined();
+    expect(preparedDicomSegFile([archive], ['heart', 'lung'], 3)).toBeUndefined();
+    expect(preparedDicomSegFile([{ ...plain, status: 'failed' }, plain], ['heart', 'lung'], 3)).toBeUndefined();
   });
   it('starts the overlap ranking with the smallest masks, breaking ties by ID', () => {
     const structures = [
@@ -282,6 +305,48 @@ describe('explicit DICOM SEG export lifecycle', () => {
       { structure_ids: ['heart', 'lung'], destination: 'osirix', resend: true, overlap_priority: ['lung', 'heart'] },
       expect.any(AbortSignal),
     );
+    scope.stop();
+  });
+  it('asks for a file only when the server offers one, and sends no destination', async () => {
+    const answer = vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ available: false, destinations: [] })),
+      create = vi.spyOn(api, 'exportDicomSeg').mockResolvedValue(job('queued')),
+      { scope, blocked, state } = fixture();
+    await state.load();
+    await state.prepareFile(['heart']);
+    expect(create).not.toHaveBeenCalled();
+    answer.mockResolvedValue(availability({ available: false, destinations: [], file: { available: true } }));
+    await state.load();
+    await state.prepareFile([]);
+    blocked.value = 'Save the draft.';
+    await state.prepareFile(['heart']);
+    expect(create).not.toHaveBeenCalled();
+    blocked.value = '';
+    await state.prepareFile(['heart', 'lung', 'heart'], ['lung', 'heart']);
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      'case-a',
+      'revision-a',
+      { structure_ids: ['heart', 'lung'], destination: null, delivery: 'file', overlap_priority: ['lung', 'heart'] },
+      expect.any(AbortSignal),
+    );
+    scope.stop();
+  });
+  it('keeps archive refused while only a file is available', async () => {
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ available: false, destinations: [], file: { available: true } }));
+    const create = vi.spyOn(api, 'exportDicomSeg'),
+      { scope, state } = fixture();
+    await state.load();
+    await state.start(['heart'], null);
+    expect(create).not.toHaveBeenCalled();
+    scope.stop();
+  });
+  it('treats a lost file request as unknown, without implying a workstation received anything', async () => {
+    vi.spyOn(api, 'dicomSegAvailability').mockResolvedValue(availability({ file: { available: true } }));
+    vi.spyOn(api, 'exportDicomSeg').mockRejectedValue(new Error('Connection closed'));
+    const { scope, state } = fixture();
+    await state.load();
+    await state.prepareFile(['heart']);
+    expect(state.needsRefresh.value).toBe(true);
+    expect(state.error.value).toBe('Connection closed Refresh export status before trying again.');
     scope.stop();
   });
   it('retains the availability reason and never queues an unavailable export', async () => {
@@ -494,5 +559,8 @@ describe('explicit DICOM SEG export lifecycle', () => {
     await api.exportDicomSeg('case/a', 'revision b', { structure_ids: ['heart'], destination: 'osirix' });
     expect(fetch.mock.calls[0][0]).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-seg');
     expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ structure_ids: ['heart'], destination: 'osirix' });
+  });
+  it('encodes every part of a prepared file address', () => {
+    expect(dicomSegFileUrl('case/a', 'revision b', 'seg?x')).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-seg/seg%3Fx/segment.dcm');
   });
 });

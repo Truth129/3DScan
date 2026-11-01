@@ -34,8 +34,9 @@ npx vitest run
 `npm run format` and `ruff format` apply the formatting. `pre-commit install` runs the
 same tools on each commit.
 
-Files matching `web/tests/dicom-view-*.test.ts` run in Vitest's `mounted` project, whose
-environment compiles Vue components for the client. Vitest otherwise compiles them for the
+Files matching `web/tests/dicom-view-*.test.ts`, and
+`web/tests/dicom-seg-file-dialog.test.ts`, run in Vitest's `mounted` project, whose environment
+compiles Vue components for the client. Vitest otherwise compiles them for the
 server, which leaves nothing to mount, and these tests check the real wiring between
 templates, refs and watchers.
 

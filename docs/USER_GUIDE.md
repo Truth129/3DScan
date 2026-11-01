@@ -370,11 +370,27 @@ serves as an overlap-preserving export for 3D Slicer.
 
 ### DICOM SEG
 
-**Export SEG…** needs a configured Orthanc, and the CT must have been imported from that archive.
-Select the masks, then choose **Archive in Orthanc**, or pick a **Send destination** and choose
-**Send to** it. All masks go into one SEG object with overlaps preserved. Reopening the dialog
-never sends anything, and **Send again** deliberately resends the same instances. See
-[send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back).
+**Export SEG…** works for classic CT from a folder, a ZIP or Orthanc, and all selected masks go into
+one SEG object with overlaps preserved.
+
+To save a file, needing no Orthanc:
+
+1. Select the masks.
+2. Choose **Prepare SEG file**. The SEG is built in the background, and you can close the dialog.
+3. When the button changes, choose **Download SEG file**.
+
+The file is named after the revision and export, not the patient, but inside it carries the CT's
+patient and study details, so handle it like the study. Preparing the same masks again gives the same
+file. Changing the selection or the ranking asks you to prepare a new one.
+
+If the CT came from a configured Orthanc, you can also choose **Archive in Orthanc**, or pick a
+**Send destination** and choose **Send to** it. A file and an archive of the same selection are the
+same SEG object. Reopening the dialog never sends anything, and **Send again** deliberately resends
+the same instances. See [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back).
+Without Orthanc, the dialog offers only the file and says why.
+
+If the dialog says the CT has no verified original series, 3DScan cannot prove which DICOM images the
+masks belong to. The synthetic demo case has none. For an imported CT, prepare its series again.
 
 The dialog starts with every nonempty mask selected. **Select visible** narrows that to the masks
 currently switched on in the anatomy list. It takes a snapshot, so hiding a mask later leaves the

@@ -1,6 +1,14 @@
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import { api, ApiError } from './api';
-import { matchesDicomSegExport, pendingDicomSegExport, successfulDicomSegDelivery, type DicomSegAvailability, type DicomSegExportJob } from './dicom-seg';
+import {
+  matchesDicomSegExport,
+  pendingDicomSegExport,
+  preparedDicomSegFile,
+  successfulDicomSegDelivery,
+  type DicomSegAvailability,
+  type DicomSegExportJob,
+  type DicomSegExportRequest,
+} from './dicom-seg';
 
 /** Export jobs never activate a revision or enter the processing/review job poller. */
 export function useDicomSegExport(options: { source: () => { caseId: string; revisionId: string }; blocked: () => string }) {
@@ -25,6 +33,8 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
   });
   const alreadySent = (structureIds: string[], destination: string, overlapPriority?: string[]) =>
     successfulDicomSegDelivery(history.value, structureIds, destination, availability.value?.encoding_version, overlapPriority);
+  const preparedFile = (structureIds: string[], overlapPriority?: string[]) =>
+    preparedDicomSegFile(history.value, structureIds, availability.value?.encoding_version, overlapPriority);
   const sourceKey = computed(() => JSON.stringify([options.source().caseId, options.source().revisionId]));
   const storageKey = () => `scan3d-dicom-seg:${sourceKey.value}`;
   let disposed = false,
@@ -143,27 +153,40 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       (resend && (destination === null || !alreadySent(structureIds, destination, overlapPriority)))
     )
       return;
+    await submit(
+      {
+        structure_ids: [...new Set(structureIds)],
+        destination,
+        ...(resend ? { resend: true } : {}),
+        ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
+      },
+      'Refresh export status before trying again; the request may already have reached the workstation.',
+    );
+  }
+  async function prepareFile(structureIds: string[], overlapPriority?: string[]) {
+    if (disposed || options.blocked() || locked.value || statusError.value || !availability.value?.file?.available || !structureIds.length) return;
+    await submit(
+      {
+        structure_ids: [...new Set(structureIds)],
+        destination: null,
+        delivery: 'file',
+        ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
+      },
+      'Refresh export status before trying again.',
+    );
+  }
+  async function submit(body: DicomSegExportRequest, recovery: string) {
     const attempt = begin();
     submitting.value = true;
     error.value = '';
     try {
-      const value = await api.exportDicomSeg(
-        attempt.caseId,
-        attempt.revisionId,
-        {
-          structure_ids: [...new Set(structureIds)],
-          destination,
-          ...(resend ? { resend: true } : {}),
-          ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
-        },
-        attempt.request.signal,
-      );
+      const value = await api.exportDicomSeg(attempt.caseId, attempt.revisionId, body, attempt.request.signal);
       if (!attempt.current()) return;
       accept(value, attempt.caseId, attempt.revisionId);
       schedule();
     } catch (reason) {
       if (attempt.current()) {
-        error.value = `${message(reason)} Refresh export status before trying again; the request may already have reached the workstation.`;
+        error.value = `${message(reason)} ${recovery}`;
         needsRefresh.value = true;
       }
     } finally {
@@ -186,5 +209,21 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     generation++;
     stop();
   });
-  return { availability, job, checking, submitting, pending, locked, error, statusError, needsRefresh, alreadySent, load, resume, start };
+  return {
+    availability,
+    job,
+    checking,
+    submitting,
+    pending,
+    locked,
+    error,
+    statusError,
+    needsRefresh,
+    alreadySent,
+    preparedFile,
+    load,
+    resume,
+    start,
+    prepareFile,
+  };
 }

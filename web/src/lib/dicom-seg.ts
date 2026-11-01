@@ -17,22 +17,27 @@ export interface DicomSegExportResult {
   destination_id?: string;
   overlap_priority?: string[];
   removed_voxels?: Record<string, number>;
+  /** Prepared for download: nothing was archived or sent. */
+  file?: boolean;
 }
 export interface DicomSegExportJob extends Job {
   result?: { dicom_seg?: DicomSegExportResult };
 }
 export interface DicomSegAvailability {
   encoding_version?: number;
+  /** Orthanc archive and send; `file` answers separately because it needs no archive. */
   available: boolean;
   reason?: string;
   destinations: DicomSegDestination[];
   exports?: DicomSegExportJob[];
+  file?: { available: boolean; reason?: string };
 }
 export interface DicomSegExportRequest {
   structure_ids: string[];
   destination: string | null;
   resend?: boolean;
   overlap_priority?: string[];
+  delivery?: 'file';
 }
 
 /** Export only a clearly displayed saved revision, independently of its renderer. */
@@ -82,6 +87,11 @@ export const pendingDicomSegExport = (job?: Job) => !!job && ['queued', 'running
 export const matchesDicomSegExport = (job: Job, caseId: string, revisionId: string) =>
   job.kind === 'orthanc_export' && job.case_id === caseId && job.revision_id === revisionId;
 
+const sameExport = (result: DicomSegExportResult, structureIds: string[], encodingVersion?: number, overlapPriority?: string[]) =>
+  (encodingVersion === undefined || (result.encoding_version ?? 1) === encodingVersion) &&
+  JSON.stringify([...result.structure_ids].sort()) === JSON.stringify([...new Set(structureIds)].sort()) &&
+  JSON.stringify(result.overlap_priority ?? null) === JSON.stringify(overlapPriority ?? null);
+
 /** A new delivery needs a separate click, scoped to the exact earlier selection and ranking. */
 export function successfulDicomSegDelivery(
   jobs: DicomSegExportJob[],
@@ -90,18 +100,25 @@ export function successfulDicomSegDelivery(
   encodingVersion?: number,
   overlapPriority?: string[],
 ): boolean {
-  const selected = [...new Set(structureIds)].sort(),
-    ranking = JSON.stringify(overlapPriority ?? null);
   const latest = jobs.find(job => {
     const result = job.result?.dicom_seg;
-    return (
-      result?.destination_id === destination &&
-      (encodingVersion === undefined || (result.encoding_version ?? 1) === encodingVersion) &&
-      JSON.stringify([...result.structure_ids].sort()) === JSON.stringify(selected) &&
-      JSON.stringify(result.overlap_priority ?? null) === ranking
-    );
+    return result?.destination_id === destination && sameExport(result, structureIds, encodingVersion, overlapPriority);
   });
   return latest?.status === 'completed' && latest.result?.dicom_seg?.sent === true;
+}
+
+/** The prepared file for this exact selection and ranking, unless a newer attempt failed. */
+export function preparedDicomSegFile(
+  jobs: DicomSegExportJob[],
+  structureIds: string[],
+  encodingVersion?: number,
+  overlapPriority?: string[],
+): DicomSegExportResult | undefined {
+  const latest = jobs.find(job => {
+    const result = job.result?.dicom_seg;
+    return result?.file && sameExport(result, structureIds, encodingVersion, overlapPriority);
+  });
+  return latest?.status === 'completed' ? latest.result?.dicom_seg : undefined;
 }
 
 function overlapSummary(result: DicomSegExportResult): string {
@@ -117,6 +134,7 @@ export function dicomSegExportSummary(job: DicomSegExportJob): string {
   if (job.status !== 'completed' || !result) return '';
   const masks = `${result.segments_count} ${result.segments_count === 1 ? 'mask' : 'masks'}`,
     overlaps = overlapSummary(result);
+  if (result.file) return `${masks} ready as one DICOM SEG file. Nothing was archived or sent.${overlaps}`;
   if (result.sent)
     return `${masks} sent to ${result.destination || 'the configured destination'} · ${result.instance_count} DICOM ${result.instance_count === 1 ? 'instance' : 'instances'}.${overlaps}`;
   if (result.archived) return `${masks} archived in Orthanc. Nothing was sent to another viewer.${overlaps}`;
