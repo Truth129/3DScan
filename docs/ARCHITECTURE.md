@@ -54,7 +54,7 @@ Real environment variables take precedence.
 | `scan3d/imaging.py`, `surfaces.py`, `surface_glb.py`                    | Masks, measurements, slice geometry, GLB surfaces      |
 | `scan3d/review_volume.py`, `volume_mask_union.py`                       | Volume and frame transport, display unions             |
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange       |
-| `scan3d/orthanc*.py`, `dicom_seg*.py`, `osirix_roi*.py`                 | Orthanc connector, DICOM SEG, OsiriX writer            |
+| `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX writer   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                |
 | `web/src/lib/ct-volume.ts`, `ct-worker.ts`                              | Source session and worker                              |
 | `web/src/lib/cornerstone-*.ts`, `vtk-*.ts`                              | Slice review, MPR and the native 3D view               |
@@ -122,6 +122,7 @@ cases/<case>/
   inference/<key>/       TotalSegmentator runs and their manifests
   revisions/<id>/        revision.json, model.glb and on-demand exports
   refinements/, corrections/, reviews/, seg-imports/, dicom-exports/
+  dicom-view-captures/   Retained 3D view captures, each named by its SHA-256
 surface-cache/, review-cache/, analysis-cache/, agreement-cache/, cinematic-cache/
 import-uploads/          Staged browser uploads, removed after a day of inactivity
 ```
@@ -157,10 +158,10 @@ Jobs are rows in SQLite, not messages in a broker. `Service.start` takes an excl
 and runs one thread per lane, so one process per data directory executes jobs. A CLI command starts only the
 lane its own job needs.
 
-| Lane | Job kinds                                                                                                                                                    |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| GPU  | `segment`; `review_predict` that runs nnInteractive                                                                                                          |
-| CPU  | `process`, `orthanc_import`, `orthanc_export`, `dicom_seg_import`, `refine`, `correction`, `include_all`, `review_accept`; `review_predict` for direct edits |
+| Lane | Job kinds                                                                                                                                                                           |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GPU  | `segment`; `review_predict` that runs nnInteractive                                                                                                                                 |
+| CPU  | `process`, `orthanc_import`, `orthanc_export`, `orthanc_view_export`, `dicom_seg_import`, `refine`, `correction`, `include_all`, `review_accept`; `review_predict` for direct edits |
 
 A relationship-only Apply also runs on the CPU lane, because it reuses the existing prediction. GPU jobs
 never overlap, whichever GPU they use, and CPU work never waits behind a segmentation. Lanes are named for
@@ -174,8 +175,8 @@ service-wide thread budget across both lanes (`SCAN3D_POSTPROCESS_WORKERS`), fur
 memory.
 
 **Restart and cancellation.** On startup, running jobs are marked failed as `Interrupted`, and draft
-sessions return to an editable state. Queued jobs stay queued, except DICOM SEG exports, which fail locally
-because a send must be requested explicitly. Cancelling a queued job takes effect immediately; a running job
+sessions return to an editable state. Queued jobs stay queued, except DICOM SEG and view exports, which fail
+locally because a send must be requested explicitly. Cancelling a queued job takes effect immediately; a running job
 observes the request at its next check.
 
 ## Inference
@@ -498,6 +499,15 @@ SEG, mask and reference hashes before any upload, and Orthanc keeps and sends th
 modality IDs. Export never changes a revision. It requires an original classic CT imported through the
 configured archive. A ranked export claims voxels in rank order against one boolean grid, so each voxel
 stays in one structure. It is a derived copy for viewers: the saved masks remain the authority.
+
+**View export** turns one capture of the 3D view into a Secondary Capture series in the source study, on
+the CPU lane. `orthanc_view_exports.py` subclasses the SEG manager, so both share queuing, retries, receipts
+and delivery uncertainty, and each lists only its own jobs. It needs no masks, so it works on a CT-only
+revision. The PNG is retained by content, apart from the export directory, because a retry can move to a new
+directory. Patient and study elements are copied exactly from the source headers. Orthanc reports success
+wherever an instance lands, so the export compares the patient identity it will file under before upload,
+and checks the study Orthanc reports before it saves a receipt or sends. The instance is a picture, with no
+frame of reference, and nothing measures from it.
 
 **SEG import** takes a local upload and needs no Orthanc connection. It appends segments as a new unreviewed
 revision after exact source-identity and native-grid checks. Anything that would need thresholding or

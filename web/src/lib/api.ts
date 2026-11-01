@@ -30,6 +30,7 @@ import type {
   OrthancStudyQuery,
 } from './orthanc';
 import type { DicomSegAvailability, DicomSegExportJob, DicomSegExportRequest } from './dicom-seg';
+import { DICOM_VIEW_MAX_BYTES, type DicomViewAvailability, type DicomViewExportJob, type DicomViewExportRequest } from './dicom-view';
 
 export class ApiError extends Error {
   constructor(
@@ -45,7 +46,9 @@ export async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new ApiError(response.status, typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail));
+    const detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+    // HTTP/2 has no status text, so a proxy's error page would otherwise leave nothing to show.
+    throw new ApiError(response.status, detail || `The server answered with status ${response.status}.`);
   }
   return response.json() as Promise<T>;
 }
@@ -75,6 +78,19 @@ export const api = {
   dicomSegAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomSegAvailability>(`${revisionUrl(id, rid)}/dicom-seg`, { signal }),
   exportDicomSeg: (id: string, rid: string, data: DicomSegExportRequest, signal?: AbortSignal) =>
     request<DicomSegExportJob>(`${revisionUrl(id, rid)}/dicom-seg`, { ...json('POST', data), signal }),
+  dicomViewAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomViewAvailability>(`${revisionUrl(id, rid)}/dicom-view`, { signal }),
+  async exportDicomView(id: string, rid: string, value: DicomViewExportRequest, signal?: AbortSignal) {
+    // An oversized body is refused before the server reads it, which the browser can
+    // report as a reset connection. That reads like a lost request, so stop it here.
+    if (value.image.size > DICOM_VIEW_MAX_BYTES) throw new ApiError(413, 'This image is too large to export. Make the 3D view smaller and capture it again.');
+    const data = new FormData();
+    data.append('image', value.image, 'view.png');
+    data.append('reference_image_id', value.referenceImageId);
+    // The server reads a field that is present as a chosen destination, even the text "null".
+    if (value.destination) data.append('destination', value.destination);
+    if (value.resend) data.append('resend', 'true');
+    return request<DicomViewExportJob>(`${revisionUrl(id, rid)}/dicom-view`, { method: 'POST', body: data, signal });
+  },
   importDicomSeg(id: string, rid: string, files: readonly File[], signal?: AbortSignal) {
     const data = new FormData();
     data.append('revision_id', rid);

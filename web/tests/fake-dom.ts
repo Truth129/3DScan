@@ -4,7 +4,7 @@ import { createRenderer } from 'vue';
 /**
  * Just enough of an element for Vue's renderer and directives, plus the queries a suite makes.
  * SSR shows only the state a component opens in, so a suite that has to press its buttons
- * drives the real component here, with the browser build that tests/client-environment.ts gives.
+ * drives the real component here, with the browser build that tests/client-sfc-environment.ts gives.
  */
 export class FakeElement {
   children: FakeElement[] = [];

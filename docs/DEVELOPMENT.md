@@ -34,6 +34,11 @@ npx vitest run
 `npm run format` and `ruff format` apply the formatting. `pre-commit install` runs the
 same tools on each commit.
 
+Files matching `web/tests/dicom-view-*.test.ts` or `web/tests/**/*.mounted.test.ts` run in
+Vitest's `mounted` project, whose environment compiles Vue components for the client.
+Vitest otherwise compiles them for the server, which leaves nothing to mount, and these
+tests check the real wiring between templates, refs and watchers.
+
 `scan3d serve` serves the built files in `web/dist`. While working on the viewer, run the
 backend and then `npm run dev` in `web/`. Vite proxies `/api` to the port in
 `SCAN3D_PORT`.
@@ -60,7 +65,8 @@ npx vite build --outDir /tmp/scan3d-stage/dist --emptyOutDir
 
 Read each script's `--help` before running it. Some use software rendering by default,
 and pass `--native` to use a GPU. Others need a Vulkan-capable GPU unless they offer
-`--software`.
+`--software`. `dicom_view_export_smoke.py` also starts two scratch Orthancs, so it needs
+`--orthanc-binary`, a `--scratch` directory and `dcm2niix` on `PATH`.
 
 A watcher closes each session's browser and removes its temporary profile when the gate
 exits, even if the gate is killed. After SIGKILL, a chromedriver or server that the gate
@@ -85,8 +91,9 @@ card or CUDA build. These facilities show what the code does, not what a card do
 - **Browser gates** run outside pytest, so that fixture does not reach them, whether a gate
   starts its own server or takes `--base-url`. `web/tests/interactive_test_server.py`
   defaults `SCAN3D_INFERENCE_PATH_DIR` to a folder inside its temporary data that need not
-  exist, and `web/tests/dicom_seg_import_smoke.py` sets the same, so a gate on either server
-  lists one path whatever this checkout has added. `web/tests/inference_path_smoke.py` sets
+  exist, and `web/tests/dicom_seg_import_smoke.py` and `web/tests/dicom_view_export_smoke.py`
+  set the same, so a gate on any of these servers lists one path whatever this checkout has
+  added. `web/tests/inference_path_smoke.py` sets
   its own. They cover only that folder: a gate that does not set `SCAN3D_DEVICE=cpu` still
   shows this checkout's default card, and a plain `scan3d serve` behind `--base-url` lists
   whatever the checkout has.
@@ -104,10 +111,8 @@ card or CUDA build. These facilities show what the code does, not what a card do
   `test_everything_a_child_imports_is_in_the_lock` fails. Add the package to
   `requirements/cuda-py314.in` and recompile with the command at the top of the lock. Pins
   outside the GPU family must also equal the AMD lock.
-- **`web/vitest.config.ts`** splits `npx vitest run` into two projects. `mounted` takes
-  `tests/**/*.mounted.test.ts`, which compile for the browser and run on
-  `tests/fake-dom.ts`, because server rendering cannot exercise a component's clicks.
-  `unit` takes the rest.
+- **`web/tests/fake-dom.ts`** is a smaller stand-in that a `*.mounted.test.ts` suite renders
+  into, because server rendering cannot exercise a component's clicks.
 - **`web/tests/inference_path_smoke.py`** is a browser gate that always renders with
   SwiftShader, so it needs no flag. It starts its own server, chromedriver and temporary
   data, by default on ports 9035 and 9535, and it refuses `web/dist`, so give it a scratch

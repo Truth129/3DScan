@@ -243,7 +243,12 @@ class OrthancClient:
             response.close()
         if received != size or retained.hexdigest() != digest or hash_file(path) != digest:
             raise OrthancError("The archive copy differs from the saved DICOM SEG. No send was started.")
-        return {"id": resource_id, "status": value["Status"], "sha256": digest, "size": size}
+        result = {"id": resource_id, "status": value["Status"], "sha256": digest, "size": size}
+        # Which study Orthanc filed the instance under: a caller can prove where
+        # it landed, which a successful status alone does not show.
+        if "ParentStudy" in value:
+            result["parent_study"] = value["ParentStudy"]
+        return result
 
     def start_store(self, instance_ids, destination):
         destination = modality_id(destination)

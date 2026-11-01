@@ -45,9 +45,9 @@ proof text or local paths.
 
 - **Origin.** A non-GET request whose `Origin` differs from `Host` gets 403. Hosts must appear in
   `SCAN3D_ALLOWED_HOSTS`.
-- **Private responses.** `/api/orthanc/*`, the license route and `.../dicom-seg` use `Cache-Control:
-  no-store`, including their errors. Candidate records, descriptors, agreement reports and frames use
-  `private, no-store`.
+- **Private responses.** `/api/orthanc/*`, the license route, `.../dicom-seg` and `.../dicom-view` use
+  `Cache-Control: no-store`, including their errors. Candidate records, descriptors, agreement reports and
+  frames use `private, no-store`.
 - **Chunks.** Volume chunks are gzip with `Cache-Control: private, max-age=31536000, immutable`, keyed by
   content.
 - **Compression.** JSON and viewer assets of at least 1 KiB use dynamic gzip. GLB routes negotiate stored
@@ -129,10 +129,12 @@ an empty mask. Structures from DICOM SEG also carry a `dicom_seg` provenance obj
 ```
 
 `status` is `queued`, `running`, `completed`, `failed` or `cancelled`. `stage` is display text.
-`revision_id` is the new revision once committed. For `orthanc_export` it is the exported revision.
+`revision_id` is the new revision once committed. For `orthanc_export` and `orthanc_view_export` it is the
+exported revision.
 
 `kind` is `process`, `segment`, `refine`, `correction`, `include_all` (from the `scan3d include-all` command
-only), `review_predict`, `review_accept`, `orthanc_import`, `orthanc_export` or `dicom_seg_import`.
+only), `review_predict`, `review_accept`, `orthanc_import`, `orthanc_export`, `orthanc_view_export` or
+`dicom_seg_import`.
 [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists which lane runs each. A restart marks running jobs
 failed with stage `Interrupted`.
 
@@ -225,6 +227,7 @@ Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 | `GET .../slicer.zip`                               | Slicer bundle                    | No              |
 | `GET`, `POST .../export.html`                      | Offline HTML viewer              | No              |
 | `GET`, `POST .../dicom-seg`                        | SEG export status and start      | No              |
+| `GET`, `POST .../dicom-view`                       | 3D view export status and start  | No              |
 
 ## System routes
 
@@ -323,8 +326,8 @@ revision has nothing to review, so it is refused.
 ## Jobs
 
 **`POST /api/jobs/{id}/cancel`** returns the Job. A queued job is cancelled at once. A running job is marked
-and stops at its next check. Once a DICOM SEG send has started, cancelling stops only the local wait; see
-[DICOM SEG export](#dicom-seg-export).
+and stops at its next check. Once a DICOM SEG or view send has started, cancelling stops only the local wait;
+see [DICOM SEG export](#dicom-seg-export).
 
 **`GET /api/jobs/{id}/measurements`** returns `{structures, completed, total}`, so a client can show
 measurements while surfaces are still building. They are kept out of ordinary polls.
@@ -828,6 +831,64 @@ mask checks still apply.
 Polling stops after 120 seconds with an unconfirmed outcome. Startup marks interrupted and queued exports
 failed locally and never contacts Orthanc. Cancelling before delivery stops the export. After C-STORE has
 started, stopping the local wait cannot cancel the remote transfer, and the job says so.
+
+## DICOM view export
+
+This turns one capture of the 3D view into a new series in the original study, then archives it in Orthanc
+or sends it to a configured destination. It needs the same source as
+[DICOM SEG export](#dicom-seg-export): a saved revision whose reference image is an original classic CT
+imported from the configured archive. It needs no masks, so a CT-only revision qualifies.
+
+**`GET .../dicom-view`** returns the same shape as `GET .../dicom-seg`: `{available, reason?, destinations,
+exports: Job[], encoding_version}`. `exports` lists view jobs only, as the SEG route lists SEG jobs only.
+
+**`POST .../dicom-view`** takes multipart `image` (a PNG), `reference_image_id`, optional `destination` and
+optional `resend`, and returns an `orthanc_view_export` job. Leave `destination` out to archive only: an
+empty value is a 422, and the text `null` is an unknown destination. `reference_image_id` must be the
+reference image of the CT that drew the picture, or the request is refused. Image IDs hash the case ID, so a
+capture from another case cannot match. Export never changes review status, adds a revision or activates
+one.
+
+**Limits.** The request must declare a plain `Content-Length` and no `Transfer-Encoding`, or it gets 411. A
+PNG may hold 128 MiB or the upload limit, whichever is lower, and a body more than 1 MiB over that gets 413.
+Both responses come before the body is read, because multipart parsing otherwise spools it first. The image
+must be a complete, still, 8-bit RGB or RGBA PNG of at most 16384 pixels per axis and 36 Mi pixels, not one
+uniform colour. Every chunk and checksum is checked before decoding, and a bad capture gets 400 with a fixed
+message and leaves nothing behind.
+
+**Encoding.** One uncompressed Secondary Capture instance in a new series: Explicit VR Little Endian,
+`Modality` OT, `ConversionType` WSD, `ImageType` `DERIVED\SECONDARY\OTHER`, `SeriesNumber` 501,
+`InstanceNumber` 1 and `SeriesDescription` `3DScan view <rev8>`, where `rev8` is the start of the revision
+ID. Text is UTF-8. Alpha blends over black, an opaque image keeps its exact pixels, and nothing is burned
+in.
+
+A render has no calibrated geometry, so the instance has no pixel spacing, image position, image orientation
+or frame of reference, and `PatientOrientation` is empty because any value would be false for most camera
+angles. `ImageComments` says it is not calibrated, has no orientation labels and is for research use only.
+`DerivationDescription` names the revision and the source series UID. There are no source reference
+sequences, because a whole-series list would add 114 bytes per image to one picture.
+`BurnedInAnnotation` is `YES` if any source header says so, since the view can show source pixels.
+`RecognizableVisualFeatures` is absent, since a head render can show a face.
+
+**Identity.** Patient and study elements are copied exactly from the source headers, including values a
+validator would refuse, and `IssuerOfPatientID` and `Laterality` when present. Every source header must agree
+on one patient, study and series. Enqueue freezes the revision, reference image, source manifest and PNG
+hash, and the job rechecks them all before encoding and before upload. Orthanc derives a study's identity
+from the patient ID it decodes, which can differ when a source's bytes disagree with its declared character
+set. So before upload, Orthanc's patient ID for the source study must equal the instance's, or nothing is
+stored. After upload, the parent study Orthanc reports must be the source study, or the job fails before it
+saves a receipt or starts C-STORE, and leaves the stored instance for inspection.
+
+**Retries.** These follow [DICOM SEG export](#dicom-seg-export), keyed on the revision, reference image,
+source manifest, PNG hash and encoding version. A duplicate request reuses the job, and archive and send of
+the same bytes share one SOP. A retry needs the same bytes, which the server has no route to resend for you,
+so a job's `error` states the outcome and never offers a retry: it can reach a reader after the capture has
+gone. A capture with different bytes makes a new series, so if an earlier unconfirmed delivery did land, the
+receiver gets both. Identical bytes are the same export: a failed job retries on the same SOP, and a completed
+one is returned as it stands, with nothing delivered, unless `resend` is set.
+
+**Result.** `result.dicom_view` has `export_id`, `encoding_version`, `archived`, `sent`, `instance_count` and
+optional `destination` and `destination_id`. It has no patient fields, paths, credentials or PNG hash.
 
 ## Orthanc routes
 

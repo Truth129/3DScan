@@ -32,6 +32,7 @@ class Service:
         self._reviews = None
         self._orthanc = None
         self._orthanc_exports = None
+        self._orthanc_view_exports = None
         self._lane_guard = threading.Lock()
         self._running_lanes = 0
         self._preparation_slots = None
@@ -64,6 +65,14 @@ class Service:
 
             self._orthanc_exports = OrthancExports(self)
         return self._orthanc_exports
+
+    @property
+    def orthanc_view_exports(self):
+        if self._orthanc_view_exports is None:
+            from .orthanc_view_exports import OrthancViewExports
+
+            self._orthanc_view_exports = OrthancViewExports(self)
+        return self._orthanc_view_exports
 
     def _interactive(self):
         if self.interactive_runtime is None:
@@ -98,6 +107,7 @@ class Service:
         self.store.recover()
         self.orthanc.recover()
         self.orthanc_exports.recover()
+        self.orthanc_view_exports.recover()
         self.stop_event.clear()
         self._running_lanes = len(lanes)
         self.threads = {lane: threading.Thread(target=self._loop, args=(lane,), daemon=True, name=f"scan3d-{lane}-worker") for lane in lanes}
@@ -338,6 +348,9 @@ class Service:
                 return
             elif job["kind"] == "orthanc_export":
                 self.orthanc_exports.run(job)
+                return
+            elif job["kind"] == "orthanc_view_export":
+                self.orthanc_view_exports.run(job)
                 return
             elif job["kind"] == "process":
                 revision = self._process(job)

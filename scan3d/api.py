@@ -21,6 +21,9 @@ from .store import ReviewConflict
 from .uploads import ImportConflict
 
 
+_MULTIPART_FRAMING = 1024**2
+
+
 class ViewerStaticFiles(StaticFiles):
     """Revalidate viewer entry points while retaining immutable build assets."""
 
@@ -70,6 +73,22 @@ def _error_response(status, headers=None):
     return handler
 
 
+def _view_upload_refusal(request, limit):
+    """Refuse an oversized capture before multipart parsing spools its whole body.
+
+    A declared length is the only thing that can be checked first, so a chunked
+    body is refused rather than counted. h11 also lets chunked framing override
+    a Content-Length, so the presence of one proves nothing on its own.
+    """
+    length = request.headers.get("content-length")
+    if "transfer-encoding" in request.headers or length is None or not (length.isascii() and length.isdigit()):
+        return JSONResponse(status_code=411, content={"detail": "A captured view must declare its Content-Length."}, headers={"Cache-Control": "no-store"})
+    # Digit strings past Python's int conversion limit would raise here.
+    if len(length) > 18 or int(length) > limit + _MULTIPART_FRAMING:
+        return JSONResponse(status_code=413, content={"detail": "The captured view exceeds the upload limit."}, headers={"Cache-Control": "no-store"})
+    return None
+
+
 def create_app(settings: Settings | None = None):
     service = Service(settings)
 
@@ -109,12 +128,24 @@ def create_app(settings: Settings | None = None):
     @app.middleware("http")
     async def same_origin(request: Request, call_next):
         # Local filesystem endpoints must not be callable by an unrelated browser origin.
-        private = request.url.path == "/api/totalsegmentator/license" or request.url.path.startswith("/api/orthanc/") or request.url.path.endswith("/dicom-seg")
+        # scope["path"] is what routing matches. request.url.path would stop at
+        # an encoded "?" in an earlier segment, and miss the upload check below.
+        view_export = request.scope["path"].endswith("/dicom-view")
+        private = (
+            request.url.path == "/api/totalsegmentator/license"
+            or request.url.path.startswith("/api/orthanc/")
+            or request.url.path.endswith("/dicom-seg")
+            or view_export
+        )
         origin = request.headers.get("origin")
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
             if urlsplit(origin).netloc != request.headers.get("host"):
                 headers = {"Cache-Control": "no-store"} if private else None
                 return JSONResponse(status_code=403, content={"detail": "Cross-origin mutations are not allowed"}, headers=headers)
+        if view_export and request.method == "POST":
+            refused = _view_upload_refusal(request, service.settings.view_upload_limit)
+            if refused:
+                return refused
         response = await call_next(request)
         if private:
             # Archive queries and validation failures can contain study identity.

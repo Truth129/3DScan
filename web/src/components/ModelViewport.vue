@@ -53,6 +53,14 @@ import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSetti
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
 import { freshVolumeColorSettings, volumeColorRequest, type VolumeColorSettings } from '../lib/volume-colors';
 import { normalizePortableState, type PortableLayers, type PortableRenderSnapshot } from '../lib/portable-viewer';
+import {
+  VIEW_CHANGED_MESSAGE,
+  VIEW_HIDDEN_MESSAGE,
+  VIEW_NOT_READY_MESSAGE,
+  VIEW_REVIEW_MESSAGE,
+  type ViewCaptureRequest,
+  type ViewportCapture,
+} from '../lib/dicom-view';
 const props = defineProps<{
   modelUrl?: string;
   manifestUrl?: string;
@@ -91,17 +99,22 @@ const props = defineProps<{
   initialSnapshot?: PortableRenderSnapshot;
   /** Supplied only by the live app so the portable bundle keeps its own renderer. */
   volumeViewComponent?: Component;
+  /** Set by the live app alone, to show DICOM ↗. Empty means the export may start. */
+  dicomViewBlockReason?: string;
 }>();
 const emit = defineEmits<{
+  unreadRefusal: [message: string];
   pick: [id: string, point: Point];
   point: [point: Point];
   gesture: [prompt: InteractivePrompt];
   opacity: [value: number];
   retryVolumeView: [];
+  exportView: [];
 }>();
 interface VolumePreview {
   diagnostics(): Record<string, unknown>;
   capturePNG(): Promise<string>;
+  captureExportPNG(expected: ViewCaptureRequest): Promise<ViewportCapture>;
   resetView(): void;
   retry(): Promise<void>;
   retryMask(): Promise<void>;
@@ -140,6 +153,14 @@ const viewport = ref<HTMLElement>(),
   expandButton = ref<HTMLButtonElement>();
 const viewportId = useId();
 const { expanded, setExpanded } = useExpandedViewport(viewport, expandButton);
+// The app's banner has its dismiss button in the header, which is inert while this is expanded.
+const exportRefusal = ref('');
+/** The banner works again once this view is not expanded, and what nobody dismissed is not finished with. */
+function handOverRefusal() {
+  if (exportRefusal.value) emit('unreadRefusal', exportRefusal.value);
+  exportRefusal.value = '';
+}
+watch(expanded, handOverRefusal);
 const surface = ref<HTMLElement>();
 const controlsId = useId();
 // Rendering controls float over the canvas; short screens and review start with them folded away.
@@ -230,6 +251,7 @@ function showHeartView() {
     view.value = 'Heart';
   } else scene?.restoreCamera(portable);
 }
+const dicomViewReason = computed(() => (props.reviewActive ? VIEW_REVIEW_MESSAGE : props.dicomViewBlockReason));
 const volumeMaskIds = computed(() => [...volumeMask.value.ids].sort());
 // Display transport may supply one combined union or per-mask portable sources.
 // The user's selected IDs remain separate from the atlas aliases.
@@ -1156,6 +1178,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   legacyInitialization++;
   void setExpanded(false, false);
+  // Its watcher will not run now that this view is going.
+  handOverRefusal();
   disposed = true;
   reference.cancel();
   loadId++;
@@ -1476,6 +1500,67 @@ async function screenshot() {
     vtkError.value = reason instanceof Error ? reason.message : 'PNG capture failed.';
   }
 }
+/** Says whether this took the message, which only an expanded view does. */
+function showRefusal(message: string) {
+  if (!expanded.value) return false;
+  exportRefusal.value = exportRefusal.value && message ? `${exportRefusal.value} · ${message}` : message;
+  return true;
+}
+/** Reasons that hold for either renderer. An instance left behind by a case change keeps its last props, so disposal is checked first. */
+function captureRefusal(expected: ViewCaptureRequest) {
+  if (disposed || props.caseId !== expected.caseId || props.revisionId !== expected.revisionId || props.modelRevisionId !== expected.revisionId)
+    return VIEW_CHANGED_MESSAGE;
+  if (props.reviewActive) return VIEW_REVIEW_MESSAGE;
+  if (props.viewportActive === false || globalThis.document?.visibilityState !== 'visible' || !viewport.value?.clientWidth || !viewport.value.clientHeight)
+    return VIEW_HIDDEN_MESSAGE;
+  return '';
+}
+/** Whether the legacy scene shows this revision. Replacement surfaces stay staged until they all arrive, and a failed load leaves the old ones up. */
+function legacyPresents(expected: ViewCaptureRequest) {
+  const session = props.localSession,
+    plane = !needsPlane.value || (!planeError.value && (gpuActive.value || currentPlane.value?.context === desiredPlaneContext.value));
+  return (
+    !!scene &&
+    !loading.value &&
+    !error.value &&
+    surfaceRevisionLoaded.value === expected.revisionId &&
+    !!session &&
+    !session.isDisposed &&
+    session.revisionBase === revisionUrl(expected.caseId, expected.revisionId) &&
+    !!session.descriptor?.reference_image_id &&
+    session.descriptor.reference_image_id === expected.referenceImageId &&
+    (!needsVolume.value || (volumeReady.value && !gpuPreparing.value && !volumeError.value && gpuSession === session)) &&
+    (!needsVolume.value || !volumeMask.value.enabled || volumeMaskReady.value) &&
+    !maskError.value &&
+    plane
+  );
+}
+/**
+ * The exact image App will freeze for export, with evidence of what it shows. Unlike PNG ↗
+ * it refuses rather than saves: a stale layer here gets a wrong revision into a patient's study.
+ */
+async function captureView(expected: ViewCaptureRequest): Promise<ViewportCapture> {
+  const check = () => {
+    const refusal = captureRefusal(expected);
+    if (refusal) throw new Error(refusal);
+  };
+  check();
+  if (vtkSelected.value) {
+    const preview = volumePreview.value;
+    if (!preview) throw new Error(VIEW_NOT_READY_MESSAGE);
+    const frame = await preview.captureExportPNG(expected);
+    check();
+    if (!vtkSelected.value || volumePreview.value !== preview) throw new Error(VIEW_NOT_READY_MESSAGE);
+    return frame;
+  }
+  if (!legacyPresents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
+  syncReview();
+  const url = scene!.capturePNG();
+  // The render itself can fail over to another presentation, through the scene's callbacks.
+  check();
+  if (!legacyPresents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
+  return { url, referenceImageId: props.localSession!.descriptor!.reference_image_id!, surfaceRevisionId: surfaceRevisionLoaded.value };
+}
 watch(vtkSelected, active => {
   vtkReady.value = false;
   vtkError.value = '';
@@ -1542,6 +1627,8 @@ function exportSnapshot(): PortableRenderSnapshot {
 defineExpose({
   focus: focusView,
   screenshot,
+  captureView,
+  showRefusal,
   exportSnapshot,
   volumeDiagnostics: () => ({ renderer: vtkSelected.value ? 'vtk' : 'three', ...volumePreview.value?.diagnostics() }),
   captureVolumePNG: () => volumePreview.value?.capturePNG(),
@@ -1814,6 +1901,9 @@ defineExpose({
     <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
       {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
     </p>
+    <p v-if="exportRefusal" class="viewport-refusal" role="alert">
+      <span>⚠ {{ exportRefusal }}</span> <button class="text-button" type="button" @click="exportRefusal = ''">Dismiss</button>
+    </p>
     <p v-if="!vtkSelected && transparencyWarning && !error" class="render-notice" role="status">{{ transparencyWarning }}</p>
     <svg v-if="!vtkSelected" class="orientation-gizmo" viewBox="0 0 78 78" role="img" aria-label="Patient RAS orientation axes">
       <circle cx="39" cy="39" r="30" />
@@ -1853,6 +1943,15 @@ defineExpose({
       <span></span><button :title="vtkSelected && !reviewActive ? 'Fit CT volume' : 'Focus selected structure'" @click="focusView">Focus</button>
       <button title="Reset view" @click="vtkSelected ? volumePreview?.resetView() : selectView('oblique')">Reset</button>
       <button title="Save image" @click="screenshot">PNG ↗</button>
+      <button
+        v-if="dicomViewBlockReason !== undefined"
+        class="dicom-view-action"
+        :title="dicomViewReason || 'Add this view to the original study as a DICOM picture'"
+        :disabled="!!dicomViewReason"
+        @click="emit('exportView')"
+      >
+        DICOM ↗
+      </button>
     </div>
     <div class="viewport-hint">
       {{ reviewActive && reviewTool !== 'navigate' ? 'Right drag to rotate · Scroll to zoom' : 'Drag to rotate · Right drag to pan · Scroll to zoom' }}
@@ -1961,7 +2060,8 @@ defineExpose({
   top: 30px;
   left: 12px;
 }
-@container model-tile (min-width: 760px) {
+/* One row needs room for both toolbars, with Heart view in the camera strip and DICOM ↗ in the tools. */
+@container model-tile (min-width: 880px) {
   /* A container query styles descendants only, so the reserved space is set where it is used. */
   .model-review-controls,
   .orientation-gizmo {
@@ -2153,6 +2253,30 @@ defineExpose({
 .model-review-hint .text-button {
   font-size: 10px;
   pointer-events: auto;
+}
+/* The banner's colours, over the view the banner cannot be dismissed from. */
+.viewport-refusal {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 6;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(460px, calc(100% - 24px));
+  margin: 0;
+  padding: 7px 12px;
+  border: 1px solid #7b5238;
+  border-radius: 4px;
+  background: #4a3025;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #f0cbaa;
+}
+.viewport-refusal .text-button {
+  margin-left: 6px;
+  color: inherit;
+  font-size: 11px;
+  text-decoration: underline;
 }
 .model-review .viewport-caption {
   top: 14px;
