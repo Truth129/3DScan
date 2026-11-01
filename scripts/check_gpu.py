@@ -75,7 +75,7 @@ def main():
         parser.error("--device must be gpu or gpu:N")
     try:
         waiting = jobs_waiting()
-    except (OSError, sqlite3.Error) as exc:
+    except (OSError, ValueError, sqlite3.Error) as exc:  # ValueError is a setting Settings refuses.
         print(f"Could not read the job queue, so no GPU check ran: {exc}", file=sys.stderr)
         return 1
     if waiting:

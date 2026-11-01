@@ -99,9 +99,11 @@ can_rebuild() {
   return "$status"
 }
 
+# The check says what it found. This sentence has to fit a busy queue and one that cannot be read,
+# which no amount of waiting will clear.
 queue_is_empty() {
   "$interpreter" -B -P "$root/scripts/check_gpu.py" --queue ||
-    fail 'This environment needs a rebuild and a job may be using it, so nothing was changed. Run this again when the queue is empty.'
+    fail 'This environment needs a rebuild, which can start only when the job queue can be read and is empty, so it was left as it is. Deal with what is reported above, then run this again.'
 }
 
 chosen=
@@ -168,7 +170,7 @@ fi
 # --system, or an active environment or a .venv here could answer instead of a Python to build
 # on. --no-cache, because uv would otherwise record the answer, and these checks write nothing.
 interpreter="$("$uv" python find --no-cache --system --color never 3.14)" ||
-  fail 'Python 3.14 was not found, and this script does not install one. Install it, then run this again.'
+  fail 'uv could not find Python 3.14, so nothing was changed. See its error above. This script does not install a Python.'
 
 command -v nvidia-smi >/dev/null ||
   fail 'nvidia-smi was not found. Install the NVIDIA driver, 580 or newer, then run this again.'
@@ -262,8 +264,10 @@ fi
 # file however the directory is spelled. Every child inherits the descriptor, so a killed run's uv
 # keeps it until that has gone too. It is opened only to read because that cannot create a marker.
 exec 9<"$marker" || fail "$marker cannot be read, so nothing was changed."
-flock --nonblock 9 ||
-  fail 'Another run is using this environment, so nothing was changed. Run this again when it has finished.'
+flock --nonblock --conflict-exit-code 75 9 || case $? in
+  75) fail 'Another run is using this environment, so nothing was changed. Run this again when it has finished.' ;;
+  *) fail 'The lock on this environment failed, so nothing was changed. See the error above.' ;;
+esac
 
 # Only a finished environment that equals the lock stays, and `uv pip sync` cannot judge that. It
 # reads a pin by PEP 440, so ==2.14.0 accepts an installed 2.14.0+cu126, the wheel the lock exists

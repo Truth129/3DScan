@@ -1811,6 +1811,16 @@ def test_a_queue_that_cannot_be_read_is_not_an_empty_one(check, tmp_path):
     assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
 
 
+def test_settings_that_cannot_be_read_are_not_an_empty_queue(check, monkeypatch):
+    monkeypatch.setenv("SCAN3D_MODALITIES", "XRAY")
+    completed = ask_the_queue(check.stub)
+    assert completed.returncode == 1
+    assert completed.stderr.strip() == "Could not read the job queue, so no GPU check ran: SCAN3D_MODALITIES must list one or more of: CT, MR"
+    full = check("--path", "nvidia")
+    assert full.returncode == 1 and "Could not read the job queue" in full.stderr and "Traceback" not in full.stderr
+    assert not check.stub.proof.exists()
+
+
 def a_directory_for_the_database(data):
     (data / "scan3d.sqlite3").mkdir(parents=True)
 

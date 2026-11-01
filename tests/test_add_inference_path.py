@@ -122,7 +122,7 @@ if tool == "find":
     if scenario["wipe_status"]:
         sys.exit(scenario["wipe_status"])
     os.execv(rig / "find", ["find", *arguments])
-if tool in ("mkdir", "rm"):
+if tool in ("flock", "mkdir", "rm"):
     os.execv(rig / tool, [tool, *arguments])
 if arguments[:2] == ["cache", "dir"]:
     if not scenario["cache_dir_status"]:
@@ -131,6 +131,8 @@ if arguments[:2] == ["cache", "dir"]:
 if arguments[:2] == ["python", "find"]:
     if scenario["python"]:
         print(rig / "system-python")
+    else:
+        print(scenario["python_error"], file=sys.stderr)
     sys.exit(0 if scenario["python"] else 2)
 if arguments[0] == "venv":
     if os.environ.get("UV_VENV_CLEAR"):
@@ -245,6 +247,7 @@ class Rig:
         self.scenario = {
             "during": {},
             "python": True,
+            "python_error": "error: No interpreter found for Python 3.14 in search path",
             "driver": "580.82.09\n",
             "driver_status": 0,
             "free": 21 * GIB,
@@ -470,7 +473,7 @@ def a_lock_with_no_pins(rig):
 
 PREFLIGHT_FAILURES = {
     no_uv: "uv was not found",
-    no_python: "Python 3.14 was not found",
+    no_python: "uv could not find Python 3.14",
     no_nvidia_smi: "nvidia-smi was not found",
     unreachable_driver: "nvidia-smi could not read the driver version: NVIDIA-SMI has failed",
     unknown_driver: "nvidia-smi gave no driver version: [N/A]",
@@ -493,6 +496,18 @@ def test_each_preflight_failure_says_its_own_reason_and_changes_nothing(rig, fai
     assert "Adding the NVIDIA" not in completed.stdout
     assert rig.snapshot() == before
     assert not {"uv venv", "uv pip sync", "venv-python"} & set(rig.steps())
+
+
+def test_a_python_uv_cannot_look_for_is_not_called_missing(rig):
+    # A TMPDIR left from an old session stops the search, with the Python right there.
+    rig.scenario.update(python=False, python_error='error: No such file or directory (os error 2) at path "/gone/.tmpw3"')
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1
+    assert "/gone/.tmpw3" in completed.stderr
+    assert "uv could not find Python 3.14, so nothing was changed. See its error above." in completed.stderr
+    assert "Install it" not in completed.stderr
+    assert rig.snapshot() == before
 
 
 def test_the_driver_message_names_the_floor(rig):
@@ -1418,6 +1433,38 @@ def test_a_killed_run_keeps_the_environment_until_its_uv_has_gone(rig):
     assert rig.packages() == LOCKED
 
 
+def no_flock(rig):
+    (rig.bin / "flock").unlink()
+
+
+def a_flock_that_fails(rig):
+    (rig.bin / "flock").unlink()
+    (rig.bin / "flock").write_text('#!/usr/bin/env bash\necho "flock: 9: No locks available" >&2\nexit 1\n')
+    (rig.bin / "flock").chmod(0o755)
+
+
+@pytest.mark.parametrize("fault, reported", [(no_flock, "flock: command not found"), (a_flock_that_fails, "No locks available")], ids=["absent", "fails"])
+def test_a_lock_that_fails_is_not_called_another_run(rig, fault, reported):
+    a_rebuild(rig)
+    fault(rig)
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1
+    assert reported in completed.stderr
+    assert "The lock on this environment failed, so nothing was changed. See the error above." in completed.stderr
+    assert "Another run" not in completed.stderr
+    assert rig.steps() == LATER_PREFLIGHT
+    assert rig.snapshot() == before
+
+
+def test_only_a_conflict_reads_as_another_run(rig):
+    # What the sentence above rests on, and real flock exits 1 on a conflict unless told otherwise.
+    a_rebuild(rig)
+    rig.watch("flock")
+    assert rig.run("nvidia").returncode == 0
+    assert rig.step("flock")["arguments"] == ["--nonblock", "--conflict-exit-code", "75", "9"]
+
+
 def test_a_finished_run_leaves_the_environment_free(rig):
     installed(rig)
     assert rig.run("nvidia").returncode == 0
@@ -1558,6 +1605,12 @@ def test_uv_rebuilds_from_the_checkout_as_it_installs_from_it(rig):
 # The job queue
 
 
+QUEUE_IN_THE_WAY = (
+    "This environment needs a rebuild, which can start only when the job queue can be read and is empty, "
+    "so it was left as it is. Deal with what is reported above, then run this again."
+)
+
+
 def busy_queue(rig):
     rig.scenario["check"] = "refused"  # The real check's guard answers both of its questions.
 
@@ -1570,7 +1623,7 @@ def test_a_busy_queue_stops_a_rebuild_before_anything_changes(rig):
     completed = rig.run("nvidia")
     assert completed.returncode == 1
     assert "Jobs are queued or running" in completed.stderr
-    assert "nothing was changed" in completed.stderr and "Run this again when the queue is empty" in completed.stderr
+    assert QUEUE_IN_THE_WAY in said(completed.stderr)
     assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]  # So it sets off no download.
     assert rig.snapshot() == before and rig.in_the_cache() == []
     assert (rig.venv / FINISHED).is_file()
@@ -1664,7 +1717,23 @@ def test_the_real_check_answers_for_a_rebuild(rig, statuses, reply):
     shutil.copy2(ROOT / "scripts" / "check_gpu.py", rig.root / "scripts")
     before = rig.snapshot()
     completed = rig.run("nvidia", env=rig.with_a_real_check())
-    assert completed.returncode == 1 and reply in completed.stderr and "nothing was changed" in completed.stderr
+    assert completed.returncode == 1 and reply in completed.stderr and QUEUE_IN_THE_WAY in said(completed.stderr)
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]
+    assert rig.snapshot() == before
+
+
+def test_a_setting_the_queue_cannot_be_read_under_is_not_called_a_busy_queue(rig):
+    # Told to wait for an empty queue, a person would wait for ever.
+    installed(rig)
+    a_local_build(rig)
+    a_library(rig, ())
+    shutil.copy2(ROOT / "scripts" / "check_gpu.py", rig.root / "scripts")
+    before = rig.snapshot()
+    completed = rig.run("nvidia", env={**rig.with_a_real_check(), "SCAN3D_MODALITIES": "XRAY"})
+    assert completed.returncode == 1
+    assert "Could not read the job queue, so no GPU check ran: SCAN3D_MODALITIES must list one or more of: CT, MR" in completed.stderr
+    assert QUEUE_IN_THE_WAY in said(completed.stderr) and "when the queue is empty" not in said(completed.stderr)
+    assert "Traceback" not in completed.stderr
     assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]
     assert rig.snapshot() == before
 
