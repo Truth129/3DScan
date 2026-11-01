@@ -32,13 +32,13 @@ SCRIPT = ROOT / "scripts" / "add_inference_path.sh"
 SETTINGS_CODE = ("__init__.py", "config.py", "doctor.py", "inference_paths.py")
 GIB = 1024**3
 LOCKED = {"alpha": {"version": "1.0", "complete": True}, "beta": {"version": "2.0.post1", "complete": True}}
-COREUTILS = ("bash", "cat", "dirname", "flock", "grep", "mkdir", "realpath", "rm", "sort", "stat", "tail")
+COREUTILS = ("bash", "cat", "dirname", "flock", "grep", "mkdir", "mktemp", "realpath", "rm", "sort", "stat", "tail")
 PREFLIGHT = ["uv python find", "nvidia-smi", "df", "df", "system-python"]
 FIRST_RUN = [*PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]
 LATER_PREFLIGHT = ["uv python find", "nvidia-smi", "system-python"]  # A later run needs no room.
 RE_RUN = [*LATER_PREFLIGHT, "uv pip freeze", "venv-python"]  # It equals the lock: no index.
 RESTARTED = [*LATER_PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]  # No install has finished.
-PLANNED = ["queue", "find", "uv venv", "uv pip sync", "venv-python"]  # A finished environment is at stake.
+PLANNED = ["uv plan", "queue", "find", "uv venv", "uv pip sync", "venv-python"]  # A finished environment is at stake.
 REBUILT = [*LATER_PREFLIGHT, "uv pip freeze", *PLANNED]
 MARKER = ".scan3d-inference-path"
 FINISHED = ".scan3d-inference-path-finished"
@@ -73,6 +73,8 @@ rig = Path(rig)
 scenario = json.loads((rig / "scenario.json").read_text())
 if "--queue" in arguments:
     step = "queue"
+elif "--dry-run" in arguments:
+    step = f"{tool} plan"
 elif tool.endswith("uv"):  # What ran, with its subcommand named.
     step = " ".join((tool, *(word for word in arguments[:2] if not word.startswith("-"))))
 else:
@@ -128,11 +130,22 @@ if arguments[0] == "venv":
     if scenario["venv_stops"]:  # uv writes the link before pyvenv.cfg.
         sys.exit(130)
     (target / "pyvenv.cfg").write_text("home = fake\n")
+if arguments[:2] == ["pip", "sync"] and "<<<<<<<" in Path(arguments[-1]).read_text():
+    print("error: Unexpected '<', expected '-c', '-e', '-r' or the start of a requirement", file=sys.stderr)
+    sys.exit(2)
+if "--dry-run" in arguments:
+    (Path(arguments[arguments.index("--target") + 1]) / ".lock").touch()  # All that real uv leaves there.
+    sys.exit(scenario["plan_status"])
 if arguments[0] == "pip":
     environment = Path(arguments[arguments.index("--python") + 1]).parents[1]
     record = environment / "installed.json"
     packages = json.loads(record.read_text()) if record.exists() else {}
 if arguments[:2] == ["pip", "freeze"]:
+    if "--quiet" not in arguments:
+        print("Using Python 3.14 environment at: .venv-nvidia-py314", file=sys.stderr)
+    if scenario["freeze_status"]:
+        print("error: Failed to read metadata", file=sys.stderr)
+        sys.exit(scenario["freeze_status"])
     print("".join(f"{name}=={package['version']}\n" for name, package in sorted(packages.items())), end="")
 if arguments[:2] == ["pip", "sync"]:
     if scenario["sync_status"]:
@@ -199,9 +212,11 @@ class Rig:
         self.fakes = self.top / "rig"
         self.bin = self.top / "bin"
         self.elsewhere = self.top / "elsewhere"
-        for folder in (self.root / "scripts", self.root / "requirements", self.root / "scan3d", self.fakes, self.bin, self.elsewhere):
+        self.tmp = self.top / "tmp"
+        for folder in (self.root / "scripts", self.root / "requirements", self.root / "scan3d", self.fakes, self.bin, self.elsewhere, self.tmp):
             folder.mkdir(parents=True)
         self.venv = self.root / ".venv-nvidia-py314"
+        self.lock = self.root / "requirements" / "cuda-py314.lock"
         self.proof = self.root / ".runtime" / "inference-paths" / "nvidia.json"
         self.scenario = {
             "during": {},
@@ -210,6 +225,8 @@ class Rig:
             "driver_status": 0,
             "free": 13 * GIB,
             "free_at": {},
+            "freeze_status": 0,
+            "plan_status": 0,
             "wipe_status": 0,
             "killed_after_the_wipe": False,
             "venv_status": 0,
@@ -221,7 +238,7 @@ class Rig:
         }
         shutil.copy2(SCRIPT, self.root / "scripts")
         (self.root / "scripts" / "check_gpu.py").write_text(STUB_CHECK)
-        (self.root / "requirements" / "cuda-py314.lock").write_text(STUB_LOCK)
+        self.lock.write_text(STUB_LOCK)
         for name in SETTINGS_CODE:
             shutil.copy(ROOT / "scan3d" / name, self.root / "scan3d")
         for name in (".venv", ".venv-rocm10-py314"):  # What the script must never adopt.
@@ -247,7 +264,7 @@ class Rig:
     def prepared(self, env=None):
         """The scenario on disk, and the command and environment of a run."""
         (self.fakes / "scenario.json").write_text(json.dumps(self.scenario))
-        return self.root / "scripts" / SCRIPT.name, {"PATH": str(self.bin), "HOME": str(self.top / "home"), **(env or {})}
+        return self.root / "scripts" / SCRIPT.name, {"PATH": str(self.bin), "HOME": str(self.top / "home"), "TMPDIR": str(self.tmp), **(env or {})}
 
     def run(self, *arguments, cwd=None, env=None):
         script, environment = self.prepared(env)
@@ -408,6 +425,14 @@ def small_disk(rig):
     rig.scenario["free"] = 12 * GIB - 1
 
 
+def no_lock(rig):
+    rig.lock.unlink()
+
+
+def a_lock_with_no_pins(rig):
+    rig.lock.write_text("# Truncated.\n")
+
+
 PREFLIGHT_FAILURES = {
     no_uv: "uv was not found",
     no_python: "Python 3.14 was not found",
@@ -417,6 +442,8 @@ PREFLIGHT_FAILURES = {
     old_driver: "NVIDIA driver 579.99.01 is too old",
     two_cards_on_an_old_driver: "NVIDIA driver 579.99.01 is too old",
     small_disk: "Only 11 GiB is free",
+    no_lock: "is missing or pins nothing",
+    a_lock_with_no_pins: "is missing or pins nothing",
 }
 
 
@@ -641,13 +668,18 @@ def test_a_first_run_builds_syncs_and_checks_and_registers_the_path(rig):
     assert "no restart" in completed.stdout and str(rig.proof) in completed.stdout
 
 
-def test_a_run_stays_inside_the_rig(rig):
+@pytest.mark.parametrize("rebuilt", [False, True], ids=["first-run", "rebuild"])
+def test_a_run_stays_inside_the_rig(rig, rebuilt):
+    if rebuilt:
+        installed(rig)
+        a_local_build(rig)
     assert rig.run("nvidia").returncode == 0
     calls = rig.calls()
     assert {call["env"]["PATH"] for call in calls} == {str(rig.bin)}
     assert all(Path(call["cwd"]).is_relative_to(rig.top) for call in calls)
     arguments = [word for call in calls for word in call["arguments"] if word.startswith("/")]
     assert arguments and all(Path(word).is_relative_to(rig.top) for word in arguments)
+    assert list(rig.tmp.iterdir()) == []
     assert {entry.name for entry in rig.root.iterdir()} == {
         ".runtime",
         ".venv",
@@ -735,6 +767,11 @@ def test_a_re_run_keeps_the_environment_and_repeats_the_check(rig):
     assert package.exists() and (rig.venv / "bin" / "python").stat().st_ino == interpreter.st_ino
     assert "from an earlier run" in completed.stdout
     assert "nothing was installed" in completed.stdout
+
+
+def test_a_re_run_does_not_name_the_environment_it_read(rig):
+    installed(rig)
+    assert "Using Python" not in rig.run("nvidia").stderr
 
 
 def test_a_re_run_repairs_a_failed_check(rig):
@@ -1022,6 +1059,103 @@ def test_a_stopped_install_is_rebuilt_in_the_room_it_left(rig, stopped):
     assert "df" not in rig.steps()
 
 
+# What a rebuild must show before it starts
+
+
+def test_an_environment_uv_cannot_read_is_left_exactly_as_it_is(rig):
+    # A failed read says nothing about the lock, and only an environment that equals it stays.
+    installed(rig)
+    rig.scenario["freeze_status"] = 2
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1
+    assert "uv could not read this environment, so nothing was changed" in said(completed.stderr)
+    assert "error: Failed to read metadata" in completed.stderr  # What the person has to go on.
+    assert "move the directory aside" in said(completed.stderr)  # The way out of a read that always fails.
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze"]
+    assert rig.snapshot() == before
+
+
+@pytest.mark.parametrize("damage", [no_lock, a_lock_with_no_pins], ids=lambda damage: damage.__name__)
+def test_a_lock_that_pins_nothing_never_reaches_a_finished_environment(rig, damage):
+    installed(rig)
+    damage(rig)
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1 and "is missing or pins nothing, so nothing was changed" in completed.stderr
+    assert rig.calls() == [] and rig.snapshot() == before
+
+
+def uv_cannot_reach_a_package(rig):
+    rig.scenario["plan_status"] = 1
+
+
+def a_merge_conflict_in_the_lock(rig):
+    rig.lock.write_text(f"<<<<<<< HEAD\n{STUB_LOCK}=======\nalpha==1.1 \\\n    --hash=sha256:dddd\n>>>>>>> other\n")
+
+
+@pytest.mark.parametrize("obstacle", [uv_cannot_reach_a_package, a_merge_conflict_in_the_lock])
+def test_a_rebuild_uv_cannot_plan_leaves_a_finished_environment_alone(rig, obstacle):
+    installed(rig)
+    a_local_build(rig)
+    obstacle(rig)
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1
+    assert "uv cannot rebuild this environment from what it can reach, so nothing was changed" in said(completed.stderr)
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "uv plan"]
+    assert rig.snapshot() == before
+    assert list(rig.tmp.iterdir()) == []
+
+
+def test_a_rebuild_is_planned_by_the_real_sync_for_a_directory_holding_nothing(rig):
+    # Asked about the environment itself, uv plans only the difference, and passes with every wheel gone.
+    installed(rig)
+    a_local_build(rig)
+    assert rig.run("nvidia").returncode == 0
+    plan = rig.step("uv plan")
+    empty = plan["arguments"][plan["arguments"].index("--target") + 1]
+    assert Path(empty).parent == rig.tmp
+    assert plan["arguments"] == [
+        "pip",
+        "sync",
+        "--quiet",
+        "--dry-run",
+        "--python",
+        str(rig.fakes / "system-python"),  # uv refuses a base Python that is not given a target.
+        "--target",
+        empty,
+        "--require-hashes",
+        str(rig.lock),
+    ]
+    assert plan["env"]["UV_PYTHON_DOWNLOADS"] == "never"
+
+
+def test_an_environment_past_reading_is_planned_for_too(rig):
+    # With its interpreter gone nothing can be read, and a lock uv cannot use must still stop the run.
+    installed(rig)
+    (rig.venv / "bin" / "python").unlink()
+    a_merge_conflict_in_the_lock(rig)
+    before = rig.snapshot()
+    assert rig.run("nvidia").returncode == 1
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv plan"]
+    assert rig.snapshot() == before
+
+
+@pytest.mark.parametrize("stop", [stopped_inside_uv_venv, stopped_inside_uv_pip_sync, killed_right_after_the_wipe])
+def test_nothing_is_at_stake_after_a_stop_so_no_plan_is_asked_for(rig, stop):
+    installed(rig)
+    a_local_build(rig)
+    calm = dict(rig.scenario)
+    stop(rig)
+    rig.run("nvidia")
+    rig.forget_calls()
+    rig.scenario = calm
+    uv_cannot_reach_a_package(rig)  # A plan would stop this run, and it has nothing to protect.
+    assert rig.run("nvidia").returncode == 0
+    assert rig.steps() == RESTARTED
+
+
 # One run at a time
 
 
@@ -1137,7 +1271,7 @@ def test_a_target_that_arrives_after_the_guard_is_refused_too(rig, step, arrival
     assert not {"find", "uv venv", "uv pip sync", "venv-python"} & set(rig.steps())
     if arrival is LATE_ARRIVALS["a-directory"]:
         assert (target / "lib" / "precious").exists()
-    assert not (target / MARKER).exists()
+    assert not (target / MARKER).exists() and not list(rig.tmp.iterdir())
 
 
 def test_a_run_that_loses_mkdir_to_another_run_is_refused_by_the_lock(rig):
@@ -1185,7 +1319,7 @@ def swapped_in(rig, step, marked=False):
 
 
 @pytest.mark.parametrize("marked", [False, True], ids=["unmarked", "marked-by-another-run"])
-@pytest.mark.parametrize("step", ["uv pip freeze", "queue"])
+@pytest.mark.parametrize("step", ["uv pip freeze", "uv plan", "queue"])
 def test_a_directory_swapped_in_during_a_run_is_left_alone(rig, step, marked):
     a_rebuild(rig)
     aside = swapped_in(rig, step, marked)
@@ -1220,7 +1354,7 @@ def test_a_busy_queue_stops_a_rebuild_before_anything_changes(rig):
     assert completed.returncode == 1
     assert "Jobs are queued or running" in completed.stderr
     assert "nothing was changed" in completed.stderr and "Run this again when the queue is empty" in completed.stderr
-    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "uv plan", "queue"]
     assert rig.snapshot() == before
     assert (rig.venv / FINISHED).is_file()
 
@@ -1298,7 +1432,7 @@ def test_the_real_check_answers_for_a_rebuild(rig, statuses, reply):
     before = rig.snapshot()
     completed = rig.run("nvidia", env=rig.with_a_real_check())
     assert completed.returncode == 1 and reply in completed.stderr and "nothing was changed" in completed.stderr
-    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "uv plan", "queue"]
     assert rig.snapshot() == before
 
 
@@ -1368,7 +1502,9 @@ def test_the_result_offers_the_card_only_on_the_same_condition(rig):
 
 
 def test_the_plan_says_what_a_re_run_does_to_anything_but_an_environment_equal_to_the_lock(rig):
-    assert "is rebuilt from empty, from what uv has already fetched where it can" in said(rig.run("nvidia", "--dry-run").stdout)
+    plan = said(rig.run("nvidia", "--dry-run").stdout)
+    assert "is rebuilt from empty, from what uv has already fetched where it can" in plan
+    assert "A finished environment waits for an empty queue and stays unless uv can plan the rebuild" in plan
 
 
 def test_usage_says_what_a_re_run_does_and_what_it_cannot_fix(rig):

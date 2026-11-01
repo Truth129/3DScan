@@ -64,10 +64,24 @@ has_environment() {
 # what uv prints for an installed package is what it writes for a pin, so the two compare as text.
 matches_lock() {
   [[ -f "$finished" ]] && has_environment || return 1
-  local pins packages
-  pins="$(grep -oE '^[a-z0-9][^ ]*==[^ ]+' "$lock" | sort)"
-  packages="$("$uv" pip freeze --python "$python" 2>/dev/null | sort)"
+  local packages
+  # A failed read says nothing about the lock, and treating it as a difference would wipe an
+  # environment that may equal it. --quiet drops only the line naming the environment.
+  packages="$("$uv" pip freeze --python "$python" --quiet | sort)" ||
+    fail 'uv could not read this environment, so nothing was changed. Fix what it reported above, then run this again. If the fault is in the environment itself, move the directory aside first, and the run after that installs it from empty.'
   [[ "$packages" == "$pins" ]]
+}
+
+# Whether uv can plan this lock from nothing, which is what a rebuild is about to need. This is the
+# rebuild's own sync as a dry run, for a directory with nothing in it. Asked about the environment
+# itself, uv plans only the difference, which passes with every wheel gone, and it needs --target
+# to accept a base Python. It leaves a lock file in the directory.
+can_rebuild() {
+  local empty status=0
+  empty="$(mktemp -d)" || return 1
+  "$uv" pip sync --quiet --dry-run --python "$interpreter" --target "$empty" --require-hashes "$lock" || status=$?
+  rm -rf -- "$empty"
+  return "$status"
 }
 
 chosen=
@@ -105,6 +119,11 @@ lock="$root/requirements/cuda-py314.lock"
 cd "$root"
 
 refuse_unmarked
+
+# Before anything else, because a lock with no pins would read as a difference from any environment,
+# and a difference starts a rebuild.
+pins="$(grep -oE '^[a-z0-9][^ ]*==[^ ]+' "$lock" | sort)" ||
+  fail "$lock is missing or pins nothing, so nothing was changed."
 
 uv="$root/.tools/bin/uv"
 if [[ ! -x "$uv" ]]; then
@@ -176,8 +195,9 @@ Adding the NVIDIA inference path.
 A first install downloads about 3.3 GiB and takes about 9 GiB on disk. A re-run leaves an
 environment that equals the lock alone, and needs no network to do so. Anything else, such as
 an install that did not finish, is rebuilt from empty, from what uv has already fetched where
-it can. Every package is checked against a hash, with one gap: acvl-utils is published only as
-source, and the tools that build it are fetched without hashes.
+it can. A finished environment waits for an empty queue and stays unless uv can plan the
+rebuild. Every package is checked against a hash, with one gap: acvl-utils is published only
+as source, and the tools that build it are fetched without hashes.
 
 It will not touch any other Python environment, the viewer, the DICOM converter,
 TotalSegmentator's settings, scan3d.env or the running app, and it does not install a Python.
@@ -228,9 +248,12 @@ flock --nonblock 9 ||
 if matches_lock; then
   echo 'Every package already equals the lock, so nothing was installed.'
 else
-  # A job can run from a finished environment and never from an unfinished one, which discovery
-  # refuses, so a first or a stopped install does not wait for the queue.
+  # Only a finished environment has anything to lose: it may be working, and a job can run from it
+  # and never from an unfinished one, which discovery refuses. So it alone waits, and it goes only
+  # if uv can build its replacement. The queue comes last because it can change while uv plans.
   if [[ -f "$finished" ]]; then
+    can_rebuild ||
+      fail 'uv cannot rebuild this environment from what it can reach, so nothing was changed. Fix what it reported above, then run this again.'
     "$interpreter" -B -P "$root/scripts/check_gpu.py" --queue ||
       fail 'This environment needs a rebuild and a job may be using it, so nothing was changed. Run this again when the queue is empty.'
   fi
