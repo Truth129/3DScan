@@ -189,15 +189,19 @@ AI weights, the license and your cases, so nothing downloads twice.
 
 The script installs only into a directory it made, which it marks with a
 `.scan3d-inference-path` file. It refuses any other directory that already exists,
-however empty, because its install removes whatever `requirements/cuda-py314.lock` does
-not list. Packages are checked against the lock's hashes, with one gap: acvl-utils is
-published only as source, and the tools that build it are fetched without hashes.
+however empty, and a link with that name does not count, because a rebuild removes
+everything in the directory except that file. Keep nothing of your own there. Packages
+are checked against the hashes in `requirements/cuda-py314.lock`, with one gap: acvl-utils
+is published only as source, and the tools that build it are fetched without hashes.
 
 **The GPU check.** Last, the script runs `scripts/check_gpu.py --path nvidia`, which
 writes a proof to `.runtime/inference-paths/nvidia.json`, or under
 `SCAN3D_INFERENCE_PATH_DIR` if you set it. That file is the whole registration. When the
 check passes, a running app that reads that folder offers the GPU the next time a panel
-opens, with no restart and no setting to change.
+opens, with no restart and no setting to change, provided your existing install's
+TotalSegmentator and nnInteractive versions equal this environment's. If they differ, the
+app shows the GPU as unavailable and says why. The script cannot compare them, because it
+cannot tell which Python serves the app.
 
 A passing check proves that this PyTorch build sees the card and ran a small 3D
 convolution on it, and that this environment can import what the app's AI processes
@@ -206,19 +210,36 @@ that results are good, or that they match another GPU's.
 
 - **A failed check** still writes the proof, so the app lists the GPU as unavailable
   with its reason. Fix what the check reported and run the script again.
-- **A refused check** writes nothing, so the app shows what it showed before. The check
-  refuses while a job is queued or running, and when it cannot read the queue.
+- **A refused check** writes nothing, so the app still goes by the last proof, if there
+  is one. The check refuses while a job is queued or running, and when it cannot read the
+  queue.
 
 **Run the script again** after changing the NVIDIA driver, after anything changes that
-environment, and whenever the app shows the GPU as unavailable. It keeps the
-environment. If its last install finished and it equals the lock, the script installs
-nothing and needs no network. Otherwise it installs every package again, from what uv
-has already fetched where it can. Either way it then repeats the GPU check. If an
-install stops, no check runs, and running the script again carries on. The app notices
-changed PyTorch and engine packages by itself, but it cannot see a driver change, so
-until you re-run the script, only the device check at the start of each job can catch a
-broken driver. If the reason shown is a TotalSegmentator or nnInteractive version,
-update your existing install too: every path must use the same versions.
+environment, and whenever the app shows the GPU as unavailable. If its last install
+finished and it equals the lock, the environment stays: the script installs nothing and
+needs no network. Anything else is rebuilt from empty, from what uv has already fetched
+where it can, because uv cannot repair what a stopped install leaves. Either way the
+script then repeats the GPU check.
+
+A finished environment may be in use, so the script rebuilds it only when no job is
+queued or running, by the same rule as the GPU check, and uv can plan the rebuild.
+Otherwise it stops with nothing changed. `scripts/check_gpu.py --queue` runs that queue
+rule alone. No job can start from an unfinished environment, so a first install and a
+stopped install do not wait for the queue.
+
+If an install stops, no check runs. Until a run finishes, the app shows the GPU as
+unavailable, or not at all if it was never checked, and running the script again starts
+from empty. Only one run can use an environment at a time, so a second stops with nothing
+changed. If uv cannot read the environment, the script stops with nothing changed too. If
+the fault is in the environment itself, move the directory aside, and the next run
+installs it from empty.
+
+The app notices changed PyTorch and engine packages by itself, but it cannot see a driver
+change, so until you re-run the script, only the device check at the start of each job
+can catch a broken driver. A job that stops there says that PyTorch cannot access a GPU
+and that no other GPU was tried. Check the driver, then run the script again to repeat
+the GPU check. If the reason shown is a TotalSegmentator or nnInteractive version, update
+your existing install too: every path must use the same versions.
 
 **To remove a path**, move its proof out of the folder. The GPU leaves the app the next
 time a panel opens, with no restart, and a job already queued on it fails, naming the

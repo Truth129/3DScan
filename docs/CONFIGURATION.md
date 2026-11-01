@@ -82,8 +82,9 @@ each time it needs the folder, not once at startup, and a blank value means the 
 changing it there needs a restart. The folder's contents are read each time a panel
 opens and each time a job starts, so adding or moving a proof file needs no restart.
 `scripts/check_gpu.py --path` and `scripts/add_inference_path.sh` read the same variable,
-so run them with the value the app sees. A proof names an interpreter that the app will
-run, so a folder outside the checkout needs the same protection as the checkout.
+and `SCAN3D_DATA_DIR` for the job queue that guards a rebuild, so run them with the values
+the app sees. A proof names an interpreter that the app will run, so a folder outside the
+checkout needs the same protection as the checkout.
 
 Variables the runtime itself reads, such as `XDG_CACHE_HOME` or the `MIOPEN_*` caches on
 AMD systems, can go in `scan3d.env` too. Every variable in the file reaches the default
