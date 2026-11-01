@@ -85,7 +85,11 @@ def add_routes(app, service):
 
     @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
     def dicom_seg_export(case_id: str, revision_id: str, body: DicomSegExport):
-        return public_job(service.orthanc_exports.start(case_id, revision_id, body.structure_ids, body.destination, resend=body.resend))
+        return public_job(
+            service.orthanc_exports.start(
+                case_id, revision_id, body.structure_ids, body.destination, resend=body.resend, overlap_priority=body.overlap_priority
+            )
+        )
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/cinematic-reference")
     def cinematic_reference(case_id: str, revision_id: str):

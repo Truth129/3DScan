@@ -56,6 +56,7 @@ class _Segment:
     mask_sha256: Digest
     voxel_count: Positive
     segment_number: Annotated[int, Field(ge=1, le=1000)]
+    removed_voxel_count: Annotated[int, Field(ge=0)] = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +91,7 @@ class _Artifact:
     created_at: str
     files: Annotated[tuple[_File | _LegacyFile, ...], Field(min_length=1, max_length=1000)]
     encoding_version: Positive = 1
+    overlap_priority: Annotated[tuple[str, ...], Field(min_length=2, max_length=1000)] | None = None
 
 
 _ARTIFACT = TypeAdapter(_Artifact)
@@ -133,6 +135,14 @@ def _hash(path, cancelled=None):
                 raise InterruptedError("DICOM SEG export cancelled before delivery")
             digest.update(block)
     return digest.hexdigest()
+
+
+def _encoded_order(structures, overlap_priority):
+    """Segment numbers follow a ranked export's order, otherwise the sorted IDs."""
+    if overlap_priority is None:
+        return structures
+    selected = {item["id"]: item for item in structures}
+    return tuple(selected[key] for key in overlap_priority)
 
 
 def _frozen_structure(structure):
@@ -218,8 +228,10 @@ class OrthancExports:
             return {"available": False, "reason": reason, "destinations": [], "exports": exports, "encoding_version": EXPORT_ENCODING_VERSION}
         return {"available": True, "destinations": destinations, "exports": exports, "encoding_version": EXPORT_ENCODING_VERSION}
 
-    def start(self, case_id, revision_id, structure_ids=None, destination=None, *, resend=False):
+    def start(self, case_id, revision_id, structure_ids=None, destination=None, *, resend=False, overlap_priority=None):
         inputs = self._inputs(case_id, revision_id, structure_ids)
+        if overlap_priority is not None and (len(overlap_priority) < 2 or sorted(overlap_priority) != [item["id"] for item in inputs.structures]):
+            raise ExportUnavailable("Rank every selected structure exactly once to resolve overlaps.")
         if resend and destination is None:
             raise ExportUnavailable("Choose a configured destination before requesting Send again.")
         display_name = None
@@ -241,6 +253,10 @@ class OrthancExports:
         selection_key = hashlib.sha256(json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         input_key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         encoding = {**identity, "encoding_version": EXPORT_ENCODING_VERSION}
+        # A ranking changes the output, not the inputs. Keeping it out of the
+        # selection and input keys lets the changed-mask guard compare it too.
+        if overlap_priority is not None:
+            encoding["overlap_priority"] = overlap_priority
         artifact_key = hashlib.sha256(json.dumps(encoding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         export_key = hashlib.sha256((artifact_key + ":" + (destination or "")).encode()).hexdigest()
         with self.service.store.connection() as con:
@@ -285,6 +301,8 @@ class OrthancExports:
                 "destination_name": display_name,
                 "delivery_attempt_id": matching["payload"]["delivery_attempt_id"] if matching and not resend else identifier(),
             }
+            if overlap_priority is not None:
+                payload["overlap_priority"] = overlap_priority
             if artifact_job:
                 manifest_sha = next(
                     (
@@ -319,6 +337,8 @@ class OrthancExports:
             }
             if destination:
                 summary.update(destination=display_name, destination_id=destination)
+            if overlap_priority is not None:
+                summary["overlap_priority"] = overlap_priority
             job["result"] = {"dicom_seg": summary}
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
         return job
@@ -341,6 +361,7 @@ class OrthancExports:
         from .dicom_seg import DicomSegError, SegmentInput, export_segmentation
 
         inputs = self._check_inputs(job)
+        overlap_priority = job["payload"].get("overlap_priority")
         manifest_path = directory / "export.json"
         if manifest_path.exists():
             try:
@@ -350,7 +371,7 @@ class OrthancExports:
             except (OSError, ValidationError):
                 raise ExportUnavailable("The cached DICOM SEG export is invalid. Its bytes were retained for inspection.") from None
         else:
-            self.service.stage(job, "Encoding exact saved masks as DICOM SEG")
+            self.service.stage(job, "Resolving overlaps and encoding DICOM SEG" if overlap_priority else "Encoding exact saved masks as DICOM SEG")
             segments = tuple(SegmentInput(item["id"], item["name"], item["color"], Path(item["mask_file"])) for item in inputs.structures)
             try:
                 result = export_segmentation(
@@ -364,6 +385,7 @@ class OrthancExports:
                     progress=lambda completed, total: self.service.store.update_job(
                         job["id"], progress={"phase": "dicom_seg", "completed": completed, "total": total}
                     ),
+                    overlap_priority=overlap_priority,
                 )
             except DicomSegError as exc:
                 raise ExportUnavailable(str(exc)) from None
@@ -385,6 +407,7 @@ class OrthancExports:
                 frame_of_reference_uid=result.frame_of_reference_uid,
                 created_at=now(),
                 encoding_version=job["payload"]["encoding_version"],
+                overlap_priority=overlap_priority,
                 files=tuple(
                     _File(
                         item.path.name,
@@ -399,6 +422,7 @@ class OrthancExports:
                                 segment.mask_sha256,
                                 segment.voxel_count,
                                 segment.segment_number,
+                                segment.removed_voxel_count,
                             )
                             for segment in item.segments
                         ),
@@ -407,14 +431,17 @@ class OrthancExports:
                 ),
             )
             # Persist the generated SOP identities before any network write.
+            # Unranked manifests keep their exact fields, so a rollback reads them.
             artifact = _ARTIFACT.validate_python(artifact)
-            atomic_json(manifest_path, _ARTIFACT.dump_python(artifact, mode="json"))
+            atomic_json(manifest_path, _ARTIFACT.dump_python(artifact, mode="json", exclude_defaults=True))
             self._check_inputs(job)
         segments = tuple(segment for item in artifact.files if isinstance(item, _File) for segment in item.segments)
+        encoded = _encoded_order(inputs.structures, overlap_priority)
         if (
             artifact.export_id != job["payload"]["export_id"]
             or artifact.artifact_key != job["payload"]["artifact_key"]
             or artifact.encoding_version != job["payload"]["encoding_version"]
+            or artifact.overlap_priority != (None if overlap_priority is None else tuple(overlap_priority))
             or artifact.case_id != job["case_id"]
             or artifact.revision_id != job["revision_id"]
             or artifact.reference_image_id != inputs.reference["id"]
@@ -428,7 +455,7 @@ class OrthancExports:
             or artifact.frame_of_reference_uid != inputs.source.frame_of_reference_uid
             or len(artifact.files) != 1
             or any(not isinstance(item, _File) for item in artifact.files)
-            or [segment.structure_id for segment in segments] != [item["id"] for item in inputs.structures]
+            or [segment.structure_id for segment in segments] != [item["id"] for item in encoded]
             or [segment.segment_number for segment in segments] != list(range(1, len(segments) + 1))
             or len({item.sop_instance_uid for item in artifact.files}) != len(artifact.files)
             or len({item.path for item in artifact.files}) != len(artifact.files)
@@ -443,7 +470,7 @@ class OrthancExports:
                 or _hash(path, lambda: self.service.cancelled(job)) != output.sha256
             ):
                 raise ExportUnavailable("The prepared DICOM SEG bytes changed. Delivery was blocked.")
-        for segment, selected in zip(segments, inputs.structures, strict=True):
+        for segment, selected in zip(segments, encoded, strict=True):
             if (
                 _hash(selected["mask_file"], lambda: self.service.cancelled(job)) != segment.mask_sha256
                 or segment.name != selected["name"]
@@ -513,6 +540,9 @@ class OrthancExports:
         if destination:
             result["destination"] = display_name
             result["destination_id"] = destination
+        if artifact.overlap_priority:
+            result["overlap_priority"] = list(artifact.overlap_priority)
+            result["removed_voxels"] = {segment.structure_id: segment.removed_voxel_count for segment in segments}
         return {"dicom_seg": result}
 
     def run(self, job):

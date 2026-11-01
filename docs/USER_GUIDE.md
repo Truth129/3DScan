@@ -432,6 +432,15 @@ Select the masks, then choose **Archive in Orthanc**, or pick a **Send destinati
 never sends anything, and **Send again** deliberately resends the same instances. See
 [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back).
 
+To give each voxel to one structure, tick **Resolve overlaps in this export** and rank the masks
+with the arrows. Where masks overlap, the higher mask keeps those voxels. The smallest masks start
+at the top, because they would lose the largest share. Only this SEG changes: saved masks,
+measurements and review status stay as they are, and the series is labelled `overlaps resolved`.
+The result reports how many voxels were removed. If a mask would lose every voxel, the export stops
+and names its rank, so nothing is dropped silently. Each ranking is a separate export, and sending
+one does not count as sending another. After an interrupted ranked export, reopening the dialog
+restores its masks and ranking, so a retry reuses the same SEG.
+
 ## Import existing DICOM SEG masks
 
 **Import DICOM SEG…** adds masks made elsewhere to an open CT, without any AI. It works for CT from

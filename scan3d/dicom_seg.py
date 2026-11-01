@@ -2,7 +2,9 @@
 
 Selected structures share one binary SEG instance. Masks are encoded one at a
 time and packed pixels are streamed through disk, without assembling source CT
-pixels or a dense multi-structure labelmap.
+pixels or a dense multi-structure labelmap. A ranked export holds one extra
+boolean grid of claimed voxels, and writes a derived copy in which each voxel
+belongs to one structure. The saved masks never change.
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ class ExportedSegment:
     segment_number: int
     voxel_count: int
     mask_sha256: str
+    removed_voxel_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,14 +243,15 @@ def _project(mask, stack):
     return pixels
 
 
-def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind, revision_id):
+def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind, revision_id, overlap_resolved=False, modified=False):
     try:
         import highdicom as hd
     except ImportError:
         raise DicomSegError("DICOM SEG export requires the qualified highdicom 0.28.2 dependency") from None
     if hd.__version__ != "0.28.2":
         raise DicomSegError("DICOM SEG export requires qualification of this highdicom version")
-    automatic = source_kind == "totalsegmentator"
+    # Removing ranked voxels applies a person's choice to the model's output.
+    automatic = source_kind == "totalsegmentator" and not modified
     algorithm_name, algorithm_version = "3DScan correction", __version__
     if automatic:
         algorithm_name = "TotalSegmentator"
@@ -285,11 +289,15 @@ def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind,
         manufacturer_model_name="Revisioned mask export",
         software_versions=__version__,
         device_serial_number="3DScan",
-        series_description=f"3DScan segmentations {revision_id[:8]}",
+        series_description=f"3DScan segmentations {revision_id[:8]}{' overlaps resolved' if overlap_resolved else ''}",
         transfer_syntax_uid=ExplicitVRLittleEndian,
         omit_empty_frames=True,
         content_label="SCAN3D_SEG",
-        content_description="Exported voxel masks; clinical review status is unchanged",
+        content_description=(
+            "Overlaps resolved by rank; saved masks and review are unchanged"
+            if overlap_resolved
+            else "Exported voxel masks; clinical review status is unchanged"
+        ),
     )
     # Single-segment instances let highdicom share the identification macro.
     # OsiriX finds segments through the per-frame form, so move it there
@@ -393,7 +401,7 @@ def _combined_header(part):
     return combined
 
 
-def _finish_dimensions(combined, stack, used_sources, cancelled):
+def _finish_dimensions(combined, stack, used_sources, cancelled, overlap_resolved=False):
     # Omitted empty planes can give each temporary segment a different local
     # rank. One output instance needs one gap-free rank for each used position.
     used = [str(image.SOPInstanceUID) for image in stack.images if str(image.SOPInstanceUID) in used_sources]
@@ -406,16 +414,23 @@ def _finish_dimensions(combined, stack, used_sources, cancelled):
     combined.NumberOfFrames = len(combined.PerFrameFunctionalGroupsSequence)
     # Independent binary masks retain overlap. Avoid claiming NO from the first
     # temporary segment without allocating a second full-volume union to prove it.
-    combined.SegmentsOverlap = "UNDEFINED" if len(combined.SegmentSequence) > 1 else "NO"
+    # A ranked export already held that union, so its NO is proven.
+    combined.SegmentsOverlap = "UNDEFINED" if len(combined.SegmentSequence) > 1 and not overlap_resolved else "NO"
 
 
-def _export_segmentation(source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled=None, progress=None) -> ExportResult:
+def _export_segmentation(
+    source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled=None, progress=None, overlap_priority=None
+) -> ExportResult:
     """Atomically publish a new series; never overwrite inputs or prior exports.
 
     The caller binds source paths to the selected revision's immutable source
     identity. This adapter additionally proves complete pixel/grid and patient/
     study/frame correspondence. ``progress(completed, total)`` runs between
     structures; cancellation may return true or raise the caller's exception.
+
+    ``overlap_priority`` ranks every structure, highest first. Each voxel then
+    stays only in the highest-ranked structure holding it, and segment numbers
+    follow the rank, so one pass over the masks can claim voxels in order.
     """
     segments = tuple(sorted(segments, key=lambda item: item.id))
     if not 1 <= len(segments) <= 1000 or len({segment.id for segment in segments}) != len(segments):
@@ -429,6 +444,11 @@ def _export_segmentation(source_paths, reference_path, segments, output_dir, *, 
             raise DicomSegError("A selected structure has an invalid display color")
     if not isinstance(revision_id, str) or not revision_id or not isinstance(source_kind, str) or not source_kind:
         raise DicomSegError("DICOM SEG export requires a saved revision and its provenance")
+    if overlap_priority is not None:
+        ranks = {identity: rank for rank, identity in enumerate(overlap_priority)}
+        if len(segments) < 2 or len(ranks) != len(overlap_priority) or ranks.keys() != {segment.id for segment in segments}:
+            raise DicomSegError("Rank every selected structure exactly once to resolve overlaps")
+        segments = tuple(sorted(segments, key=lambda item: ranks[item.id]))
     _check_cancelled(cancelled)
     reference_path, output_dir = Path(reference_path), Path(output_dir)
     if output_dir.exists() or output_dir.is_symlink():
@@ -440,6 +460,7 @@ def _export_segmentation(source_paths, reference_path, segments, output_dir, *, 
         raise DicomSegError("The reference grid exceeds the bounded DICOM SEG export size")
     stack, stamps = _source_stack(source_paths, reference, affine, cancelled)
     stamps.append((reference_path, reference_stamp))
+    claimed = None if overlap_priority is None else np.zeros(reference.shape, dtype=bool)
     series_uid = generate_uid()
     output_dir.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     exported_segments = []
@@ -460,18 +481,36 @@ def _export_segmentation(source_paths, reference_path, segments, output_dir, *, 
                 count = int(np.count_nonzero(mask))
                 if not count:
                     raise DicomSegError("A selected structure has an empty mask; export only nonempty masks")
+                removed = 0
+                if claimed is not None:
+                    mask[claimed] = False
+                    kept = int(np.count_nonzero(mask))
+                    if not kept:
+                        raise DicomSegError(f"Overlap rank {index} would lose every voxel; rank it higher or export it separately")
+                    claimed |= mask
+                    removed, count = count - kept, kept
                 pixels = _project(mask, stack)
-                part = _encode(stack, pixels, segment, series_uid=series_uid, instance_number=1, source_kind=source_kind, revision_id=revision_id)
+                part = _encode(
+                    stack,
+                    pixels,
+                    segment,
+                    series_uid=series_uid,
+                    instance_number=1,
+                    source_kind=source_kind,
+                    revision_id=revision_id,
+                    overlap_resolved=claimed is not None,
+                    modified=removed > 0,
+                )
                 if combined is None:
                     combined = _combined_header(part)
                 _merge_segment(combined, part, index, used_sources, cancelled)
                 packed.append(part.PixelData, int(part.NumberOfFrames) * int(part.Rows) * int(part.Columns), cancelled)
-                exported_segments.append(ExportedSegment(segment.id, index, count, mask_digest))
+                exported_segments.append(ExportedSegment(segment.id, index, count, mask_digest, removed))
                 del mask, pixels, part
                 if progress is not None:
                     progress(index, len(segments))
             packed.finish()
-        _finish_dimensions(combined, stack, used_sources, cancelled)
+        _finish_dimensions(combined, stack, used_sources, cancelled, overlap_resolved=claimed is not None)
         _check_cancelled(cancelled)
         name = "segment-0001.dcm"
         destination = staging / name
@@ -501,11 +540,21 @@ def _export_segmentation(source_paths, reference_path, segments, output_dir, *, 
     )
 
 
-def export_segmentation(source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled=None, progress=None) -> ExportResult:
+def export_segmentation(
+    source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled=None, progress=None, overlap_priority=None
+) -> ExportResult:
     """Export exact masks with public-safe validation and atomic publication."""
     try:
         return _export_segmentation(
-            source_paths, reference_path, segments, output_dir, revision_id=revision_id, source_kind=source_kind, cancelled=cancelled, progress=progress
+            source_paths,
+            reference_path,
+            segments,
+            output_dir,
+            revision_id=revision_id,
+            source_kind=source_kind,
+            cancelled=cancelled,
+            progress=progress,
+            overlap_priority=overlap_priority,
         )
     except (DicomSegError, InterruptedError):
         raise

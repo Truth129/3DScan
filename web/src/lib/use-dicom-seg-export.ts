@@ -23,8 +23,8 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     records.splice(index < 0 ? records.length : index, 0, current);
     return records;
   });
-  const alreadySent = (structureIds: string[], destination: string) =>
-    successfulDicomSegDelivery(history.value, structureIds, destination, availability.value?.encoding_version);
+  const alreadySent = (structureIds: string[], destination: string, overlapPriority?: string[]) =>
+    successfulDicomSegDelivery(history.value, structureIds, destination, availability.value?.encoding_version, overlapPriority);
   const sourceKey = computed(() => JSON.stringify([options.source().caseId, options.source().revisionId]));
   const storageKey = () => `scan3d-dicom-seg:${sourceKey.value}`;
   let disposed = false,
@@ -131,7 +131,7 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       }
     }
   }
-  async function start(structureIds: string[], destination: string | null, resend = false) {
+  async function start(structureIds: string[], destination: string | null, resend = false, overlapPriority?: string[]) {
     if (
       disposed ||
       options.blocked() ||
@@ -140,7 +140,7 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       !availability.value?.available ||
       !structureIds.length ||
       (destination !== null && !availability.value.destinations.some(item => item.id === destination)) ||
-      (resend && (destination === null || !alreadySent(structureIds, destination)))
+      (resend && (destination === null || !alreadySent(structureIds, destination, overlapPriority)))
     )
       return;
     const attempt = begin();
@@ -150,7 +150,12 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       const value = await api.exportDicomSeg(
         attempt.caseId,
         attempt.revisionId,
-        { structure_ids: [...new Set(structureIds)], destination, ...(resend ? { resend: true } : {}) },
+        {
+          structure_ids: [...new Set(structureIds)],
+          destination,
+          ...(resend ? { resend: true } : {}),
+          ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
+        },
         attempt.request.signal,
       );
       if (!attempt.current()) return;

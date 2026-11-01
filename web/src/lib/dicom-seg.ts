@@ -15,6 +15,8 @@ export interface DicomSegExportResult {
   instance_count: number;
   structure_ids: string[];
   destination_id?: string;
+  overlap_priority?: string[];
+  removed_voxels?: Record<string, number>;
 }
 export interface DicomSegExportJob extends Job {
   result?: { dicom_seg?: DicomSegExportResult };
@@ -30,6 +32,7 @@ export interface DicomSegExportRequest {
   structure_ids: string[];
   destination: string | null;
   resend?: boolean;
+  overlap_priority?: string[];
 }
 
 /** Export only a clearly displayed saved revision, independently of its renderer. */
@@ -59,30 +62,63 @@ export function savedRevisionExportBlockReason(options: {
 }
 
 export const nonemptySavedStructures = (structures: Structure[]) => structures.filter(structure => structure.voxel_count > 0);
+/** Small masks lose the largest share of their voxels, so they start at the top. */
+export const defaultOverlapOrder = (structures: Structure[]) =>
+  [...structures].sort((a, b) => a.voxel_count - b.voxel_count || (a.id < b.id ? -1 : 1)).map(structure => structure.id);
+
+/** Swap with the next selected rank. Unselected masks keep their places for reselection. */
+export function moveOverlapRank(order: string[], selected: string[], id: string, offset: -1 | 1): string[] {
+  const ranked = order.filter(item => selected.includes(item)),
+    neighbour = ranked[ranked.indexOf(id) + offset];
+  if (!ranked.includes(id) || neighbour === undefined) return order;
+  return order.map(item => (item === id ? neighbour : item === neighbour ? id : item));
+}
+
+/** A retry must repeat an unfinished export's ranking: any other ranking is a different SEG. */
+export const unfinishedOverlapRanking = (job?: DicomSegExportJob) =>
+  job && ['failed', 'queued', 'running'].includes(job.status) ? job.result?.dicom_seg?.overlap_priority : undefined;
+
 export const pendingDicomSegExport = (job?: Job) => !!job && ['queued', 'running'].includes(job.status);
 export const matchesDicomSegExport = (job: Job, caseId: string, revisionId: string) =>
   job.kind === 'orthanc_export' && job.case_id === caseId && job.revision_id === revisionId;
 
-/** A new delivery needs a separate click, scoped to the exact earlier selection. */
-export function successfulDicomSegDelivery(jobs: DicomSegExportJob[], structureIds: string[], destination: string, encodingVersion?: number): boolean {
-  const selected = [...new Set(structureIds)].sort();
+/** A new delivery needs a separate click, scoped to the exact earlier selection and ranking. */
+export function successfulDicomSegDelivery(
+  jobs: DicomSegExportJob[],
+  structureIds: string[],
+  destination: string,
+  encodingVersion?: number,
+  overlapPriority?: string[],
+): boolean {
+  const selected = [...new Set(structureIds)].sort(),
+    ranking = JSON.stringify(overlapPriority ?? null);
   const latest = jobs.find(job => {
     const result = job.result?.dicom_seg;
     return (
       result?.destination_id === destination &&
       (encodingVersion === undefined || (result.encoding_version ?? 1) === encodingVersion) &&
-      JSON.stringify([...result.structure_ids].sort()) === JSON.stringify(selected)
+      JSON.stringify([...result.structure_ids].sort()) === JSON.stringify(selected) &&
+      JSON.stringify(result.overlap_priority ?? null) === ranking
     );
   });
   return latest?.status === 'completed' && latest.result?.dicom_seg?.sent === true;
 }
 
+function overlapSummary(result: DicomSegExportResult): string {
+  if (!result.overlap_priority) return '';
+  const removed = Object.values(result.removed_voxels ?? {}).filter(count => count > 0);
+  if (!removed.length) return ' The masks did not overlap, so no voxels were removed.';
+  const voxels = removed.reduce((total, count) => total + count, 0);
+  return ` ${voxels.toLocaleString()} overlapping ${voxels === 1 ? 'voxel' : 'voxels'} removed from ${removed.length} ${removed.length === 1 ? 'mask' : 'masks'} in this export. Saved masks are unchanged.`;
+}
+
 export function dicomSegExportSummary(job: DicomSegExportJob): string {
   const result = job.result?.dicom_seg;
   if (job.status !== 'completed' || !result) return '';
-  const masks = `${result.segments_count} ${result.segments_count === 1 ? 'mask' : 'masks'}`;
+  const masks = `${result.segments_count} ${result.segments_count === 1 ? 'mask' : 'masks'}`,
+    overlaps = overlapSummary(result);
   if (result.sent)
-    return `${masks} sent to ${result.destination || 'the configured destination'} · ${result.instance_count} DICOM ${result.instance_count === 1 ? 'instance' : 'instances'}.`;
-  if (result.archived) return `${masks} archived in Orthanc. Nothing was sent to another viewer.`;
+    return `${masks} sent to ${result.destination || 'the configured destination'} · ${result.instance_count} DICOM ${result.instance_count === 1 ? 'instance' : 'instances'}.${overlaps}`;
+  if (result.archived) return `${masks} archived in Orthanc. Nothing was sent to another viewer.${overlaps}`;
   return 'Export finished. Delivery has not been confirmed.';
 }

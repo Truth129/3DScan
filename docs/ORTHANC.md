@@ -195,11 +195,16 @@ imports SEG.
 
 3DScan's SEG output has been checked for display as ROIs in OsiriX MD 14.3 on synthetic data only.
 That shows basic interoperability, not clinical alignment, and editing ROIs and saving them back has
-not been checked. Other viewers are untested. SEG also appears differently in the OsiriX database
-from ROIs drawn in OsiriX.
+not been checked. OHIF has been checked only for the 3D limit below, and other viewers are untested.
+SEG also appears differently in the OsiriX database from ROIs drawn in OsiriX.
 
 - **Encoding.** All selected masks are separately numbered binary segments in one instance, so
   overlaps survive. Segment identification sits in the per-frame functional groups.
+- **Overlaps in viewers.** OHIF stacks overlapping segments into one volume for its 3D view, so any
+  overlap doubles that volume. Its surface converter aborted at 512×512×910 stacked slices and
+  worked at 800, shown as `Failed to convert labelmap to surface`. These tests used synthetic data
+  in OHIF 3.12.0, 3.13.13 and 3.14.0-beta.68. **Resolve overlaps in this export** keeps the stack to
+  one layer without changing saved masks. See the [user guide](USER_GUIDE.md#dicom-seg).
 - **`99SCAN3D` warnings.** This is a legal private coding scheme, used for the generic `REGION` and
   `SEGMENTATION` codes. A validator may report an unrecognized scheme or term several times per
   segment. These warnings concern metadata, not pixels or geometry.
