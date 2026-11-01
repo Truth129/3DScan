@@ -174,11 +174,11 @@ scripts/add_inference_path.sh nvidia
 - For a first install, at least 20 GiB free where the environment goes and where uv
   keeps its cache
 
-A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk. uv clones
+A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk. uv copies
 what it installs from its cache, so that the environment's files are its own. A disk that
-can do that, such as btrfs, holds the data once. Where a disk cannot, or the cache is on
-another disk, uv warns that it is falling back to a full copy, and the environment and the
-cache each hold one. That is why the script asks for more than 9 GiB.
+shares data between files, such as btrfs, still holds the data once. On any other disk, or
+with the cache on another disk, the environment and the cache each hold a full copy. That
+is why the script asks for more than 9 GiB.
 
 **Your existing install needs the AI packages too.** Every path must use the same
 TotalSegmentator, nnU-Net and nnInteractive versions, and the script does not check
@@ -264,7 +264,7 @@ every run. When the fault is in the environment itself, wait until no job is que
 running and move the directory aside. The next run is then a first install: it starts
 from empty, needs the free space above, and does not wait for the queue.
 
-That gets you clean files, because the environment's files are clones, so damage to them
+That gets you clean files, because the environment's files are its own, so damage to them
 stays there. The exception is damage in uv's cache itself, which nothing checks, because a
 hash is checked only when a package is fetched. If the same fault comes back after a fresh
 install, clear that package from the cache and run the script again. With uv in `.tools/bin`

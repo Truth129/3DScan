@@ -189,6 +189,11 @@ if arguments[:2] == ["pip", "sync"]:
     accepted = {name for name, package in packages.items() if package["version"].partition("+")[0] == locked[name]}
     linked = [name for name in locked if name not in accepted]
     packages |= {name: {"version": locked[name], "complete": True} for name in linked}
+    # What real uv does to a package's own tool: its clone mode makes each file new, with default
+    # permissions, and its copy and hard link keep the wheel's.
+    tool = environment / "bin" / "package-tool"
+    tool.touch()
+    tool.chmod(0o600 if os.environ.get("UV_LINK_MODE") == "clone" else 0o700)
     # Stopped on the last package: every dist-info is there, so the versions alone look right.
     if scenario["sync_stops"]:
         packages[linked[-1]]["complete"] = False
@@ -522,10 +527,12 @@ def test_the_limits_themselves_are_enough(rig):
 
 def test_the_room_a_first_install_asks_for_is_explained(rig):
     small_disk(rig)
-    assert "needs at least 20 GiB, because where a disk cannot clone files, the environment and uv's cache each hold a full copy" in rig.run("nvidia").stderr
+    assert "needs at least 20 GiB, because on a disk that cannot share data between files, the environment and uv's cache each hold a full copy" in said(
+        rig.run("nvidia").stderr
+    )
     rig.scenario["free"] = 20 * GIB
     plan = said(rig.run("nvidia", "--dry-run").stdout)
-    assert "It asks for 20 GiB free, because where a disk cannot clone files, the environment and uv's cache each hold a full copy" in plan
+    assert "It asks for 20 GiB free, because on a disk that cannot share data between files, the environment and uv's cache each hold a full copy" in plan
 
 
 def test_a_two_card_listing_reads_as_one_driver(rig):
@@ -785,13 +792,22 @@ def test_every_uv_call_is_barred_from_fetching_a_python(rig):
     assert len(uv) == 3 and {call["env"]["UV_PYTHON_DOWNLOADS"] for call in uv} == {"never"}
 
 
-@pytest.mark.parametrize("inherited", [{}, {"UV_LINK_MODE": "hardlink"}, {"UV_LINK_MODE": "symlink"}], ids=["unset", "hardlink", "symlink"])
-def test_every_uv_call_clones_whatever_it_inherits(rig, inherited):
+@pytest.mark.parametrize(
+    "inherited", [{}, {"UV_LINK_MODE": "hardlink"}, {"UV_LINK_MODE": "symlink"}, {"UV_LINK_MODE": "clone"}], ids=["unset", "hardlink", "symlink", "clone"]
+)
+def test_every_uv_call_copies_whatever_it_inherits(rig, inherited):
     # A hard link is the cache's own file, so an edit in place here would be an edit there too.
     rig.run("nvidia", env=inherited)
     uv = [call for call in rig.calls() if call["tool"] == "uv"]
-    assert len(uv) == 3 and {call["env"]["UV_LINK_MODE"] for call in uv} == {"clone"}
+    assert len(uv) == 3 and {call["env"]["UV_LINK_MODE"] for call in uv} == {"copy"}
     assert not any("--link-mode" in call["arguments"] for call in uv)
+
+
+def test_a_tool_inside_a_package_can_still_be_run(rig):
+    # torch and triton carry their own, and neither uv nor the GPU check would say that one had lost
+    # its execute bit. The first thing to fail would be whatever ran it.
+    assert rig.run("nvidia").returncode == 0
+    assert (rig.venv / "bin" / "package-tool").stat().st_mode & 0o100
 
 
 def test_the_checkouts_own_uv_comes_before_the_one_on_path(rig):

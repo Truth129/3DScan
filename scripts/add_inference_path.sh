@@ -156,9 +156,11 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$root/.cache/uv}"
 # interpreter nobody chose.
 export UV_PYTHON_DOWNLOADS=never
 # By default uv hard-links, on btrfs too, so a file edited in place here would change in its cache
-# and in any environment built from the same wheel, and a rebuild would put the edit back. A clone
-# is a file of its own for no more data. Where a disk cannot clone, uv warns and copies instead.
-export UV_LINK_MODE=clone
+# and in any environment built from the same wheel, and a rebuild would put the edit back. A copy
+# is a file of its own, and a disk that shares data between files, as btrfs does, spends no more on
+# it than on a clone. uv's clone mode would not do: it makes each file new, with default permissions,
+# so every tool inside a package loses its execute bit, and nothing here runs one to notice.
+export UV_LINK_MODE=copy
 # Each of these reaches `uv venv` alone, and so would stop a rebuild only after its wipe: one refuses
 # --allow-existing, and the other fetches pip.
 unset UV_VENV_CLEAR UV_VENV_SEED
@@ -186,12 +188,13 @@ driver="${driver%%$'\n'*}"
 
 # Only the run that starts an install needs the room. What it leaves in the environment and the
 # cache counts against the free space from then on, so asking again would refuse the re-run that
-# rebuilds it. A disk that cannot clone, or a cache on another disk, holds two full copies.
+# rebuilds it. A disk that cannot share data between files, or a cache on another disk, holds two
+# full copies.
 if ! marked; then
   for place in "$venv" "$UV_CACHE_DIR"; do
     free="$(free_bytes "$place")"
     (( free >= 20 * 1024 ** 3 )) ||
-      fail "Only $(( free / 1024 ** 3 )) GiB is free for $place. This needs at least 20 GiB, because where a disk cannot clone files, the environment and uv's cache each hold a full copy."
+      fail "Only $(( free / 1024 ** 3 )) GiB is free for $place. This needs at least 20 GiB, because on a disk that cannot share data between files, the environment and uv's cache each hold a full copy."
   done
 fi
 
@@ -224,7 +227,8 @@ Adding the NVIDIA inference path.
   Proof        $proof
 
 A first install downloads about 3.3 GiB and takes about 9 GiB on disk. It asks for 20 GiB free,
-because where a disk cannot clone files, the environment and uv's cache each hold a full copy.
+because on a disk that cannot share data between files, the environment and uv's cache each hold
+a full copy.
 A re-run leaves an environment that equals the lock alone, and needs no network to do so.
 Anything else, such as an install that did not finish, is rebuilt from empty, from what uv has
 already fetched where it can. A finished environment waits for an empty queue, and stays until
