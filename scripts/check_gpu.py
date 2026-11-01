@@ -35,10 +35,14 @@ def jobs_waiting():
     """Whether any job is queued or running, by the same rule as the license route.
 
     A proof taken beside inference proves little and competes for the card. The connection is
-    read-only and selects no case content. A library with no database has no jobs.
+    read-only and selects no case content. A library with no database has no jobs, and nothing
+    else counts as none: this answer guards a rebuild, so a database that is there and cannot be
+    read has to raise. `Path.is_file()` would call that absent, and so would following a link.
     """
     database = Settings.from_env().data_dir / "scan3d.sqlite3"
-    if not database.is_file():
+    try:
+        database.lstat()
+    except FileNotFoundError:
         return False
     connection = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)
     try:
@@ -62,7 +66,7 @@ def main():
         parser.error("--device must be gpu or gpu:N")
     try:
         waiting = jobs_waiting()
-    except sqlite3.Error as exc:
+    except (OSError, sqlite3.Error) as exc:
         print(f"Could not read the job queue, so no GPU check ran: {exc}", file=sys.stderr)
         return 1
     if waiting:

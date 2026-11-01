@@ -1757,6 +1757,41 @@ def test_a_queue_that_cannot_be_read_is_not_an_empty_one(check, tmp_path):
     assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
 
 
+def a_directory_for_the_database(data):
+    (data / "scan3d.sqlite3").mkdir(parents=True)
+
+
+def a_link_to_a_database_that_is_gone(data):
+    data.mkdir()
+    (data / "scan3d.sqlite3").symlink_to(data / "elsewhere.sqlite3")
+
+
+def a_file_for_the_library(data):
+    data.touch()
+
+
+@pytest.mark.parametrize("build", [a_directory_for_the_database, a_link_to_a_database_that_is_gone, a_file_for_the_library])
+def test_a_database_that_is_there_and_cannot_be_opened_is_not_an_empty_queue(check, tmp_path, build):
+    build(tmp_path / "data")
+    completed = ask_the_queue(check.stub)
+    assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
+    full = check("--path", "nvidia")
+    assert full.returncode == 1 and "Could not read the job queue" in full.stderr
+    assert not check.stub.proof.exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can enter any directory")
+def test_a_library_this_user_cannot_enter_is_not_an_empty_queue(check, tmp_path):
+    # One with a running job, which `Path.is_file()` would call no database at all.
+    store = library(tmp_path, "running")
+    store.directory.chmod(0)
+    try:
+        completed = ask_the_queue(check.stub)
+    finally:
+        store.directory.chmod(0o700)
+    assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
+
+
 def test_the_queue_question_loads_no_gpu_runtime(check, tmp_path, monkeypatch):
     # Importing this PyTorch records the import and then kills the process.
     monkeypatch.setenv("SCAN3D_FAKE_TORCH", "crash")
