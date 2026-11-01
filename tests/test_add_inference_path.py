@@ -1595,6 +1595,12 @@ def test_a_setting_only_uv_venv_reads_cannot_stop_a_rebuild_after_its_wipe(rig, 
     assert all(variable not in call["env"] for call in rig.calls() if call["tool"] == "uv")
 
 
+def test_a_rebuild_keeps_what_its_trial_fetched(rig):
+    a_rebuild(rig)
+    assert rig.run("nvidia", env={"UV_NO_CACHE": "1"}).returncode == 0
+    assert all("UV_NO_CACHE" not in call["env"] for call in rig.calls() if call["tool"] == "uv")
+
+
 def test_uv_rebuilds_from_the_checkout_as_it_installs_from_it(rig):
     # It reads its settings from where it starts, and a rebuild must read what a first install read.
     a_rebuild(rig)

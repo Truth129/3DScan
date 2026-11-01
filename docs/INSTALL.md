@@ -192,7 +192,8 @@ that changes `.venv`, and rebuilds the viewer and the converter. All paths share
 AI weights, the license and your cases, so nothing downloads twice.
 
 `target` and `prefix` under `[pip]` in a `uv.toml`, the checkout's or your own, are not
-supported. uv would install somewhere else and the environment would be left empty.
+supported. uv would install somewhere else and the environment would be left empty. With
+`no-cache` set there, a rebuild fetches everything a second time after its trial.
 
 The script installs only into a directory it made, which it marks with a
 `.scan3d-inference-path` file. It refuses any other directory that already exists,
