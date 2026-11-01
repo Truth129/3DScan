@@ -592,6 +592,36 @@ describe('following a job', () => {
     await settled();
     expect(view.banner()).toContain('Export interrupted.');
   });
+  it('follows the job of a lost response to its end, and reports it once the dialog has closed', async () => {
+    vi.mocked(fetch).mockImplementation((async () => {
+      throw new TypeError('Failed to fetch');
+    }) as typeof fetch);
+    const view = await app();
+    await view.export();
+    click(view.button('Archive in Orthanc'));
+    await settled();
+    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running')] });
+    click(view.button('Refresh export status'));
+    await settled();
+    expect(view.text()).toContain('Exporting DICOM view');
+    expect(view.text()).not.toContain('still in progress');
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    polled = async () => job('failed', { error: 'Delivery is not confirmed.' });
+    await settled();
+    expect(view.banner()).toContain('Delivery is not confirmed.');
+  });
+  it('reports an earlier export that only the dialog listed', async () => {
+    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
+    const view = await app();
+    await view.export();
+    expect(view.text()).toContain('still in progress');
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    polled = async () => job('failed', { id: 'earlier', error: 'Delivery is not confirmed.' });
+    await settled();
+    expect(view.banner()).toContain('Delivery is not confirmed.');
+  });
   it('leaves the workspace free while an export runs', async () => {
     const view = await start();
     expect(view.text()).not.toContain('Waiting for the processing worker');

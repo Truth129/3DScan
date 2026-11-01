@@ -4,6 +4,7 @@ import { api, ApiError } from '../lib/api';
 import {
   dicomViewAlreadySent,
   dicomViewExportSummary,
+  jobOfLostRequest,
   matchesDicomViewExport,
   pendingDicomViewExport,
   unfinishedEarlierDicomView,
@@ -18,6 +19,7 @@ const props = defineProps<{
   open: boolean;
   /** Functions, because how a request ended must reach someone even if this dialog has gone. */
   follow: (job: DicomViewExportJob, capture: ViewCapture) => void;
+  observe: (job: DicomViewExportJob) => void;
   report: (message: string, capture: ViewCapture) => void;
 }>();
 const emit = defineEmits<{ close: [] }>();
@@ -52,9 +54,16 @@ async function load() {
   try {
     const result = await api.dicomViewAvailability(capture.caseId, capture.revisionId, request.signal);
     if (request.signal.aborted) return;
+    const exports = result.exports ?? [],
+      // Only a listing can name a job whose response was lost. A job listed before that
+      // request stays separate: it may be another image, so this dialog must not claim it.
+      lost = needsRefresh.value ? jobOfLostRequest(availability.value?.exports ?? [], exports, capture.caseId, capture.revisionId) : undefined;
     availability.value = result;
     error.value = '';
     needsRefresh.value = false;
+    if (lost) props.follow(lost, capture);
+    // Nothing else may be watching these, and each one still has to report how it ends.
+    for (const item of exports) if (pendingDicomViewExport(item)) props.observe(item);
   } catch (reason) {
     if (!request.signal.aborted) statusError.value = reason instanceof Error ? reason.message : 'Export status could not be read.';
   } finally {
@@ -146,7 +155,7 @@ onBeforeUnmount(() => {
     <p v-if="earlier" class="help" role="status">
       {{
         pendingDicomViewExport(earlier)
-          ? 'An earlier export of this revision is still in progress. It carries on separately from this capture.'
+          ? 'An earlier export of this revision is still in progress. A notice reports how it ends.'
           : 'An earlier export of this revision did not finish, and it may still have reached the receiver. This capture makes a new series unless it is the same image.'
       }}
     </p>

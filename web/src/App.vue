@@ -1885,6 +1885,7 @@ onBeforeUnmount(() => {
       :job="viewJob"
       :open="viewExportOpen"
       :follow="followViewJob"
+      :observe="viewJobs.follow"
       :report="reportViewExport"
       @close="closeViewExport"
     />

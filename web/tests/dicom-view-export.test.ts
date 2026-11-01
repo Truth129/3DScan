@@ -70,7 +70,7 @@ function server(answers: { available?: DicomViewAvailability; queued?: DicomView
   return posts;
 }
 async function dialog(values: Record<string, unknown> = {}) {
-  const state = shallowReactive<Record<string, any>>({ capture, open: true, follow: vi.fn(), report: vi.fn(), ...values }),
+  const state = shallowReactive<Record<string, any>>({ capture, open: true, follow: vi.fn(), observe: vi.fn(), report: vi.fn(), ...values }),
     closed = vi.fn(),
     mounted = mount(DicomViewExport, () => ({ ...state, onClose: closed }));
   await settled();
@@ -459,6 +459,45 @@ describe('the dialog', () => {
     expect(disabled(view.button('Archive in Orthanc'))).toBe(false);
     expect(view.text()).not.toContain('may already have reached');
     expect(posts).toHaveLength(1);
+  });
+  describe('after losing the response to a submission', () => {
+    async function lost(listing: DicomViewExportJob[], earlier: DicomViewExportJob[] = []) {
+      vi.spyOn(api, 'dicomViewAvailability')
+        .mockResolvedValueOnce(availability({ exports: earlier }))
+        .mockResolvedValue(availability({ exports: listing }));
+      vi.spyOn(api, 'exportDicomView').mockRejectedValue(new TypeError('Connection closed'));
+      const view = await dialog();
+      click(view.button('Archive in Orthanc'));
+      await settled();
+      click(view.button('Refresh export status'));
+      await settled();
+      return view;
+    }
+    it.each(['running', 'failed', 'completed'] as const)('takes a %s job that was not listed before as this capture’s own', async status => {
+      const own = job(status, { id: 'lost' }),
+        view = await lost([own, job('completed', { id: 'older' })], [job('completed', { id: 'older' })]);
+      expect(view.state.follow).toHaveBeenCalledExactlyOnceWith(own, capture);
+    });
+    it('never claims a job that was already listed, which may be another image', async () => {
+      const earlier = job('running', { id: 'earlier' }),
+        view = await lost([earlier], [earlier]);
+      expect(view.state.follow).not.toHaveBeenCalled();
+      expect(view.state.observe).toHaveBeenCalledWith(earlier);
+      expect(view.text()).toContain('still in progress');
+    });
+  });
+  it('watches every unfinished export it lists, since one with no dialog may have no watcher', async () => {
+    const running = job('running', { id: 'earlier' });
+    server({ available: availability({ exports: [running, job('queued', { id: 'next' }), job('failed', { id: 'old' })] }) });
+    const view = await dialog();
+    expect(view.state.observe.mock.calls.map(([item]: [DicomViewExportJob]) => item.id)).toEqual(['earlier', 'next']);
+    expect(view.state.follow).not.toHaveBeenCalled();
+  });
+  it('does not call an unfinished export separate from this capture, because it can be its own', async () => {
+    server({ available: availability({ exports: [job('running', { id: 'earlier' })] }) });
+    const text = (await dialog()).text();
+    expect(text).not.toContain('separately');
+    expect(text).toContain('A notice reports how it ends.');
   });
   it('treats a server refusal as an answer, with nothing to refresh', async () => {
     vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
