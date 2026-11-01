@@ -23,7 +23,7 @@ describe('3D view toolbar', () => {
         payload: undefined,
       }),
     );
-    expect(html).toContain('PNG ↗');
+    expect(html).toContain('title="Save image"');
     expect(html).not.toContain('DICOM ↗');
   });
   it('explains why it is disabled, and leaves PNG ↗ alone', async () => {

@@ -2039,7 +2039,8 @@ defineExpose({
   top: 30px;
   left: 12px;
 }
-@container model-tile (min-width: 760px) {
+/* One row needs room for both toolbars, with Heart view in the camera strip and DICOM ↗ in the tools. */
+@container model-tile (min-width: 880px) {
   /* A container query styles descendants only, so the reserved space is set where it is used. */
   .model-review-controls,
   .orientation-gizmo {
