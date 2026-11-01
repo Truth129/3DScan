@@ -112,8 +112,8 @@ if tool == "find":
     if scenario["wipe_status"]:
         sys.exit(scenario["wipe_status"])
     os.execv(rig / "find", ["find", *arguments])
-if tool == "mkdir":
-    os.execv(rig / "mkdir", ["mkdir", *arguments])
+if tool in ("mkdir", "rm"):
+    os.execv(rig / tool, [tool, *arguments])
 if arguments[:2] == ["python", "find"]:
     if scenario["python"]:
         print(rig / "system-python")
@@ -254,6 +254,12 @@ class Rig:
         self.shim(self.fakes / "venv-python", "venv-python")
         for name in COREUTILS:
             (self.bin / name).symlink_to(shutil.which(name))
+
+    def watch(self, name):
+        """A coreutil that still does its work, and is now a step a test can attach code to."""
+        (self.fakes / name).symlink_to(shutil.which(name))
+        (self.bin / name).unlink()
+        self.shim(self.bin / name, name)
 
     def shim(self, location, tool):
         location.parent.mkdir(parents=True, exist_ok=True)
@@ -1279,9 +1285,7 @@ def test_a_run_that_loses_mkdir_to_another_run_is_refused_by_the_lock(rig):
     target, made = rig.elsewhere / "target", rig.elsewhere / "made-by-the-other-run"
     made.mkdir()
     (made / MARKER).touch()
-    (rig.fakes / "mkdir").symlink_to(shutil.which("mkdir"))
-    (rig.bin / "mkdir").unlink()
-    rig.shim(rig.bin / "mkdir", "mkdir")
+    rig.watch("mkdir")
     rig.scenario["during"] = {"mkdir": f"if '-p' not in arguments:\n    Path({str(made)!r}).rename({str(target)!r})"}
     with (made / MARKER).open() as held:
         fcntl.flock(held, fcntl.LOCK_EX)
@@ -1336,6 +1340,25 @@ def test_the_wipe_stays_in_the_directory_it_checked_whatever_becomes_of_the_name
     rig.run("nvidia")
     assert (rig.venv / "precious").exists()
     assert [entry.name for entry in aside.iterdir()] == [MARKER]
+
+
+def test_the_finished_mark_goes_from_the_directory_it_checked_too(rig):
+    a_rebuild(rig)
+    rig.watch("rm")
+    aside = swapped_in(rig, "rm", marked=True)
+    arrival = rig.scenario["during"]["rm"]
+    rig.scenario["during"]["rm"] = f"if arguments[0] == '-f':\n    {arrival}; (venv / {FINISHED!r}).touch()"
+    rig.scenario["venv_status"] = 1  # Stops the run before it could write that mark itself.
+    rig.run("nvidia")
+    assert (rig.venv / FINISHED).exists()  # It belongs to the directory that took the name.
+    assert not (aside / FINISHED).exists()
+
+
+def test_uv_rebuilds_from_the_checkout_as_it_installs_from_it(rig):
+    # It reads its settings from where it starts, and a rebuild must read what a first install read.
+    a_rebuild(rig)
+    assert rig.run("nvidia").returncode == 0
+    assert rig.step("uv venv")["cwd"] == rig.step("uv pip sync")["cwd"] == str(rig.root)
 
 
 # The job queue
