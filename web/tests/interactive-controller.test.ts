@@ -977,6 +977,48 @@ describe('a draft that moves under a job this page follows', () => {
       });
     });
 
+    describe('with Run AI pressed inside the second that Cancel left', () => {
+      /** The page as it used to be freed: past the left-over timer, with the run still out. */
+      async function runningOn(hold: (reader: ReturnType<typeof fixture>['reader']) => { release: (value: never) => void }) {
+        const { controller, reader } = await cancelArmed();
+        const out = hold(reader);
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(controller.working, 'the page stays held').toBe(true);
+        return { controller, reader, out, run };
+      }
+      const heldRead = (reader: ReturnType<typeof fixture>['reader']) => {
+        const read = held<InteractiveReview>();
+        reader.interactiveReview.mockReturnValueOnce(read.reply);
+        return read;
+      };
+      it('refuses a mark, which would cancel the run with no word', async () => {
+        const { controller, reader, out, run } = await runningOn(holdPredict);
+        controller.append(point('second'));
+        await vi.advanceTimersByTimeAsync(300);
+        expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
+        expect(reader.interactivePrompts).not.toHaveBeenCalled();
+        out.release(job('next') as never);
+        await run;
+        expect([controller.conflict, controller.error, controller.job?.id]).toEqual([false, '', 'next']);
+      });
+      it('refuses a Discard while predict is out, which would leave a record with no id', async () => {
+        const { controller, reader, out, run } = await runningOn(holdPredict);
+        await controller.discard();
+        expect(reader.discardInteractive).not.toHaveBeenCalled();
+        out.release(job('next') as never);
+        await run;
+        expect(controller.review?.id).toBe('draft');
+      });
+      it('refuses a Discard while the read after predict is out, which that read would undo', async () => {
+        const { controller, reader, out, run } = await runningOn(heldRead);
+        await controller.discard();
+        expect(reader.discardInteractive).not.toHaveBeenCalled();
+        out.release(running() as never);
+        await run;
+        expect([controller.review?.status, controller.conflict]).toEqual(['predicting', false]);
+      });
+    });
     it('ignores the failure of a read that lost to one that ended the follow', async () => {
       const second = failing<InteractiveReview>();
       const { controller, reader } = await twoPolls(second.reply);
