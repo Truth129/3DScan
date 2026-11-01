@@ -100,6 +100,10 @@ def test_invalid_operations_and_cross_origin_fail_before_job(client):
     assert http.post(f"{prefix}/refinements", json=invalid).status_code == 422
     assert service.store.list("jobs") == []
     assert http.post("/api/cases/import-local", json={"path": "/etc"}).status_code == 400
+    data_dir = service.settings.data_dir
+    for inside in (data_dir, data_dir / "cases" / case["id"], data_dir.parent):
+        assert "outside the application's data directory" in http.post("/api/cases/import-local", json={"path": str(inside)}).json()["detail"]
+    assert len(service.store.list("cases")) == 1
     assert http.post("/api/cases/demo", headers={"origin": "https://unrelated.example"}).status_code == 403
     assert http.get("/api/cases", headers={"host": "unrelated.example"}).status_code == 400
     assert http.get("/api/health", headers={"host": "review.example:8443"}).status_code == 200

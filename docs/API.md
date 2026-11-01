@@ -270,7 +270,8 @@ model_id, model_revision, license, capabilities, inference_paths}`, from package
 optional `label`, and returns a Case.
 
 **`POST /api/cases/import-local`** takes `{path, label?}` for a directory or ZIP under
-`SCAN3D_IMPORT_ROOTS`, and copies the files. Symlinks are refused.
+`SCAN3D_IMPORT_ROOTS`, and copies the files. Symlinks and anything inside the data directory are
+refused.
 
 **Staged uploads** are how the browser imports, up to 16 GiB and 100,000 files. Uploads idle for a
 day are removed.

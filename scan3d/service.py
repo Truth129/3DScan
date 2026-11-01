@@ -175,8 +175,10 @@ class Service:
 
     def import_local(self, path, label=None):
         path = self.settings.import_path(path)
-        if path.is_dir() and (path == self.settings.data_dir or path in self.settings.data_dir.parents):
-            raise ValueError("Select a scan directory that does not contain the application's data directory")
+        data_dir = self.settings.data_dir.resolve()
+        # From inside it, an import would copy another case's scans into a new case.
+        if path == data_dir or data_dir in path.parents or path in data_dir.parents:
+            raise ValueError("Select a scan outside the application's data directory")
         case = self.new_case(label)
         destination = self.store.case_dir(case["id"]) / "dicom"
         try:
