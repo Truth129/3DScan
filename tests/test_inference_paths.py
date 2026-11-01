@@ -247,8 +247,17 @@ def test_a_default_proof_from_before_the_census_is_not_compared(tmp_path, fresh,
     assert (rows()[0]["label"], rows()[0]["reason"]) == ("Test Default GPU", None)
 
 
+def test_a_default_proof_on_nvidia_is_compared_with_nvidia_cards(tmp_path, fresh, sysfs):
+    build_sysfs(sysfs, {"card0": AMD_CARD, "card1": NVIDIA_CARD})
+    default_proof(tmp_path, hip_version=None, cuda_version="13.0", hardware=["10de:2c05"])
+    assert (rows()[0]["label"], rows()[0]["reason"]) == ("Test Default GPU", None)
+    build_sysfs(sysfs, {"card1": ("0x10de", "0x2c06")})
+    assert (rows()[0]["label"], rows()[0]["reason"]) == ("Default device", CAUTION)
+
+
 def test_a_census_that_is_not_a_list_names_no_card_and_blocks_nothing(tmp_path, fresh, sysfs):
-    build_sysfs(sysfs, {"card1": AMD_CARD})
+    # With no vendor it can trust, the row cannot say the monitor shares this card.
+    build_sysfs(sysfs, {"card1": AMD_CARD}, {"card1-DP-1": "connected"})
     default_proof(tmp_path, hardware=7)
     assert rows()[0] == {"id": "default", "label": "Default device", "memory_gib": None, "shares_display": False, "available": True, "reason": CAUTION}
     assert binding("default")["identity"] == "default"
