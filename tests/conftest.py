@@ -13,4 +13,5 @@ def no_machine_inference_state(tmp_path_factory):
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("SCAN3D_INFERENCE_PATH_DIR", str(tmp_path_factory.mktemp("no-inference-paths")))
         patch.setenv("SCAN3D_GPU_PROOF", str(tmp_path_factory.mktemp("no-gpu-proof") / "gpu-proof.json"))
+        patch.delenv("SCAN3D_DEVICE", raising=False)  # With cpu set, the default row reads CPU.
         yield
