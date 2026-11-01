@@ -253,9 +253,9 @@ If an install stops, no check runs. Until an install finishes, the app shows the
 unavailable if it was last checked on that environment, or not at all if it was never
 checked, and running the script again starts from empty. Once a trial has passed, no
 download can stop the rebuild. A full disk or a killed run still can, and either leaves
-this same stopped state. A run killed outright during a trial leaves a folder of hard links
-in uv's cache, and `uv cache clean` removes it. Only one run can use an environment at a
-time, so a second stops with nothing changed.
+this same stopped state. A run killed during a trial can leave a folder of hard links in
+uv's cache, and `uv cache clean` removes it. Only one run can use an environment at a time,
+so a second stops with nothing changed.
 
 Two faults in a finished environment survive a re-run. If uv cannot read it, the script
 stops with nothing changed. If files are missing or damaged but its package names and

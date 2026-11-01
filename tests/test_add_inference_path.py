@@ -1304,19 +1304,16 @@ def test_an_environment_past_reading_is_tried_too(rig):
     assert rig.snapshot() == before
 
 
-@pytest.mark.parametrize(
-    "stop, signalled",
-    [(signal.SIGINT, os.killpg), (signal.SIGHUP, os.killpg), (signal.SIGTERM, os.killpg), (signal.SIGTERM, os.kill)],
-    ids=["ctrl-c", "closed-terminal", "terminated", "terminated-script-only"],
-)
-def test_a_trial_that_is_stopped_takes_its_folder_with_it(rig, stop, signalled):
+@pytest.mark.parametrize("stop", [signal.SIGINT, signal.SIGHUP, signal.SIGTERM], ids=["ctrl-c", "closed-terminal", "terminated"])
+def test_a_trial_that_is_stopped_takes_its_folder_with_it(rig, stop):
+    # The whole group, as a terminal sends it. A signal to the script alone leaves uv writing there.
     a_rebuild(rig)
     rig.scenario["during"] = {"uv trial": "hold()"}
     first = rig.start("nvidia")
     rig.wait_until_held()
     assert len(rig.in_the_cache()) == 1
     before = rig.snapshot()
-    signalled(first.pid, stop)
+    os.killpg(first.pid, stop)
     assert first.wait(timeout=30) == -stop
     assert rig.in_the_cache() == []
     assert rig.snapshot() == before

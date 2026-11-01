@@ -84,8 +84,8 @@ matches_lock() {
 # time this passes, uv has fetched and built everything a rebuild needs, and no download can stop
 # one after its wipe, though a full disk or a kill still can. A dry run would not show that: it reads
 # index pages alone, and passes with every wheel gone. The folder is in uv's cache because a hard
-# link costs no data within a disk, and --target lets uv take a base Python. A signal takes the
-# folder with it, and only a kill leaves it behind, as links that `uv cache clean` removes.
+# link costs no data within a disk, and --target lets uv take a base Python. Ctrl-C takes the folder
+# with it. A kill, or a signal that leaves uv running, can leave it, as links `uv cache clean` removes.
 can_rebuild() {
   local cache status=0
   cache="$("$uv" cache dir --color never)" && mkdir -p -- "$cache" || return 1
