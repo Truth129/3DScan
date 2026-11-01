@@ -155,11 +155,12 @@ const viewportId = useId();
 const { expanded, setExpanded } = useExpandedViewport(viewport, expandButton);
 // The app's banner has its dismiss button in the header, which is inert while this is expanded.
 const exportRefusal = ref('');
-watch(expanded, () => {
-  // The banner works again from here, and what nobody dismissed is not finished with.
+/** The banner works again once this view is not expanded, and what nobody dismissed is not finished with. */
+function handOverRefusal() {
   if (exportRefusal.value) emit('unreadRefusal', exportRefusal.value);
   exportRefusal.value = '';
-});
+}
+watch(expanded, handOverRefusal);
 const surface = ref<HTMLElement>();
 const controlsId = useId();
 // Rendering controls float over the canvas; short screens and review start with them folded away.
@@ -1177,6 +1178,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   legacyInitialization++;
   void setExpanded(false, false);
+  // Its watcher will not run now that this view is going.
+  handOverRefusal();
   disposed = true;
   reference.cancel();
   loadId++;
