@@ -475,6 +475,9 @@ function viewExportScope(): ViewExportScope {
     reviewing: workspaceMode.value === 'review',
   };
 }
+function refuseViewExport(reason: unknown) {
+  if (!model.value?.showRefusal(reason instanceof Error ? reason.message : String(reason))) fail(reason);
+}
 function dropViewCapture() {
   viewCapture.value = undefined;
   viewExportOpen.value = false;
@@ -486,6 +489,8 @@ function dropViewCapture() {
  */
 async function exportView() {
   if (viewCapturing.value) return;
+  error.value = '';
+  model.value?.showRefusal('');
   if (viewCapture.value && pendingDicomViewExport(viewJob.value)) {
     viewExportOpen.value = true;
     return;
@@ -495,7 +500,7 @@ async function exportView() {
     caseLabel = activeCase.value?.label ?? '',
     referenceImageId = revision.value?.reference_image_id ?? revision.value?.image_asset?.id;
   if (!viewport || !viewExportScopeReady(frozen) || !referenceImageId) {
-    fail(new Error(VIEW_NOT_READY_MESSAGE));
+    refuseViewExport(new Error(VIEW_NOT_READY_MESSAGE));
     return;
   }
   const request: ViewCaptureRequest = { caseId: frozen.caseId!, revisionId: frozen.revisionId!, referenceImageId };
@@ -507,7 +512,7 @@ async function exportView() {
     viewCapture.value = freezeViewCapture(request, frame, caseLabel);
     viewExportOpen.value = true;
   } catch (reason) {
-    fail(viewExportScopeHeld(frozen, viewExportScope()) ? reason : new Error(VIEW_CHANGED_MESSAGE));
+    refuseViewExport(viewExportScopeHeld(frozen, viewExportScope()) ? reason : new Error(VIEW_CHANGED_MESSAGE));
   } finally {
     viewCapturing.value = false;
   }

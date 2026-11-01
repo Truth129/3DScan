@@ -563,6 +563,26 @@ function sharedRefusals(open: () => Promise<Viewport>, rendered: () => { mock: {
 
 describe('viewport capture through Cornerstone', () => {
   const open = () => viewport({ localSession: session() });
+  it('shows a refusal only while expanded, until it is dismissed or the view is restored', async () => {
+    const shown = await open();
+    expect(shown.exposed.showRefusal('Not ready.')).toBe(false);
+    await settled();
+    expect(shown.text()).not.toContain('Not ready.');
+    click(shown.labelled('Expand 3D view'));
+    await settled();
+    expect(shown.exposed.showRefusal('Not ready.')).toBe(true);
+    await settled();
+    expect(shown.text()).toContain('Not ready.');
+    click(shown.button('Dismiss'));
+    await settled();
+    expect(shown.text()).not.toContain('Not ready.');
+    shown.exposed.showRefusal('Still not ready.');
+    await settled();
+    expect(shown.text()).toContain('Still not ready.');
+    click(shown.labelled('Restore 3D view'));
+    await settled();
+    expect(shown.text()).not.toContain('Still not ready.');
+  });
   it('returns the view component’s evidence', async () => {
     const shown = await open();
     await expect(shown.capture()).resolves.toEqual({ url: 'data:image/png;base64,frame', referenceImageId: 'image-a', surfaceRevisionId: '' });

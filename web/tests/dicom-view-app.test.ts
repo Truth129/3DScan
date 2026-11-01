@@ -7,7 +7,7 @@ import { LEGACY_CT_PRESENTATION } from '../src/lib/image-domain';
 import type { Case, InteractiveReview, Job, Revision } from '../src/types';
 import { click, deferred, mount, settled, type Deferred, type MountedElement } from './mounted';
 
-const fake = vi.hoisted(() => ({ capture: undefined as any, viewports: [] as any[], review: undefined as any }));
+const fake = vi.hoisted(() => ({ capture: undefined as any, viewports: [] as any[], review: undefined as any, expanded: false, refusals: [] as string[] }));
 vi.mock('../src/components/ModelViewport.vue', () => ({
   default: {
     props: ['dicomViewBlockReason', 'modelRevisionId', 'revisionId', 'caseId'],
@@ -15,7 +15,15 @@ vi.mock('../src/components/ModelViewport.vue', () => ({
     setup(props: any, { emit, expose }: any) {
       const self = { props, exportView: () => emit('exportView') };
       fake.viewports.push(self);
-      expose({ captureView: (request: unknown) => fake.capture(request, self), exportSnapshot: () => undefined, focus() {} });
+      expose({
+        captureView: (request: unknown) => fake.capture(request, self),
+        exportSnapshot: () => undefined,
+        focus() {},
+        showRefusal(message: string) {
+          fake.refusals.push(message);
+          return fake.expanded;
+        },
+      });
       return () =>
         h(
           'button',
@@ -198,6 +206,8 @@ function holdCapture() {
 }
 beforeEach(() => {
   fake.viewports = [];
+  fake.expanded = false;
+  fake.refusals = [];
   fake.capture = async (request: { referenceImageId: string; revisionId: string }) => frame(request);
   revisions = {
     'revision-a1': revision('revision-a1', 'case-a'),
@@ -278,6 +288,29 @@ describe('capturing from the workspace', () => {
     await view.export();
     expect(view.dialog()).toBeUndefined();
     expect(view.banner()).toContain('The 3D view is not ready.');
+  });
+  it('clears an earlier refusal when a new capture starts', async () => {
+    const good = fake.capture;
+    fake.capture = async () => {
+      throw new Error('The 3D view is not ready.');
+    };
+    const view = await app();
+    await view.export();
+    expect(view.banner()).toContain('The 3D view is not ready.');
+    fake.capture = good;
+    await view.export();
+    expect(view.dialog()?.open).toBe(true);
+    expect(view.banner()).toBe('');
+  });
+  it('shows a refusal inside an expanded viewport, whose inert header holds the banner’s dismiss button', async () => {
+    fake.expanded = true;
+    fake.capture = async () => {
+      throw new Error('The 3D view is not ready.');
+    };
+    const view = await app();
+    await view.export();
+    expect(fake.refusals.at(-1)).toBe('The 3D view is not ready.');
+    expect(view.banner()).toBe('');
   });
   it('refuses a frame whose evidence names another image', async () => {
     fake.capture = async (request: { referenceImageId: string; revisionId: string }) => ({ ...frame(request), referenceImageId: 'image-other' });

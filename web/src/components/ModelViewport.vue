@@ -152,6 +152,11 @@ const viewport = ref<HTMLElement>(),
   expandButton = ref<HTMLButtonElement>();
 const viewportId = useId();
 const { expanded, setExpanded } = useExpandedViewport(viewport, expandButton);
+// The app's banner has its dismiss button in the header, which is inert while this is expanded.
+const exportRefusal = ref('');
+watch(expanded, () => {
+  exportRefusal.value = '';
+});
 const surface = ref<HTMLElement>();
 const controlsId = useId();
 // Rendering controls float over the canvas; short screens and review start with them folded away.
@@ -1489,6 +1494,11 @@ async function screenshot() {
     vtkError.value = reason instanceof Error ? reason.message : 'PNG capture failed.';
   }
 }
+/** Says whether this took the message, which only an expanded view does. */
+function showRefusal(message: string) {
+  exportRefusal.value = expanded.value ? message : '';
+  return expanded.value;
+}
 /** Reasons that hold for either renderer. An instance left behind by a case change keeps its last props, so disposal is checked first. */
 function captureRefusal(expected: ViewCaptureRequest) {
   if (disposed || props.caseId !== expected.caseId || props.revisionId !== expected.revisionId || props.modelRevisionId !== expected.revisionId)
@@ -1611,6 +1621,7 @@ defineExpose({
   focus: focusView,
   screenshot,
   captureView,
+  showRefusal,
   exportSnapshot,
   volumeDiagnostics: () => ({ renderer: vtkSelected.value ? 'vtk' : 'three', ...volumePreview.value?.diagnostics() }),
   captureVolumePNG: () => volumePreview.value?.capturePNG(),
@@ -1882,6 +1893,9 @@ defineExpose({
     </div>
     <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
       {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
+    </p>
+    <p v-if="exportRefusal" class="viewport-refusal" role="alert">
+      <span>⚠ {{ exportRefusal }}</span> <button class="text-button" type="button" @click="exportRefusal = ''">Dismiss</button>
     </p>
     <p v-if="!vtkSelected && transparencyWarning && !error" class="render-notice" role="status">{{ transparencyWarning }}</p>
     <svg v-if="!vtkSelected" class="orientation-gizmo" viewBox="0 0 78 78" role="img" aria-label="Patient RAS orientation axes">
@@ -2232,6 +2246,30 @@ defineExpose({
 .model-review-hint .text-button {
   font-size: 10px;
   pointer-events: auto;
+}
+/* The banner's colours, over the view the banner cannot be dismissed from. */
+.viewport-refusal {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 6;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(460px, calc(100% - 24px));
+  margin: 0;
+  padding: 7px 12px;
+  border: 1px solid #7b5238;
+  border-radius: 4px;
+  background: #4a3025;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #f0cbaa;
+}
+.viewport-refusal .text-button {
+  margin-left: 6px;
+  color: inherit;
+  font-size: 11px;
+  text-decoration: underline;
 }
 .model-review .viewport-caption {
   top: 14px;
