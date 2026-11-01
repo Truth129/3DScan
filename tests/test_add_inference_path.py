@@ -329,8 +329,15 @@ class Rig:
     def start(self, *arguments):
         """A run in the background. Its output is a file, so that nothing waits on what it leaves behind."""
         script, environment = self.prepared()
+
+        def default_ctrl_c():
+            # `pytest &` hands down an ignored SIGINT, and bash cannot trap a signal it starts with ignored.
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+
         with (self.fakes / "background.log").open("w") as log:
-            return subprocess.Popen([script, *arguments], cwd=self.elsewhere, env=environment, stdout=log, stderr=log, start_new_session=True)
+            return subprocess.Popen(
+                [script, *arguments], cwd=self.elsewhere, env=environment, stdout=log, stderr=log, start_new_session=True, preexec_fn=default_ctrl_c
+            )
 
     def wait_until_held(self):
         end = time.monotonic() + 30
