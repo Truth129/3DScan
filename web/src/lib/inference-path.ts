@@ -93,8 +93,9 @@ export function pathStatus(row: InferencePathRow | undefined, notice: string) {
 }
 
 /**
- * Why each other card cannot be picked. An unavailable row is a disabled option, so it can never
- * become the selected row that pathStatus describes, and nothing else on the page says why.
+ * Why each other card cannot be picked. An unavailable row is a disabled option, so nobody can
+ * select it to read what pathStatus says, and nothing else on the page says why. A remembered card
+ * can stay selected while it is unavailable, and pathStatus says that one already.
  */
 export const otherPathReasons = (paths: readonly InferencePathRow[], selected?: string) =>
   paths.filter(row => !row.available && row.id !== selected).map(row => unavailable(row));
