@@ -532,9 +532,9 @@ export class InteractiveController {
           // Marks still unsaved with a message up mean a save failed during the follow. It keeps the
           // message, and only this can bring it back. Without a message they are marks the server
           // rewrote, which need no save. Reload saved work sits inside a conflict's message.
-          const failed = this.unsaved && !!this.error;
-          this.error = value.error ?? (this.conflict || failed ? this.error : '');
-          if (failed) {
+          const retry = this.unsaved && !!this.error;
+          this.error = value.error ?? (this.conflict || retry ? this.error : '');
+          if (retry) {
             this.retrying = value.error ? '' : this.error;
             this.schedule();
           }
