@@ -959,6 +959,8 @@ def test_a_timeout_never_shows_its_command_line():
         ("see http://example.org/help.", "see http://example.org/help."),
         ("https://example.org:8443/help", "https://example.org:8443/help"),
         ("file:///home/someone/ct.nii.gz", "file:<local path>"),
+        ("https:///home/someone/ct.nii.gz", "https:<local path>"),  # An address names a host, and this one holds only a path.
+        ("http:////home/someone/ct.nii.gz", "http:<local path>"),
         ("see https://example.org/help, then open /home/someone/ct.nii.gz", "see https://example.org/help, then open <local path>"),
         ("see https://example.org/help:/opt/a/lib:/opt/b/lib", "see https://example.org/help:<local path>:<local path>"),
         ("/home/some one/ct.nii.gz failed, see https://example.org/help", "<local path> failed, see https://example.org/help"),

@@ -80,9 +80,10 @@ _BAD_RECORD = (AttributeError, KeyError, OSError, RecursionError, TypeError, Val
 # ImportError and dlopen text leaves paths unquoted, and a directory can hold a space, so a space
 # ends a path only when no later word on its line has a slash. What follows a path's last slash
 # cannot be told from prose, and stays. A web address is matched first only so that it is kept,
-# because its `//host/...` reads as a path: PyTorch's out-of-memory error ends with one.
+# because its `//host/...` reads as a path: PyTorch's out-of-memory error ends with one. With no
+# host it is only a path with a prefix, so it falls through to the path rule.
 _PATH_CHAR = r"""[^\s'"`,;:()<>\[\]{}]"""
-_LOCAL_PATH = re.compile(rf"""(https?://{_PATH_CHAR}+)|'/[^']*'|"/[^"]*"|(?<![\w.~-])/{_PATH_CHAR}+(?:(?: +{_PATH_CHAR}+)* +{_PATH_CHAR}*/{_PATH_CHAR}*)?""")
+_LOCAL_PATH = re.compile(rf"""(https?://(?!/){_PATH_CHAR}+)|'/[^']*'|"/[^"]*"|(?<![\w.~-])/{_PATH_CHAR}+(?:(?: +{_PATH_CHAR}+)* +{_PATH_CHAR}*/{_PATH_CHAR}*)?""")
 
 
 def installed(site, name):
