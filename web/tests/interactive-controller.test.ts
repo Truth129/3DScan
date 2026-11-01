@@ -743,6 +743,417 @@ describe('a draft that moves under a job this page follows', () => {
       expect(reader.interactiveReview).toHaveBeenCalledOnce();
     });
   });
+  describe('what is left of a follow that is over', () => {
+    const summary = { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5 };
+    const job = (id = 'prediction', kind = 'review_predict') => ({ id, case_id: 'case', kind, status: 'queued' as const, stage: 'Queued', created_at: '' });
+    const cancelled = () => ({ ...job(), status: 'cancelled' as const });
+    const result = () =>
+      saved(1, { status: 'ready', dirty: false, applied_prompt_count: 1, candidate: { generation: 1, revision_id: 'review-draft-1', summary } });
+    /** A reply that fails when it is let go, as a held one that a poll is already waiting on. */
+    const failing = <T>() => {
+      const gate = held<void>();
+      return {
+        reply: gate.reply.then((): T => {
+          throw new Error('Failed to fetch');
+        }),
+        release: () => gate.release(),
+      };
+    };
+    const quiet = async (reader: ReturnType<typeof fixture>['reader']) => {
+      reader.interactiveReview.mockClear();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(reader.interactiveReview, 'nothing is being followed').not.toHaveBeenCalled();
+    };
+    /** A poll is out when Cancel is pressed, and that poll ends the follow before Cancel answers. */
+    async function cancelOutlasts(answer: Promise<unknown>) {
+      const { controller, reader } = await ownJob();
+      const read = held<InteractiveReview>();
+      reader.interactiveReview.mockReturnValueOnce(read.reply);
+      await vi.advanceTimersByTimeAsync(900);
+      reader.cancel.mockReturnValueOnce(answer as never);
+      const cancelling = controller.cancel();
+      read.release(saved());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.working).toBe(false);
+      return { controller, reader, cancelling };
+    }
+    /** The same order the other way round: Cancel answers first, so its timer outlasts the follow. */
+    async function cancelArmed() {
+      const { controller, reader } = await ownJob();
+      const read = held<InteractiveReview>();
+      reader.interactiveReview.mockReturnValueOnce(read.reply);
+      await vi.advanceTimersByTimeAsync(900);
+      await controller.cancel();
+      read.release(saved());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.working).toBe(false);
+      return { controller, reader };
+    }
+    /** Two polls out at once, which Cancel's timer can do on a slow link. The first ends the follow. */
+    async function twoPolls<T extends InteractiveReview | never>(second: Promise<T>, ended = saved() as InteractiveReview) {
+      const { controller, reader } = await ownJob();
+      const first = held<InteractiveReview>();
+      reader.interactiveReview.mockReturnValueOnce(first.reply).mockReturnValueOnce(second as never);
+      await vi.advanceTimersByTimeAsync(900);
+      await controller.cancel();
+      await vi.advanceTimersByTimeAsync(900);
+      expect(reader.interactiveReview).toHaveBeenCalledTimes(3);
+      first.release(ended);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.working).toBe(false);
+      return { controller, reader };
+    }
+    function holdPredict(reader: ReturnType<typeof fixture>['reader']) {
+      const predict = held<ReturnType<typeof job>>();
+      reader.predictInteractive.mockReturnValueOnce(predict.reply as never);
+      return predict;
+    }
+    function holdAccept(reader: ReturnType<typeof fixture>['reader']) {
+      const answer = held<ReturnType<typeof job>>();
+      reader.acceptInteractive.mockReturnValueOnce(answer.reply as never);
+      return answer;
+    }
+
+    it('arms nothing when Cancel answers after the follow ended, so no read is left to free the next run', async () => {
+      const answer = held<ReturnType<typeof cancelled>>();
+      const { reader, cancelling } = await cancelOutlasts(answer.reply);
+      answer.release(cancelled());
+      await cancelling;
+      await quiet(reader);
+    });
+    it('lets a timer Cancel armed run out, once the follow it was for has ended', async () => {
+      const { reader } = await cancelArmed();
+      await quiet(reader);
+    });
+    it('still restarts the wait for the next read while the job runs, as it always has', async () => {
+      const { controller, reader } = await ownJob();
+      await vi.advanceTimersByTimeAsync(500);
+      reader.interactiveReview.mockClear();
+      await controller.cancel();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reader.interactiveReview).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(reader.interactiveReview).toHaveBeenCalledOnce();
+    });
+    it('says so when Cancel fails, and goes on following the job', async () => {
+      const { controller, reader } = await ownJob();
+      await vi.advanceTimersByTimeAsync(500);
+      reader.cancel.mockRejectedValueOnce(new Error('Workstation offline'));
+      reader.interactiveReview.mockClear();
+      await controller.cancel();
+      expect(controller.error).toBe('Cancellation could not be requested. Workstation offline');
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reader.interactiveReview, 'the wait restarted').not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(reader.interactiveReview).toHaveBeenCalledOnce();
+    });
+    it('still says so when Cancel fails after the follow ended', async () => {
+      const answer = failing<ReturnType<typeof cancelled>>();
+      const { controller, reader, cancelling } = await cancelOutlasts(answer.reply);
+      answer.release();
+      await cancelling;
+      expect(controller.error).toBe('Cancellation could not be requested. Failed to fetch');
+      await quiet(reader);
+    });
+    it('reaches the job a follow took on from another tab, before any poll has named it', async () => {
+      const { controller, reader } = await followed();
+      expect(controller.job).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(500);
+      await controller.cancel();
+      expect(reader.cancel).toHaveBeenCalledExactlyOnceWith('prediction');
+      reader.interactiveReview.mockClear();
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reader.interactiveReview, 'the wait restarted').not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(reader.interactiveReview).toHaveBeenCalledOnce();
+    });
+
+    describe.each([
+      ['a run', (controller: InteractiveController, reader: ReturnType<typeof fixture>['reader']) => [holdPredict(reader), controller.apply(true)] as const],
+      ['a Save', (controller: InteractiveController, reader: ReturnType<typeof fixture>['reader']) => [holdAccept(reader), controller.accept()] as const],
+    ])('when %s starts next', (_next, start) => {
+      /** A page that can do either, because the follow left a result that a Save can take. */
+      const ready = async (
+        setup: (ended: InteractiveReview) => Promise<{ controller: InteractiveController; reader: ReturnType<typeof fixture>['reader'] }>,
+      ) => {
+        const { controller, reader } = await setup(result());
+        const [answer, finishing] = start(controller, reader);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(controller.working).toBe(true);
+        return { controller, reader, answer, finishing };
+      };
+      it('drops a timer the last follow left', async () => {
+        const { controller, reader, answer, finishing } = await ready(async ended => {
+          const { controller, reader } = await ownJob();
+          const read = held<InteractiveReview>();
+          reader.interactiveReview.mockReturnValueOnce(read.reply);
+          await vi.advanceTimersByTimeAsync(900);
+          await controller.cancel();
+          read.release(ended);
+          await vi.advanceTimersByTimeAsync(0);
+          return { controller, reader };
+        });
+        await quiet(reader);
+        expect(controller.working, 'the page stays held').toBe(true);
+        answer.release(job());
+        await finishing;
+      });
+      it('arms nothing when a Cancel from the last follow answers', async () => {
+        const reply = held<ReturnType<typeof cancelled>>();
+        let cancelling!: Promise<void>;
+        const { controller, reader, answer, finishing } = await ready(async ended => {
+          const { controller, reader } = await ownJob();
+          const read = held<InteractiveReview>();
+          reader.interactiveReview.mockReturnValueOnce(read.reply);
+          await vi.advanceTimersByTimeAsync(900);
+          reader.cancel.mockReturnValueOnce(reply.reply as never);
+          cancelling = controller.cancel();
+          read.release(ended);
+          await vi.advanceTimersByTimeAsync(0);
+          return { controller, reader };
+        });
+        reply.release(cancelled());
+        await cancelling;
+        await quiet(reader);
+        expect(controller.working).toBe(true);
+        answer.release(job());
+        await finishing;
+      });
+      it('says nothing of a Cancel from the last follow that fails', async () => {
+        const reply = failing<ReturnType<typeof cancelled>>();
+        let cancelling!: Promise<void>;
+        const { controller, answer, finishing } = await ready(async ended => {
+          const { controller, reader } = await ownJob();
+          const read = held<InteractiveReview>();
+          reader.interactiveReview.mockReturnValueOnce(read.reply);
+          await vi.advanceTimersByTimeAsync(900);
+          reader.cancel.mockReturnValueOnce(reply.reply as never);
+          cancelling = controller.cancel();
+          read.release(ended);
+          await vi.advanceTimersByTimeAsync(0);
+          return { controller, reader };
+        });
+        reply.release();
+        await cancelling;
+        expect(controller.error).toBe('');
+        answer.release(job());
+        await finishing;
+      });
+      it('drops a read the last follow left, which would otherwise free the page', async () => {
+        const second = held<InteractiveReview>();
+        const { controller, reader, answer, finishing } = await ready(ended => twoPolls(second.reply, ended));
+        reader.job.mockClear();
+        second.release({ ...result(), error: 'From the last follow', job_id: 'prediction', prompts: [point('saved'), point('stale')] });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(reader.job, 'the record it would have gone with has gone').not.toHaveBeenCalled();
+        expect([controller.working, controller.error, controller.unsaved]).toEqual([true, '', false]);
+        await quiet(reader);
+        expect(controller.working).toBe(true);
+        answer.release(job());
+        await finishing;
+      });
+      it('says nothing of a read the last follow left that fails', async () => {
+        const second = failing<InteractiveReview>();
+        const { controller, reader, answer, finishing } = await ready(ended => twoPolls(second.reply, ended));
+        second.release();
+        await vi.advanceTimersByTimeAsync(0);
+        expect([controller.working, controller.error]).toEqual([true, '']);
+        await quiet(reader);
+        answer.release(job());
+        await finishing;
+      });
+      it('drops a job read the last follow left', async () => {
+        const jobRead = held<ReturnType<typeof job>>();
+        const { controller, reader, answer, finishing } = await ready(async ended => {
+          const { controller, reader } = await ownJob();
+          const first = held<InteractiveReview>();
+          reader.interactiveReview.mockReturnValueOnce(first.reply).mockResolvedValueOnce(ended);
+          reader.job.mockReturnValueOnce(jobRead.reply as never);
+          await vi.advanceTimersByTimeAsync(900);
+          await controller.cancel();
+          first.release(running());
+          await vi.advanceTimersByTimeAsync(0); // Its job read is out, and it ends nothing yet.
+          await vi.advanceTimersByTimeAsync(900); // The next poll ends the follow.
+          expect(controller.working).toBe(false);
+          return { controller, reader };
+        });
+        jobRead.release(job());
+        await vi.advanceTimersByTimeAsync(0);
+        expect([controller.working, controller.error]).toEqual([true, '']);
+        await quiet(reader);
+        expect(controller.working).toBe(true);
+        answer.release(job());
+        await finishing;
+      });
+    });
+
+    it('ignores the failure of a read that lost to one that ended the follow', async () => {
+      const second = failing<InteractiveReview>();
+      const { controller, reader } = await twoPolls(second.reply);
+      second.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.error).toBe('');
+      await quiet(reader);
+    });
+    it('reads nothing more once the controller has stopped, between the review and the job', async () => {
+      const { controller, reader } = await ownJob();
+      const read = held<InteractiveReview>();
+      reader.interactiveReview.mockReturnValueOnce(read.reply);
+      await vi.advanceTimersByTimeAsync(900);
+      controller.dispose();
+      reader.job.mockClear();
+      read.release(running());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reader.job).not.toHaveBeenCalled();
+    });
+    it('stops at once when the controller stops with a job read out', async () => {
+      const { controller, reader } = await ownJob();
+      const read = held<ReturnType<typeof job>>();
+      reader.job.mockReturnValueOnce(read.reply as never);
+      await reads(reader, saved(1, { status: 'ready', job_id: 'prediction' }));
+      controller.dispose();
+      read.release(job());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.review?.status, 'a stopped page takes on nothing more').toBe('predicting');
+    });
+    it('leaves no read behind a Cancel pressed while a Save waits for its job, which would free the page mid-Save', async () => {
+      const { controller, reader } = await ownJob();
+      await reads(reader, result());
+      expect([controller.working, controller.job?.id]).toEqual([false, 'prediction']);
+      const answer = holdAccept(reader);
+      const saving = controller.accept();
+      await vi.advanceTimersByTimeAsync(0);
+      await controller.cancel();
+      expect(reader.cancel).toHaveBeenCalledExactlyOnceWith('prediction');
+      await quiet(reader);
+      expect(controller.working).toBe(true);
+      answer.release(job('saving', 'review_accept'));
+      await saving;
+      reader.interactiveReview.mockClear();
+      await reads(reader, saved(1, { status: 'accepted', job_id: 'saving' }));
+      expect(reader.interactiveReview, 'the Save arms its own').toHaveBeenCalledOnce();
+      expect(controller.working).toBe(false);
+    });
+    it('leaves no read behind a Cancel pressed before a repeat run has its job', async () => {
+      const { controller, reader } = fixture(saved());
+      await controller.load();
+      reader.interactiveReview.mockRejectedValueOnce(new Error('Failed to fetch'));
+      await controller.apply(true); // The read failed, so the record still says a job is running.
+      expect([controller.working, controller.review?.status]).toEqual([false, 'predicting']);
+      const predict = holdPredict(reader);
+      const run = controller.apply(true);
+      await vi.advanceTimersByTimeAsync(0);
+      await controller.cancel();
+      expect(reader.cancel).toHaveBeenCalledExactlyOnceWith('prediction');
+      await quiet(reader);
+      expect(controller.working).toBe(true);
+      predict.release(job('second'));
+      await run;
+      expect(controller.job?.id).toBe('second');
+    });
+
+    describe('a Reload that lands while a run or a Save is out', () => {
+      async function runOut() {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        const predict = holdPredict(reader);
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(0);
+        return { controller, reader, predict, run };
+      }
+      async function saveOut() {
+        const { controller, reader } = fixture(result());
+        await controller.load();
+        const answer = holdAccept(reader);
+        const saving = controller.accept();
+        await vi.advanceTimersByTimeAsync(0);
+        return { controller, reader, answer, saving };
+      }
+      const gone = async ({ controller, reader }: Pick<Awaited<ReturnType<typeof runOut>>, 'controller' | 'reader'>) => {
+        reader.interactiveReviews.mockResolvedValueOnce([]);
+        await controller.reload();
+        expect([controller.review, controller.working]).toEqual([undefined, false]);
+      };
+      it('never builds a record with no id out of the job that run answers with', async () => {
+        const page = await runOut();
+        await gone(page);
+        page.reader.interactiveReview.mockClear();
+        page.predict.release(job());
+        await page.run;
+        expect([page.controller.review, page.controller.job, page.controller.working, page.controller.error]).toEqual([undefined, undefined, false, '']);
+        expect(page.reader.interactiveReview, 'there is nothing to read').not.toHaveBeenCalled();
+      });
+      it('lets the next mark start a draft of its own, as a browser refresh used to be needed for', async () => {
+        const page = await runOut();
+        await gone(page);
+        page.predict.release(job());
+        await page.run;
+        page.controller.append(point('next'));
+        await page.controller.flush();
+        expect(page.reader.startInteractive).toHaveBeenCalledOnce();
+        expect([page.controller.unsaved, page.controller.conflict, page.controller.error]).toEqual([false, false, '']);
+      });
+      it('says nothing of a refusal that record has been replaced since', async () => {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        const predict = held<ReturnType<typeof job>>();
+        reader.predictInteractive.mockReturnValueOnce(
+          predict.reply.then(() => Promise.reject(new ApiError(409, 'This correction session is closed'))) as never,
+        );
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(0);
+        await gone({ controller, reader });
+        reader.interactiveReview.mockClear();
+        predict.release(job());
+        await run;
+        expect([controller.error, controller.conflict]).toEqual(['', false]);
+        expect(reader.interactiveReview).not.toHaveBeenCalled();
+      });
+      it('leaves a job the Reload found to the follow it started', async () => {
+        const page = await runOut();
+        page.reader.interactiveReviews.mockResolvedValueOnce([running(1)]);
+        await page.controller.reload();
+        expect(page.controller.working).toBe(true);
+        page.predict.release(job());
+        await page.run;
+        expect(page.controller.job, 'the first poll says which job it is').toBeUndefined();
+        await reads(page.reader, saved(1, { status: 'ready' }));
+        expect(page.controller.working).toBe(false);
+      });
+      it('drops the read after predict, which would bring back a closed record', async () => {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        const read = held<InteractiveReview>();
+        reader.interactiveReview.mockReturnValueOnce(read.reply);
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(0);
+        await gone({ controller, reader });
+        read.release(saved(2, { status: 'discarded' }));
+        await run;
+        expect([controller.review, controller.conflict, controller.error]).toEqual([undefined, false, '']);
+      });
+      it('leaves the Save to the server, and still hands its job to the caller', async () => {
+        const page = await saveOut();
+        await gone(page);
+        page.answer.release(job('saving', 'review_accept'));
+        expect((await page.saving)?.id).toBe('saving');
+        expect([page.controller.review, page.controller.job, page.controller.working]).toEqual([undefined, undefined, false]);
+        await quiet(page.reader);
+      });
+      it('says nothing of a Save refused after that record was replaced', async () => {
+        const { controller, reader } = fixture(result());
+        await controller.load();
+        const answer = held<ReturnType<typeof job>>();
+        reader.acceptInteractive.mockReturnValueOnce(answer.reply.then(() => Promise.reject(new ApiError(409, 'This correction session is closed'))) as never);
+        const saving = controller.accept();
+        await vi.advanceTimersByTimeAsync(0);
+        await gone({ controller, reader });
+        answer.release(job());
+        await saving;
+        expect(controller.error).toBe('');
+      });
+    });
+  });
   it('asks for a reload when the first read of a job it has just started finds another tab has saved', async () => {
     const { controller, reader } = fixture(saved());
     await controller.load();

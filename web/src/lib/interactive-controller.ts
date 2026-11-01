@@ -57,6 +57,13 @@ export class InteractiveController {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private writing?: Promise<void>;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Moves when a run or a Save starts and when a record is installed. A timer or a reply from
+   * before that belongs to something that is over, and must leave what came after it alone.
+   */
+  private follow = 0;
+  /** The follow whose reads have started, which a run or a Save does only once it has its job. */
+  private reading = 0;
   private stopped = false;
   private cancelRequested = false;
   private initialRelationship = normalizeRelationship();
@@ -172,6 +179,7 @@ export class InteractiveController {
     // record this replaces. A poll left running would stop on a missing review with the spinner on,
     // and cancel() would reach the old job before the running one until the first poll.
     clearTimeout(this.pollTimer);
+    this.follow++;
     this.working = false;
     this.job = undefined;
     this.review = value;
@@ -334,6 +342,7 @@ export class InteractiveController {
       this.notify();
       return;
     }
+    const follow = ++this.follow;
     this.working = true;
     this.job = undefined;
     this.cancelRequested = false;
@@ -351,13 +360,16 @@ export class InteractiveController {
       }
       const { id, generation } = this.review;
       // One path sends no fifth argument at all, so it stays today's request.
-      this.job = await (choice
+      const job = await (choice
         ? this.reader.predictInteractive(this.caseId, id, generation, fullRefine, choice)
         : this.reader.predictInteractive(this.caseId, id, generation, fullRefine));
-      const seen: InteractiveReview = { ...this.review, status: 'predicting', job_id: this.job.id };
+      // The record that was asked about has gone, and this job says nothing about what replaced it.
+      if (follow !== this.follow) return;
+      this.job = job;
+      const seen: InteractiveReview = { ...this.review, status: 'predicting', job_id: job.id };
       this.review = seen;
       this.notify();
-      if (this.cancelRequested) await this.reader.cancel(this.job.id);
+      if (this.cancelRequested) await this.reader.cancel(job.id);
       const value = await this.reader.interactiveReview(this.caseId, seen.id);
       // As in poll(): a save of this page's can be in the reply already, or have landed after it.
       if (this.saving || this.review !== seen) {
@@ -368,6 +380,7 @@ export class InteractiveController {
       this.notify();
       this.poll();
     } catch (reason) {
+      if (follow !== this.follow) return;
       this.error = reason instanceof Error ? reason.message : String(reason);
       this.working = false;
       this.notify();
@@ -425,34 +438,45 @@ export class InteractiveController {
   }
   async accept(): Promise<Job | undefined> {
     if (this.working || this.dirty || !this.review?.candidate) return;
+    const follow = ++this.follow;
     this.working = true;
     this.error = '';
     this.notify();
     try {
       await this.flush();
       const value = await this.reader.acceptInteractive(this.caseId, this.review.id, this.review.generation);
+      // As in apply(), but the server has the Save whatever became of this record, so App must hear.
+      if (follow !== this.follow) return value;
       this.job = value;
       this.review = { ...this.review, status: 'accepting', job_id: value.id };
       this.poll();
       this.notify();
       return value;
     } catch (reason) {
+      if (follow !== this.follow) return;
       this.error = reason instanceof Error ? reason.message : String(reason);
       this.working = false;
       this.notify();
     }
   }
   async cancel() {
-    const id = this.job?.id ?? (this.review && ['predicting', 'accepting'].includes(this.review.status) ? this.review.job_id : undefined);
+    const id = this.job?.id ?? (this.review && ['predicting', 'accepting'].includes(this.review.status) ? this.review.job_id : undefined),
+      follow = this.follow;
+    // Its reply can land after the follow has ended, or inside the next one, which reads for itself
+    // once it has a job. A read before that would see no job and free the page under the request.
+    const restart = () => {
+      if (this.working && this.reading === follow && this.follow === follow) this.poll();
+    };
     try {
       if (id) {
         await this.reader.cancel(id);
-        this.poll();
+        restart();
       } else if (this.working) this.cancelRequested = true;
     } catch (reason) {
+      if (follow !== this.follow) return;
       this.error = `Cancellation could not be requested. ${reason instanceof Error ? reason.message : reason}`;
       this.notify();
-      if (this.working) this.poll();
+      restart();
     }
   }
   async discard() {
@@ -470,11 +494,16 @@ export class InteractiveController {
   private poll() {
     clearTimeout(this.pollTimer);
     if (!this.review || this.stopped) return;
+    // A timer or a reply can outlast what it was following, and the page may be idle or on a new run.
+    const follow = this.follow,
+      over = () => this.stopped || !this.working || follow !== this.follow;
+    this.reading = follow;
     this.pollTimer = setTimeout(async () => {
+      if (over()) return;
       const seen = this.review!;
       try {
         const value = await this.reader.interactiveReview(this.caseId, seen.id);
-        if (this.stopped) return;
+        if (over()) return;
         // A failed job read says nothing about the record, so it waits until the record is judged.
         let job = this.job,
           failed: { reason: unknown } | undefined;
@@ -484,10 +513,11 @@ export class InteractiveController {
           } catch (reason) {
             failed = { reason };
           }
+        if (over()) return;
         // A save of this page's can be in the reply already, which would read as another tab's, or
         // have landed after it, which the reply would undo. The next read can tell.
         if (this.saving || this.review !== seen) {
-          if (this.working) this.poll();
+          this.poll();
           return;
         }
         if (!this.takeOn(seen, value)) return;
@@ -504,6 +534,7 @@ export class InteractiveController {
         this.notify();
         if (this.working) this.poll();
       } catch (reason) {
+        if (over()) return;
         this.error = `Review status unavailable. ${reason instanceof Error ? reason.message : reason}`;
         this.notify();
         this.poll();
