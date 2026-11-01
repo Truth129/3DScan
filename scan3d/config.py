@@ -69,6 +69,11 @@ def device_request() -> str:
     return os.environ.get("SCAN3D_DEVICE", "").strip() or DEFAULT_DEVICE
 
 
+# One captured view. Multipart parsing buffers a body in RAM-backed /tmp before
+# any handler runs, so this also bounds what one request can make the server hold.
+VIEW_UPLOAD_LIMIT = 128 * 1024**2
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -103,6 +108,10 @@ class Settings:
             orthanc_password=os.environ.get("SCAN3D_ORTHANC_PASSWORD", ""),
             orthanc_export_destinations=destinations,
         )
+
+    @property
+    def view_upload_limit(self) -> int:
+        return min(VIEW_UPLOAD_LIMIT, self.upload_limit)
 
     def modality_unavailable(self, modality) -> str | None:
         """Why this workstation does not offer a modality's workflows, or None.

@@ -162,6 +162,7 @@ describe('expanded viewport lifecycle', () => {
       activeElement: previous as unknown as HTMLElement,
       addEventListener: (name: string, listener: EventListener) => listeners.set(name, listener),
       removeEventListener: (name: string) => listeners.delete(name),
+      querySelector: () => null,
     };
     vi.stubGlobal('document', document);
     vi.stubGlobal('HTMLElement', Element);
@@ -191,6 +192,69 @@ describe('expanded viewport lifecycle', () => {
     expect(listeners.size).toBe(0);
     expect(sibling.inert).toBe(true);
     expect(previous.focus).toHaveBeenCalledTimes(1);
+  });
+
+  async function expandedPage() {
+    const listeners = new Map<string, EventListener>();
+    class Element {
+      inert = false;
+      tagName = 'DIV';
+      parentElement?: Element;
+      children: Element[] = [];
+      focus = vi.fn();
+      contains = () => false;
+      querySelectorAll = () => [] as Element[];
+    }
+    const body = new Element(),
+      viewport = new Element(),
+      button = new Element(),
+      header = new Element(),
+      held = new Element(),
+      state = { modal: false };
+    held.tagName = 'DIALOG';
+    body.children = [viewport, header, held];
+    viewport.parentElement = header.parentElement = held.parentElement = body;
+    Object.assign(button, { tabIndex: 0, matches: () => false, closest: () => null, getClientRects: () => [{}] });
+    viewport.querySelectorAll = () => [button];
+    vi.stubGlobal('document', {
+      body,
+      activeElement: held,
+      addEventListener: (name: string, listener: EventListener) => listeners.set(name, listener),
+      removeEventListener: (name: string) => listeners.delete(name),
+      querySelector: (selector: string) => (selector === 'dialog:modal' && state.modal ? held : null),
+    });
+    vi.stubGlobal('HTMLElement', Element);
+    const expansion = effectScope().run(() =>
+      useExpandedViewport(shallowRef(viewport as unknown as HTMLElement), shallowRef(button as unknown as HTMLButtonElement)),
+    )!;
+    await expansion.setExpanded(true);
+    const press = (key: string) => {
+      const event = { key, isComposing: false, shiftKey: false, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+      listeners.get('keydown')!(event as unknown as Event);
+      return event;
+    };
+    return { ...expansion, button, header, held, state, press };
+  }
+  it('leaves a held dialog usable, since showModal cannot lift inert from it', async () => {
+    const { header, held } = await expandedPage();
+    expect(header.inert).toBe(true);
+    expect(held.inert).toBe(false);
+  });
+  it('leaves Tab and Escape to a modal dialog, and takes them back when it closes', async () => {
+    const page = await expandedPage();
+    page.button.focus.mockClear();
+    page.state.modal = true;
+    expect(page.press('Tab').preventDefault).not.toHaveBeenCalled();
+    expect(page.button.focus).not.toHaveBeenCalled();
+    expect(page.press('Escape').preventDefault).not.toHaveBeenCalled();
+    await nextTick();
+    expect(page.expanded.value).toBe(true);
+    page.state.modal = false;
+    expect(page.press('Tab').preventDefault).toHaveBeenCalledOnce();
+    expect(page.button.focus).toHaveBeenCalledOnce();
+    page.press('Escape');
+    await nextTick();
+    expect(page.expanded.value).toBe(false);
   });
 });
 

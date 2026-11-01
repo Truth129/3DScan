@@ -159,30 +159,51 @@ def _frozen_structure(structure):
 
 
 class OrthancExports:
+    kind = "orthanc_export"
+    result_key = "dicom_seg"
+    encoding_version = EXPORT_ENCODING_VERSION
+    label = "DICOM SEG"
+    interrupted_error = "Export interrupted. Retry to reuse its exact SEG bytes and check any existing Orthanc delivery job."
+    failed_error = "DICOM SEG export failed. Check the original CT and saved masks, then retry."
+    undelivered_error = "Orthanc could not deliver every SEG instance. An explicit retry reuses the same SOP instances."
+    unconfirmed_error = (
+        "Delivery is not confirmed. Check the destination before retrying; a retry reuses the exact SEG instances and checks any known Orthanc job."
+    )
+    still_active_error = "An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status."
+
     def __init__(self, service):
         self.service = service
 
     def _directory(self, case_id, export_id):
         return self.service.store.case_dir(case_id) / "dicom-exports" / export_id
 
-    def _inputs(self, case_id, revision_id, structure_ids=None):
+    def _reference(self, case_id, revision_id):
         store = self.service.store
         revision = store.revision(case_id, revision_id)
         case = store.get("cases", case_id)
         if not self.service.settings.orthanc_url:
-            raise ExportUnavailable("Configure Orthanc before exporting DICOM SEG.")
+            raise ExportUnavailable(f"Configure Orthanc before exporting {self.label}.")
         try:
             reference = reference_image(revision)
         except (KeyError, OSError, ValueError):
             raise ExportUnavailable("This saved revision's reference image cannot be verified.") from None
         if reference["modality"] != "CT":
-            raise ExportUnavailable("DICOM SEG return currently supports original classic CT sources only.")
+            raise ExportUnavailable(f"{self.label} return currently supports original classic CT sources only.")
+        return revision, case, reference
+
+    def _inputs(self, case_id, revision_id, structure_ids=None):
+        revision, case, reference = self._reference(case_id, revision_id)
         structures = {item["id"]: item for item in revision["structures"]}
         selected = sorted(structure_ids if structure_ids is not None else (key for key, item in structures.items() if item.get("voxel_count", 1)))
         if not selected or len(selected) != len(set(selected)) or any(key not in structures for key in selected):
             raise ExportUnavailable("Select one or more distinct structures from this saved revision.")
         if any(not structures[key].get("voxel_count", 1) for key in selected):
             raise ExportUnavailable("Empty masks cannot be exported as DICOM SEG.")
+        source, directory = self._source(case_id, case, reference)
+        return _Inputs(revision, reference, source, directory, tuple(structures[key] for key in selected))
+
+    def _source(self, case_id, case, reference):
+        store = self.service.store
         source_metadata = reference["source"]
         try:
             source = parse_source(case.get("references", {})["orthanc"])
@@ -210,39 +231,27 @@ class OrthancExports:
             raise ExportUnavailable(
                 "This saved revision has no verified original Orthanc CT source. Reimport and prepare its original CT before export."
             ) from None
-        return _Inputs(revision, reference, source, directory, tuple(structures[key] for key in selected))
+        return source, directory
 
     def availability(self, case_id, revision_id):
         # Resolve saved identity first: candidates and revisions from another
         # case are never treated as exportable snapshots.
         self.service.store.revision(case_id, revision_id)
-        exports = [
-            public_job(job) for job in self.service.store.list("jobs", case_id) if job["kind"] == "orthanc_export" and job.get("revision_id") == revision_id
-        ]
+        exports = [public_job(job) for job in self.service.store.list("jobs", case_id) if job["kind"] == self.kind and job.get("revision_id") == revision_id]
         try:
             self._inputs(case_id, revision_id)
             with self.service.orthanc.client() as client:
                 destinations = client.destinations(self.service.settings.orthanc_export_destinations)
         except (ExportUnavailable, OrthancError, NotFound) as exc:
             reason = str(exc) if isinstance(exc, ExportUnavailable) else "The configured Orthanc archive is unavailable. Retry its connection."
-            return {"available": False, "reason": reason, "destinations": [], "exports": exports, "encoding_version": EXPORT_ENCODING_VERSION}
-        return {"available": True, "destinations": destinations, "exports": exports, "encoding_version": EXPORT_ENCODING_VERSION}
+            return {"available": False, "reason": reason, "destinations": [], "exports": exports, "encoding_version": self.encoding_version}
+        return {"available": True, "destinations": destinations, "exports": exports, "encoding_version": self.encoding_version}
 
     def start(self, case_id, revision_id, structure_ids=None, destination=None, *, resend=False, overlap_priority=None):
         inputs = self._inputs(case_id, revision_id, structure_ids)
         if overlap_priority is not None and (len(overlap_priority) < 2 or sorted(overlap_priority) != [item["id"] for item in inputs.structures]):
             raise ExportUnavailable("Rank every selected structure exactly once to resolve overlaps.")
-        if resend and destination is None:
-            raise ExportUnavailable("Choose a configured destination before requesting Send again.")
-        display_name = None
-        if destination is not None:
-            if destination not in self.service.settings.orthanc_export_destinations:
-                raise ExportUnavailable("Select a configured DICOM SEG destination.")
-            with self.service.orthanc.client() as client:
-                destinations = {item["id"]: item for item in client.destinations(self.service.settings.orthanc_export_destinations)}
-            if destination not in destinations:
-                raise ExportUnavailable("The selected DICOM SEG destination is unavailable.")
-            display_name = destinations[destination]["name"]
+        display_name = self._destination(destination, resend)
         identity = {
             "revision_id": revision_id,
             "reference_image_id": inputs.reference["id"],
@@ -259,12 +268,8 @@ class OrthancExports:
             encoding["overlap_priority"] = overlap_priority
         artifact_key = hashlib.sha256(json.dumps(encoding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         export_key = hashlib.sha256((artifact_key + ":" + (destination or "")).encode()).hexdigest()
-        with self.service.store.connection() as con:
-            con.execute("BEGIN IMMEDIATE")
-            rows = con.execute(
-                "SELECT data FROM jobs WHERE case_id=? AND json_extract(data,'$.kind')='orthanc_export' ORDER BY rowid DESC", (case_id,)
-            ).fetchall()
-            previous = [json.loads(row["data"]) for row in rows]
+
+        def changed_inputs(previous):
             # Encoding upgrades create fresh SOPs, but cannot make a changed
             # saved mask look like the same immutable input. Legacy artifacts
             # used their input hash directly as the artifact key.
@@ -273,10 +278,61 @@ class OrthancExports:
                 for job in previous
             ):
                 raise ExportUnavailable("Saved masks changed since this revision's earlier export. Save a new revision before exporting those masks.")
+
+        fields = {
+            **identity,
+            "encoding_version": EXPORT_ENCODING_VERSION,
+            "input_key": input_key,
+            "artifact_key": artifact_key,
+            "selection_key": selection_key,
+            "export_key": export_key,
+        }
+        extras = {"overlap_priority": overlap_priority} if overlap_priority is not None else {}
+
+        def summarize(payload):
+            summary = {
+                "export_id": payload["export_id"],
+                "encoding_version": EXPORT_ENCODING_VERSION,
+                "archived": False,
+                "sent": False,
+                "segments_count": len(inputs.structures),
+                "instance_count": 1,
+                "structure_ids": [item["id"] for item in inputs.structures],
+            }
+            if destination:
+                summary.update(destination=display_name, destination_id=destination)
+            if overlap_priority is not None:
+                summary["overlap_priority"] = overlap_priority
+            return summary
+
+        return self._enqueue(case_id, revision_id, fields, extras, destination, display_name, resend, summarize, guard=changed_inputs)
+
+    def _destination(self, destination, resend):
+        if resend and destination is None:
+            raise ExportUnavailable("Choose a configured destination before requesting Send again.")
+        if destination is None:
+            return None
+        if destination not in self.service.settings.orthanc_export_destinations:
+            raise ExportUnavailable(f"Select a configured {self.label} destination.")
+        with self.service.orthanc.client() as client:
+            destinations = {item["id"]: item for item in client.destinations(self.service.settings.orthanc_export_destinations)}
+        if destination not in destinations:
+            raise ExportUnavailable(f"The selected {self.label} destination is unavailable.")
+        return destinations[destination]["name"]
+
+    def _enqueue(self, case_id, revision_id, fields, extras, destination, display_name, resend, summarize, *, guard=None, publish=None):
+        """Dedupe and queue in one write transaction; publish runs only for a new job."""
+        artifact_key, export_key = fields["artifact_key"], fields["export_key"]
+        with self.service.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            rows = con.execute("SELECT data FROM jobs WHERE case_id=? AND json_extract(data,'$.kind')=? ORDER BY rowid DESC", (case_id, self.kind)).fetchall()
+            previous = [json.loads(row["data"]) for row in rows]
+            if guard:
+                guard(previous)
             matching = next((job for job in previous if job["payload"]["export_key"] == export_key), None)
             if matching and matching["status"] in {"queued", "running"}:
                 return matching
-            if resend and not (matching and matching["status"] == "completed" and matching.get("result", {}).get("dicom_seg", {}).get("sent")):
+            if resend and not (matching and matching["status"] == "completed" and matching.get("result", {}).get(self.result_key, {}).get("sent")):
                 raise ExportUnavailable("Send again requires a confirmed successful export of this selection to this destination. Use Export or Retry first.")
             if matching and matching["status"] == "completed" and not resend:
                 return matching
@@ -290,19 +346,13 @@ class OrthancExports:
                 None,
             )
             payload = {
-                **identity,
-                "encoding_version": EXPORT_ENCODING_VERSION,
-                "input_key": input_key,
-                "artifact_key": artifact_key,
-                "selection_key": selection_key,
-                "export_key": export_key,
+                **fields,
                 "export_id": artifact_job["payload"]["export_id"] if artifact_job else identifier(),
                 "destination": destination,
                 "destination_name": display_name,
                 "delivery_attempt_id": matching["payload"]["delivery_attempt_id"] if matching and not resend else identifier(),
             }
-            if overlap_priority is not None:
-                payload["overlap_priority"] = overlap_priority
+            payload.update(extras)
             if artifact_job:
                 manifest_sha = next(
                     (
@@ -317,7 +367,7 @@ class OrthancExports:
             job = dict(
                 id=identifier(),
                 case_id=case_id,
-                kind="orthanc_export",
+                kind=self.kind,
                 status="queued",
                 stage="Queued",
                 error=None,
@@ -326,21 +376,10 @@ class OrthancExports:
                 cancel_requested=False,
                 payload=payload,
             )
-            summary = {
-                "export_id": payload["export_id"],
-                "encoding_version": EXPORT_ENCODING_VERSION,
-                "archived": False,
-                "sent": False,
-                "segments_count": len(inputs.structures),
-                "instance_count": 1,
-                "structure_ids": [item["id"] for item in inputs.structures],
-            }
-            if destination:
-                summary.update(destination=display_name, destination_id=destination)
-            if overlap_priority is not None:
-                summary["overlap_priority"] = overlap_priority
-            job["result"] = {"dicom_seg": summary}
+            job["result"] = {self.result_key: summarize(payload)}
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
+            if publish:
+                publish(payload)
         return job
 
     def _check_inputs(self, job):
@@ -364,12 +403,7 @@ class OrthancExports:
         overlap_priority = job["payload"].get("overlap_priority")
         manifest_path = directory / "export.json"
         if manifest_path.exists():
-            try:
-                if job["payload"].get("artifact_manifest_sha256", _hash(manifest_path)) != _hash(manifest_path):
-                    raise ExportUnavailable("The cached DICOM SEG export manifest changed. Delivery was blocked.")
-                artifact = _ARTIFACT.validate_json(manifest_path.read_bytes())
-            except (OSError, ValidationError):
-                raise ExportUnavailable("The cached DICOM SEG export is invalid. Its bytes were retained for inspection.") from None
+            artifact = self._cached_manifest(job, manifest_path, _ARTIFACT)
         else:
             self.service.stage(job, "Resolving overlaps and encoding DICOM SEG" if overlap_priority else "Encoding exact saved masks as DICOM SEG")
             segments = tuple(SegmentInput(item["id"], item["name"], item["color"], Path(item["mask_file"])) for item in inputs.structures)
@@ -461,6 +495,26 @@ class OrthancExports:
             or len({item.path for item in artifact.files}) != len(artifact.files)
         ):
             raise ExportUnavailable("The cached DICOM SEG export differs from its frozen source or saved revision.")
+        self._check_files(job, directory, artifact)
+        for segment, selected in zip(segments, encoded, strict=True):
+            if (
+                _hash(selected["mask_file"], lambda: self.service.cancelled(job)) != segment.mask_sha256
+                or segment.name != selected["name"]
+                or segment.color != selected["color"]
+            ):
+                raise ExportUnavailable("The saved masks or prepared DICOM SEG bytes changed. Delivery was blocked.")
+        self._pin_manifest(job, manifest_path)
+        return artifact
+
+    def _cached_manifest(self, job, manifest_path, adapter):
+        try:
+            if job["payload"].get("artifact_manifest_sha256", _hash(manifest_path)) != _hash(manifest_path):
+                raise ExportUnavailable(f"The cached {self.label} export manifest changed. Delivery was blocked.")
+            return adapter.validate_json(manifest_path.read_bytes())
+        except (OSError, ValidationError):
+            raise ExportUnavailable(f"The cached {self.label} export is invalid. Its bytes were retained for inspection.") from None
+
+    def _check_files(self, job, directory, artifact):
         for output in artifact.files:
             path = directory / "dicom" / output.path
             if (
@@ -469,23 +523,20 @@ class OrthancExports:
                 or path.stat().st_size != output.size
                 or _hash(path, lambda: self.service.cancelled(job)) != output.sha256
             ):
-                raise ExportUnavailable("The prepared DICOM SEG bytes changed. Delivery was blocked.")
-        for segment, selected in zip(segments, encoded, strict=True):
-            if (
-                _hash(selected["mask_file"], lambda: self.service.cancelled(job)) != segment.mask_sha256
-                or segment.name != selected["name"]
-                or segment.color != selected["color"]
-            ):
-                raise ExportUnavailable("The saved masks or prepared DICOM SEG bytes changed. Delivery was blocked.")
+                raise ExportUnavailable(f"The prepared {self.label} bytes changed. Delivery was blocked.")
+
+    def _pin_manifest(self, job, manifest_path):
         self.service.check_cancel(job)
         job["payload"]["artifact_manifest_sha256"] = _hash(manifest_path)
         self.service.store.update_job(job["id"], payload=job["payload"])
-        return artifact
+
+    def _check_upload(self, job, upload):
+        """Runs after each upload, before its receipt is saved or any send starts."""
 
     def recover(self):
         """Recovery is local only; a user request must resume any remote job."""
         for job in self.service.store.list("jobs"):
-            if job["kind"] != "orthanc_export":
+            if job["kind"] != self.kind:
                 continue
             if job["status"] == "queued" or job["status"] == "failed" and job.get("stage") == "Interrupted":
                 self.service.store.update_job(
@@ -493,7 +544,7 @@ class OrthancExports:
                     status="failed",
                     stage="Interrupted",
                     completed_at=now(),
-                    error="Export interrupted. Retry to reuse its exact SEG bytes and check any existing Orthanc delivery job.",
+                    error=self.interrupted_error,
                 )
 
     def cancel(self, job_id):
@@ -519,7 +570,7 @@ class OrthancExports:
                 job.update(
                     status="failed" if active else "cancelled",
                     stage="Stopped waiting; delivery may continue" if active else "Cancelled before delivery",
-                    error="An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status." if active else None,
+                    error=self.still_active_error if active else None,
                     completed_at=now(),
                 )
             con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job, allow_nan=False), job_id))
@@ -569,7 +620,7 @@ class OrthancExports:
                 try:
                     receipt = _RECEIPT.validate_json(receipt_path.read_bytes())
                 except (OSError, ValidationError):
-                    raise ExportUnavailable("The DICOM SEG delivery receipt cannot be verified. Delivery was blocked.") from None
+                    raise ExportUnavailable(f"The {self.label} delivery receipt cannot be verified. Delivery was blocked.") from None
                 previous_delivery = receipt.destinations.get(destination)
                 sending = previous_delivery is not None and previous_delivery.state != "failure"
             artifact = self._artifact(job, directory)
@@ -577,25 +628,26 @@ class OrthancExports:
                 if receipt.manifest_sha256 != job["payload"]["artifact_manifest_sha256"] or not set(receipt.uploaded).issubset(
                     item.path for item in artifact.files
                 ):
-                    raise ExportUnavailable("The delivery receipt does not belong to this DICOM SEG artifact.")
+                    raise ExportUnavailable(f"The delivery receipt does not belong to this {self.label} artifact.")
             else:
                 receipt = _Receipt(job["payload"]["artifact_manifest_sha256"], {}, {})
             with self.service.orthanc.client() as client:
                 for item in artifact.files:
-                    self.service.stage(job, "Archiving DICOM SEG in Orthanc")
+                    self.service.stage(job, f"Archiving {self.label} in Orthanc")
                     # Orthanc may have been restored or changed independently.
                     # Reuploading identical SOP bytes is idempotent and verifies
                     # their readback before trusting a cached instance ID.
                     upload = client.upload_instance(directory / "dicom" / item.path, expected_sha256=item.sha256)
+                    self._check_upload(job, upload)
                     receipt.uploaded[item.path] = upload["id"]
                     save_receipt()
                 self.service.check_cancel(job)
                 if destination:
                     if destination not in self.service.settings.orthanc_export_destinations:
-                        raise ExportUnavailable("The selected destination is no longer enabled. DICOM SEG remains archived.")
+                        raise ExportUnavailable(f"The selected destination is no longer enabled. {self.label} remains archived.")
                     delivery = receipt.destinations.get(destination)
                     if delivery is None or delivery.state != "success" or delivery.attempt_id != job["payload"]["delivery_attempt_id"]:
-                        self.service.stage(job, "Sending DICOM SEG through Orthanc")
+                        self.service.stage(job, f"Sending {self.label} through Orthanc")
                         if (
                             delivery is None
                             or not delivery.job_id
@@ -618,7 +670,7 @@ class OrthancExports:
                         sending = True
                         job["payload"].update(orthanc_job_id=delivery.job_id, delivery_state=delivery.state)
                         self.service.store.update_job(job["id"], payload=job["payload"])
-                        self.service.store.update_job(job["id"], stage="Checking Orthanc DICOM SEG delivery")
+                        self.service.store.update_job(job["id"], stage=f"Checking Orthanc {self.label} delivery")
                         deadline = time.monotonic() + DELIVERY_WAIT_SECONDS
                         while True:
                             remote = client.store_job(delivery.job_id)
@@ -631,7 +683,7 @@ class OrthancExports:
                                 job["payload"]["delivery_state"] = delivery.state
                                 self.service.store.update_job(job["id"], payload=job["payload"])
                                 if not success:
-                                    raise ExportUnavailable("Orthanc could not deliver every SEG instance. An explicit retry reuses the same SOP instances.")
+                                    raise ExportUnavailable(self.undelivered_error)
                                 break
                             if time.monotonic() >= deadline:
                                 raise OrthancError("The Orthanc delivery job is still pending")
@@ -642,24 +694,16 @@ class OrthancExports:
             self.service.store.update_job(
                 job["id"],
                 status="completed",
-                stage="DICOM SEG sent" if destination else "DICOM SEG archived",
+                stage=f"{self.label} sent" if destination else f"{self.label} archived",
                 error=None,
                 completed_at=now(),
                 result=self._result(artifact, receipt, destination, job["payload"]["destination_name"]),
             )
         except Exception as exc:
             cancelled = isinstance(exc, InterruptedError) and not sending
-            error = (
-                str(exc)
-                if isinstance(exc, ExportUnavailable)
-                else (
-                    "Delivery is not confirmed. Check the destination before retrying; a retry reuses the exact SEG instances and checks any known Orthanc job."
-                    if sending
-                    else "DICOM SEG export failed. Check the original CT and saved masks, then retry."
-                )
-            )
+            error = str(exc) if isinstance(exc, ExportUnavailable) else (self.unconfirmed_error if sending else self.failed_error)
             if not cancelled:
-                log.warning("DICOM SEG export %s failed (%s)", job["id"], type(exc).__name__)
+                log.warning("%s export %s failed (%s)", self.label, job["id"], type(exc).__name__)
             if sending and receipt and destination in receipt.destinations and receipt.destinations[destination].state == "starting":
                 receipt.destinations[destination] = replace(receipt.destinations[destination], state="unknown")
                 try:

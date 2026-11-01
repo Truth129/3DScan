@@ -16,6 +16,8 @@ import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSetti
 import { VolumeMaskSources } from '../lib/volume-mask-sources';
 import { isVolumeLabelUnion } from '../lib/gpu-volume-data';
 import type { VolumeColorRequest } from '../lib/volume-colors';
+import { revisionUrl } from '../lib/api';
+import { VIEW_NOT_READY_MESSAGE, type ViewCaptureRequest, type ViewportCapture } from '../lib/dicom-view';
 
 const props = defineProps<{
   session?: RenderCTSession;
@@ -473,6 +475,40 @@ async function loadColors() {
     }
   }
 }
+/**
+ * Whether the frame on the canvas is the expected revision, layer by layer. Props only say
+ * what was requested: a replaced mask, tint or surface keeps its old pixels until its own
+ * load finishes, so each layer has to show that it presents this revision.
+ */
+function presents(expected: ViewCaptureRequest) {
+  const descriptor = lease?.source.descriptor,
+    base = revisionUrl(expected.caseId, expected.revisionId);
+  return (
+    !!viewer &&
+    ready.value &&
+    !props.review &&
+    !props.reviewPlaneActive &&
+    !!descriptor &&
+    !!props.session &&
+    !props.session.isDisposed &&
+    descriptor.key === props.sourceKey &&
+    !!descriptor.reference_image_id &&
+    descriptor.reference_image_id === expected.referenceImageId &&
+    props.session.revisionBase === base &&
+    props.revisionBase === base &&
+    props.modelRevisionId === expected.revisionId &&
+    !surfaceLoading.value &&
+    !surfaceError.value &&
+    !planeError.value &&
+    (props.segmentationVisible === false || surfacePresentedRevision.value === expected.revisionId) &&
+    !maskLoading.value &&
+    !maskError.value &&
+    (!props.mask?.enabled || props.volumeVisible === false || maskReady.value) &&
+    !colorLoading.value &&
+    !colorError.value &&
+    (!props.colors?.enabled || !props.colors.ids.length || props.volumeVisible === false || colorReady.value)
+  );
+}
 function syncPresentation() {
   presentationVersion++;
   if (!viewer) return;
@@ -745,6 +781,14 @@ defineExpose({
     if (!viewer || !ready.value) throw new Error('Wait for the Cornerstone viewer to finish rendering.');
     const image = await viewer.capturePNG();
     return reviewInput ? reviewInput.compositePNG(image) : image;
+  },
+  /** The frame is checked on both sides of the render, and its pixels are read with no task between them. */
+  captureExportPNG: async (expected: ViewCaptureRequest): Promise<ViewportCapture> => {
+    if (!presents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
+    const instance = viewer!,
+      url = await instance.capturePNG();
+    if (viewer !== instance || !presents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
+    return { url, referenceImageId: lease!.source.descriptor.reference_image_id!, surfaceRevisionId: surfacePresentedRevision.value };
   },
   prepareReviewPlane: async () => {
     if (!viewer || !ready.value) return false;
