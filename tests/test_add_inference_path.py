@@ -1501,12 +1501,13 @@ def swapped_in(rig, step, marked=False):
     """The environment moves aside the first time `step` starts, and another directory takes its name."""
     aside = rig.elsewhere / "aside"
     arrival = f"venv = Path({str(rig.venv)!r}); venv.rename({str(aside)!r}); venv.mkdir(); (venv / 'precious').touch()"
-    arrival += f"; (venv / {MARKER!r}).touch()" if marked else ""
+    arrival += {False: "", True: f"; (venv / {MARKER!r}).touch()", "linked": f"; (venv / {MARKER!r}).symlink_to({str(aside / MARKER)!r})"}[marked]
     rig.scenario["during"] = {step: f"if not Path({str(aside)!r}).exists():\n    {arrival}"}
     return aside
 
 
-@pytest.mark.parametrize("marked", [False, True], ids=["unmarked", "marked-by-another-run"])
+# The link is the same file to `-ef`, and `marked` refuses that directory.
+@pytest.mark.parametrize("marked", [False, True, "linked"], ids=["unmarked", "marked-by-another-run", "marker-links-to-the-locked-one"])
 @pytest.mark.parametrize("step", ["uv pip freeze", "queue", "uv trial"])
 def test_a_directory_swapped_in_during_a_run_is_left_alone(rig, step, marked):
     a_rebuild(rig)

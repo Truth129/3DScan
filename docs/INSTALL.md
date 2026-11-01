@@ -197,10 +197,14 @@ supported. uv would install somewhere else and the environment would be left emp
 The script installs only into a directory it made, which it marks with a
 `.scan3d-inference-path` file. It refuses any other directory that already exists,
 however empty, and a link with that name does not count, because a rebuild removes
-everything in the directory except that file. Keep nothing of your own there. uv checks a
-package against the hashes in `requirements/cuda-py314.lock` when it fetches it, not when
-it reuses its cache, and there is one gap: acvl-utils is published only as source, and the
-tools that build it are fetched without hashes.
+everything in the directory except that file. Keep nothing of your own there. It checks
+the marker again just before that wipe, which stays in the directory it checked. The uv
+steps after the wipe go by name, so never put another environment at that name during a
+run.
+
+uv checks a package against the hashes in `requirements/cuda-py314.lock` when it fetches
+it, not when it reuses its cache, and there is one gap: acvl-utils is published only as
+source, and the tools that build it are fetched without hashes.
 
 **The GPU check.** Last, the script runs `scripts/check_gpu.py --path nvidia`, which
 writes a proof to `.runtime/inference-paths/nvidia.json`, or under

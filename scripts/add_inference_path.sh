@@ -289,10 +289,12 @@ else
     queue_is_empty
   fi
   # This happens from inside the directory, after a last look that its marker is the one this run
-  # locked, so that the wipe cannot land anywhere else whatever becomes of the name. The marker
+  # locked, by the test `marked` uses, so that the wipe stays in the directory it checked. A hard
+  # link to that marker is the same file, and no test can tell. The uv steps after it go by name, so
+  # another directory that takes the name once the wipe has begun is installed into. The marker
   # stays, so that a stop at any point leaves a directory this script still owns. The finished mark
   # goes first, so that discovery withdraws the path before anything changes.
-  cd -- "$venv" && [[ "${marker##*/}" -ef /dev/fd/9 ]] ||
+  cd -- "$venv" && [[ ! -L "${marker##*/}" && "${marker##*/}" -ef /dev/fd/9 ]] ||
     fail "$venv changed during this run, so nothing was changed. Run this again."
   rm -f -- "${finished##*/}"
   find . -mindepth 1 -maxdepth 1 ! -name "${marker##*/}" -exec rm -rf -- {} + ||
