@@ -101,7 +101,7 @@ can_rebuild() {
 
 # The check says what it found. This sentence has to fit a busy queue and one that cannot be read,
 # which no amount of waiting will clear.
-queue_is_empty() {
+refuse_unless_idle() {
   "$interpreter" -B -P "$root/scripts/check_gpu.py" --queue ||
     fail 'This environment needs a rebuild, which can start only when the job queue can be read and is empty, so it was left as it is. Deal with what is reported above, then run this again.'
 }
@@ -155,7 +155,7 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$root/.cache/uv}"
 # uv fetches a Python it cannot find unless told not to, and a runtime must not rest on an
 # interpreter nobody chose.
 export UV_PYTHON_DOWNLOADS=never
-# By default uv hard-links, on every disk, so a file edited in place here would change in its cache
+# By default uv hard-links, on btrfs too, so a file edited in place here would change in its cache
 # and in any environment built from the same wheel, and a rebuild would put the edit back. A clone
 # is a file of its own for no more data. Where a disk cannot clone, uv warns and copies instead.
 export UV_LINK_MODE=clone
@@ -289,10 +289,10 @@ else
   # after a trial has built its replacement. The queue comes first so that a busy one never sets off
   # a download, and again after, because a cold trial can take many minutes.
   if [[ -f "$finished" ]]; then
-    queue_is_empty
+    refuse_unless_idle
     can_rebuild ||
       fail 'uv cannot rebuild this environment from what it can reach, so it was left as it is. Fix what uv reported above, then run this again.'
-    queue_is_empty
+    refuse_unless_idle
   fi
   # This happens from inside the directory, after a last look that its marker is the one this run
   # locked, by the test `marked` uses, so that the wipe stays in the directory it checked. A hard

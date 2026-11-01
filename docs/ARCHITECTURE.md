@@ -316,7 +316,7 @@ to continue from, so one added mark on another card would rebuild reviewed work 
 lock is derived, not stored: it is non-empty `batches`, which only a published result writes. A failed or
 cancelled first run therefore never locks a draft. Undoing back past the first step frees it, unless that step
 was a whole-mask refine with no marks, which undo cannot remove, and changing `options` always frees it. The
-stored card goes when `batches` empties, so nothing is left for a later step to be mistaken for. Direct and
+stored card is cleared when `batches` empties, so no later step can be credited to it. Direct and
 relationship-only Apply run no model, so they ignore the choice, and a relationship-only result leaves the
 draft's card as it was.
 

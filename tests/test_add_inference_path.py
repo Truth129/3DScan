@@ -827,6 +827,11 @@ def test_spaces_in_every_path(tmp_path):
     assert rig.step("venv-python")["arguments"][0] == f"{rig.root}/scripts/check_gpu.py"
     assert (venv / MARKER).is_file() and rig.proof.is_file()
     assert str(rig.proof) in completed.stdout
+    (venv / "installed.json").write_text(json.dumps({**json.loads((venv / "installed.json").read_text()), "alpha": {"version": "0.9", "complete": True}}))
+    rig.forget_calls()
+    completed = rig.run("nvidia", "--venv", str(venv))
+    assert completed.returncode == 0, completed.stderr
+    assert trial_folder(rig).parent == rig.cache and rig.in_the_cache() == []
 
 
 def test_the_check_runs_without_the_launchers_library_variables(rig):
@@ -1412,10 +1417,11 @@ def test_a_dry_run_can_look_while_another_run_works(rig):
     assert first.wait(timeout=60) == 0
 
 
-def test_a_killed_run_keeps_the_environment_until_its_uv_has_gone(rig):
+@pytest.mark.parametrize("step", ["uv trial", "uv pip sync"])
+def test_a_killed_run_keeps_the_environment_until_its_uv_has_gone(rig, step):
     # Only the script dies, and its uv goes on writing. Starting again now would wipe around it.
     a_rebuild(rig)
-    rig.scenario["during"] = {"uv pip sync": "hold()"}
+    rig.scenario["during"] = {step: "hold()"}
     first = rig.start("nvidia")
     rig.wait_until_held()
     first.kill()
