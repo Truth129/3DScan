@@ -724,8 +724,11 @@ saves a receipt or starts C-STORE, and leaves the stored instance for inspection
 
 **Retries.** These follow [DICOM SEG export](#dicom-seg-export), keyed on the revision, reference image,
 source manifest, PNG hash and encoding version. A duplicate request reuses the job, and archive and send of
-the same bytes share one SOP. A retry needs the same bytes, which the server has no route to resend for you.
-A new capture makes a new series, so if an earlier unconfirmed delivery did land, the receiver gets both.
+the same bytes share one SOP. A retry needs the same bytes, which the server has no route to resend for you,
+so a job's `error` states the outcome and never offers a retry: it can reach a reader after the capture has
+gone. A capture with different bytes makes a new series, so if an earlier unconfirmed delivery did land, the
+receiver gets both. Identical bytes are the same export: a failed job retries on the same SOP, and a completed
+one is returned as it stands, with nothing delivered, unless `resend` is set.
 
 **Result.** `result.dicom_view` has `export_id`, `encoding_version`, `archived`, `sent`, `instance_count` and
 optional `destination` and `destination_id`. It has no patient fields, paths, credentials or PNG hash.

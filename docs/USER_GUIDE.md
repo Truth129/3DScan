@@ -334,11 +334,18 @@ The button is disabled during review and for the same reasons as the other expor
 refused while the view is still updating or showing an error, and discarded if the case or revision
 changes while it is taken.
 
-One capture makes one series, and a new capture makes another. Reopening the dialog never sends
-anything, and **Send again** deliberately resends the same image. After a failure, retrying from the
-dialog reuses the same image. While an export runs you can close the dialog or change case. The
-button then reopens the dialog, and the result appears as a notice, or in the error banner if the
-export fails or cannot be confirmed.
+One capture makes one series, and a capture of a different image makes another. A view that has
+not changed captures the same image, so it reuses that series: exporting it again reports the earlier
+result and delivers nothing new. Reopening the dialog never sends anything, and **Send again**
+deliberately resends the same image. After a failure, retrying from the dialog reuses the same image.
+Once the dialog has gone there is nothing to retry from, so check the study in Orthanc and capture the
+view again. If the connection drops during a request, **Refresh export status** finds the job if the
+request reached the server.
+
+While an export runs you can close the dialog, and the button reopens it unless the button is
+disabled. Changing case or revision lets go of the capture, so the button then takes a new one.
+Either way the result appears as a notice, or in the error banner if the export fails or cannot be
+confirmed. The banner also reports a request that fails after you close the dialog.
 
 ### Portable offline HTML
 

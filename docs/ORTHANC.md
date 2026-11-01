@@ -164,8 +164,9 @@ number is 501, which repeats if you export more views.
   under a different patient ID, nothing is stored. This happens when a source's bytes disagree with
   its declared character set. If Orthanc files the upload outside the original study, nothing is
   sent, and the stored instance stays in Orthanc for you to check.
-- A retry needs the same image. A new capture is a new series, so if an earlier delivery was not
-  confirmed but did arrive, the receiver has both.
+- A retry needs the same image, which only the dialog holds. A capture of a different image is a new
+  series, so if an earlier delivery was not confirmed but did arrive, the receiver has both. A view
+  that has not changed captures the same image, so it reuses the same instance.
 
 ## Open in 3DScan from Orthanc Explorer 2
 
