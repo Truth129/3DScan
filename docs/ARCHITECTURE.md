@@ -480,7 +480,8 @@ segmentations on the exact native grid, after source-identity checks, and append
 unreviewed revision. Anything that would need thresholding or resampling is refused.
 
 **Slicer exchange** exports a ZIP with the reference image, `segmentation.seg.nrrd` and a stable ID
-mapping, and imports corrected segmentations after geometry and identity checks.
+mapping, and imports corrected segmentations after geometry and identity checks. A segment with
+unchanged voxels keeps its saved mask file.
 
 ## Modalities
 

@@ -482,7 +482,8 @@ For 3D Slicer, expand **External correction with Slicer** under **Review status 
 1. **Slicer bundle ↓** downloads the reference CT, a `.seg.nrrd` and a mapping file.
 2. Edit in 3D Slicer, keeping the segment tags.
 3. Choose **Import correction ↑** with the self-contained `.seg.nrrd`. 3DScan checks segment
-   identities, the source CT hash and geometry, then creates a revision.
+   identities, the source CT hash and geometry, then creates a revision. Segments you did not
+   change keep their saved masks, and so keep their provenance.
 
 ## Measurements and model agreement
 

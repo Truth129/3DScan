@@ -11,19 +11,21 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import uuid
+import zipfile
 
 from fastapi.testclient import TestClient
 import nibabel as nib
+import nrrd
 import numpy as np
 import pytest
 import pydicom
 
-from scan3d import imaging, segmentation
+from scan3d import imaging, segmentation, slicer_io
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.orthanc import OrthancDeliveryUnknown, OrthancError
 from scan3d.store import identifier, job_lane, public_job
-from test_agreement import erase, paint, segment_task
+from test_agreement import erase, paint, produced, segment_task
 from test_orthanc_imports import SyntheticArchive, SERIES, SERIES_UID, STUDY_UID, FRAME_UID, oid
 
 
@@ -949,9 +951,28 @@ def test_a_correction_leaves_other_masks_automatic_and_a_rerun_replaces_it(rig, 
     assert described(rig, monkeypatch, rerun) == {"total:liver": AUTOMATIC, "total:spleen": AUTOMATIC, "total:kidney_left": AUTOMATIC}
 
 
+def test_a_slicer_import_leaves_the_masks_it_did_not_change_automatic(rig, worker, monkeypatch):
+    first = segment_task(rig, rig.base, "total")
+    bundle = slicer_io.export_bundle(Path(first["ct_file"]), first["structures"], rig.root / "slicer.zip")
+    with zipfile.ZipFile(bundle) as archive:
+        archive.extract("segmentation.seg.nrrd", rig.root)
+    segmentation = rig.root / "segmentation.seg.nrrd"
+    data, header = nrrd.read(str(segmentation), index_order="F")
+    assert header["Segment0_ID"] == "total:liver" and data[0, 0, 0, 0]
+    data[0, 0, 0, 0] = 0
+    nrrd.write(str(segmentation), data, header, index_order="F")
+    edited = produced(rig.service, rig.service.store.enqueue(rig.case["id"], "correction", {"revision_id": first["id"], "seg_file": str(segmentation)}))
+    assert edited["source"] == "slicer_correction"
+    assert mask_file(edited, "total:liver") != mask_file(first, "total:liver")
+    assert mask_file(edited, "total:spleen") == mask_file(first, "total:spleen")
+    expected = {"total:liver": SEMIAUTOMATIC, "total:spleen": AUTOMATIC, "total:kidney_left": AUTOMATIC}
+    assert described(rig, monkeypatch, edited) == expected
+    assert described(rig, monkeypatch, segment_task(rig, edited, "body")) == {**expected, "body:trunc": AUTOMATIC}
+
+
 @pytest.mark.parametrize("folder", ["corrections/job", "refinements/job", "reviews/session/candidates/job", "seg-imports/upload/masks"])
 def test_a_copy_of_a_model_output_is_not_the_models_own_mask(rig, folder):
-    """Only the original file proves no one edited a mask, so a byte-identical copy elsewhere is not automatic."""
+    """Earlier Slicer imports re-saved every segment, and a copy cannot prove no one edited it."""
     structure = rig.revision["structures"][0]
     copy = rig.service.store.case_dir(rig.case["id"]) / folder / "mask.nii.gz"
     copy.parent.mkdir(parents=True)

@@ -303,7 +303,7 @@ def test_unchanged_masks_need_no_decode_and_changed_pairs_are_cached(history, mo
     service, case_id = history.service, history.case["id"]
     first = segment_task(history, history.image, "total")
     refined = erase(history, first, "total:liver")
-    # Slicer rewrites every segment; an unchanged one can keep identical bytes.
+    # Earlier Slicer imports rewrote every segment; an unchanged one can keep identical bytes.
     copy = service.store.case_dir(case_id) / "corrections" / "fixture" / "kidney.nii.gz"
     copy.parent.mkdir(parents=True)
     shutil.copyfile(entry(refined, "total:kidney_left")["mask_file"], copy)

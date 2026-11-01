@@ -1004,8 +1004,9 @@ with overlapping masks in separate layers and stable IDs preserved.
 
 **`POST /api/cases/{id}/corrections`** takes multipart `revision_id` and `segmentation` and returns
 a `correction` job. It verifies geometry, segment identity and the source hash, handles cropped
-labelmaps, and marks the new revision `corrected`. Like a refine, it fails if `revision_id` is no
-longer active when it saves.
+labelmaps, and marks the new revision `corrected`. A segment whose voxels match its mask in
+`revision_id` keeps that saved file. Like a refine, it fails if `revision_id` is no longer active
+when it saves.
 
 ### Offline HTML
 
@@ -1099,8 +1100,10 @@ preserved.
   saved model output is automatic in every revision that carries it, and any other mask is
   semiautomatic.
 - A corrected mask stays semiautomatic in later revisions that carry it, and a later run that
-  replaces it is automatic again. A Slicer import re-saves every segment in its bundle, so each one
-  is semiautomatic.
+  replaces it is automatic again.
+- A Slicer import keeps the file of each segment it did not change, so only an edited segment
+  becomes semiautomatic. Earlier Slicer imports re-saved every segment, and those stay
+  semiautomatic.
 - The grid is never resampled. Source pixels must map to unique integer native voxels within the
   import tolerances, with complete slice coverage.
 - The cap is 512 MiB and 100,000 frames, enforced before upload or download.

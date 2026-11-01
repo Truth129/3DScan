@@ -311,6 +311,29 @@ def test_slicer_overlap_roundtrip(fixture, tmp_path):
     assert "mask_file" not in mapping["structures"][0]
 
 
+def test_slicer_import_keeps_the_saved_file_of_each_unchanged_segment(fixture, tmp_path):
+    ct_path, first_path, affine, _, mask = fixture
+    second_mask = np.zeros(mask.shape, np.uint8)
+    second_mask[4:10, 5:12, 6:13] = 1
+    second_path = save(tmp_path / "second.nii.gz", second_mask, affine)
+    structures = [entry(first_path), entry(second_path, "lung_vessels:lung_arteries")]
+    with zipfile.ZipFile(slicer_io.export_bundle(ct_path, structures, tmp_path / "slicer.zip")) as archive:
+        archive.extract("segmentation.seg.nrrd", tmp_path)
+    segmentation = tmp_path / "segmentation.seg.nrrd"
+    untouched = slicer_io.import_segmentation(ct_path, segmentation, structures, tmp_path / "untouched", require_source_hash=True)
+    assert [item["mask_file"] for item in untouched] == [str(first_path), str(second_path)]
+    assert not list((tmp_path / "untouched").iterdir())
+
+    data, header = nrrd.read(str(segmentation), index_order="F")
+    layer, label = int(header["Segment1_Layer"]), int(header["Segment1_LabelValue"])
+    data[(layer, *np.argwhere(data[layer] == label)[0])] = 0
+    nrrd.write(str(segmentation), data, header, index_order="F")
+    edited = slicer_io.import_segmentation(ct_path, segmentation, structures, tmp_path / "edited", require_source_hash=True)
+    assert edited[0]["mask_file"] == str(first_path)
+    assert Path(edited[1]["mask_file"]).parent == (tmp_path / "edited").resolve()
+    assert nib.load(edited[1]["mask_file"]).get_fdata().sum() == second_mask.sum() - 1
+
+
 def test_slicer_cropped_labelmap_origin_not_double_offset(fixture, tmp_path):
     ct_path, mask_path, affine, _, mask = fixture
     low = np.array([2, 3, 4])

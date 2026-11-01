@@ -267,7 +267,9 @@ def import_segmentation(ct_path: Path, seg_path: Path, structures, output_dir: P
     for structure in structures:
         entry = dict(structure)
         stable_id = str(structure["id"])
-        if stable_id in corrected:
+        # Slicer returns every segment of the bundle. One it left unchanged keeps
+        # its saved file, which is the proof of where that mask came from.
+        if stable_id in corrected and not np.array_equal(corrected[stable_id], _binary(Path(structure["mask_file"]), ct, ct_affine)[0]):
             name = hashlib.sha256(stable_id.encode()).hexdigest()[:20] + ".nii.gz"
             path = output_dir / name
             if path.resolve() == Path(structure["mask_file"]).resolve():
