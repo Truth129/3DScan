@@ -232,18 +232,25 @@ what uv has already fetched where it can, because uv cannot repair what a stoppe
 leaves. Either way the script then repeats the GPU check.
 
 A finished environment may be in use, so the script rebuilds it only when no job is
-queued or running, by the same rule as the GPU check, and uv can plan the rebuild.
-Otherwise it stops with nothing changed. `scripts/check_gpu.py --queue` runs that queue
+queued or running, by the same rule as the GPU check, and only after a trial has built its
+replacement. The trial is a real install into a temporary folder inside uv's cache. It
+fetches and builds everything the rebuild needs, and its hard links cost no extra data. If
+it fails, the environment stays as it was. The script reads the queue before the trial, so
+that a busy queue never sets off a download, and again after it, because a trial can take
+many minutes when uv has to fetch packages. `scripts/check_gpu.py --queue` runs that queue
 rule alone. No job can start from an unfinished environment, so a first install and a
-stopped install do not wait for the queue. An idle nnInteractive process is not a job, so
-it does not hold a rebuild back. It keeps what it had loaded until a segmentation, AI
-assist on another GPU or a restart stops it, and if the GPU check records no change it
-goes on serving that GPU.
+stopped install do not wait for the queue, and they run no trial. An idle nnInteractive
+process is not a job, so it does not hold a rebuild back. It keeps what it had loaded until
+a segmentation, AI assist on another GPU or a restart stops it, and if the GPU check records
+no change it goes on serving that GPU.
 
 If an install stops, no check runs. Until an install finishes, the app shows the GPU as
 unavailable if it was last checked on that environment, or not at all if it was never
-checked, and running the script again starts from empty. Only one run can use an
-environment at a time, so a second stops with nothing changed.
+checked, and running the script again starts from empty. Once a trial has passed, no
+download can stop the rebuild. A full disk or a killed run still can, and either leaves
+this same stopped state. A run killed outright during a trial leaves a folder of hard links
+in uv's cache, and `uv cache clean` removes it. Only one run can use an environment at a
+time, so a second stops with nothing changed.
 
 Two faults in a finished environment survive a re-run. If uv cannot read it, the script
 stops with nothing changed. If files are missing or damaged but its package names and

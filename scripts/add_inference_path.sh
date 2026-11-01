@@ -78,16 +78,28 @@ matches_lock() {
   [[ "$packages" == "$pins" ]]
 }
 
-# Whether uv can plan this lock from nothing, which is what a rebuild is about to need. This is the
-# rebuild's own sync as a dry run, for a directory with nothing in it. Asked about the environment
-# itself, uv plans only the difference, which passes with every wheel gone, and it needs --target
-# to accept a base Python. It leaves a lock file in the directory.
+# Whether uv can build this whole lock, found out by doing it in a folder nobody will use. So by the
+# time this passes, uv has fetched and built everything a rebuild needs, and no download can stop
+# one after its wipe, though a full disk or a kill still can. A dry run would not show that: it reads
+# index pages alone, and passes with every wheel gone. The folder is in uv's cache because a hard
+# link costs no data within a disk, and --target lets uv take a base Python. A signal takes the
+# folder with it, and only a kill leaves it behind, as links that `uv cache clean` removes.
 can_rebuild() {
-  local empty status=0
-  empty="$(mktemp -d)" || return 1
-  "$uv" pip sync --quiet --dry-run --python "$interpreter" --target "$empty" --require-hashes "$lock" || status=$?
-  rm -rf -- "$empty"
+  local cache status=0
+  cache="$("$uv" cache dir --color never)" && mkdir -p -- "$cache" || return 1
+  trial="$(mktemp -d -p "$cache" scan3d-trial.XXXXXXXXXX)" || return 1
+  trap 'rm -rf -- "$trial"' EXIT
+  echo 'Trying the rebuild in a folder of its own first, so that this environment stays unless uv can'
+  echo 'finish. That can take many minutes if uv has to fetch packages.'
+  "$uv" pip sync --link-mode hardlink --python "$interpreter" --target "$trial" --require-hashes "$lock" || status=$?
+  rm -rf -- "$trial"
+  trap - EXIT
   return "$status"
+}
+
+queue_is_empty() {
+  "$interpreter" -B -P "$root/scripts/check_gpu.py" --queue ||
+    fail 'This environment needs a rebuild and a job may be using it, so nothing was changed. Run this again when the queue is empty.'
 }
 
 chosen=
@@ -209,10 +221,10 @@ A first install downloads about 3.3 GiB and takes about 9 GiB on disk. It asks f
 because where a disk cannot clone files, the environment and uv's cache each hold a full copy.
 A re-run leaves an environment that equals the lock alone, and needs no network to do so.
 Anything else, such as an install that did not finish, is rebuilt from empty, from what uv has
-already fetched where it can. A finished environment waits for an empty queue and stays unless
-uv can plan the rebuild. uv checks a package's hash when it fetches it, not when it reuses its
-cache, and there is one gap: acvl-utils is published only as source, and the tools that build
-it are fetched without hashes.
+already fetched where it can. A finished environment waits for an empty queue, and stays until
+a trial has fetched and built all that the rebuild needs. uv checks a package's hash when it
+fetches it, not when it reuses its cache, and there is one gap: acvl-utils is published only as
+source, and the tools that build it are fetched without hashes.
 
 It will not touch any other Python environment, the viewer, the DICOM converter,
 TotalSegmentator's settings, scan3d.env or the running app, and it does not install a Python.
@@ -266,12 +278,13 @@ if matches_lock; then
 else
   # Only a finished environment has anything to lose: it may be working, and a job can run from it
   # and never from an unfinished one, which discovery refuses. So it alone waits, and it goes only
-  # if uv can build its replacement. The queue comes last because it can change while uv plans.
+  # after a trial has built its replacement. The queue comes first so that a busy one never sets off
+  # a download, and again after, because a cold trial can take many minutes.
   if [[ -f "$finished" ]]; then
+    queue_is_empty
     can_rebuild ||
-      fail 'uv cannot rebuild this environment from what it can reach, so nothing was changed. Fix what it reported above, then run this again.'
-    "$interpreter" -B -P "$root/scripts/check_gpu.py" --queue ||
-      fail 'This environment needs a rebuild and a job may be using it, so nothing was changed. Run this again when the queue is empty.'
+      fail 'uv cannot rebuild this environment from what it can reach, so it was left as it is. Fix what uv reported above, then run this again.'
+    queue_is_empty
   fi
   # This happens from inside the directory, after a last look that its marker is the one this run
   # locked, so that the wipe cannot land anywhere else whatever becomes of the name. The marker

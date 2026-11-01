@@ -38,8 +38,9 @@ FIRST_RUN = [*PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]
 LATER_PREFLIGHT = ["uv python find", "nvidia-smi", "system-python"]  # A later run needs no room.
 RE_RUN = [*LATER_PREFLIGHT, "uv pip freeze", "venv-python"]  # It equals the lock: no index.
 RESTARTED = [*LATER_PREFLIGHT, "find", "uv venv", "uv pip sync", "venv-python"]  # No install has finished.
-PLANNED = ["uv plan", "queue", "find", "uv venv", "uv pip sync", "venv-python"]  # A finished environment is at stake.
-REBUILT = [*LATER_PREFLIGHT, "uv pip freeze", *PLANNED]
+TRIAL = ["queue", "uv cache dir", "uv trial", "queue"]  # A finished environment is at stake.
+TRIED = [*TRIAL, "find", "uv venv", "uv pip sync", "venv-python"]
+REBUILT = [*LATER_PREFLIGHT, "uv pip freeze", *TRIED]
 MARKER = ".scan3d-inference-path"
 FINISHED = ".scan3d-inference-path-finished"
 PLAN_ENDS = "so it cannot compare them."
@@ -73,8 +74,8 @@ rig = Path(rig)
 scenario = json.loads((rig / "scenario.json").read_text())
 if "--queue" in arguments:
     step = "queue"
-elif "--dry-run" in arguments:
-    step = f"{tool} plan"
+elif "--target" in arguments:
+    step = f"{tool} trial"
 elif tool.endswith("uv"):  # What ran, with its subcommand named.
     step = " ".join((tool, *(word for word in arguments[:2] if not word.startswith("-"))))
 else:
@@ -123,6 +124,10 @@ if tool == "find":
     os.execv(rig / "find", ["find", *arguments])
 if tool in ("mkdir", "rm"):
     os.execv(rig / tool, [tool, *arguments])
+if arguments[:2] == ["cache", "dir"]:
+    if not scenario["cache_dir_status"]:
+        print(painted(os.environ["UV_CACHE_DIR"], 36, 39))
+    sys.exit(scenario["cache_dir_status"])
 if arguments[:2] == ["python", "find"]:
     if scenario["python"]:
         print(rig / "system-python")
@@ -148,9 +153,12 @@ if arguments[0] == "venv":
 if arguments[:2] == ["pip", "sync"] and "<<<<<<<" in Path(arguments[-1]).read_text():
     print("error: Unexpected '<', expected '-c', '-e', '-r' or the start of a requirement", file=sys.stderr)
     sys.exit(2)
-if "--dry-run" in arguments:
-    (Path(arguments[arguments.index("--target") + 1]) / ".lock").touch()  # All that real uv leaves there.
-    sys.exit(scenario["plan_status"])
+if "--target" in arguments:
+    folder = Path(arguments[arguments.index("--target") + 1])
+    (folder / "alpha").mkdir()
+    (folder / "alpha" / "__init__.py").touch()
+    (folder / ".lock").touch()
+    sys.exit(scenario["trial_status"])
 if arguments[0] == "pip":
     environment = Path(arguments[arguments.index("--python") + 1]).parents[1]
     record = environment / "installed.json"
@@ -233,6 +241,7 @@ class Rig:
         self.venv = self.root / ".venv-nvidia-py314"
         self.lock = self.root / "requirements" / "cuda-py314.lock"
         self.proof = self.root / ".runtime" / "inference-paths" / "nvidia.json"
+        self.cache = self.root / ".cache" / "uv"
         self.scenario = {
             "during": {},
             "python": True,
@@ -241,7 +250,8 @@ class Rig:
             "free": 21 * GIB,
             "free_at": {},
             "freeze_status": 0,
-            "plan_status": 0,
+            "cache_dir_status": 0,
+            "trial_status": 0,
             "wipe_status": 0,
             "killed_after_the_wipe": False,
             "venv_status": 0,
@@ -295,7 +305,7 @@ class Rig:
         """A run in the background. Its output is a file, so that nothing waits on what it leaves behind."""
         script, environment = self.prepared()
         with (self.fakes / "background.log").open("w") as log:
-            return subprocess.Popen([script, *arguments], cwd=self.elsewhere, env=environment, stdout=log, stderr=log)
+            return subprocess.Popen([script, *arguments], cwd=self.elsewhere, env=environment, stdout=log, stderr=log, start_new_session=True)
 
     def wait_until_held(self):
         end = time.monotonic() + 30
@@ -341,8 +351,12 @@ class Rig:
         }
 
     def snapshot(self):
-        """Everything a run could have changed, so a test can show that it changed nothing."""
-        return {str(entry): _state(entry) for folder in (self.root, self.elsewhere) for entry in sorted(folder.rglob("*"))}
+        """Everything a run could have changed, so a test can show that it changed nothing. uv's cache
+        stands apart, because a trial is there to fill it. `in_the_cache` tells what a trial left."""
+        return {str(entry): _state(entry) for folder in (self.root, self.elsewhere) for entry in sorted(folder.rglob("*")) if ".cache" not in entry.parts}
+
+    def in_the_cache(self):
+        return sorted(entry.name for entry in self.cache.iterdir()) if self.cache.exists() else []
 
 
 def _state(entry):
@@ -713,8 +727,8 @@ def test_a_run_stays_inside_the_rig(rig, rebuilt):
     assert all(Path(call["cwd"]).is_relative_to(rig.top) for call in calls)
     arguments = [word for call in calls for word in call["arguments"] if word.startswith("/")]
     assert arguments and all(Path(word).is_relative_to(rig.top) for word in arguments)
-    assert list(rig.tmp.iterdir()) == []
-    assert {entry.name for entry in rig.root.iterdir()} == {
+    assert list(rig.tmp.iterdir()) == [] and rig.in_the_cache() == []
+    assert {entry.name for entry in rig.root.iterdir()} - {".cache"} == {
         ".runtime",
         ".venv",
         ".venv-nvidia-py314",
@@ -1093,7 +1107,7 @@ def test_an_environment_that_lost_pyvenv_cfg_gets_it_back(rig):
     (rig.venv / "pyvenv.cfg").unlink()
     assert rig.run("nvidia").returncode == 0
     # Not a freeze: without that file the link is the Python it points at.
-    assert rig.steps() == [*LATER_PREFLIGHT, *PLANNED]
+    assert rig.steps() == [*LATER_PREFLIGHT, *TRIED]
     assert not package.exists()
     assert (rig.venv / "pyvenv.cfg").is_file() and rig.packages() == LOCKED
     assert not (rig.fakes / "base-python-changed").exists()
@@ -1109,7 +1123,7 @@ def test_an_environment_that_lost_its_interpreter_gets_one_back(rig):
     rig.scenario["free"] = 10 * GIB
     completed = rig.run("nvidia")
     assert completed.returncode == 0, completed.stderr
-    assert rig.steps() == [*LATER_PREFLIGHT, *PLANNED]
+    assert rig.steps() == [*LATER_PREFLIGHT, *TRIED]
     assert not package.exists()
     assert (rig.venv / "bin" / "python").is_file() and rig.packages() == LOCKED
 
@@ -1154,63 +1168,141 @@ def test_a_lock_that_pins_nothing_never_reaches_a_finished_environment(rig, dama
 
 
 def uv_cannot_reach_a_package(rig):
-    rig.scenario["plan_status"] = 1
+    rig.scenario["trial_status"] = 1
+
+
+def uv_cannot_name_its_cache(rig):
+    rig.scenario["cache_dir_status"] = 2
+
+
+def a_cache_that_cannot_be_made(rig):
+    (rig.root / ".cache").write_text("a file where the folder should be")
 
 
 def a_merge_conflict_in_the_lock(rig):
     rig.lock.write_text(f"<<<<<<< HEAD\n{STUB_LOCK}=======\nalpha==1.1 \\\n    --hash=sha256:dddd\n>>>>>>> other\n")
 
 
-@pytest.mark.parametrize("obstacle", [uv_cannot_reach_a_package, a_merge_conflict_in_the_lock])
-def test_a_rebuild_uv_cannot_plan_leaves_a_finished_environment_alone(rig, obstacle):
+@pytest.mark.parametrize(
+    "obstacle, steps",
+    [
+        (uv_cannot_reach_a_package, TRIAL[:3]),
+        (a_merge_conflict_in_the_lock, TRIAL[:3]),
+        (uv_cannot_name_its_cache, TRIAL[:2]),
+        (a_cache_that_cannot_be_made, TRIAL[:2]),
+    ],
+    ids=lambda value: value.__name__ if callable(value) else "",
+)
+def test_a_rebuild_that_fails_its_trial_leaves_a_finished_environment_alone(rig, obstacle, steps):
     installed(rig)
     a_local_build(rig)
     obstacle(rig)
     before = rig.snapshot()
     completed = rig.run("nvidia")
     assert completed.returncode == 1
-    assert "uv cannot rebuild this environment from what it can reach, so nothing was changed" in said(completed.stderr)
-    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "uv plan"]
+    assert "uv cannot rebuild this environment from what it can reach, so it was left as it is" in said(completed.stderr)
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", *steps]
     assert rig.snapshot() == before
-    assert list(rig.tmp.iterdir()) == []
+    assert list(rig.tmp.iterdir()) == [] and rig.in_the_cache() == []
 
 
-def test_a_rebuild_is_planned_by_the_real_sync_for_a_directory_holding_nothing(rig):
-    # Asked about the environment itself, uv plans only the difference, and passes with every wheel gone.
+def trial_folder(rig):
+    trial = rig.step("uv trial")
+    return Path(trial["arguments"][trial["arguments"].index("--target") + 1])
+
+
+def test_a_rebuild_is_tried_for_real_in_uvs_cache_before_anything_is_wiped(rig):
+    # A dry run reads index pages alone, and passes with every wheel gone. Links within the cache's
+    # disk cost no data, and uv refuses a base Python that is not given a target.
     installed(rig)
     a_local_build(rig)
     assert rig.run("nvidia").returncode == 0
-    plan = rig.step("uv plan")
-    empty = plan["arguments"][plan["arguments"].index("--target") + 1]
-    assert Path(empty).parent == rig.tmp
-    assert plan["arguments"] == [
+    trial, folder = rig.step("uv trial"), trial_folder(rig)
+    assert folder.parent == rig.cache
+    assert trial["arguments"] == [
         "pip",
         "sync",
-        "--quiet",
-        "--dry-run",
+        "--link-mode",
+        "hardlink",
         "--python",
-        str(rig.fakes / "system-python"),  # uv refuses a base Python that is not given a target.
+        str(rig.fakes / "system-python"),
         "--target",
-        empty,
+        str(folder),
         "--require-hashes",
         str(rig.lock),
     ]
-    assert plan["env"]["UV_PYTHON_DOWNLOADS"] == "never"
+    assert trial["env"]["UV_PYTHON_DOWNLOADS"] == "never"
+    assert rig.in_the_cache() == []
 
 
-def test_an_environment_past_reading_is_planned_for_too(rig):
+def test_a_person_is_told_why_a_rebuild_waits(rig):
+    a_rebuild(rig)
+    told = said(rig.run("nvidia").stdout)
+    assert "Trying the rebuild in a folder of its own first, so that this environment stays unless uv can finish" in told
+    assert "That can take many minutes if uv has to fetch packages" in told
+
+
+def test_the_trial_finds_the_cache_with_colour_forced(rig):
+    # The name uv prints would otherwise be a folder of its own, with escapes in it.
+    a_rebuild(rig)
+    assert rig.run("nvidia", env={"FORCE_COLOR": "1"}).returncode == 0
+    assert trial_folder(rig).parent == rig.cache
+    assert rig.step("uv cache dir")["arguments"] == ["cache", "dir", "--color", "never"]
+
+
+def test_the_trial_uses_the_cache_it_is_told_to(rig):
+    a_rebuild(rig)
+    cache = rig.top / "other-disk" / "uv"
+    assert rig.run("nvidia", env={"UV_CACHE_DIR": str(cache)}).returncode == 0
+    assert trial_folder(rig).parent == cache
+    assert cache.is_dir() and list(cache.iterdir()) == []
+
+
+def test_an_environment_past_reading_is_tried_too(rig):
     # With its interpreter gone nothing can be read, and a lock uv cannot use must still stop the run.
     installed(rig)
     (rig.venv / "bin" / "python").unlink()
     a_merge_conflict_in_the_lock(rig)
     before = rig.snapshot()
     assert rig.run("nvidia").returncode == 1
-    assert rig.steps() == [*LATER_PREFLIGHT, "uv plan"]
+    assert rig.steps() == [*LATER_PREFLIGHT, *TRIAL[:3]]
     assert rig.snapshot() == before
 
 
+@pytest.mark.parametrize(
+    "stop, signalled",
+    [(signal.SIGINT, os.killpg), (signal.SIGHUP, os.killpg), (signal.SIGTERM, os.killpg), (signal.SIGTERM, os.kill)],
+    ids=["ctrl-c", "closed-terminal", "terminated", "terminated-script-only"],
+)
+def test_a_trial_that_is_stopped_takes_its_folder_with_it(rig, stop, signalled):
+    a_rebuild(rig)
+    rig.scenario["during"] = {"uv trial": "hold()"}
+    first = rig.start("nvidia")
+    rig.wait_until_held()
+    assert len(rig.in_the_cache()) == 1
+    before = rig.snapshot()
+    signalled(first.pid, stop)
+    assert first.wait(timeout=30) == -stop
+    assert rig.in_the_cache() == []
+    assert rig.snapshot() == before
+
+
+def test_a_kill_inside_the_trial_leaves_the_environment_and_a_folder_of_links(rig):
+    a_rebuild(rig)
+    before = rig.snapshot()
+    rig.scenario["during"] = {"uv trial": "os.kill(os.getppid(), signal.SIGKILL)"}
+    assert rig.run("nvidia").returncode == -signal.SIGKILL
+    assert rig.snapshot() == before and (rig.venv / FINISHED).is_file()
+    left = rig.in_the_cache()
+    assert len(left) == 1 and left[0].startswith("scan3d-trial.")
+    rig.scenario["during"] = {}
+    rig.forget_calls()
+    assert rig.run("nvidia").returncode == 0
+    assert rig.packages() == LOCKED and rig.in_the_cache() == left  # Until `uv cache clean`.
+
+
 @pytest.mark.parametrize("stop", [stopped_inside_uv_venv, stopped_inside_uv_pip_sync, killed_right_after_the_wipe])
-def test_nothing_is_at_stake_after_a_stop_so_no_plan_is_asked_for(rig, stop):
+def test_nothing_is_at_stake_after_a_stop_so_no_trial_is_run(rig, stop):
     installed(rig)
     a_local_build(rig)
     calm = dict(rig.scenario)
@@ -1218,7 +1310,7 @@ def test_nothing_is_at_stake_after_a_stop_so_no_plan_is_asked_for(rig, stop):
     rig.run("nvidia")
     rig.forget_calls()
     rig.scenario = calm
-    uv_cannot_reach_a_package(rig)  # A plan would stop this run, and it has nothing to protect.
+    uv_cannot_reach_a_package(rig)  # A trial would stop this run, and it has nothing to protect.
     assert rig.run("nvidia").returncode == 0
     assert rig.steps() == RESTARTED
 
@@ -1242,7 +1334,7 @@ REFUSED_FOR_ANOTHER_RUN = "Another run is using this environment, so nothing was
     "start, step",
     [
         *((a_first_install, step) for step in ("find", "uv venv", "uv pip sync", "venv-python")),
-        *((a_rebuild, step) for step in ("uv pip freeze", *PLANNED)),
+        *((a_rebuild, step) for step in dict.fromkeys(("uv pip freeze", *TRIED))),
     ],
     ids=lambda value: value if isinstance(value, str) else value.__name__,
 )
@@ -1391,15 +1483,16 @@ def test_the_lock_only_reads_the_marker(rig):
 
 
 def swapped_in(rig, step, marked=False):
-    """The environment moves aside as `step` starts, and another directory takes its name."""
+    """The environment moves aside the first time `step` starts, and another directory takes its name."""
     aside = rig.elsewhere / "aside"
     arrival = f"venv = Path({str(rig.venv)!r}); venv.rename({str(aside)!r}); venv.mkdir(); (venv / 'precious').touch()"
-    rig.scenario["during"] = {step: arrival + (f"; (venv / {MARKER!r}).touch()" if marked else "")}
+    arrival += f"; (venv / {MARKER!r}).touch()" if marked else ""
+    rig.scenario["during"] = {step: f"if not Path({str(aside)!r}).exists():\n    {arrival}"}
     return aside
 
 
 @pytest.mark.parametrize("marked", [False, True], ids=["unmarked", "marked-by-another-run"])
-@pytest.mark.parametrize("step", ["uv pip freeze", "uv plan", "queue"])
+@pytest.mark.parametrize("step", ["uv pip freeze", "queue", "uv trial"])
 def test_a_directory_swapped_in_during_a_run_is_left_alone(rig, step, marked):
     a_rebuild(rig)
     aside = swapped_in(rig, step, marked)
@@ -1462,8 +1555,22 @@ def test_a_busy_queue_stops_a_rebuild_before_anything_changes(rig):
     assert completed.returncode == 1
     assert "Jobs are queued or running" in completed.stderr
     assert "nothing was changed" in completed.stderr and "Run this again when the queue is empty" in completed.stderr
-    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "uv plan", "queue"]
-    assert rig.snapshot() == before
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]  # So it sets off no download.
+    assert rig.snapshot() == before and rig.in_the_cache() == []
+    assert (rig.venv / FINISHED).is_file()
+
+
+def test_a_job_that_starts_during_the_trial_stops_the_rebuild(rig):
+    # A cold trial can take many minutes, and the environment may then be in use.
+    installed(rig)
+    a_local_build(rig)
+    rig.scenario["during"] = {"uv trial": "(rig / 'scenario.json').write_text(json.dumps({**scenario, 'check': 'refused'}))"}
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1
+    assert "Jobs are queued or running" in completed.stderr
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", *TRIAL]
+    assert rig.snapshot() == before and rig.in_the_cache() == []
     assert (rig.venv / FINISHED).is_file()
 
 
@@ -1471,9 +1578,11 @@ def test_the_queue_is_asked_by_a_python_that_writes_nothing_and_loads_nothing_fr
     installed(rig)
     a_local_build(rig)
     assert rig.run("nvidia").returncode == 0
-    question = rig.step("queue")
-    assert question["tool"] == "system-python"
-    assert question["arguments"] == ["-B", "-P", f"{rig.root}/scripts/check_gpu.py", "--queue"]
+    questions = [call for call in rig.calls() if call["step"] == "queue"]
+    assert len(questions) == 2
+    for question in questions:
+        assert question["tool"] == "system-python"
+        assert question["arguments"] == ["-B", "-P", f"{rig.root}/scripts/check_gpu.py", "--queue"]
 
 
 @pytest.mark.parametrize("stop", [stopped_inside_uv_venv, stopped_inside_uv_pip_sync, killed_right_after_the_wipe])
@@ -1540,7 +1649,7 @@ def test_the_real_check_answers_for_a_rebuild(rig, statuses, reply):
     before = rig.snapshot()
     completed = rig.run("nvidia", env=rig.with_a_real_check())
     assert completed.returncode == 1 and reply in completed.stderr and "nothing was changed" in completed.stderr
-    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "uv plan", "queue"]
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", "queue"]
     assert rig.snapshot() == before
 
 
@@ -1618,7 +1727,7 @@ def test_the_plan_says_when_a_hash_is_checked(rig):
 def test_the_plan_says_what_a_re_run_does_to_anything_but_an_environment_equal_to_the_lock(rig):
     plan = said(rig.run("nvidia", "--dry-run").stdout)
     assert "is rebuilt from empty, from what uv has already fetched where it can" in plan
-    assert "A finished environment waits for an empty queue and stays unless uv can plan the rebuild" in plan
+    assert "A finished environment waits for an empty queue, and stays until a trial has fetched and built all that the rebuild needs" in plan
 
 
 def test_usage_says_what_a_re_run_does_and_what_it_cannot_fix(rig):
