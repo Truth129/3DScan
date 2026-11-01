@@ -120,10 +120,17 @@ export class VTKVolumeLabels {
     this.onChange?.();
   }
 
-  private install() {
-    if (this.restore) return;
+  private compatibleReplacements() {
     const replacements = vtkVolumeLabelShaderReplacements();
     if (typeof this.node.setLabelHooks !== 'function') throw new Error('This Cornerstone volume mapper is incompatible with segment colouring.');
+    return replacements;
+  }
+
+  /** The sampler must arrive with its texture. Alone it sits on unit 0, where vtk
+   * keeps its 2D depth texture beside any surface, and every CT draw then fails. */
+  private install() {
+    if (this.restore) return;
+    const replacements = this.compatibleReplacements();
     const properties = this.mapper.getViewSpecificProperties();
     const openGL = properties.OpenGL ?? (properties.OpenGL = {});
     openGL.ShaderReplacements = [...(openGL.ShaderReplacements ?? []), ...replacements];
@@ -199,7 +206,7 @@ export class VTKVolumeLabels {
     this.changed();
     let staged: ReturnType<typeof vtkOpenGLTexture.newInstance> | undefined;
     try {
-      this.install();
+      this.compatibleReplacements();
       // Admission precedes provider reads, slab allocation and GPU upload.
       this.reserve(this.gpuBytes + 2 * descriptor.byte_length);
       this.cpuBytes = descriptor.byte_length;
@@ -230,6 +237,7 @@ export class VTKVolumeLabels {
       this.matrix = vtkVolumeMaskTransform(this.ct, descriptor);
       this.colors = uniforms.colors;
       this.strength = uniforms.strength;
+      this.install();
       this.ready = true;
       this.reserve(this.gpuBytes);
       this.changed();

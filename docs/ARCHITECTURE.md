@@ -325,7 +325,8 @@ Cornerstone's engine: a separate 3D renderer would hold a second GPU copy of the
   showing the wrong tissue.
 - **Color segments.** A label union stores which structure covers each crop voxel, largest first so
   contained anatomy stays visible. A shader hook tints the transfer-function colour before lighting, leaving
-  opacity and shading to the CT. The native view colours up to 64 structures.
+  opacity and shading to the CT. The hook goes in only with its uploaded texture, so the CT keeps drawing
+  untinted while labels load. The native view colours up to 64 structures.
 - **Lighting.** Preset, Standard, Cinematic and Ambient occlusion modes expose vtk.js scattering and ambient
   occlusion. A manual light can follow the camera or stay fixed in patient space.
 
