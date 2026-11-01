@@ -369,6 +369,12 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
   font-size: 10px;
   margin-left: 5px;
 }
+/* The option labels never wrap, so beside a second select they would leave the panel. */
+@media (min-width: 1001px) {
+  .segmentation-panel form:has(> label + label) fieldset {
+    flex: 1 1 auto;
+  }
+}
 @media (max-width: 1000px) {
   .segmentation-panel {
     padding: 12px 16px;
