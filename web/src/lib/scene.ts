@@ -1231,12 +1231,17 @@ export class AnatomyScene {
     data.ctPlaneRenderCount = String(++this.planeRenderCount);
     data.ctPlaneRenderCpuMs = (performance.now() - started).toFixed(2);
   }
-  screenshot(label = '3dscan') {
+  /** Render and read back in one tick: a frame's pixels are only readable before it yields. */
+  capturePNG() {
     if (this.volumePresentation) this.volumeRenderer!.setInteracting(false);
     this.render();
-    const link = document.createElement('a');
+    return this.renderer.domElement.toDataURL('image/png');
+  }
+  screenshot(label = '3dscan') {
+    const url = this.capturePNG(),
+      link = document.createElement('a');
     link.download = `${label.replace(/[^a-z\d-]/gi, '_')}.png`;
-    link.href = this.renderer.domElement.toDataURL('image/png');
+    link.href = url;
     link.click();
   }
   private resize() {
