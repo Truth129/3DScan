@@ -382,8 +382,7 @@ describe('the dialog', () => {
   it('says a retry reuses the image and a new capture does not', async () => {
     const posts = server(),
       view = await dialog({ job: job('failed', { error: 'Delivery not confirmed.' }) });
-    expect(view.text()).toContain('Delivery not confirmed.');
-    expect(view.text()).toContain('Retry from this dialog reuses the same image. A new capture makes a new series.');
+    expect(view.text()).toContain('Delivery not confirmed. Retry from this dialog reuses the same image. A new capture makes a new series.');
     click(view.button('Archive in Orthanc'));
     await settled();
     expect((posts[0].form.get('image') as File).size).toBe(capture.image.size);

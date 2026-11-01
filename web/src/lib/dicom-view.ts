@@ -68,8 +68,10 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 /** A sync decode, so that nothing can run between the identity checks and the frozen capture. */
 export function pngBytes(url: string): Uint8Array<ArrayBuffer> {
   if (!url.startsWith(PNG_DATA_URL)) throw new Error('The 3D view did not produce a PNG image.');
-  const text = atob(url.slice(PNG_DATA_URL.length));
-  return Uint8Array.from(text, character => character.charCodeAt(0));
+  const text = atob(url.slice(PNG_DATA_URL.length)),
+    bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);
+  return bytes;
 }
 
 /** Width and height from the IHDR chunk, which the PNG format requires to come first. */
