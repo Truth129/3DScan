@@ -20,6 +20,8 @@ const props = defineProps<{
   follow: (job: DicomViewExportJob, capture: ViewCapture) => void;
   observe: (job: DicomViewExportJob) => void;
   report: (message: string, capture: ViewCapture) => void;
+  /** The watcher's latest word on a job, because a listing stops being true as soon as it is read. */
+  known: (id: string) => DicomViewExportJob | undefined;
 }>();
 const emit = defineEmits<{ close: [] }>();
 // Read once: App keys this dialog by capture, and nothing here may follow a live identity.
@@ -38,7 +40,23 @@ const actionDisabled = computed(() => locked.value || !!statusError.value || !av
 const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
 const repeatDelivery = computed(() => !!target.value && dicomViewAlreadySent(job.value, target.value.id));
 const summary = computed(() => (job.value ? dicomViewExportSummary(job.value) : ''));
-const earlier = computed(() => unfinishedEarlierDicomView(availability.value?.exports ?? [], capture.caseId, capture.revisionId, job.value));
+const listed = computed(() => availability.value?.exports ?? []);
+const earlier = computed(() =>
+  unfinishedEarlierDicomView(
+    listed.value.map(item => props.known(item.id) ?? item),
+    capture.caseId,
+    capture.revisionId,
+    job.value,
+  ),
+);
+/** The notice saying how it ended lies under this dialog's backdrop, so it has to be said here too. */
+const earlierOutcome = computed(() => {
+  const ended = listed.value
+    .filter(pendingDicomViewExport)
+    .map(item => props.known(item.id))
+    .find(item => item?.status === 'completed' && item.id !== job.value?.id);
+  return ended ? dicomViewExportSummary(ended) : '';
+});
 let requests: AbortController | undefined,
   previousFocus: HTMLElement | undefined,
   gone = false;
@@ -149,10 +167,12 @@ onBeforeUnmount(() => {
     <p v-if="earlier" class="help" role="status">
       {{
         pendingDicomViewExport(earlier)
-          ? 'An earlier export of this revision is still in progress. A notice reports how it ends.'
+          ? 'An earlier export of this revision is still in progress.'
           : 'An earlier export of this revision did not finish, and it may still have reached the receiver. This capture makes a new series unless it is the same image.'
       }}
     </p>
+
+    <p v-if="earlierOutcome" class="help" role="status">An earlier export of this revision finished. {{ earlierOutcome }}</p>
 
     <fieldset :disabled="locked || !availability?.available">
       <label class="destination-field"

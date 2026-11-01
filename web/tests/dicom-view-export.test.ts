@@ -70,7 +70,15 @@ function server(answers: { available?: DicomViewAvailability; queued?: DicomView
   return posts;
 }
 async function dialog(values: Record<string, unknown> = {}) {
-  const state = shallowReactive<Record<string, any>>({ capture, open: true, follow: vi.fn(), observe: vi.fn(), report: vi.fn(), ...values }),
+  const state = shallowReactive<Record<string, any>>({
+      capture,
+      open: true,
+      follow: vi.fn(),
+      observe: vi.fn(),
+      report: vi.fn(),
+      known: () => undefined,
+      ...values,
+    }),
     closed = vi.fn(),
     mounted = mount(DicomViewExport, () => ({ ...state, onClose: closed }));
   await settled();
@@ -529,7 +537,6 @@ describe('the dialog', () => {
     server({ available: availability({ exports: [job('running', { id: 'earlier' })] }) });
     const text = (await dialog()).text();
     expect(text).not.toContain('separately');
-    expect(text).toContain('A notice reports how it ends.');
   });
   it('treats a server refusal as an answer, with nothing to refresh', async () => {
     vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());

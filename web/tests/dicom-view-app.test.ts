@@ -667,6 +667,25 @@ describe('following a job', () => {
     await settled();
     expect(view.banner()).toContain('Delivery is not confirmed.');
   });
+  it('says inside the dialog how an earlier export ended, because the notice lies under its backdrop', async () => {
+    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
+    const view = await app();
+    await view.export();
+    expect(view.text()).toContain('still in progress');
+    polled = async () => job('completed', { id: 'earlier', result: archived });
+    await settled();
+    expect(view.text()).not.toContain('still in progress');
+    expect(view.text()).toContain('An earlier export of this revision finished. View archived in Orthanc.');
+  });
+  it('moves the note on when an earlier export fails while the dialog is open', async () => {
+    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
+    const view = await app();
+    await view.export();
+    polled = async () => job('failed', { id: 'earlier', error: 'Delivery is not confirmed.' });
+    await settled();
+    expect(view.text()).not.toContain('still in progress');
+    expect(view.text()).toContain('did not finish');
+  });
   it('leaves the workspace free while an export runs', async () => {
     const view = await start();
     expect(view.text()).not.toContain('Waiting for the processing worker');

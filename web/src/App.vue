@@ -1894,6 +1894,7 @@ onBeforeUnmount(() => {
       :follow="followViewJob"
       :observe="viewJobs.follow"
       :report="reportViewExport"
+      :known="viewJobs.job"
       @close="closeViewExport"
     />
   </div>
