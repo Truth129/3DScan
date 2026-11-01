@@ -267,7 +267,8 @@ class ReviewManager:
             schema_version=2,
             method=method,
         )
-        return self.store.save("review_sessions", record)
+        # A reused draft can hold a job that has ended, which only a read settles.
+        return self.get(case_id, self.store.open_review(record)["id"])
 
     def create_structure(self, case_id, revision_id, name, group="Custom", color="#e3a35d", relationship=None, method="nninteractive"):
         """Create an empty draft target, without changing the segmentation history."""

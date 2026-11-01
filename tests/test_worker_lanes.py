@@ -106,8 +106,11 @@ def test_gpu_jobs_never_overlap_and_interactive_predictions_precede_queued_segme
     monkeypatch.setattr(service, "_segment", segmentation)
     segment = service.store.enqueue(case["id"], "segment", {"revision_id": base["id"]})
     predictions = []
-    for structure in ("total:liver", "total:liver", "total:kidney_left"):
-        draft = service.reviews.create(case["id"], base["id"], structure)
+    for draft in (
+        service.reviews.create(case["id"], base["id"], "total:liver"),
+        service.reviews.create(case["id"], base["id"], "total:kidney_left"),
+        service.reviews.create_structure(case["id"], base["id"], "Third target"),
+    ):
         draft = service.reviews.update(case["id"], draft["id"], 0, [prompt])
         predictions.append(service.reviews.predict(case["id"], draft["id"], draft["generation"]))
     draft = direct_draft(service, case, base)
@@ -400,8 +403,10 @@ def test_corrections_never_overlap_across_paths_or_with_segmentation(example, mo
 
     monkeypatch.setattr(service, "_segment", segmentation)
     jobs = [service.segment_case(case["id"], base["id"], "total", inference_path="second")]
-    for name in ("nvidia", "second", None, "default", "nvidia"):
-        draft = model_draft(service, case, base, prompt)
+    for index, name in enumerate(("nvidia", "second", None, "default", "nvidia")):
+        # A target holds one open draft, and these all wait in the queue at once.
+        draft = service.reviews.create_structure(case["id"], base["id"], f"Target {index}")
+        draft = service.reviews.update(case["id"], draft["id"], 0, [prompt])
         jobs.append(service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=name))
     service.start()
     try:

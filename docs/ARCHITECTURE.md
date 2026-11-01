@@ -311,6 +311,17 @@ the read-only image, mask and frame routes, so the viewer previews it with the t
 it never appears in revision history. Direct edits also prepare changed surfaces for 3D preview;
 nnInteractive surfaces are built on Save.
 
+**One open draft per target.** A client shows one draft for a revision, structure and method, so a second would
+hide the first's marks with no message. The create route reads and inserts in one write transaction, and it
+returns an open draft untouched, which keeps its generation, job and card. Reuse alone would not be safe: a
+save replaces the whole prompt list at the generation it holds, so a page that took on a returned draft with
+marks of its own would erase the other tab's, and a save during their job would cancel it. A page with unsaved
+changes therefore refuses a draft that holds work and stays draftless, keeping its changes on screen with a
+message until the person reloads, which drops them. A page with nothing to keep opens the draft, and a run
+that opened it stops there, because its marks have not been seen. Merging was rejected: a mark is placed against
+the marks and result on screen, and a merge would move the other tab's generation and put its unsaved marks at
+risk. Targets that hold two drafts from before this rule keep both.
+
 **Inference paths in a draft.** A draft can use any [path](#inference-paths) until its first published result,
 then stays on that card, so every step of a saved correction ran on one card. A new worker has no warm state
 to continue from, so one added mark on another card would rebuild reviewed work from the original mask. The

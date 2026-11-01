@@ -289,6 +289,23 @@ class Store:
         if review["status"] in ("accepted", "discarded"):
             raise ReviewConflict("This correction session is closed")
 
+    def open_review(self, record):
+        """Store a new draft, or return the one already open for its revision, structure and method.
+
+        A client shows one draft per target, so a second would hide the first's marks. The read and
+        the insert share a write lock, because two pages making a first mark at once would both
+        find none. Newest first, as in `list`, so targets that hold two drafts from before this
+        check answer with the one a client shows.
+        """
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            for row in con.execute("SELECT data FROM review_sessions WHERE case_id=? ORDER BY rowid DESC", (record["case_id"],)).fetchall():
+                review = self._upgrade_review(json.loads(row["data"]))
+                if review["status"] not in ("accepted", "discarded") and all(review[key] == record[key] for key in ("revision_id", "structure_id", "method")):
+                    return review
+            con.execute("INSERT INTO review_sessions VALUES (?,?,?)", (record["id"], record["case_id"], json.dumps(record, allow_nan=False)))
+        return record
+
     def change_review(self, case_id, session_id, generation, prompts=None, discard=False, options=None, relationship=None):
         """Replace a prompt generation and invalidate work in the same transaction."""
         with self.connection() as con:

@@ -659,6 +659,132 @@ def test_concurrent_new_targets_bound_dense_baseline_generation(example, monkeyp
     assert all(not imaging._binary(Path(draft["target"]["mask_file"]))[0].any() for draft in drafts)
 
 
+# A target keeps one open draft
+
+
+def start(example, structure="total:liver", **choice):
+    service, case, base, _ = example
+    return service.reviews.create(case["id"], base["id"], structure, **choice)
+
+
+def open_drafts(example):
+    service, case, _, _ = example
+    return [record["id"] for record in service.store.list("review_sessions", case["id"]) if record["status"] not in ("accepted", "discarded")]
+
+
+def test_a_second_start_returns_the_open_draft_with_its_marks(example):
+    service, case, _, prompt = example
+    first = start(example)
+    saved = service.reviews.update(case["id"], first["id"], 0, [prompt])
+    second = start(example)
+    assert second["id"] == first["id"] and second["generation"] == 1 and second["prompts"] == saved["prompts"]
+    assert open_drafts(example) == [first["id"]]
+
+
+def test_each_structure_and_method_keeps_its_own_draft(example):
+    drafts = [start(example), start(example, "total:kidney_left"), start(example, method="direct")]
+    assert len({draft["id"] for draft in drafts}) == len(open_drafts(example)) == 3
+
+
+def test_http_starts_at_the_same_moment_make_one_draft(example, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import sqlite3
+    import threading
+
+    service, case, base, _ = example
+    app = create_app(service.settings)
+    store = app.state.service.store
+    starts = 8
+    together = threading.Barrier(starts)
+    open_review, connect = store.open_review, sqlite3.connect
+
+    def at_once(record):
+        together.wait(timeout=30)
+        return open_review(record)
+
+    class SlowRead(sqlite3.Connection):
+        """Holds each read past the moment the others make theirs, so only a write lock can pass."""
+
+        def execute(self, sql, *values):
+            cursor = super().execute(sql, *values)
+            if sql.startswith("SELECT data FROM review_sessions WHERE case_id"):
+                time.sleep(0.05)
+            return cursor
+
+    monkeypatch.setattr(store, "open_review", at_once)
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **options: connect(*args, factory=SlowRead, **options))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+
+        def post(_):
+            return client.post(f"/api/cases/{case['id']}/reviews", json={"revision_id": base["id"], "structure_id": "total:liver"})
+
+        with ThreadPoolExecutor(max_workers=starts) as pool:
+            responses = list(pool.map(post, range(starts)))
+    assert {response.status_code for response in responses} == {200}
+    assert len({response.json()["id"] for response in responses}) == 1 and len(open_drafts(example)) == 1
+
+
+def test_a_start_cannot_change_the_draft_it_returns(example):
+    service, case, _, prompt = example
+    first = start(example)
+    service.reviews.update(case["id"], first["id"], 0, [prompt])
+    second = start(example, relationship={"kind": "subregion", "parent_id": "total:kidney_left"})
+    assert second["id"] == first["id"] and second["generation"] == 1 and second["relationship"] == first["relationship"]
+    with pytest.raises(ValueError):
+        start(example, relationship={"kind": "subregion", "parent_id": "total:liver"})
+    assert current(example, first)["generation"] == 1
+
+
+def test_a_start_leaves_a_running_job_alone_and_settles_one_that_ended(example):
+    service, case, _, prompt = example
+    draft = service.reviews.update(case["id"], start(example)["id"], 0, [prompt])
+    queued = service.reviews.predict(case["id"], draft["id"], draft["generation"])
+    running = start(example)
+    assert running["id"] == draft["id"] and running["status"] == "predicting" and running["job_id"] == queued["id"]
+    assert service.store.get("jobs", queued["id"])["status"] == "queued"
+    service.store.update_job(queued["id"], status="failed", error="Synthetic failure")
+    settled = start(example)
+    assert settled["id"] == draft["id"] and settled["status"] == "draft" and settled["error"] == "Synthetic failure"
+
+
+def test_a_discarded_draft_is_never_returned(example):
+    service, case, _, _ = example
+    draft = candidate(example)
+    service.reviews.discard(case["id"], draft["id"])
+    fresh = start(example)
+    assert fresh["id"] != draft["id"] and fresh["generation"] == 0 and not fresh["prompts"] and fresh["candidate"] is None
+
+
+def test_a_saved_draft_is_never_returned_and_a_start_stays_on_the_active_revision(example):
+    service, case, base, _ = example
+    waiting = start(example, "total:kidney_left")
+    draft = candidate(example)
+    saved = execute_next(service, service.reviews.accept(case["id"], draft["id"], draft["generation"]))
+    assert saved["status"] == "completed", saved
+    # A draft left open on the old revision does not make that revision startable again.
+    with pytest.raises(ReviewConflict, match="active revision"):
+        start(example, "total:kidney_left")
+    for structure, closed in (("total:liver", draft), ("total:kidney_left", waiting)):
+        fresh = service.reviews.create(case["id"], saved["revision_id"], structure)
+        assert fresh["id"] != closed["id"] and fresh["revision_id"] == saved["revision_id"] and not fresh["prompts"]
+
+
+def test_two_drafts_from_before_answer_with_the_one_a_client_shows(example):
+    service, case, _, _ = example
+    older = start(example)
+    newer = service.store.save("review_sessions", {**older, "id": identifier()})
+    assert start(example)["id"] == newer["id"] == service.reviews.list(case["id"])[0]["id"]
+    assert open_drafts(example) == [newer["id"], older["id"]]
+
+
+def test_a_draft_saved_before_methods_existed_counts_as_ai_assist(example):
+    service, case, _, _ = example
+    draft = start(example)
+    service.store.save("review_sessions", {key: value for key, value in draft.items() if key != "method"})
+    assert start(example)["id"] == draft["id"]
+    assert start(example, method="direct")["id"] != draft["id"]
+
+
 # Inference paths: a draft keeps the card of its first result
 
 
@@ -1050,6 +1176,18 @@ def bound_draft(example, name="nvidia"):
     return ran(example, draft)
 
 
+def test_a_draft_returned_to_a_second_page_stays_on_its_card(example, paths):
+    draft = bound_draft(example)
+    returned = start(example)
+    assert returned["id"] == draft["id"] and returned["batches"] == draft["batches"] and returned["candidate"] == draft["candidate"]
+    assert public_review(returned)["inference_path"] == binding("nvidia")
+    add_mark(example, returned, "point-3")
+    with pytest.raises(ReviewConflict, match="Re-run its steps"):
+        queue(example, returned, inference_path="second")
+    assert ran(example, returned)["inference_path"] == binding("nvidia")
+    assert sent(example)[1]["inference_path"].id == "nvidia"
+
+
 def test_a_replay_repeats_the_exact_steps_on_the_new_card_and_moves_the_draft_at_publish(example, paths):
     service, case, _, _ = example
     draft = bound_draft(example)
@@ -1107,7 +1245,7 @@ def test_the_replayed_steps_satisfy_the_engines_own_validation(example, paths):
     draft = bound_draft(example)
     state = ran(example, draft, inference_path="second", replay=True)
     assert _batches(sent(example)[1]["batches"], len(state["prompts"]))
-    full = unmarked(example)
+    full = start(example, "total:kidney_left")
     ran(example, full, full_refine=True, inference_path="nvidia")
     ran(example, full, inference_path="second", replay=True)
     assert _batches(sent(example)[1]["batches"], 0) == [{"end": 0, "autozoom": True, "full_refine": True, "legacy": False}]
@@ -1214,7 +1352,7 @@ def test_a_replay_runs_the_model_even_with_a_relationship_change_waiting(example
 def test_a_replay_with_nothing_to_repeat_is_an_ordinary_run(example, paths):
     draft = marked(example)
     assert ran(example, draft, inference_path="nvidia", replay=True)["batches"] == [{"end": 1, "autozoom": True, "full_refine": False}]
-    empty = unmarked(example)
+    empty = start(example, "total:kidney_left")
     with pytest.raises(ReviewConflict, match="Add or edit a prompt"):
         queue(example, empty, inference_path="nvidia", replay=True)
 

@@ -346,6 +346,13 @@ measurements while surfaces are still building. They are kept out of ordinary po
 `direct` or `nninteractive`, the API default; the browser starts with `direct`. The revision must be active
 and contain the structure. Starting a review changes no mask.
 
+A target has one open draft. If one is already open for that revision, structure and method, the route
+returns it as it stands, with its marks, generation, candidate, running job and inference path, and two
+simultaneous requests get the same draft. `relationship` is still validated, but it does not change a returned
+draft, so use `PATCH` for that. Accepted and discarded drafts are never returned. Where a target already holds
+two open drafts from before this rule, both stay open and the newest is returned, which is the one the browser
+shows. A caller should check `generation` and `prompts` before saving, because `PATCH` replaces every prompt.
+
 **`POST /api/cases/{id}/reviews/new-structure`** takes `{revision_id, name, group?, color?, relationship?,
 method?}` and creates an empty draft target on the reference grid with a server-generated `custom:<id>`. No
 revision or surface exists yet. `review-<sid>-0` exposes the empty target on the read-only routes. Duplicate

@@ -517,6 +517,7 @@ def test_jobs_on_different_paths_take_turns_in_one_worker_and_default_is_a_turn(
         job = execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path=chosen))
         assert job["status"] == "completed", job
         prefixes.append(service.reviews.get(case["id"], draft["id"])["candidate"]["provenance"]["prefix"])
+        service.reviews.discard(case["id"], draft["id"])
     assert prefixes == [venv_of(first), venv_of(second), sys.prefix, sys.prefix, venv_of(first)]
     # The default and naming the default are one path, so that pair shares a child.
     assert len(child_environment.read_text().split()) == 3
