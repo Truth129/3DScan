@@ -771,9 +771,14 @@ describe('a draft that moves under a job this page follows', () => {
       return { controller, reader };
     }
     const marked = () => saved(2, { prompts: [point('saved'), point('later')] });
+    /** Up to the poll that finds the job over, which leaves the retry's own 250 ms still to run. */
+    const ends = async (reader: ReturnType<typeof fixture>['reader'], value: InteractiveReview) => {
+      reader.interactiveReview.mockResolvedValueOnce(value);
+      await vi.advanceTimersByTimeAsync(600);
+    };
     it('keeps its message and tries again once the job has ended', async () => {
       const { controller, reader } = await failedSave();
-      await reads(reader, saved(1, { status: 'ready' }));
+      await ends(reader, saved(1, { status: 'ready' }));
       expect([controller.working, controller.error, controller.unsaved]).toEqual([false, offline, true]);
       reader.interactivePrompts.mockClear();
       reader.interactivePrompts.mockResolvedValueOnce(marked());
@@ -793,7 +798,7 @@ describe('a draft that moves under a job this page follows', () => {
     });
     it("shows the job's own error over it, which says more, and still tries again", async () => {
       const { controller, reader } = await failedSave();
-      await reads(reader, saved(1, { status: 'ready', error: 'Ran out of GPU memory' }));
+      await ends(reader, saved(1, { status: 'ready', error: 'Ran out of GPU memory' }));
       expect(controller.error).toBe('Ran out of GPU memory');
       reader.interactivePrompts.mockClear();
       reader.interactivePrompts.mockResolvedValueOnce(marked());
@@ -802,7 +807,7 @@ describe('a draft that moves under a job this page follows', () => {
     });
     it('says so if that fails too, and leaves the marks in place', async () => {
       const { controller, reader } = await failedSave();
-      await reads(reader, saved(1, { status: 'ready' }));
+      await ends(reader, saved(1, { status: 'ready' }));
       reader.interactivePrompts.mockRejectedValueOnce(new Error('Still offline'));
       await vi.advanceTimersByTimeAsync(250);
       expect([controller.error, controller.unsaved, controller.conflict]).toEqual(['Still offline', true, false]);
