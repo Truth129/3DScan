@@ -529,10 +529,12 @@ export class InteractiveController {
         this.working = ['predicting', 'accepting'].includes(value.status);
         if (!this.working) {
           this.persisted = saved(value);
-          // Reload saved work sits inside the message, so a conflict must keep one. A save that
-          // failed during the follow keeps its message too, and only this can bring it back.
-          this.error = value.error ?? (this.conflict || this.unsaved ? this.error : '');
-          if (this.unsaved) {
+          // Marks still unsaved with a message up mean a save failed during the follow. It keeps the
+          // message, and only this can bring it back. Without a message they are marks the server
+          // rewrote, which need no save. Reload saved work sits inside a conflict's message.
+          const failed = this.unsaved && !!this.error;
+          this.error = value.error ?? (this.conflict || failed ? this.error : '');
+          if (failed) {
             this.retrying = value.error ? '' : this.error;
             this.schedule();
           }

@@ -1307,6 +1307,23 @@ describe('a draft that moves under a job this page follows', () => {
       expect(controller.unsaved).toBe(false);
       expect(reader.interactivePrompts).not.toHaveBeenCalled();
     });
+    it('sends nothing for a mark the server rewrote, which no failure left unsaved', async () => {
+      const { controller, reader } = await ownJob();
+      await reads(reader, saved(1, { status: 'ready', prompts: [{ ...point('saved'), ras: [1, 2, 3.5] } as InteractivePrompt] }));
+      expect(controller.unsaved).toBe(true);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    });
+    it('clears a passing read failure as ever, when no mark is waiting', async () => {
+      const { controller, reader } = await ownJob();
+      reader.interactiveReview.mockRejectedValueOnce(new Error('Failed to fetch'));
+      await vi.advanceTimersByTimeAsync(900);
+      expect(controller.error).toBe('Review status unavailable. Failed to fetch');
+      await reads(reader, saved(1, { status: 'ready' }));
+      expect(controller.error).toBe('');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    });
   });
   it('keeps the job it knows when the reply names none, because a save clears that field', async () => {
     const { controller, reader } = await ownJob();
