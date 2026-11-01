@@ -690,6 +690,18 @@ describe('following a job', () => {
     await settled();
     expect(view.banner()).toContain('Delivery is not confirmed.');
   });
+  it('names the case of a job that fails while the next one is loading', async () => {
+    const view = await start(),
+      loading = deferred<Case>();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    vi.mocked(api.case).mockImplementationOnce(() => loading.promise);
+    view.open('case-b');
+    await settled();
+    polled = async () => job('failed', { error: 'Delivery not confirmed.' });
+    await settled();
+    expect(view.banner()).toContain('Synthetic A: Delivery not confirmed.');
+  });
   it('keeps both of two failures that land close together', async () => {
     const second = { id: 'view-2', case_id: 'case-b', revision_id: 'revision-b1' };
     let ended = false;

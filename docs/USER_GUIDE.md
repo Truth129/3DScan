@@ -341,7 +341,8 @@ deliberately resends the same image. After a failure, retrying from the dialog r
 Once the dialog has gone there is nothing to retry from, so check the study in Orthanc and capture the
 view again. If the connection drops during a request, the dialog says the outcome is unknown. Press the
 same button again: the server recognises the same image and destination and answers with the export it
-already has, or starts one if the first request never arrived.
+already has, or starts one if the first request never arrived. If you close the dialog first, the banner
+tells you to check the study in Orthanc.
 
 While an export runs you can close the dialog, and the button reopens it unless the button is
 disabled. Changing case or revision lets go of the capture, so the button then takes a new one.

@@ -59,7 +59,10 @@ const earlierOutcome = computed(() => {
 });
 let requests: AbortController | undefined,
   previousFocus: HTMLElement | undefined,
-  gone = false;
+  gone = false,
+  // A request with no answer, until the server answers one for that destination.
+  lost: { message: string; destination?: string } | undefined;
+const unconfirmed = (message: string) => `${message} Check the study in Orthanc before exporting again; the request may already have reached the workstation.`;
 
 async function load() {
   requests?.abort();
@@ -94,22 +97,22 @@ async function start(chosen?: string, resend = false) {
     });
     if (!matchesDicomViewExport(queued, capture.caseId, capture.revisionId)) throw new ApiError(400, 'The export job does not match this capture.');
     props.follow(queued, capture);
+    if (lost?.destination === chosen) lost = undefined;
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : 'The export request could not finish.',
       // A refusal settles it. Anything else may have queued the job before its answer was lost.
       refused = reason instanceof ApiError && reason.status < 500;
-    if (gone)
-      props.report(
-        refused ? message : `${message} Check the study in Orthanc before exporting again; the request may already have reached the workstation.`,
-        capture,
-      );
+    if (gone) props.report(refused ? message : unconfirmed(message), capture);
     else {
       // No listing can say which image a job holds, so only the repeat can find this capture's
       // own job. The server answers it with that job, because the image and destination match.
       error.value = refused
         ? message
         : `${message} The request may already have reached the workstation. Repeating it is safe: the server recognises this image and destination.`;
-      if (!refused) void load();
+      if (!refused) {
+        lost = { message, destination: chosen };
+        void load();
+      }
     }
   } finally {
     submitting.value = false;
@@ -146,6 +149,8 @@ onBeforeUnmount(() => {
   gone = true;
   requests?.abort();
   dialog.value?.close();
+  // The listing may never have named the job, so this warning is all that is sure to remain.
+  if (lost) props.report(unconfirmed(lost.message), capture);
 });
 </script>
 

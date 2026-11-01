@@ -474,7 +474,7 @@ function viewExportScope(): ViewExportScope {
     reviewing: workspaceMode.value === 'review',
   };
 }
-/** Every failure stays until someone dismisses it, so a second one must not replace the first. */
+/** A second failure must not replace the first, which nobody may have read yet. */
 function alertViewExport(message: string) {
   if (!model.value?.showRefusal(message)) error.value = error.value ? `${error.value} · ${message}` : message;
 }

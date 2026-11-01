@@ -486,6 +486,35 @@ describe('the dialog', () => {
         expect(view.text()).not.toContain('View archived');
       },
     );
+    it('leaves a lasting warning if it closes with the outcome still unknown', async () => {
+      const view = await lost();
+      view.unmount();
+      expect(view.state.report).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Check the study in Orthanc'), capture);
+    });
+    it('has nothing to warn about once the repeat is answered', async () => {
+      const view = await lost();
+      view.post.mockResolvedValue(job('running', { id: 'own' }));
+      click(view.button('Archive in Orthanc'));
+      await settled();
+      view.unmount();
+      expect(view.state.report).not.toHaveBeenCalled();
+    });
+    it('keeps a lost send unknown when only an archive is answered', async () => {
+      vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
+      const post = vi
+        .spyOn(api, 'exportDicomView')
+        .mockRejectedValueOnce(new TypeError('Connection closed'))
+        .mockResolvedValue(job('completed', { id: 'archive' }));
+      const view = await dialog();
+      await view.choose('osirix');
+      click(view.button('Send to OsiriX'));
+      await settled();
+      click(view.button('Archive in Orthanc'));
+      await settled();
+      expect(post).toHaveBeenCalledTimes(2);
+      view.unmount();
+      expect(view.state.report).toHaveBeenCalledOnce();
+    });
     it('watches whatever is running, so its end is reported even if nobody repeats the request', async () => {
       const running = job('running', { id: 'perhaps-own' }),
         view = await lost([running]);
