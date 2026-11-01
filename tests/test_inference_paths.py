@@ -1801,6 +1801,46 @@ def test_a_database_that_is_there_and_cannot_be_opened_is_not_an_empty_queue(che
     assert not check.stub.proof.exists()
 
 
+def a_link_for_the_library(tmp_path, monkeypatch):
+    (tmp_path / "data").symlink_to(tmp_path / "unmounted" / "library")
+
+
+def a_link_above_the_library(tmp_path, monkeypatch):
+    (tmp_path / "mount").symlink_to(tmp_path / "unmounted")
+    monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "mount" / "library"))
+
+
+def a_link_in_a_relative_setting(tmp_path, monkeypatch):
+    (tmp_path / "mount").symlink_to(tmp_path / "unmounted")
+    monkeypatch.setenv("SCAN3D_DATA_DIR", "mount/library")
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.mark.parametrize("build", [a_link_for_the_library, a_link_above_the_library, a_link_in_a_relative_setting])
+def test_a_library_behind_a_link_whose_target_has_gone_is_not_an_empty_queue(check, tmp_path, monkeypatch, build):
+    # Resolved, this reads as a missing directory, which is what a fresh install has.
+    build(tmp_path, monkeypatch)
+    completed = ask_the_queue(check.stub)
+    assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
+    assert "a link whose target has gone" in completed.stderr
+    assert not (tmp_path / "unmounted").exists()
+    assert check("--path", "nvidia").returncode == 1 and not check.stub.proof.exists()
+
+
+def test_a_working_link_to_a_library_is_read_through(check, tmp_path, monkeypatch):
+    library(tmp_path, "running")
+    (tmp_path / "link").symlink_to(tmp_path / "data")
+    monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "link"))
+    assert ask_the_queue(check.stub).stderr.strip() == BUSY
+
+
+def test_a_working_link_to_an_empty_folder_has_an_empty_queue(check, tmp_path, monkeypatch):
+    (tmp_path / "library").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "library")
+    monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "link"))
+    assert ask_the_queue(check.stub).returncode == 0
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can enter any directory")
 def test_a_library_this_user_cannot_enter_is_not_an_empty_queue(check, tmp_path):
     # One with a running job, which `Path.is_file()` would call no database at all.

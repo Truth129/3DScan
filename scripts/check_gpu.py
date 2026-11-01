@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 from importlib import import_module, metadata
 import json
+import os
 from pathlib import Path
 import platform
 import re
@@ -16,7 +17,7 @@ import time
 # this a healthy runtime would write a failing proof.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scan3d.config import Settings, device_request, load_environment
+from scan3d.config import ROOT, Settings, device_request, load_environment
 from scan3d.doctor import proof_path
 from scan3d.inference_paths import DEFAULT, GPU_REQUEST, ID_PATTERN, directory, gpu_cards, installed
 
@@ -38,7 +39,15 @@ def jobs_waiting():
     read-only and selects no case content. A library with no database has no jobs, and nothing
     else counts as none: this answer guards a rebuild, so a database that is there and cannot be
     read has to raise. `Path.is_file()` would call that absent, and so would following a link.
+
+    A plain missing directory is a fresh install. A link on the way to it whose target has gone
+    is a library this shell cannot see, such as an unmounted disk, and a service may still hold it
+    open. Settings has already resolved that into a plain missing directory, so read it as written.
     """
+    written = Path(os.environ.get("SCAN3D_DATA_DIR", ROOT / "data"))
+    for place in (written, *written.parents):
+        if place.is_symlink() and not place.exists():
+            raise FileNotFoundError(f"{place} is a link whose target has gone")
     database = Settings.from_env().data_dir / "scan3d.sqlite3"
     try:
         database.lstat()

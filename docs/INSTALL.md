@@ -212,7 +212,9 @@ that results are good, or that they match another GPU's.
   with its reason. Fix what the check reported and run the script again.
 - **A refused check** writes nothing, so the app still goes by the last proof, if there
   is one. The check refuses while a job is queued or running, and when it cannot read the
-  queue.
+  queue. A data directory that does not exist counts as a fresh install, with no jobs, but
+  a link to one whose target has gone, as with an unmounted disk, counts as a queue it
+  cannot read.
 
 **Run the script again** after changing the NVIDIA driver, after anything changes that
 environment, and whenever the app shows the GPU as unavailable. If its last install
