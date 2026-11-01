@@ -758,3 +758,19 @@ def test_availability_only_lists_exports_of_the_requested_revision(view):
     execute(view, post(view))
     assert view.http.get(view.url).json()["exports"]
     assert not view.http.get(view.base_url).json()["exports"]
+
+
+def test_a_send_posted_during_an_encode_does_not_disturb_it(view, monkeypatch):
+    encode, queued = dicom_view._encode, []
+
+    def during(*args, **kwargs):
+        queued.append(post(view, destination="osirix"))
+        return encode(*args, **kwargs)
+
+    monkeypatch.setattr(dicom_view, "_encode", during)
+    first = execute(view, post(view))
+    assert first["status"] == "completed", first["error"]
+    assert private_job(view, queued[0])["payload"]["export_id"] == first["payload"]["export_id"]
+    finished = execute(view, queued[0])
+    assert finished["status"] == "completed", finished["error"]
+    assert len(view.encoded) == 1 and len(view.archive.blobs) == 1 and len(view.archive.sends) == 1

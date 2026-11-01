@@ -58,8 +58,8 @@ _TOO_LARGE = "The captured view has too many pixels. Make the pane smaller and c
 _BLANK = "The captured view is blank. Capture the view again."
 _COMMENTS = "Rendered 3D view from 3DScan. Not calibrated: do not measure. No orientation labels. Research use only."
 
-# A maximum-size decode peaks near 1 GiB, and each request runs on its own
-# server thread alongside the job worker.
+# A maximum-size decode peaks at several hundred MiB, and each request runs on
+# its own server thread alongside the job worker.
 _DECODE_SLOT = threading.BoundedSemaphore(1)
 
 

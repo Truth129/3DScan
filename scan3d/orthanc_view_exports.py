@@ -84,10 +84,10 @@ class OrthancViewExports(OrthancExports):
     def _retained(self, case_id, png_sha256):
         return self._captures(case_id) / f"{png_sha256}.png"
 
-    def _retained_intact(self, job):
-        png = self._retained(job["case_id"], job["payload"]["png_sha256"])
+    def _retained_intact(self, case_id, png_sha256, cancelled=None):
+        png = self._retained(case_id, png_sha256)
         try:
-            return not png.is_symlink() and png.is_file() and _hash(png, lambda: self.service.cancelled(job)) == job["payload"]["png_sha256"]
+            return not png.is_symlink() and png.is_file() and _hash(png, cancelled) == png_sha256
         except InterruptedError:
             raise  # A subclass of OSError, but this is a cancellation.
         except OSError:
@@ -140,9 +140,10 @@ class OrthancViewExports(OrthancExports):
                 return summary
 
             def publish(_payload):
-                # Named by content, so this is idempotent and heals a damaged
-                # copy, and a job already reading the file keeps its inode.
-                os.replace(staging, self._retained(case_id, png_sha256))
+                # A running encode stamps this file, so an intact copy keeps
+                # its inode. Inside the transaction, so POSTs cannot race this.
+                if not self._retained_intact(case_id, png_sha256):
+                    os.replace(staging, self._retained(case_id, png_sha256))
 
             return self._enqueue(case_id, revision_id, fields, {}, destination, display_name, resend, summarize, publish=publish)
         finally:
@@ -159,7 +160,7 @@ class OrthancViewExports(OrthancExports):
             or inputs.source.snapshot.study_id != payload["orthanc_study_id"]
         ):
             raise ExportUnavailable("The saved revision changed after this export was queued. Capture the view again.")
-        if not self._retained_intact(job):
+        if not self._retained_intact(job["case_id"], payload["png_sha256"], lambda: self.service.cancelled(job)):
             raise ExportUnavailable("The retained view image is unavailable or changed. Capture the view again.")
         self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=lambda: self.service.cancelled(job))
         return inputs
