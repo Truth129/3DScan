@@ -193,9 +193,9 @@ AI weights, the license and your cases, so nothing downloads twice.
 
 `target` and `prefix` under `[pip]` in a `uv.toml`, the checkout's or your own, are not
 supported. uv would install somewhere else and the environment would be left empty.
-`no-cache` there is not supported either, nor is an index that forbids storing what it
-serves. uv then keeps nothing, so a finished environment fails its trial, described below,
-and stays as it is until you move it aside.
+`no-cache` in a `uv.toml` is not supported either, nor is an index that forbids storing
+what it serves. uv then keeps nothing, so a finished environment fails its trial, described
+below, and stays as it is until you move it aside.
 
 The script installs only into a directory it made, which it marks with a
 `.scan3d-inference-path` file. It refuses any other directory that already exists,
