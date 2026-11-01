@@ -174,7 +174,9 @@ class OrthancViewExports(OrthancExports):
         patient and study while the upload still reports success.
         """
         snapshot = inputs.source.snapshot
-        patient_id = str(pydicom.dcmread(path, stop_before_pixels=True, specific_tags=["PatientID"]).get("PatientID", "")).strip()
+        value = pydicom.dcmread(path, stop_before_pixels=True, specific_tags=["PatientID"]).get("PatientID", "")
+        # A backslash is illegal in LO, but pydicom splits on it and Orthanc keeps the text.
+        patient_id = ("\\".join(value) if isinstance(value, pydicom.multival.MultiValue) else str(value)).strip()
         try:
             with self.service.orthanc.client() as client:
                 study = client.study(snapshot.study_id)

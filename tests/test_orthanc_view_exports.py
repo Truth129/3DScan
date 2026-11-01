@@ -496,14 +496,14 @@ def test_trailing_spaces_do_not_refuse_a_matching_study(view):
     assert execute(view, post(view))["status"] == "completed"
 
 
-def test_the_study_check_reads_the_instance_as_utf8(tmp_path):
-    """The same comparison on a real non-ASCII instance, as the source would give it."""
-    sources = write_sources(tmp_path / "sources", 1, SpecificCharacterSet="ISO_IR 100", PatientID="MÜ12")
+def study_check(tmp_path, source_patient_id, **source):
+    """Run the comparison on a real encoded instance; the returned function takes Orthanc's patient ID."""
+    sources = write_sources(tmp_path / "sources", 1, PatientID=source_patient_id, **source)
     png = tmp_path / "capture.png"
     png.write_bytes(PNG)
     instance = dicom_view.export_view(sources, png, tmp_path / "export", revision_id="a" * 32)
     study_uid = str(pydicom.dcmread(sources[0], stop_before_pixels=True).StudyInstanceUID)
-    archived = ["MÜ12"]
+    archived = [None]
 
     class Client:
         def __enter__(self):
@@ -518,10 +518,29 @@ def test_the_study_check_reads_the_instance_as_utf8(tmp_path):
     service = SimpleNamespace(orthanc=SimpleNamespace(client=Client))
     inputs = SimpleNamespace(source=SimpleNamespace(snapshot=SimpleNamespace(study_id=STUDY, study_uid=study_uid)))
     manager = view_exports.OrthancViewExports(service)
-    manager._check_study(inputs, instance.path)
-    archived[0] = "M12"
-    with pytest.raises(ExportUnavailable, match="different patient ID"):
+
+    def check(patient_id):
+        archived[0] = patient_id
         manager._check_study(inputs, instance.path)
+
+    return check
+
+
+def test_the_study_check_reads_the_instance_as_utf8(tmp_path):
+    """The same comparison on a real non-ASCII instance, as the source would give it."""
+    check = study_check(tmp_path, "MÜ12", SpecificCharacterSet="ISO_IR 100")
+    check("MÜ12")
+    with pytest.raises(ExportUnavailable, match="different patient ID"):
+        check("M12")
+
+
+@pytest.mark.parametrize("patient_id", ["A\\B", "ABC\\"])
+def test_a_backslash_in_the_patient_id_is_compared_as_orthanc_stores_it(tmp_path, patient_id):
+    """Illegal in LO, but it imports, and pydicom reads it as a list where Orthanc keeps the text."""
+    check = study_check(tmp_path, patient_id)
+    check(patient_id)
+    with pytest.raises(ExportUnavailable, match="different patient ID"):
+        check(patient_id.replace("\\", "/"))
 
 
 def test_the_client_reports_the_study_orthanc_chose(export_archive, tmp_path, monkeypatch):
