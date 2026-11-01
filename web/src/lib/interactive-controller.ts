@@ -584,8 +584,10 @@ export class InteractiveController {
       } catch (reason) {
         if (over()) return;
         this.error = `Review status unavailable. ${reason instanceof Error ? reason.message : reason}`;
+        // Asking again cannot bring back a review or job that has gone.
+        if (reason instanceof ApiError && reason.status === 404) this.working = false;
         this.notify();
-        this.poll();
+        if (this.working) this.poll();
       }
     }, 900);
   }

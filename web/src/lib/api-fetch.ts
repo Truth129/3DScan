@@ -1,4 +1,7 @@
-/** Every server request passes through here, so one place can see a session end. */
+/**
+ * Server requests pass through here, so one place can see a session end. The exceptions are two
+ * download links that the browser follows itself: the Slicer bundle and a saved SEG file.
+ */
 type StatusObserver = (status: number) => void;
 
 let observer: StatusObserver = () => {};

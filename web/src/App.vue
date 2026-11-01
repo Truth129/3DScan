@@ -58,7 +58,7 @@ import {
 import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
 import { pathBlocked, pathField, runSummary, SEGMENT_PATH_KEY, usePathChoice } from './lib/inference-path';
-import { caseIsGone, outboundExportKinds, pollCanRecover, recoverCaseJob } from './lib/jobs';
+import { caseIsGone, jobIsGone, outboundExportKinds, recoverCaseJob } from './lib/jobs';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import {
   freezeViewCapture,
@@ -657,7 +657,7 @@ async function openCase(id: string) {
     if (generation === caseGeneration) loading.value = false;
   }
 }
-/** Nothing of a case that has gone stays on screen or names it in this browser. */
+/** Nothing of a case that has gone stays on screen, and this browser stops reopening it. */
 async function closeCase(id: string) {
   caseGeneration++;
   resetCaseView();
@@ -785,7 +785,10 @@ function poll() {
         return;
       }
       fail(reason);
-      if (pollCanRecover(reason)) poll();
+      if (jobIsGone(reason)) {
+        localStorage.removeItem(`scan3d-job:${job.value.case_id}`);
+        job.value = undefined;
+      } else poll();
     }
   }, 1400);
 }

@@ -1617,6 +1617,15 @@ describe('a draft that moves under a job this page follows', () => {
       await vi.advanceTimersByTimeAsync(5000);
       expect(reader.interactivePrompts).not.toHaveBeenCalled();
     });
+    it('stops asking once the review has gone', async () => {
+      const { controller, reader } = await ownJob();
+      reader.interactiveReview.mockRejectedValueOnce(new ApiError(404, 'Review session not found'));
+      await vi.advanceTimersByTimeAsync(900);
+      expect(controller.error).toBe('Review status unavailable. Review session not found');
+      const asked = reader.interactiveReview.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(reader.interactiveReview).toHaveBeenCalledTimes(asked);
+    });
     it('clears a passing read failure as ever, when no mark is waiting', async () => {
       const { controller, reader } = await ownJob();
       reader.interactiveReview.mockRejectedValueOnce(new Error('Failed to fetch'));

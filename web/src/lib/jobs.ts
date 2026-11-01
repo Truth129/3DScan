@@ -10,8 +10,8 @@ export const outboundExportKinds = ['orthanc_export', 'orthanc_view_export'];
 const active = (job: Job, caseId: string) =>
   job.case_id === caseId && !['review_predict', ...outboundExportKinds].includes(job.kind) && ['queued', 'running'].includes(job.status);
 
-/** Asking again cannot clear a 401 or a 404. */
-export const pollCanRecover = (reason: unknown) => !(reason instanceof ApiError && [401, 404].includes(reason.status));
+/** Asking again cannot bring back a job that has gone. A 401 clears once someone signs in again. */
+export const jobIsGone = (reason: unknown) => reason instanceof ApiError && reason.status === 404;
 /** Other 404s name a part of a case, such as a revision. Only this one means the case itself has gone. */
 export const caseIsGone = (reason: unknown) => reason instanceof ApiError && reason.status === 404 && reason.message === 'Case not found';
 

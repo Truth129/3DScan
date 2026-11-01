@@ -570,8 +570,8 @@ export class LocalCTSession {
         if (!entry) return;
         await this.acquireDownload(signal);
         try {
-          // Immutable private chunks can reuse the browser's HTTP cache. Bulk
-          // downloads yield network priority to navigation and detail.
+          // Private chunks can reuse the browser's HTTP cache once the server agrees.
+          // Bulk downloads yield network priority to navigation and detail.
           const response = await apiFetch(entry.chunk.url, { signal, cache: 'default', priority: this.quality === 'full' ? 'low' : 'high' });
           if (!response.ok) throw new Error(`Local CT chunk request failed (${response.status})`);
           const bytes = await response.arrayBuffer();
