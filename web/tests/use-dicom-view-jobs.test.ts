@@ -92,7 +92,7 @@ describe('view export watcher', () => {
     const { watcher, success, failure } = fixture();
     watcher.follow(job('running'));
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith('Delivery not confirmed.');
+    expect(failure).toHaveBeenCalledExactlyOnceWith('Delivery not confirmed. A new capture makes a new series.');
     expect(success).not.toHaveBeenCalled();
   });
   it.each([
@@ -116,7 +116,7 @@ describe('view export watcher', () => {
     watcher.follow(job('running'));
     active.value = 'case-b';
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith('Case A: Delivery not confirmed.');
+    expect(failure).toHaveBeenCalledExactlyOnceWith('Case A: Delivery not confirmed. A new capture makes a new series.');
     watcher.follow(job('running', { id: 'view-2' }));
     await vi.advanceTimersByTimeAsync(1400);
     expect(success).toHaveBeenCalledExactlyOnceWith('Case A: View archived in Orthanc. Nothing was sent to another viewer.');
@@ -210,7 +210,7 @@ describe('view export watcher', () => {
     await vi.advanceTimersByTimeAsync(1400);
     expect(poll).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith('Interrupted.');
+    expect(failure).toHaveBeenCalledExactlyOnceWith('Interrupted. A new capture makes a new series.');
   });
   it('lets a failed seed pass, so that opening a case still works', async () => {
     vi.spyOn(api, 'jobs').mockRejectedValue(new TypeError('Failed to fetch'));

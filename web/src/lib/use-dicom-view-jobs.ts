@@ -31,10 +31,16 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     jobs.set(job.id, job);
     if (options.showing(job.id)) return;
     if (dicomViewDelivered(job)) options.success(named(dicomViewExportSummary(job), job.case_id));
-    else if (job.status === 'failed')
-      options.failure(named(job.error || 'The DICOM view export failed. Check Orthanc before exporting it again.', job.case_id));
-    else if (job.status === 'cancelled') options.failure(named('The DICOM view export was cancelled. Check Orthanc before exporting it again.', job.case_id));
-    else options.failure(named(dicomViewExportSummary(job) || 'The DICOM view export finished without confirming delivery.', job.case_id));
+    else {
+      const reason =
+        job.status === 'failed'
+          ? job.error || 'The DICOM view export failed.'
+          : job.status === 'cancelled'
+            ? 'The DICOM view export was cancelled.'
+            : dicomViewExportSummary(job) || 'The DICOM view export finished without confirming delivery.';
+      // The job's own text can offer a retry, which needs the image the closed dialog held.
+      options.failure(named(`${reason} A new capture makes a new series.`, job.case_id));
+    }
   }
   function schedule(id: string) {
     timers.set(
