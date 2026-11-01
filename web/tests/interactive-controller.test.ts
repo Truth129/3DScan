@@ -1017,6 +1017,26 @@ describe('a draft that moves under a job this page follows', () => {
         answer.release(job());
         await finishing;
       });
+      it('drops a list the last Reload left, which would end this follow over the same record', async () => {
+        const list = held<InteractiveReview[]>();
+        let slow!: Promise<void>;
+        const { controller, reader, answer, finishing } = await ready(async ended => {
+          const { controller, reader } = fixture(ended);
+          await controller.load();
+          reader.interactiveReviews.mockReturnValueOnce(list.reply);
+          slow = controller.reload();
+          await controller.reload(); // The second click's list answers first.
+          return { controller, reader };
+        });
+        list.release([result()]);
+        await slow;
+        expect(controller.working, 'the page stays held').toBe(true);
+        answer.release(job());
+        await finishing;
+        expect(controller.job?.id, 'this follow still takes on its own job').toBe('prediction');
+        await reads(reader, result());
+        expect(controller.working).toBe(false);
+      });
     });
 
     describe('with Run AI pressed inside the second that Cancel left', () => {
@@ -1246,6 +1266,58 @@ describe('a draft that moves under a job this page follows', () => {
         answer.release(job());
         await saving;
         expect(controller.error).toBe('');
+      });
+    });
+    describe('a list something newer has overtaken', () => {
+      /** Two clicks of Reload saved work, and the second click's list answers first. */
+      async function overtaken(list: Promise<InteractiveReview[]>) {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        reader.interactiveReviews.mockReturnValueOnce(list);
+        const slow = controller.reload();
+        await controller.reload();
+        return { controller, slow };
+      }
+      /** A first load that a Discard lands ahead of, which leaves nothing else to end the load. */
+      async function firstLoad(list: Promise<InteractiveReview[]>) {
+        const { controller, reader, changed } = fixture(saved());
+        reader.interactiveReviews.mockReturnValueOnce(list);
+        const loading = controller.load();
+        await controller.discard();
+        changed.mockClear();
+        return { controller, changed, loading };
+      }
+      it('leaves a mark made since, which installing it would wipe with its undo', async () => {
+        const list = held<InteractiveReview[]>();
+        const { controller, slow } = await overtaken(list.reply);
+        controller.append(point('since'));
+        list.release([saved()]);
+        await slow;
+        expect(controller.prompts.map(item => item.id)).toEqual(['saved', 'since']);
+        expect(controller.canUndo).toBe(true);
+      });
+      it('says nothing when it fails, because the list that answered is still good', async () => {
+        const list = failing<InteractiveReview[]>();
+        const { controller, slow } = await overtaken(list.reply);
+        list.release();
+        await slow;
+        expect([controller.error, controller.review?.id]).toEqual(['', 'draft']);
+      });
+      it('still ends the first load, or the page would refuse every mark', async () => {
+        const list = held<InteractiveReview[]>();
+        const { controller, changed, loading } = await firstLoad(list.reply);
+        list.release([saved()]);
+        await loading;
+        expect([controller.loaded, controller.review]).toEqual([true, undefined]);
+        expect(changed, 'App hears nothing else').toHaveBeenCalled();
+      });
+      it('still ends the first load when it fails', async () => {
+        const list = failing<InteractiveReview[]>();
+        const { controller, changed, loading } = await firstLoad(list.reply);
+        list.release();
+        await loading;
+        expect([controller.loaded, controller.error]).toEqual([true, '']);
+        expect(changed).toHaveBeenCalled();
       });
     });
   });

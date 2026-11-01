@@ -154,6 +154,9 @@ export class InteractiveController {
     if (this.working) this.poll();
   }
   async load() {
+    // A run, a Save or another list that has come since is newer than this list. Installing it would
+    // end a follow over the very record that follow is on, and wipe any mark made since.
+    const follow = this.follow;
     try {
       const records = await this.reader.interactiveReviews(this.caseId);
       const latest = records.find(
@@ -164,14 +167,16 @@ export class InteractiveController {
           !['accepted', 'discarded'].includes(item.status),
       );
       if (this.stopped) return;
-      this.install(latest);
-      this.loaded = true;
-      if (latest && ['predicting', 'accepting'].includes(latest.status)) {
-        this.working = true;
-        this.poll();
+      if (follow === this.follow) {
+        this.install(latest);
+        if (latest && ['predicting', 'accepting'].includes(latest.status)) {
+          this.working = true;
+          this.poll();
+        }
       }
+      this.loaded = true;
     } catch (reason) {
-      this.error = reason instanceof Error ? reason.message : String(reason);
+      if (follow === this.follow) this.error = reason instanceof Error ? reason.message : String(reason);
       this.loaded = true;
     }
     this.notify();
