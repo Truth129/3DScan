@@ -644,6 +644,21 @@ def test_the_default_target_needs_the_marker_too(rig):
     assert refused(rig.run("nvidia"))
 
 
+@pytest.mark.parametrize("arguments", [(), ("--venv", ".venv-nvidia-py314")], ids=["default", "named"])
+def test_a_link_that_points_nowhere_is_what_the_refusal_names(rig, arguments):
+    # Its target does not exist, so naming that would send a person looking for nothing.
+    a_dangling_link(rig, rig.venv)
+    completed = rig.run("nvidia", *arguments, cwd=rig.root)
+    assert refused(completed)
+    assert completed.stderr.startswith(f"{rig.venv} already exists") and str(rig.top / "nowhere") not in completed.stderr
+
+
+def test_a_refusal_names_where_a_working_link_leads(rig):
+    target = rig.elsewhere / "target"
+    a_link_to_a_directory(rig, target)
+    assert rig.run("nvidia", "--venv", str(target)).stderr.startswith(f"{rig.top / 'empty'} already exists")
+
+
 def no_marker(target):
     pass
 

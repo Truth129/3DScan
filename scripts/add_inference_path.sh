@@ -38,10 +38,12 @@ marked() {
 
 # The marker alone lets this script use a directory that exists, whatever its name or however
 # empty it is: `uv pip sync` removes what the lock does not list, so another environment would
-# be destroyed. A link that points nowhere still holds the name.
+# be destroyed. A link that points nowhere still holds the name, and it is all there is to name.
 refuse_unmarked() {
-  if [[ -e "$venv" || -L "$named" ]] && ! marked; then
-    fail "$venv already exists and this script did not make it, so nothing was changed. Name a new directory with --venv."
+  local taken="$venv"
+  [[ -e "$venv" ]] || taken="$named"
+  if [[ -e "$taken" || -L "$taken" ]] && ! marked; then
+    fail "$taken already exists and this script did not make it, so nothing was changed. Name a new directory with --venv."
   fi
 }
 
