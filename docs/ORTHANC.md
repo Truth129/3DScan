@@ -129,7 +129,7 @@ Import runs on the CPU and is bound to the snapshot you selected:
 
 ## Send a saved segmentation back
 
-In a saved revision, choose **DICOM SEG…**, select nonempty masks, then choose **Archive in Orthanc**
+In a saved revision, choose **Export SEG…**, select nonempty masks, then choose **Archive in Orthanc**
 or pick a **Send destination** and choose **Send to** it. Archiving uploads the SEG and reads it back
 to compare hashes. Sending does the same, then asks Orthanc to perform C-STORE to that modality.
 

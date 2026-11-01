@@ -3,9 +3,10 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue';
 import { defaultOverlapOrder, dicomSegExportSummary, moveOverlapRank, nonemptySavedStructures, unfinishedOverlapRanking } from '../lib/dicom-seg';
 import { prettyName } from '../lib/geometry';
 import { useDicomSegExport } from '../lib/use-dicom-seg-export';
-import type { Revision, ReviewStatus } from '../types';
+import { visibleVolumeMaskIds } from '../lib/volume-mask';
+import type { Revision, ReviewStatus, StructureDisplay } from '../types';
 
-const props = defineProps<{ caseId: string; revision: Revision; disabledReason: string }>();
+const props = defineProps<{ caseId: string; revision: Revision; display: StructureDisplay; disabledReason: string }>();
 const dialog = ref<HTMLDialogElement>(),
   rankingList = ref<HTMLOListElement>(),
   opened = ref(false),
@@ -14,6 +15,7 @@ const dialog = ref<HTMLDialogElement>(),
   resolveOverlaps = ref(false),
   overlapOrder = ref<string[]>([]);
 const structures = computed(() => nonemptySavedStructures(props.revision.structures));
+const visibleIds = computed(() => visibleVolumeMaskIds(structures.value, props.display));
 const { availability, job, checking, submitting, pending, locked, error, statusError, needsRefresh, alreadySent, load, resume, start } = useDicomSegExport({
   source: () => ({ caseId: props.caseId, revisionId: props.revision.id }),
   blocked: () => props.disabledReason,
@@ -77,7 +79,7 @@ onBeforeUnmount(() => dialog.value?.close());
     :title="disabled || 'Export saved masks as DICOM SEG.'"
     @click="open"
   >
-    DICOM SEG{{ pending ? ' · exporting…' : '…' }}
+    {{ pending ? 'Exporting SEG…' : 'Export SEG…' }}
   </button>
   <dialog
     ref="dialog"
@@ -104,6 +106,14 @@ onBeforeUnmount(() => dialog.value?.close());
       <legend>Masks · {{ selected.length }} of {{ structures.length }} selected</legend>
       <div class="selection-actions">
         <button type="button" class="text-button" @click="selected = structures.map(item => item.id)">Select all</button
+        ><button
+          type="button"
+          class="text-button"
+          :disabled="!visibleIds.length"
+          :title="visibleIds.length ? 'Select only the masks switched on in the anatomy list' : 'No saved mask is switched on in the anatomy list.'"
+          @click="selected = visibleIds"
+        >
+          Select visible</button
         ><button type="button" class="text-button" @click="selected = []">Clear selection</button>
       </div>
       <div class="segment-options">
@@ -112,7 +122,8 @@ onBeforeUnmount(() => dialog.value?.close());
         >
       </div>
       <p class="help">
-        <template v-if="structures.length !== revision.structures.length">Empty masks are excluded. </template>Viewer visibility does not change this selection.
+        <template v-if="structures.length !== revision.structures.length">Empty masks are excluded. </template>The anatomy list changes this selection only when
+        you choose Select visible.
       </p>
       <div v-if="selected.length > 1" class="overlap-options">
         <label class="overlap-toggle"><input v-model="resolveOverlaps" type="checkbox" /><span>Resolve overlaps in this export</span></label>
@@ -253,6 +264,7 @@ legend {
   color: var(--muted);
 }
 .selection-actions {
+  flex-wrap: wrap;
   margin-bottom: 10px;
 }
 .segment-options {
