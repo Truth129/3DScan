@@ -25,6 +25,7 @@ const snapshot = (prompts: InteractivePrompt[], options: InteractiveOptions, rel
   options: { ...options },
   relationship: normalizeRelationship(relationship),
 });
+const saved = (value: InteractiveReview) => signature(snapshot(value.prompts, value.options ?? initialOptions(), value.relationship));
 type Reader = Pick<
   typeof api,
   | 'interactiveReviews'
@@ -350,7 +351,7 @@ export class InteractiveController {
       this.review = { ...this.review, status: 'predicting', job_id: this.job.id };
       this.notify();
       if (this.cancelRequested) await this.reader.cancel(this.job.id);
-      this.review = await this.reader.interactiveReview(this.caseId, this.review.id);
+      if (!this.takeOn(this.review, await this.reader.interactiveReview(this.caseId, this.review.id))) return;
       this.notify();
       this.poll();
     } catch (reason) {
@@ -390,6 +391,24 @@ export class InteractiveController {
       }
     }
     this.notify();
+  }
+  /**
+   * Takes on a record read from the server, unless another tab's work is in it. A save sends this
+   * page's marks, options and relationship at the generation it holds, so holding a newer one would
+   * let that save past the server's check and overwrite the work. A generation can move with
+   * nothing in it changed, as a re-run's does at enqueue. Both sides are the server's own records,
+   * so a mark it normalised still compares equal.
+   */
+  private takeOn(seen: InteractiveReview, value: InteractiveReview) {
+    if (value.generation === seen.generation || saved(value) === saved(seen)) {
+      this.review = value;
+      return true;
+    }
+    this.working = false;
+    this.conflict = true;
+    this.error = 'The correction draft changed; reload its current prompts';
+    this.notify();
+    return false;
   }
   async accept(): Promise<Job | undefined> {
     if (this.working || this.dirty || !this.review?.candidate) return;
@@ -439,14 +458,22 @@ export class InteractiveController {
     clearTimeout(this.pollTimer);
     if (!this.review || this.stopped) return;
     this.pollTimer = setTimeout(async () => {
+      const seen = this.review!;
       try {
-        const value = await this.reader.interactiveReview(this.caseId, this.review!.id);
+        const value = await this.reader.interactiveReview(this.caseId, seen.id);
         if (this.stopped) return;
-        this.review = value;
-        if (value.job_id) this.job = await this.reader.job(value.job_id);
+        const job = value.job_id ? await this.reader.job(value.job_id) : this.job;
+        // A save of this page's can be in the reply already, which would read as another tab's, or
+        // have landed after it, which the reply would undo. The next read can tell.
+        if (this.saving || this.review !== seen) {
+          if (this.working) this.poll();
+          return;
+        }
+        if (!this.takeOn(seen, value)) return;
+        this.job = job;
         this.working = ['predicting', 'accepting'].includes(value.status);
         if (!this.working) {
-          this.persisted = signature(snapshot(value.prompts, value.options ?? initialOptions(), value.relationship));
+          this.persisted = saved(value);
           this.error = value.error ?? '';
         }
         this.notify();

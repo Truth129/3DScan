@@ -738,6 +738,25 @@ describe('a 409 from predict', () => {
     expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 2');
     expect(root.named('review-messages')?.button('Reload saved work')).toBeUndefined();
   });
+  it("offers Reload saved work when another tab saves while this page follows a job, and leaves that tab's marks alone", async () => {
+    const server = workstation([amd, nvidia], free());
+    const { root, panel } = await openAI();
+    server.predict.mockRejectedValueOnce(new ApiError(409, 'This correction session already has a queued or running job'));
+    server.setRemote(free({ status: 'predicting', job_id: 'prediction' }));
+    await press(root.button('Run AI'));
+    expect(root.named('review-working')?.button('Cancel')).toBeDefined();
+    const other = free({ generation: 2, prompts: [applied, { id: 'other-tab', kind: 'point', include: true, ras: point }] });
+    server.setRemote(other);
+    await vi.waitFor(() => expect(root.named('review-messages')?.button('Reload saved work')).toBeDefined(), nextPoll);
+    expect(root.named('review-working')).toBeUndefined();
+    expect(root.named('review-messages')?.content).toContain('The correction draft changed; reload its current prompts');
+    panel.value.addPrompt(point);
+    await settled();
+    expect(api.interactivePrompts).not.toHaveBeenCalled();
+    await press(root.named('review-messages')?.button('Reload saved work'));
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 2');
+    expect(root.named('review-messages')?.button('Reload saved work')).toBeUndefined();
+  });
   it('offers Reload saved work for a draft that another tab saved', async () => {
     const server = workstation([amd, nvidia], free());
     const { root } = await openAI();

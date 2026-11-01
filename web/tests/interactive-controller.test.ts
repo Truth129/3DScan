@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InteractiveController } from '../src/lib/interactive-controller';
 import { ApiError } from '../src/lib/api';
 import { reviewRunPath } from '../src/lib/inference-path';
@@ -529,6 +529,193 @@ describe('a 409 from predict', () => {
     expect(controller.job?.id).toBe('prediction');
     expect(reader.interactiveReview).toHaveBeenCalledOnce();
     expect(controller.conflict).toBe(false);
+  });
+});
+
+describe('a draft that moves under a job this page follows', () => {
+  const stale = 'The correction draft changed; reload its current prompts';
+  const refusal = 'This correction session already has a queued or running job';
+  const saved = (generation = 1, extra: Partial<InteractiveReview> = {}): InteractiveReview => ({ ...base(), generation, prompts: [point('saved')], ...extra });
+  const running = (generation = 1, status: 'predicting' | 'accepting' = 'predicting') => saved(generation, { status, job_id: 'prediction' });
+  const theirs = () => saved(2, { prompts: [point('saved'), point('other-tab')] });
+  const held = <T>() => {
+    let release!: (value: T) => void;
+    const reply = new Promise<T>(resolve => (release = resolve));
+    return { reply, release };
+  };
+  const reads = async (reader: ReturnType<typeof fixture>['reader'], value: InteractiveReview) => {
+    reader.interactiveReview.mockResolvedValueOnce(value);
+    await vi.advanceTimersByTimeAsync(900);
+  };
+  async function ownJob() {
+    const { controller, reader, changed } = fixture(saved());
+    await controller.load();
+    await controller.apply(true);
+    expect(controller.working).toBe(true);
+    return { controller, reader, changed };
+  }
+  async function followed(status: 'predicting' | 'accepting' = 'predicting') {
+    const { controller, reader, changed } = fixture(saved());
+    await controller.load();
+    reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, refusal));
+    reader.interactiveReview.mockResolvedValueOnce(running(1, status));
+    await controller.apply(true);
+    expect(controller.working).toBe(true);
+    return { controller, reader, changed };
+  }
+  /** Marked in the moment before the re-read answered, so the page follows with a save still to come. */
+  async function followedWithAMark(status: 'predicting' | 'accepting' = 'predicting') {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, refusal));
+    const read = held<InteractiveReview>();
+    reader.interactiveReview.mockReturnValueOnce(read.reply);
+    const run = controller.apply(true);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.append(point('later'));
+    read.release(running(1, status));
+    await run;
+    expect([controller.working, controller.unsaved]).toEqual([true, true]);
+    return { controller, reader };
+  }
+  beforeEach(() => void vi.useFakeTimers());
+  afterEach(() => void vi.useRealTimers());
+
+  describe.each([
+    ['its own job', ownJob],
+    ["another tab's job", followed],
+  ])('following %s', (_route, page) => {
+    it('asks for a reload over marks it has never seen, and takes none of them on', async () => {
+      const { controller, reader } = await page();
+      await reads(reader, theirs());
+      expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, stale]);
+      expect(controller.review?.generation).toBe(1);
+      expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
+      expect(controller.unsaved, 'nothing here is waiting to save').toBe(false);
+      controller.append(point('blocked'));
+      await controller.flush();
+      expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    });
+    it('says so, because App hears nothing else', async () => {
+      const { controller, reader, changed } = await page();
+      const conflicts: boolean[] = [];
+      changed.mockImplementation(() => conflicts.push(controller.conflict));
+      await reads(reader, theirs());
+      expect(conflicts.at(-1)).toBe(true);
+    });
+    it('stops reading once it has asked', async () => {
+      const { controller, reader } = await page();
+      await reads(reader, theirs());
+      reader.interactiveReview.mockClear();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(reader.interactiveReview).not.toHaveBeenCalled();
+      expect(controller.working).toBe(false);
+    });
+    it.each<[string, Partial<InteractiveReview>]>([
+      ['options', { options: { ...options, autozoom: false } }],
+      ['relationship', { relationship: { kind: 'subregion', parent_id: 'parent', exclusive_with: [] } }],
+    ])('counts a change to the %s too, because a save sends them back', async (_field, change) => {
+      const { controller, reader } = await page();
+      await reads(reader, saved(2, change));
+      expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, stale]);
+      expect(controller.review?.generation).toBe(1);
+    });
+    it('goes on through a generation that moved with nothing in it changed, as a re-run moves it at enqueue', async () => {
+      const { controller, reader } = await page();
+      await reads(reader, running(2));
+      expect([controller.working, controller.conflict]).toEqual([true, false]);
+      expect(controller.review?.generation).toBe(2);
+      await reads(reader, saved(2, { status: 'ready' }));
+      expect([controller.working, controller.conflict, controller.error]).toEqual([false, false, '']);
+      reader.interactivePrompts.mockResolvedValueOnce(saved(3, { prompts: [point('saved'), point('next')] }));
+      controller.append(point('next'));
+      await controller.flush();
+      expect(reader.interactivePrompts.mock.calls[0][2]).toBe(2);
+    });
+    it('trusts an unmoved generation over the look of the reply, because every change moves it', async () => {
+      const { controller, reader } = await page();
+      await reads(reader, { ...running(1), prompts: [{ id: 'saved', kind: 'point', include: true, ras: [1.5, 2, 3] }] });
+      expect([controller.working, controller.conflict]).toEqual([true, false]);
+    });
+    it('reads a server that normalised a mark as the same mark', async () => {
+      const { controller, reader } = await page();
+      const { kind: _kind, ...legacy } = point('saved') as InteractivePrompt & { kind: string };
+      await reads(reader, { ...running(2), prompts: [legacy as InteractivePrompt] });
+      expect(controller.conflict).toBe(false);
+    });
+  });
+
+  it('asks for a reload when the first read of a job it has just started finds another tab has saved', async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.interactiveReview.mockResolvedValueOnce(theirs());
+    await controller.apply(true);
+    expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, stale]);
+    expect(controller.review?.generation).toBe(1);
+    expect(controller.job?.id, 'predict answered, so this is no refusal').toBe('prediction');
+    reader.interactiveReview.mockClear();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(reader.interactiveReview).not.toHaveBeenCalled();
+  });
+  it('takes the generation that its own re-run moved from that same read', async () => {
+    const { controller, reader } = fixture(saved());
+    await controller.load();
+    reader.interactiveReview.mockResolvedValueOnce(running(2));
+    await controller.apply(true);
+    expect([controller.working, controller.conflict]).toEqual([true, false]);
+    expect(controller.review?.generation).toBe(2);
+  });
+  it('does not read a save of its own as another tab, because the reply can hold it already', async () => {
+    const { controller, reader } = await followedWithAMark();
+    const save = held<InteractiveReview>();
+    reader.interactivePrompts.mockReturnValueOnce(save.reply);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(controller.saving).toBe(true);
+    const landed = saved(2, { prompts: [point('saved'), point('later')] });
+    await reads(reader, { ...landed, status: 'draft' });
+    expect(controller.conflict).toBe(false);
+    expect(controller.review?.generation, 'nothing is taken on while it cannot be judged').toBe(1);
+    save.release(landed);
+    await vi.advanceTimersByTimeAsync(0);
+    await reads(reader, landed);
+    expect([controller.working, controller.conflict, controller.unsaved]).toEqual([false, false, false]);
+    expect(controller.review?.generation).toBe(2);
+  });
+  it('drops a reply that a save of its own has overtaken, which would take it back a generation', async () => {
+    const { controller, reader } = await followedWithAMark();
+    const save = held<InteractiveReview>(),
+      read = held<InteractiveReview>();
+    reader.interactivePrompts.mockReturnValueOnce(save.reply);
+    reader.interactiveReview.mockReturnValueOnce(read.reply);
+    await vi.advanceTimersByTimeAsync(900);
+    expect(reader.interactiveReview).toHaveBeenCalled();
+    save.release(saved(2, { prompts: [point('saved'), point('later')] })); // It lands while the read is out.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.saving).toBe(false);
+    read.release(running(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.review?.generation).toBe(2);
+    expect([controller.conflict, controller.unsaved]).toEqual([false, false]);
+  });
+  it('drops a reply when a save lands during the job read that follows it', async () => {
+    const { controller, reader } = await followedWithAMark();
+    const save = held<InteractiveReview>(),
+      job = held<Awaited<ReturnType<typeof reader.job>>>();
+    reader.interactivePrompts.mockReturnValueOnce(save.reply);
+    reader.job.mockReturnValueOnce(job.reply);
+    await reads(reader, saved(1, { status: 'ready', job_id: 'prediction' }));
+    expect(reader.job).toHaveBeenCalled();
+    save.release(saved(2, { prompts: [point('saved'), point('later')] })); // It lands while the job read is out.
+    await vi.advanceTimersByTimeAsync(0);
+    job.release({ id: 'prediction', case_id: 'case', kind: 'review_predict', status: 'queued', stage: 'Queued', created_at: '' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.review?.generation).toBe(2);
+    expect(controller.unsaved, 'that save is not waiting to be made again').toBe(false);
+  });
+  it('keeps the job it knows when the reply names none, because a save clears that field', async () => {
+    const { controller, reader } = await ownJob();
+    await reads(reader, saved(1, { status: 'ready', job_id: undefined }));
+    expect(controller.job?.id).toBe('prediction');
   });
 });
 
