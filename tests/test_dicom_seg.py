@@ -30,7 +30,7 @@ def fixture(tmp_path):
     for index, name, color in [(0, "ring", "#ff4040"), (1, "block", "#00dcff")]:
         path = tmp_path / f"{name}.nii.gz"
         nib.save(nib.Nifti1Image(masks[..., index].astype(np.uint8), affine), path)
-        segments.append(dicom_seg.SegmentInput(name, name.capitalize(), color, path))
+        segments.append(dicom_seg.SegmentInput(name, name.capitalize(), color, path, automatic=True))
     return dict(paths=paths, images=images, reference=reference, segments=segments, truth=truth, output=tmp_path / "export")
 
 
@@ -41,7 +41,6 @@ def export(fixture, **kwargs):
         fixture["segments"],
         fixture["output"],
         revision_id="revision-test",
-        source_kind=kwargs.pop("source_kind", "totalsegmentator"),
         **kwargs,
     )
 
@@ -73,7 +72,7 @@ def independent_pixels(path, images, segment_number=1):
 def test_each_segment_names_its_own_model_in_a_shared_revision(fixture):
     block, ring = fixture["segments"]
     segments = (replace(block, id="mrsegmentator:liver"), replace(ring, id="total:liver"))
-    result = export({**fixture, "segments": segments}, source_kind="nnunet_model")
+    result = export({**fixture, "segments": segments})
     seg = pydicom.dcmread(result.files[0].path)
     numbers = {entry.structure_id: entry.segment_number for entry in result.files[0].segments}
     assert seg.SegmentSequence[numbers["mrsegmentator:liver"] - 1].SegmentAlgorithmName == "MRSegmentator"
@@ -208,14 +207,22 @@ def test_a_single_structure_has_nothing_to_rank(fixture):
         export(fixture, overlap_priority=["ring"])
 
 
-@pytest.mark.parametrize("source_kind", ["interactive", "direct_edit", "include_all_outputs"])
-def test_corrected_or_mixed_provenance_is_not_declared_fully_automatic(fixture, source_kind):
-    result = dicom_seg.export_segmentation(
-        fixture["paths"], fixture["reference"], fixture["segments"][:1], fixture["output"], revision_id="saved-revision", source_kind=source_kind
-    )
-    seg = pydicom.dcmread(result.files[0].path)
+def test_a_mask_is_semiautomatic_unless_shown_to_be_the_models_own(fixture):
+    segment = fixture["segments"][0]
+    fixture["segments"] = [dicom_seg.SegmentInput(segment.id, segment.name, segment.color, segment.mask_path)]
+    seg = pydicom.dcmread(export(fixture).files[0].path)
     assert seg.SegmentSequence[0].SegmentAlgorithmType == "SEMIAUTOMATIC"
     assert seg.SegmentSequence[0].SegmentAlgorithmName == "3DScan correction"
+
+
+def test_each_segment_of_one_instance_states_its_own_provenance(fixture):
+    ring, block = fixture["segments"]
+    fixture["segments"] = [ring, replace(block, automatic=False)]
+    seg = pydicom.dcmread(export(fixture).files[0].path)
+    assert {item.TrackingID: (item.SegmentAlgorithmType, item.SegmentAlgorithmName) for item in seg.SegmentSequence} == {
+        "ring": ("AUTOMATIC", "TotalSegmentator"),
+        "block": ("SEMIAUTOMATIC", "3DScan correction"),
+    }
 
 
 def test_masks_are_processed_one_at_a_time(fixture, monkeypatch):
@@ -268,7 +275,7 @@ def test_eight_segments_share_one_instance_with_continuous_odd_sized_frame_bits(
         path = tmp_path / f"mask-{index}.nii.gz"
         nib.save(nib.Nifti1Image(masks[..., index].astype(np.uint8), affine), path)
         segments.append(dicom_seg.SegmentInput(f"segment-{index}", f"Synthetic mask {index}", "#40a0ff", path))
-    result = dicom_seg.export_segmentation(paths[::-1], reference, segments[::-1], tmp_path / "export", revision_id="eight-segments", source_kind="direct_edit")
+    result = dicom_seg.export_segmentation(paths[::-1], reference, segments[::-1], tmp_path / "export", revision_id="eight-segments")
     assert len(result.files) == 1 and len(result.files[0].segments) == 8
     instance = result.files[0]
     dataset = pydicom.dcmread(instance.path)
@@ -418,7 +425,6 @@ def test_real_converter_rounding_preserves_every_ct_sample_and_seg_bit(tmp_path,
         [dicom_seg.SegmentInput("rounding", "Synthetic rounding mask", "#ff4040", mask_path)],
         tmp_path / "export",
         revision_id="synthetic-rounded-source",
-        source_kind="direct_edit",
     )
     _, decoded = independent_pixels(result.files[0].path, images)
     np.testing.assert_array_equal(decoded, values % 11 < 2)

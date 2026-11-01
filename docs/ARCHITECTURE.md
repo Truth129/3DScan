@@ -460,7 +460,8 @@ same masks are one instance.
 
 **SEG export** turns chosen structures of a saved revision into one binary SEG instance. It never
 changes the revision, and it reads source headers, never source pixels. A manifest pins the hashes
-before any upload, and a ranked export resolves overlaps in that SEG only.
+before any upload, and a ranked export resolves overlaps in that SEG only. A segment is automatic
+only while its mask is the model's own write-once output file, the evidence the agreement report uses.
 
 Orthanc keeps and sends the same bytes to allowlisted modality IDs, and a DICOMweb archive must
 return every stored instance on read-back ([ORTHANC.md](ORTHANC.md#send-a-saved-segmentation-back),

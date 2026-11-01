@@ -1093,8 +1093,14 @@ source's patient and study identity. It is 404 without a completed file job of t
 
 **Encoding.** One binary SEG instance in a new series, with numbered segments identified on each
 frame, keeping original patient, study, frame and source references, names and colours. Overlaps are
-preserved, and corrected masks are described as semiautomatic.
+preserved.
 
+- Each segment states its own mask's history, not the revision's `source`. A mask that is still a
+  saved model output is automatic in every revision that carries it, and any other mask is
+  semiautomatic.
+- A corrected mask stays semiautomatic in later revisions that carry it, and a later run that
+  replaces it is automatic again. A Slicer import re-saves every segment in its bundle, so each one
+  is semiautomatic.
 - The grid is never resampled. Source pixels must map to unique integer native voxels within the
   import tolerances, with complete slice coverage.
 - The cap is 512 MiB and 100,000 frames, enforced before upload or download.

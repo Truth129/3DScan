@@ -116,12 +116,12 @@ def test_one_history_lists_both_formats_newest_first_and_keeps_seg_keys(roi):
     seg = execute(roi, roi.http.post(roi.endpoint, json={}).json())
     rois = execute(roi, post(roi))
     available = roi.http.get(roi.endpoint).json()
-    assert available["available"] is True and available["encoding_version"] == 3 and available["osirix_roi"] == {"encoding_version": 1}
+    assert available["available"] is True and available["encoding_version"] == 4 and available["osirix_roi"] == {"encoding_version": 1}
     assert [(item["id"], item["kind"]) for item in available["exports"]] == [(rois["id"], "orthanc_roi_export"), (seg["id"], "orthanc_export")]
     # A SEG keeps the key it had before ROIs existed, and the two formats share no artifact.
     payload = seg["payload"]
     identity_fields = {key: payload[key] for key in ("revision_id", "reference_image_id", "source_manifest_sha256", "structures")}
-    key = hashlib.sha256(json.dumps({**identity_fields, "encoding_version": 3}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps({**identity_fields, "encoding_version": 4}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     assert payload["artifact_key"] == key and rois["payload"]["artifact_key"] != key
     assert rois["payload"]["input_key"] == payload["input_key"] and rois["payload"]["export_id"] != payload["export_id"]
     assert len(roi.calls) == len(roi.encoded) == 1

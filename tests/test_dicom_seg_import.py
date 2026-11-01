@@ -29,8 +29,8 @@ def fixture(tmp_path):
     for index in range(2):
         path = tmp_path / f"mask-{index}.nii.gz"
         nib.save(nib.Nifti1Image(masks[..., index].astype(np.uint8), affine), path)
-        segments.append(dicom_seg.SegmentInput(str(index), f"Imported {index}", ("#ff4040", "#00dcff")[index], path))
-    result = dicom_seg.export_segmentation(paths, reference, segments, tmp_path / "export", revision_id="synthetic", source_kind="totalsegmentator")
+        segments.append(dicom_seg.SegmentInput(str(index), f"Imported {index}", ("#ff4040", "#00dcff")[index], path, automatic=True))
+    result = dicom_seg.export_segmentation(paths, reference, segments, tmp_path / "export", revision_id="synthetic")
     return dict(paths=paths, reference=reference, seg=result.files[0].path, truth=masks, images=images, output=tmp_path / "imported", segments=segments)
 
 
@@ -231,9 +231,7 @@ def test_sheared_ct_stack_preserves_full_affine_without_resampling(fixture, tmp_
         path = tmp_path / f"sheared-mask-{index}.nii.gz"
         nib.save(nib.Nifti1Image(fixture["truth"][..., index].astype(np.uint8), affine), path)
         segments.append(dicom_seg.SegmentInput(str(index), f"Sheared {index}", "#ff4040", path))
-    result = dicom_seg.export_segmentation(
-        fixture["paths"], fixture["reference"], segments, tmp_path / "sheared-export", revision_id="sheared", source_kind="direct_edit"
-    )
+    result = dicom_seg.export_segmentation(fixture["paths"], fixture["reference"], segments, tmp_path / "sheared-export", revision_id="sheared")
     fixture["seg"] = result.files[0].path
     for index, entry in enumerate(run(fixture)):
         restored = nib.load(entry["mask_file"])

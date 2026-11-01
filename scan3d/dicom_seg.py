@@ -47,6 +47,8 @@ class SegmentInput:
     name: str
     color: str
     mask_path: Path
+    # True only for a mask the caller has shown is the model's own output.
+    automatic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,7 +246,7 @@ def _project(mask, stack):
     return pixels
 
 
-def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind, revision_id, overlap_resolved=False, modified=False):
+def _encode(stack, pixels, segment, *, series_uid, instance_number, revision_id, overlap_resolved=False, modified=False):
     try:
         import highdicom as hd
     except ImportError:
@@ -252,7 +254,7 @@ def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind,
     if hd.__version__ != "0.28.2":
         raise DicomSegError("DICOM SEG export requires qualification of this highdicom version")
     # Removing ranked voxels applies a person's choice to the model's output.
-    automatic = source_kind in {"totalsegmentator", "nnunet_model"} and not modified and not segment.id.startswith("custom:")
+    automatic = segment.automatic and not modified
     algorithm_name, algorithm_version = "3DScan correction", __version__
     # Models share a revision, so the name comes from the segment, not the revision's source.
     model = MODELS.get(segment.id.partition(":")[0])
@@ -424,7 +426,7 @@ def _finish_dimensions(combined, stack, used_sources, cancelled, overlap_resolve
 
 
 def _export_segmentation(
-    source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled=None, progress=None, overlap_priority=None
+    source_paths, reference_path, segments, output_dir, *, revision_id, cancelled=None, progress=None, overlap_priority=None
 ) -> ExportResult:
     """Atomically publish a new series; never overwrite inputs or prior exports.
 
@@ -447,8 +449,8 @@ def _export_segmentation(
             raise DicomSegError("DICOM segment names must be 1–64 printable characters without backslashes")
         if not isinstance(segment.color, str) or re.fullmatch(r"#[0-9a-fA-F]{6}", segment.color) is None:
             raise DicomSegError("A selected structure has an invalid display color")
-    if not isinstance(revision_id, str) or not revision_id or not isinstance(source_kind, str) or not source_kind:
-        raise DicomSegError("DICOM SEG export requires a saved revision and its provenance")
+    if not isinstance(revision_id, str) or not revision_id:
+        raise DicomSegError("DICOM SEG export requires a saved revision")
     if overlap_priority is not None:
         ranks = {identity: rank for rank, identity in enumerate(overlap_priority)}
         if len(segments) < 2 or len(ranks) != len(overlap_priority) or ranks.keys() != {segment.id for segment in segments}:
@@ -501,7 +503,6 @@ def _export_segmentation(
                     segment,
                     series_uid=series_uid,
                     instance_number=1,
-                    source_kind=source_kind,
                     revision_id=revision_id,
                     overlap_resolved=claimed is not None,
                     modified=removed > 0,
@@ -546,7 +547,7 @@ def _export_segmentation(
 
 
 def export_segmentation(
-    source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled=None, progress=None, overlap_priority=None
+    source_paths, reference_path, segments, output_dir, *, revision_id, cancelled=None, progress=None, overlap_priority=None
 ) -> ExportResult:
     """Export exact masks with public-safe validation and atomic publication."""
     try:
@@ -556,7 +557,6 @@ def export_segmentation(
             segments,
             output_dir,
             revision_id=revision_id,
-            source_kind=source_kind,
             cancelled=cancelled,
             progress=progress,
             overlap_priority=overlap_priority,

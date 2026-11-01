@@ -18,10 +18,12 @@ import numpy as np
 import pytest
 import pydicom
 
+from scan3d import imaging, segmentation
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.orthanc import OrthancDeliveryUnknown, OrthancError
 from scan3d.store import identifier, job_lane, public_job
+from test_agreement import erase, paint, segment_task
 from test_orthanc_imports import SyntheticArchive, SERIES, SERIES_UID, STUDY_UID, FRAME_UID, oid
 
 
@@ -31,6 +33,7 @@ class SegmentInput:
     name: str
     color: str
     mask_path: Path
+    automatic: bool = False
 
 
 class DicomSegError(ValueError):
@@ -122,8 +125,10 @@ def rig(tmp_path, monkeypatch):
     service.store.commit_revision(base)
     saved = copy.deepcopy(base)
     saved.update(id=identifier(), parent_id=base["id"], source="totalsegmentator", kind="segmentation", structures=[])
+    run = directory / "inference" / ("a" * 64) / f"run-{identifier()}" / "test"
+    run.mkdir(parents=True)
     for index in range(2):
-        mask_path = directory / f"saved-mask-{index}.nii.gz"
+        mask_path = run / f"{index}.nii.gz"
         values = np.zeros((8, 6, 3), dtype=np.uint8)
         values[1 + index : 4, 2:5, 1] = 1
         nib.save(nib.Nifti1Image(values, affine), mask_path)
@@ -140,7 +145,7 @@ def rig(tmp_path, monkeypatch):
     service.store.save("revisions", saved)
     calls = []
 
-    def encode(source_paths, reference_path, segments, output_dir, *, revision_id, source_kind, cancelled, progress, overlap_priority=None):
+    def encode(source_paths, reference_path, segments, output_dir, *, revision_id, cancelled, progress, overlap_priority=None):
         assert all(Path(path).is_file() for path in source_paths)
         assert not output_dir.exists()
         output_dir.mkdir(parents=True)
@@ -221,7 +226,7 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
         "available": True,
         "destinations": [{"id": "osirix", "name": "OsiriX", "aet": "SYNTHETIC_OSIRIX"}],
         "exports": [],
-        "encoding_version": 3,
+        "encoding_version": 4,
         "file": {"available": True},
         "osirix_roi": {"encoding_version": 1},
     }
@@ -233,7 +238,7 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
     result = finished["result"]["dicom_seg"]
     assert result == {
         "export_id": finished["payload"]["export_id"],
-        "encoding_version": 3,
+        "encoding_version": 4,
         "archived": True,
         "sent": False,
         "segments_count": 2,
@@ -303,7 +308,7 @@ def eight_mask_revision(rig):
     template = rig.revision["structures"][0]
     image = nib.load(template["mask_file"])
     for index in range(2, 8):
-        mask_path = Path(template["mask_file"]).with_name(f"saved-mask-{index}.nii.gz")
+        mask_path = Path(template["mask_file"]).with_name(f"{index}.nii.gz")
         values = np.zeros(image.shape, dtype=np.uint8)
         values[index, 1:4, 1] = 1
         nib.save(nib.Nifti1Image(values, image.affine), mask_path)
@@ -403,7 +408,7 @@ def test_encoding_upgrade_requires_explicit_export_and_preserves_legacy_sops_and
     old_directory, old_manifest = artifact(rig, old)
     old_bytes = {path.relative_to(old_directory): path.read_bytes() for path in old_directory.rglob("*") if path.is_file()}
     available = rig.http.get(rig.endpoint).json()
-    assert available["encoding_version"] == 3
+    assert available["encoding_version"] == 4
     assert available["exports"][0]["id"] == old["id"]
     assert available["exports"][0]["result"]["dicom_seg"].get("encoding_version", 1) == version
     rig.service.store.recover()
@@ -411,13 +416,13 @@ def test_encoding_upgrade_requires_explicit_export_and_preserves_legacy_sops_and
     assert len(rig.calls) == len(rig.archive.sends) == 1
     assert rig.http.post(rig.endpoint, json={"destination": "osirix", "resend": True}).status_code == 400
     fresh = start(rig, destination="osirix")
-    assert fresh["result"]["dicom_seg"]["encoding_version"] == 3
+    assert fresh["result"]["dicom_seg"]["encoding_version"] == 4
     assert fresh["result"]["dicom_seg"]["export_id"] != old["payload"]["export_id"]
     assert len(rig.calls) == len(rig.archive.sends) == 1
     finished = execute(rig, fresh)
     _, new_manifest = artifact(rig, finished)
-    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 3
-    assert new_manifest["encoding_version"] == 3
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 4
+    assert new_manifest["encoding_version"] == 4
     assert len(new_manifest["files"]) == finished["result"]["dicom_seg"]["instance_count"] == 1
     assert {item["sop_instance_uid"] for item in old_manifest["files"]}.isdisjoint(item["sop_instance_uid"] for item in new_manifest["files"])
     assert old_bytes == {path.relative_to(old_directory): path.read_bytes() for path in old_directory.rglob("*") if path.is_file()}
@@ -441,13 +446,34 @@ def test_newer_encoding_profile_reuses_input_identity_without_reusing_sops(rig, 
     import scan3d.orthanc_exports as exports
 
     old = execute(rig, start(rig))
-    monkeypatch.setattr(exports, "EXPORT_ENCODING_VERSION", 4)
+    monkeypatch.setattr(exports, "EXPORT_ENCODING_VERSION", 5)
     finished = execute(rig, start(rig))
-    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 4
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["encoding_version"] == 5
     assert finished["payload"]["input_key"] == old["payload"]["input_key"]
     assert finished["payload"]["artifact_key"] != old["payload"]["artifact_key"]
     assert finished["payload"]["export_id"] != old["payload"]["export_id"]
     assert len(rig.calls) == 2 and not rig.archive.sends
+
+
+def test_version_three_exports_are_not_reused_and_keep_their_bytes_and_receipts(rig, monkeypatch):
+    """Those exports described every segment by its revision, so their bytes can misstate one."""
+    import scan3d.orthanc_exports as exports
+
+    with monkeypatch.context() as previous:
+        previous.setattr(exports, "EXPORT_ENCODING_VERSION", 3)
+        old = execute(rig, start(rig, destination="osirix"))
+    assert old["status"] == "completed" and old["result"]["dicom_seg"]["sent"] is True
+    directory, old_manifest = artifact(rig, old)
+    kept = {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()}
+    assert rig.http.post(rig.endpoint, json={"destination": "osirix", "resend": True}).status_code == 400
+    fresh = execute(rig, start(rig, destination="osirix"))
+    assert fresh["status"] == "completed" and fresh["result"]["dicom_seg"]["encoding_version"] == 4
+    assert fresh["payload"]["input_key"] == old["payload"]["input_key"]
+    assert fresh["payload"]["export_id"] != old["payload"]["export_id"]
+    assert artifact(rig, fresh)[1]["files"][0]["sop_instance_uid"] != old_manifest["files"][0]["sop_instance_uid"]
+    assert len(rig.calls) == len(rig.archive.sends) == 2
+    assert directory / "delivery.json" in kept and {path: path.read_bytes() for path in kept} == kept
+    assert exports._ARTIFACT.validate_json(kept[directory / "export.json"]).encoding_version == 3
 
 
 @pytest.mark.parametrize("version", [1, 2])
@@ -775,16 +801,20 @@ def test_manifest_publication_failure_retains_orphan_bytes_and_next_queued_expor
     assert len(rig.calls) == 2 and len(rig.archive.sends) == 1
 
 
-def test_manager_uses_actual_encoder_for_eight_exact_saved_masks_in_one_instance(rig, monkeypatch):
+def real_encoder(context):
+    # Import the real encoder for this job, then restore both registry and
+    # package attributes so neighboring fake-encoder fixtures stay isolated.
     import scan3d
 
+    context.setattr(scan3d, "dicom_seg", None, raising=False)
+    context.delitem(sys.modules, "scan3d.dicom_seg")
+    importlib.import_module("scan3d.dicom_seg")
+
+
+def test_manager_uses_actual_encoder_for_eight_exact_saved_masks_in_one_instance(rig, monkeypatch):
     eight_mask_revision(rig)
     with monkeypatch.context() as encoder_context:
-        # Import the real encoder for this job, then restore both registry and
-        # package attributes so neighboring fake-encoder fixtures stay isolated.
-        encoder_context.setattr(scan3d, "dicom_seg", None, raising=False)
-        encoder_context.delitem(sys.modules, "scan3d.dicom_seg")
-        importlib.import_module("scan3d.dicom_seg")
+        real_encoder(encoder_context)
         finished = execute(rig, start(rig, destination="osirix"))
     assert finished["status"] == "completed", finished["error"]
     directory, manifest = artifact(rig, finished)
@@ -821,6 +851,115 @@ def test_manager_uses_actual_encoder_for_eight_exact_saved_masks_in_one_instance
     result = finished["result"]["dicom_seg"]
     assert result["sent"] and result["archived"] and result["segments_count"] == 8 and result["instance_count"] == 1
     assert len(rig.archive.sends[0][1]) == 1 and not rig.calls
+
+
+# Model outputs on the rig's 8 x 6 x 3 CT grid.
+OUTPUTS = {
+    "total": {"liver": ((0, 0, 0), (4, 3, 3)), "spleen": ((4, 0, 0), (8, 3, 3)), "kidney_left": ((0, 3, 0), (4, 6, 3))},
+    "body": {"trunc": ((4, 3, 0), (8, 6, 3))},
+}
+STROKE = dict(id="paint", kind="scribble", include=True, axis=2, index=1, vertices=[[1.0, 4.0], [2.0, 4.0]], radius_mm=1.0)
+AUTOMATIC = ("AUTOMATIC", "TotalSegmentator")
+SEMIAUTOMATIC = ("SEMIAUTOMATIC", "3DScan correction")
+
+
+@pytest.fixture
+def worker(monkeypatch):
+    """A deterministic double of the worker adapter, around the real segment job."""
+
+    def fingerprint(profile, options=None, **source):
+        digest = hashlib.sha256(json.dumps([profile, options], sort_keys=True).encode()).hexdigest()
+        return {"versions": {"TotalSegmentator": "2.18.0"}, "device_request": "gpu:1", "wrapper_sha256": "f" * 64, "weights_complete": True, "digest": digest}
+
+    def segment(ct_path, output_dir, profile, progress, cancelled, options=None, **source):
+        task = options["tasks"][0]
+        run = Path(output_dir) / f"run-{identifier()}"
+        reference = nib.load(ct_path)
+        structures = []
+        for label, (low, high) in OUTPUTS[task].items():
+            values = np.zeros(reference.shape, dtype=np.uint8)
+            values[tuple(slice(start, stop) for start, stop in zip(low, high, strict=True))] = 1
+            path = run / task / f"{label}.nii.gz"
+            imaging._save_mask(values, reference, path)
+            structures.append(dict(id=f"{task}:{label}", name=label.capitalize(), task=task, group="Fixture", color="#a1b2c3", mask_file=str(path)))
+        manifest = {
+            "schema_version": 1,
+            "engine": "TotalSegmentator",
+            "engine_version": "2.18.0",
+            "status": "completed",
+            "run_id": run.name,
+            "options": options,
+            "qc": [],
+            "model_fingerprint": fingerprint(profile, options),
+            "tasks": [{"task": task, "status": "completed", "labels": sorted(OUTPUTS[task])}],
+        }
+        (Path(output_dir) / "inference.json").write_text(json.dumps(manifest))
+        return structures
+
+    monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
+    monkeypatch.setattr(segmentation, "segment", segment)
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: pytest.fail("Provenance tests never use a GPU"))
+
+
+def mask_file(revision, structure_id):
+    return next(item["mask_file"] for item in revision["structures"] if item["id"] == structure_id)
+
+
+def described(rig, monkeypatch, revision):
+    """What the real SEG of a revision says about each of its segments."""
+    rig.endpoint = f"/api/cases/{rig.case['id']}/revisions/{revision['id']}/dicom-seg"
+    with monkeypatch.context() as context:
+        real_encoder(context)
+        finished = execute(rig, start(rig))
+    assert finished["status"] == "completed", finished["error"]
+    directory, manifest = artifact(rig, finished)
+    seg = pydicom.dcmread(directory / "dicom" / manifest["files"][0]["path"])
+    return {item.TrackingID: (item.SegmentAlgorithmType, item.SegmentAlgorithmName) for item in seg.SegmentSequence}
+
+
+def test_a_later_model_run_keeps_each_corrected_masks_own_provenance(rig, worker, monkeypatch):
+    first = segment_task(rig, rig.base, "total")
+    refined = erase(rig, erase(rig, first, "total:liver"), "total:spleen")
+    repainted = paint(rig, refined, "total:spleen", prompt=STROKE)
+    custom = paint(rig, repainted, name="Lesion", prompt=STROKE)
+    carried = segment_task(rig, custom, "body")
+    # The revision's source names its last operation, which only added the trunc.
+    assert carried["source"] == "totalsegmentator"
+    assert mask_file(carried, "total:liver") == mask_file(refined, "total:liver") != mask_file(first, "total:liver")
+    assert mask_file(carried, "total:spleen") == mask_file(repainted, "total:spleen") != mask_file(refined, "total:spleen")
+    assert mask_file(carried, "total:kidney_left") == mask_file(first, "total:kidney_left")
+    lesion = next(item["id"] for item in carried["structures"] if item["id"].startswith("custom:"))
+    assert described(rig, monkeypatch, carried) == {
+        "total:liver": SEMIAUTOMATIC,
+        "total:spleen": SEMIAUTOMATIC,
+        "total:kidney_left": AUTOMATIC,
+        "body:trunc": AUTOMATIC,
+        lesion: SEMIAUTOMATIC,
+    }
+
+
+def test_a_correction_leaves_other_masks_automatic_and_a_rerun_replaces_it(rig, worker, monkeypatch):
+    first = segment_task(rig, rig.base, "total")
+    refined = erase(rig, first, "total:liver")
+    assert refined["source"] == "refinement"
+    assert described(rig, monkeypatch, refined) == {"total:liver": SEMIAUTOMATIC, "total:spleen": AUTOMATIC, "total:kidney_left": AUTOMATIC}
+    # A new run replaces the corrected liver, so that mask is the model's again.
+    rerun = segment_task(rig, refined, "total", remove_small_blobs=True)
+    assert mask_file(rerun, "total:liver") not in {mask_file(first, "total:liver"), mask_file(refined, "total:liver")}
+    assert described(rig, monkeypatch, rerun) == {"total:liver": AUTOMATIC, "total:spleen": AUTOMATIC, "total:kidney_left": AUTOMATIC}
+
+
+@pytest.mark.parametrize("folder", ["corrections/job", "refinements/job", "reviews/session/candidates/job", "seg-imports/upload/masks"])
+def test_a_copy_of_a_model_output_is_not_the_models_own_mask(rig, folder):
+    """Only the original file proves no one edited a mask, so a byte-identical copy elsewhere is not automatic."""
+    structure = rig.revision["structures"][0]
+    copy = rig.service.store.case_dir(rig.case["id"]) / folder / "mask.nii.gz"
+    copy.parent.mkdir(parents=True)
+    copy.write_bytes(Path(structure["mask_file"]).read_bytes())
+    structure["mask_file"] = str(copy)
+    rig.service.store.save("revisions", rig.revision)
+    assert execute(rig, start(rig))["status"] == "completed"
+    assert {item.id: item.automatic for item in rig.calls[-1]} == {"test:0": False, "test:1": True}
 
 
 def test_each_ranking_is_its_own_artifact_of_the_same_saved_inputs(rig):

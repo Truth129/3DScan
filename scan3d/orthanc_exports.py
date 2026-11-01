@@ -31,7 +31,7 @@ from .store import identifier, now, public_job
 
 log = logging.getLogger(__name__)
 DELIVERY_WAIT_SECONDS = 120
-EXPORT_ENCODING_VERSION = 3
+EXPORT_ENCODING_VERSION = 4
 ARCHIVE_OFF = "Your account cannot use the archive. An administrator can turn it on in People."
 
 
@@ -560,6 +560,7 @@ class OrthancExports:
             raise ExportUnavailable("The original CT files no longer match the saved reference image. Reimport and prepare the CT before export.")
 
     def _artifact(self, job, directory):
+        from .agreement import _saved_output
         from .dicom_seg import DicomSegError, SegmentInput, export_segmentation
 
         inputs = self._check_inputs(job)
@@ -569,7 +570,16 @@ class OrthancExports:
             artifact = self._cached_manifest(job, manifest_path, _ARTIFACT)
         else:
             self.service.stage(job, "Resolving overlaps and encoding DICOM SEG" if overlap_priority else "Encoding exact saved masks as DICOM SEG")
-            segments = tuple(SegmentInput(item["id"], item["name"], item["color"], Path(item["mask_file"])) for item in inputs.structures)
+            # A revision's source names only its last operation, and later
+            # revisions carry corrected masks unchanged. Model outputs are
+            # write-once and every correction writes a new file, so a mask's own
+            # path proves its origin, even in revisions saved before this check.
+            # Structure IDs and mask paths are already part of the artifact key.
+            outputs = (self.service.store.case_dir(job["case_id"]) / "inference").resolve()
+            segments = tuple(
+                SegmentInput(item["id"], item["name"], item["color"], Path(item["mask_file"]), _saved_output(item, outputs) is not None)
+                for item in inputs.structures
+            )
             try:
                 result = export_segmentation(
                     list(inputs.seg_source.paths),
@@ -577,7 +587,6 @@ class OrthancExports:
                     segments,
                     directory / "dicom",
                     revision_id=job["revision_id"],
-                    source_kind=inputs.revision["source"],
                     cancelled=lambda: self.service.cancelled(job),
                     progress=lambda completed, total: self.service.store.update_job(
                         job["id"], progress={"phase": "dicom_seg", "completed": completed, "total": total}
