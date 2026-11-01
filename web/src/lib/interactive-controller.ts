@@ -466,7 +466,15 @@ export class InteractiveController {
       try {
         const value = await this.reader.interactiveReview(this.caseId, seen.id);
         if (this.stopped) return;
-        const job = value.job_id ? await this.reader.job(value.job_id) : this.job;
+        // A failed job read says nothing about the record, so it waits until the record is judged.
+        let job = this.job,
+          failed: { reason: unknown } | undefined;
+        if (value.job_id)
+          try {
+            job = await this.reader.job(value.job_id);
+          } catch (reason) {
+            failed = { reason };
+          }
         // A save of this page's can be in the reply already, which would read as another tab's, or
         // have landed after it, which the reply would undo. The next read can tell.
         if (this.saving || this.review !== seen) {
@@ -474,6 +482,7 @@ export class InteractiveController {
           return;
         }
         if (!this.takeOn(seen, value)) return;
+        if (failed) throw failed.reason;
         this.job = job;
         this.working = ['predicting', 'accepting'].includes(value.status);
         if (!this.working) {

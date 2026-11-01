@@ -791,6 +791,48 @@ describe('a draft that moves under a job this page follows', () => {
     expect(controller.review).toBeUndefined();
     expect(controller.prompts).toEqual([]);
   });
+  describe('a job read that fails', () => {
+    const failed = () => {
+      throw new Error('Failed to fetch');
+    };
+    const unavailable = 'Review status unavailable. Failed to fetch';
+    it('keeps the reply it came with, as it did before, and says the status is unavailable', async () => {
+      const { controller, reader } = await ownJob();
+      reader.job.mockImplementationOnce(failed);
+      await reads(reader, saved(1, { status: 'ready', job_id: 'prediction', dirty: false }));
+      expect(controller.review?.status, 'a result is shown at once').toBe('ready');
+      expect([controller.working, controller.error]).toEqual([true, unavailable]);
+    });
+    it('goes on reading, and ends with the next read that works', async () => {
+      const { controller, reader } = await ownJob();
+      reader.job.mockImplementationOnce(failed);
+      await reads(reader, saved(1, { status: 'ready', job_id: 'prediction' }));
+      await reads(reader, saved(1, { status: 'ready', job_id: 'prediction' }));
+      expect([controller.working, controller.error]).toEqual([false, '']);
+    });
+    it('still asks for a reload over marks it has never seen, which says more than the failure', async () => {
+      const { controller, reader } = await ownJob();
+      reader.job.mockImplementationOnce(failed);
+      await reads(reader, { ...theirs(), job_id: 'prediction' });
+      expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, stale]);
+      expect(controller.review?.generation).toBe(1);
+    });
+    it('reads on without a word when a save of its own has the reply in doubt', async () => {
+      const { controller, reader } = await followedWithAMark();
+      const save = held<InteractiveReview>();
+      reader.interactivePrompts.mockReturnValueOnce(save.reply);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(controller.saving).toBe(true);
+      reader.job.mockImplementationOnce(failed);
+      await reads(reader, saved(2, { prompts: [point('saved'), point('later')], status: 'draft', job_id: 'prediction' }));
+      expect([controller.error, controller.conflict, controller.working]).toEqual(['', false, true]);
+      expect(controller.review?.generation, 'nothing is taken on while it cannot be judged').toBe(1);
+      reader.interactiveReview.mockClear();
+      save.release(saved(2, { prompts: [point('saved'), point('later')] }));
+      await vi.advanceTimersByTimeAsync(900);
+      expect(reader.interactiveReview).toHaveBeenCalledOnce();
+    });
+  });
   it('reads no more once a Reload has ended the follow, whatever a read still out then says', async () => {
     const { controller, reader } = await followedWithAMark('accepting');
     reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Wait for acceptance to finish or cancel it before editing'));
