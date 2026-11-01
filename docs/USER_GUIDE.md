@@ -99,16 +99,19 @@ after **Task**. With one GPU there is no **Run on**, and nothing in this section
 
 **Run on** lists each GPU with its memory, and starts on the default GPU. Your browser remembers
 what you choose, separately for segmentation and for [AI assist](#choose-a-gpu-for-ai-assist).
-The list is read again each time you open **Segment CT…**. A line under the form says what you
-need to know about the selected GPU:
+The list is read again each time you open **Segment CT…**, and after a run is refused, because a
+refusal can mean the list is out of date. A line under the form says what you need to know about
+the selected GPU:
 
-- **An unavailable GPU** is marked **· unavailable** and cannot be picked. If you chose it earlier
-  it stays selected, the line gives the reason, and **Run segmentation** stays off until you choose
-  another or the problem is fixed. 3DScan never swaps it quietly.
+- **An unavailable GPU** is marked **· unavailable** and cannot be picked. Each one gets a line
+  giving its reason, whether you chose it or not, and **Check again** beside **Run on** reads the
+  list again once it is fixed. If you chose it earlier it stays selected, and **Run segmentation**
+  stays off until you choose another or the problem is fixed. 3DScan never swaps it quietly.
 - **A GPU that has been removed** is replaced by the first available one, and the line says so.
 - **The default GPU** can always be chosen. If its last GPU check failed or is out of date, the
-  line says so as a caution. It reads **Default device** when no GPU check names a card, and
-  **CPU** when `SCAN3D_DEVICE` is `cpu`.
+  line says so as a caution. It reads **Default device** when no GPU check names a card, or when
+  that vendor's cards have changed since the check, which also earns the caution, and **CPU** when
+  `SCAN3D_DEVICE` is `cpu`.
 - **A GPU that drives your display** gets the line **This GPU also drives the display, so free
   memory depends on what is on screen.**
 
@@ -247,8 +250,9 @@ Save or discard your draft before switching between **Direct edit** and **AI ass
 ### Choose a GPU for AI assist
 
 With [a second GPU set up](INSTALL.md#add-a-second-gpu), **Options +** adds **Run on**, with the
-same [status line](#choose-a-gpu) as segmentation, and the toolbar shows **AI ·** and the GPU that
-**Run AI** uses. With one GPU neither appears. **Direct edit** needs no GPU, so it shows neither.
+same [status lines and **Check again**](#choose-a-gpu) as segmentation, and the toolbar shows
+**AI ·** and the GPU that **Run AI** uses. With one GPU neither appears. **Direct edit** needs no
+GPU, so it shows neither.
 
 Until the first AI result you can choose freely. That result keeps the draft on its GPU, so each
 step builds on the last and all of a saved correction comes from one GPU. The summary beside
@@ -277,11 +281,16 @@ again** to read the list again once it is fixed. **Run AI** for marks and **Refi
 stop until then. Whatever needs no GPU keeps working: marking, **↶ Undo**, a **Direct edit**
 draft, applying a relationship change and saving a current result. A draft with no result can
 choose another GPU under **Run on**. One with a result can re-run on another GPU or be discarded.
+A run that is refused or fails reads the list by itself, so this message can arrive unasked.
 
 **If a GPU has been removed**, **Run on** moves to the first available GPU and says so. A draft
 with results from that GPU says it is no longer set up, and it keeps **Re-run draft on** and
 **Re-run on this GPU** even with one GPU left, so it always has a way out. If the GPU comes back,
 **Check again** clears the message.
+
+**With a draft open in two tabs**, a refused **Run AI** brings this page up to date with the other
+tab's result or job. If the other tab has changed the draft, the page offers **Reload saved work**
+and saves nothing over it.
 
 ### Add a missing structure
 
