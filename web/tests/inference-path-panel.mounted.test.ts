@@ -681,6 +681,31 @@ describe('a run that ends badly', () => {
     await settled();
     expect(server.interactiveStatus).not.toHaveBeenCalled();
   });
+  it('reads nothing for a job that fails with review closed on another revision', async () => {
+    const server = workstation([amd, nvidia], free());
+    const view = await openAI();
+    server.acceptRerun();
+    await press(view.root.button('Run AI'));
+    view.active.value = false;
+    await settled();
+    view.revisionId.value = 'newer';
+    await settled();
+    server.interactiveStatus.mockClear();
+    jobEnds(server, 'failed');
+    server.setRemote(free({ error: 'Failed', job_id: 'prediction' }));
+    await vi.waitFor(() => expect(api.job).toHaveBeenCalled(), nextPoll);
+    await settled();
+    expect(server.interactiveStatus).not.toHaveBeenCalled();
+  });
+  it('reads nothing for a run that has a job, even though the read after it failed', async () => {
+    const server = workstation([amd, nvidia], free());
+    const { root } = await openAI();
+    server.interactiveStatus.mockClear();
+    vi.mocked(api.interactiveReview).mockRejectedValueOnce(new Error('Workstation offline'));
+    await press(root.button('Run AI'));
+    expect(root.named('review-messages')?.content).toContain('Workstation offline');
+    expect(server.interactiveStatus, 'the run ended with a job, so the card was taken').not.toHaveBeenCalled();
+  });
 });
 
 describe('a 409 from predict', () => {
