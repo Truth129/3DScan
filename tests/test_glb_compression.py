@@ -169,7 +169,7 @@ def test_all_glb_routes_reuse_single_gzip_layer_and_preserve_raw(glb_case, monke
         assert raw.status_code == 200 and "content-encoding" not in raw.headers
         assert raw.content == path.read_bytes()
         assert "accept-encoding" in raw.headers["vary"].lower()
-    assert "immutable" in http.get(surface["url"]).headers["cache-control"]
+    assert http.get(surface["url"]).headers["cache-control"] == "private, no-cache"
 
 
 def test_glb_negotiates_encoding_qualities_and_explicit_refusals(glb_case):
@@ -203,7 +203,7 @@ def test_glb_validators_belong_to_selected_representation(glb_case):
         response = http.get(surface["url"], headers=headers)
         assert response.status_code == 304 and not response.content
         assert response.headers["etag"] == original.headers["etag"]
-        assert "immutable" in response.headers["cache-control"]
+        assert response.headers["cache-control"] == "private, no-cache"
         assert "accept-encoding" in response.headers["vary"].lower()
         assert "content-length" not in response.headers
         assert http.get(surface["url"], headers={**headers, "if-none-match": f"W/{original.headers['etag']}"}).status_code == 304

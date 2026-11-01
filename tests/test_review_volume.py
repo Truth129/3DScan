@@ -301,10 +301,7 @@ def test_revision_scoped_api_raw_bytes_parent_crop_and_case_isolation(source, tm
         assert str(tmp_path) not in json.dumps(descriptor)
         chunks = [client.get(chunk["url"]) for chunk in descriptor["chunks"]]
         assert all(
-            chunk.status_code == 200
-            and chunk.headers["content-encoding"] == "gzip"
-            and "private" in chunk.headers["cache-control"]
-            and "immutable" in chunk.headers["cache-control"]
+            chunk.status_code == 200 and chunk.headers["content-encoding"] == "gzip" and chunk.headers["cache-control"] == "private, no-cache"
             for chunk in chunks
         )
         # HTTP clients decompress Content-Encoding automatically, like fetch().

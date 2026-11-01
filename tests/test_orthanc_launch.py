@@ -58,7 +58,8 @@ def launch(rig, **overrides):
 
 
 def files_state(root):
-    return {str(item.relative_to(root)): item.read_bytes() if item.is_file() else None for item in root.rglob("*")}
+    # SQLite's shared-memory index records read marks, so even a plain read changes it.
+    return {str(item.relative_to(root)): item.read_bytes() if item.is_file() else None for item in root.rglob("*") if item.name != "scan3d.sqlite3-shm"}
 
 
 @contextmanager

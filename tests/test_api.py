@@ -76,6 +76,7 @@ def test_demo_review_refine_undo_frames_and_slicer_roundtrip(client):
     assert http.patch(f"{prefix}/revisions/{rid}", json={"review_status": "reviewed"}).json()["review_status"] == "reviewed"
     bundle = http.get(f"{prefix}/revisions/{rid}/slicer.zip")
     assert bundle.status_code == 200, bundle.text
+    assert bundle.headers["cache-control"] == "private, no-cache"
     with zipfile.ZipFile(io.BytesIO(bundle.content)) as archive:
         name = next(n for n in archive.namelist() if n.endswith(".seg.nrrd"))
         segmentation = archive.read(name)
@@ -168,7 +169,7 @@ def test_lazy_detailed_export_and_revision_scoped_surface_assets(client):
     assert len(manifest["structures"]) == 7
     assert "path" not in json.dumps(manifest)
     asset = http.get(manifest["structures"][0]["url"])
-    assert asset.content[:4] == b"glTF" and "immutable" in asset.headers["cache-control"]
+    assert asset.content[:4] == b"glTF" and asset.headers["cache-control"] == "private, no-cache"
     assert http.get(f"{prefix}/surfaces/{'0' * 64}.glb").status_code == 404
     # Downloading an export must preserve both review state and active revision.
     http.patch(prefix, json={"review_status": "reviewed"})

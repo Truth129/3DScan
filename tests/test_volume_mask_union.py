@@ -273,8 +273,11 @@ def test_api_union_chunks_case_selection_source_and_margin_ownership(tmp_path):
         assert str(tmp_path) not in json.dumps(result)
         chunks = [client.get(chunk["url"]) for chunk in descriptor["chunks"]]
         assert all(
-            chunk.status_code == 200 and chunk.headers["content-encoding"] == "gzip" and "immutable" in chunk.headers["cache-control"] for chunk in chunks
+            chunk.status_code == 200 and chunk.headers["content-encoding"] == "gzip" and chunk.headers["cache-control"] == "private, no-cache"
+            for chunk in chunks
         )
+        revalidated = client.get(descriptor["chunks"][0]["url"], headers={"if-none-match": chunks[0].headers["etag"]})
+        assert revalidated.status_code == 304 and not revalidated.content and revalidated.headers["cache-control"] == "private, no-cache"
         actual = np.frombuffer(b"".join(c.content for c in chunks), np.uint8).reshape(descriptor["shape"], order="F")
         np.testing.assert_array_equal(actual, (a | b)[2:16, 3:20, 5:25])
         chunk = descriptor["chunks"][0]["url"]

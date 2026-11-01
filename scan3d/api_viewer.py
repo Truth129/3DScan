@@ -15,6 +15,9 @@ from .domain import VolumeQuality
 from .errors import NotFound
 from .portable_export import ExportRequest
 
+# A browser may keep these, but asks first, so a case that has gone stops being served from its disk.
+REVALIDATED = "private, no-cache"
+
 
 class _FrameCache:
     """Bound compressed interactive frames by bytes as well as entry count."""
@@ -89,10 +92,12 @@ def _encoding_preferences(value):
     return gzip > 0 and gzip >= qualities.get("identity", 0), identity > 0
 
 
-def _glb_response(target, request, cache_control=None):
-    headers = {"Vary": "Accept-Encoding"}
-    if cache_control:
-        headers["Cache-Control"] = cache_control
+def _etag_matches(if_none_match, etag):
+    return any(tag.strip().removeprefix("W/") in ("*", etag) for tag in if_none_match.split(","))
+
+
+def _glb_response(target, request):
+    headers = {"Vary": "Accept-Encoding", "Cache-Control": REVALIDATED}
     gzip, identity = _encoding_preferences(request.headers.get("accept-encoding", ""))
     selected = Path(target)
     encoding = "identity"
@@ -110,7 +115,7 @@ def _glb_response(target, request, cache_control=None):
     response = FileResponse(selected, media_type="model/gltf-binary", headers=headers, stat_result=stat)
     if_none_match = request.headers.get("if-none-match")
     if if_none_match is not None:
-        not_modified = any(tag.strip().removeprefix("W/") in ("*", headers["ETag"]) for tag in if_none_match.split(","))
+        not_modified = _etag_matches(if_none_match, headers["ETag"])
     else:
         since = parsedate(request.headers.get("if-modified-since", ""))
         modified = parsedate(response.headers["last-modified"])
@@ -153,7 +158,7 @@ def add_routes(app, service):
         target = surface_asset_path(service.surface_cache, key)
         if not target.is_file():
             raise HTTPException(503, "Cached surface is unavailable; regenerate the model")
-        return _glb_response(target, request, "private, max-age=31536000, immutable")
+        return _glb_response(target, request)
 
     review_cache = service.settings.data_dir / "review-cache"
 
@@ -228,21 +233,17 @@ def add_routes(app, service):
         )
         return with_image_context(descriptor, asset)
 
-    def volume_chunk(descriptor, key, index):
+    def volume_chunk(descriptor, key, index, request):
         from .review_volume import chunk_path
 
         if descriptor is None:
             raise NotFound("Review volume does not belong to this revision")
-        return FileResponse(
-            chunk_path(review_cache, descriptor, key, index),
-            media_type="application/octet-stream",
-            headers={
-                "Content-Encoding": "gzip",
-                "Vary": "Accept-Encoding",
-                "Cache-Control": "private, max-age=31536000, immutable",
-                "X-Content-Type-Options": "nosniff",
-            },
-        )
+        path = chunk_path(review_cache, descriptor, key, index)
+        # The key names the content, so one key and index are always the same bytes.
+        headers = {"ETag": f'"{key}-{index}"', "Vary": "Accept-Encoding", "Cache-Control": REVALIDATED, "X-Content-Type-Options": "nosniff"}
+        if _etag_matches(request.headers.get("if-none-match", ""), headers["ETag"]):
+            return Response(status_code=304, headers=headers)
+        return FileResponse(path, media_type="application/octet-stream", headers={**headers, "Content-Encoding": "gzip"})
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/ct-volume")
     def ct_volume_manifest(case_id: str, revision_id: str, quality: VolumeQuality = VolumeQuality.FULL):
@@ -251,8 +252,8 @@ def add_routes(app, service):
         return JSONResponse(with_chunk_urls(descriptor, prefix, f"?quality={quality}"), headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/ct-volume/{key}/chunks/{index}")
-    def ct_volume_chunk(case_id: str, revision_id: str, key: str, index: int, quality: VolumeQuality = VolumeQuality.FULL):
-        return volume_chunk(review_ct(case_id, revision_id, quality), key, index)
+    def ct_volume_chunk(case_id: str, revision_id: str, key: str, index: int, request: Request, quality: VolumeQuality = VolumeQuality.FULL):
+        return volume_chunk(review_ct(case_id, revision_id, quality), key, index, request)
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/image-volume")
     def image_volume_manifest(case_id: str, revision_id: str, quality: VolumeQuality = VolumeQuality.FULL):
@@ -261,8 +262,8 @@ def add_routes(app, service):
         return JSONResponse(with_chunk_urls(descriptor, prefix, f"?quality={quality}"), headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/image-volume/{key}/chunks/{index}")
-    def image_volume_chunk(case_id: str, revision_id: str, key: str, index: int, quality: VolumeQuality = VolumeQuality.FULL):
-        return volume_chunk(review_ct(case_id, revision_id, quality), key, index)
+    def image_volume_chunk(case_id: str, revision_id: str, key: str, index: int, request: Request, quality: VolumeQuality = VolumeQuality.FULL):
+        return volume_chunk(review_ct(case_id, revision_id, quality), key, index, request)
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/mask-volume")
     def mask_volume_manifest(
@@ -296,11 +297,12 @@ def add_routes(app, service):
         key: str,
         index: int,
         structure_id: str,
+        request: Request,
         parent: bool = False,
         quality: VolumeQuality = VolumeQuality.FULL,
         margin_mm: float = Query(0, ge=0, le=5),
     ):
-        return volume_chunk(review_mask(case_id, revision_id, structure_id, parent, quality, margin_mm), key, index)
+        return volume_chunk(review_mask(case_id, revision_id, structure_id, parent, quality, margin_mm), key, index, request)
 
     async def cancellable_presentation(request, build, *args):
         import asyncio
@@ -337,9 +339,15 @@ def add_routes(app, service):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-mask/{key}/chunks/{index}")
     def volume_mask_chunk(
-        case_id: str, revision_id: str, key: str, index: int, structure_ids: list[str] = Query(default=[]), margin_mm: float = Query(0, ge=0, le=5)
+        case_id: str,
+        revision_id: str,
+        key: str,
+        index: int,
+        request: Request,
+        structure_ids: list[str] = Query(default=[]),
+        margin_mm: float = Query(0, ge=0, le=5),
     ):
-        return volume_chunk(review_volume_mask(case_id, revision_id, structure_ids, margin_mm), key, index)
+        return volume_chunk(review_volume_mask(case_id, revision_id, structure_ids, margin_mm), key, index, request)
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-labels")
     async def volume_labels_manifest(request: Request, case_id: str, revision_id: str, structure_ids: list[str] = Query(default=[])):
@@ -354,8 +362,8 @@ def add_routes(app, service):
         )
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/volume-labels/{key}/chunks/{index}")
-    def volume_labels_chunk(case_id: str, revision_id: str, key: str, index: int, structure_ids: list[str] = Query(default=[])):
-        return volume_chunk(review_volume_labels(case_id, revision_id, structure_ids), key, index)
+    def volume_labels_chunk(case_id: str, revision_id: str, key: str, index: int, request: Request, structure_ids: list[str] = Query(default=[])):
+        return volume_chunk(review_volume_labels(case_id, revision_id, structure_ids), key, index, request)
 
     frame_cache = _FrameCache()
 
@@ -459,7 +467,7 @@ def add_routes(app, service):
             raise ValueError("Run segmentation before exporting a Slicer segmentation bundle")
         target = Path(revision["directory"]) / "slicer.zip"
         slicer_io.export_bundle(Path(revision["ct_file"]), revision["structures"], target)
-        return FileResponse(target, filename=f"Scan3D-{case_id[:8]}-Slicer.zip")
+        return FileResponse(target, filename=f"Scan3D-{case_id[:8]}-Slicer.zip", headers={"Cache-Control": REVALIDATED})
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/export.html")
     def export(case_id: str, revision_id: str):

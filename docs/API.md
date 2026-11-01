@@ -47,8 +47,9 @@ paths.
 - **Private responses.** `/api/orthanc/*`, the license route, `.../dicom-seg`, a prepared
   `segment.dcm` and `.../dicom-view` use `Cache-Control: no-store`, errors included. Candidate
   records, descriptors, agreement reports and frames use `private, no-store`.
-- **Chunks.** Volume chunks are gzip, keyed by content, with
-  `Cache-Control: private, max-age=31536000, immutable`.
+- **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces, `model.glb` and
+  `slicer.zip` use `Cache-Control: private, no-cache` with an `ETag`, and a matching `If-None-Match`
+  gets a 304, so a browser keeps them but checks with the server before each use.
 - **Compression.** JSON and viewer assets of at least 1 KiB use dynamic gzip. GLB routes negotiate
   stored gzip files. `slicer.zip`, `export.html` and `segment.dcm` are left alone and keep
   `Content-Length`.
@@ -667,8 +668,7 @@ and `value` hold the same number.
 ### Surfaces
 
 **`model-manifest`** returns `{schema_version: 1, structures: [{id, key, url}]}`, and
-**`surfaces/{key}.glb`** serves one structure with immutable caching. Reuse unchanged objects by
-`key`.
+**`surfaces/{key}.glb`** serves one structure. Reuse unchanged objects by `key`.
 
 **`model.glb?detail=false`** serves the combined model. `detail=true` builds a detailed export on
 first request, and never activates a revision or changes review status.
