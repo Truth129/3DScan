@@ -506,6 +506,7 @@ h3 {
   box-shadow: 0 5px 30px #0006;
   border-radius: 6px;
   font-size: 12px;
+  pointer-events: none;
 }
 /* Job status lives in the fixed header, so a running job never takes height from a viewer. */
 .job-banner {
