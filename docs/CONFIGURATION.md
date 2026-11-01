@@ -7,7 +7,7 @@
 3. The built-in default.
 
 `scripts/bootstrap.sh` creates `scan3d.env` from `scan3d.env.example` with mode 600. Git
-ignores `scan3d.env`, so ports, paths and passwords stay out of version control. Set
+ignores it, so ports, paths and passwords stay out of version control. Set
 `SCAN3D_CONFIG=/path/to/file` to read a different file, which must then exist.
 
 Restart 3DScan after changing a setting.
@@ -20,9 +20,10 @@ SCAN3D_PORT=9100
 SCAN3D_ORTHANC_PASSWORD="a value with spaces"
 ```
 
-Each line is `KEY=VALUE`, and the value is the rest of the line. There are no inline
-comments, and `$VARIABLES` are not expanded. Quotes are optional. The file is parsed, not
-run, and systemd's `EnvironmentFile=` accepts the same format. Use absolute paths.
+- Each line is `KEY=VALUE`. The value is the rest of the line, and quotes are optional.
+- There are no inline comments, and `$VARIABLES` are not expanded.
+- Use absolute paths.
+- The file is parsed, not run. systemd's `EnvironmentFile=` accepts the same format.
 
 ## Settings
 
@@ -53,8 +54,7 @@ Browser upload needs no import root.
 | ------------------- | ------- | --------------------------------------------------------------- |
 | `SCAN3D_MODALITIES` | `CT`    | Modalities offered. `CT,MR` enables experimental MRI support.   |
 
-Stored series keep their source details, so enabling a modality later makes series
-already in the library available.
+Enabling a modality later makes series already in the library available.
 
 ### AI compute
 
@@ -76,51 +76,43 @@ already in the library available.
 GPUs, so `auto` never chooses between AMD and NVIDIA, and the `N` in `gpu:N` counts within
 one build.
 
-`SCAN3D_INFERENCE_PATH_DIR` names the folder of added paths. The app reads this variable
-each time it needs the folder, not once at startup, and a blank value means the default. In
-`scan3d.env` it behaves like any other variable: that file is read at startup, so
-changing it there needs a restart. The folder's contents are read each time a panel
-opens and each time a job starts, so adding or moving a proof file needs no restart.
-`scripts/check_gpu.py --path` and `scripts/add_inference_path.sh` read the same variable,
-and `SCAN3D_DATA_DIR` for the job queue that guards a rebuild, so run them with the values
-the app sees. A proof names an interpreter that the app will run, so a folder outside the
-checkout needs the same protection as the checkout.
+`SCAN3D_INFERENCE_PATH_DIR`:
 
-Variables the runtime itself reads, such as `XDG_CACHE_HOME` or the `MIOPEN_*` caches on
-AMD systems, can go in `scan3d.env` too. Every variable in the file reaches the default
-path's worker processes. An added path's workers inherit the same environment, except
-for these:
+- A blank value means the default.
+- Changing it in `scan3d.env` needs a restart. Adding or moving a proof file does not: the
+  app reads the folder each time a panel opens and each time a job starts.
+- `scripts/check_gpu.py --path` and `scripts/add_inference_path.sh` read it too, and
+  `SCAN3D_DATA_DIR` for the job queue that guards a rebuild. Run them with the values the app
+  sees.
+- A proof names an interpreter the app will run, so protect a folder outside the checkout
+  like the checkout itself.
 
-- `CUDA_VISIBLE_DEVICES`, `HIP_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES` and
-  `GPU_DEVICE_ORDINAL`, because they select another stack's cards.
-- `LD_LIBRARY_PATH` and `LD_PRELOAD`, because they could load another stack's libraries
-  over the runtime's own.
-- `nnUNet_compile`, because it would turn on compiled models there, which no check covers,
-  and nothing recorded with a result would show that. It still reaches the default path,
-  so leave it unset or the two paths will differ.
-- `TORCHINDUCTOR_CACHE_DIR` and `TRITON_CACHE_DIR`, because they point at another stack's
-  compiled kernels.
+Variables the runtime reads, such as `XDG_CACHE_HOME` or the `MIOPEN_*` caches on AMD systems,
+can go in `scan3d.env` too. Every variable in the file reaches the default path's workers. An
+added path's workers inherit the same environment, except for these:
 
-`scripts/check_gpu.py --path` removes the same variables before it loads PyTorch, so a
-proof measures what a job will see. A process cannot take `LD_LIBRARY_PATH` or `LD_PRELOAD`
-back from itself, so `scripts/add_inference_path.sh` clears those two before it starts the
-check. Clear them yourself if you run the check by hand.
+| Variable                                        | Withheld because                         |
+| ----------------------------------------------- | ---------------------------------------- |
+| `CUDA_VISIBLE_DEVICES`, `HIP_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES`, `GPU_DEVICE_ORDINAL` | They select another stack's cards. Keep them out of `scan3d.env` and any launcher: no choice of card needs them, and HIP reads `CUDA_VISIBLE_DEVICES` too. |
+| `LD_LIBRARY_PATH`, `LD_PRELOAD`                 | They could load another stack's libraries over the runtime's own. |
+| `nnUNet_compile`                                | It would turn on compiled models there, which no check covers and no recorded result would show. It still reaches the default path, so leave it unset or the two paths will differ. |
+| `TORCHINDUCTOR_CACHE_DIR`, `TRITON_CACHE_DIR`   | They point at another stack's compiled kernels. |
+
+`scripts/check_gpu.py --path` removes the same variables before it loads PyTorch. A process
+cannot take `LD_LIBRARY_PATH` or `LD_PRELOAD` back from itself, so
+`scripts/add_inference_path.sh` clears those two first. Clear them yourself if you run the
+check by hand.
 
 An added path's workers also get their own `XDG_CACHE_HOME`, under
-`.cache/inference-paths/<id>`, so that they never read another stack's kernels. They get
-`SCAN3D_DEVICE` set to that path's device, `SCAN3D_INFERENCE_PATH` set to its ID, which is
-not a setting and only changes the advice a failed device check gives, and that
-environment's `bin` folder first on `PATH`. Every path shares the weights, the license and
-the nnInteractive model.
-
-Keep those four visibility variables out of `scan3d.env` and any launcher. Each stack
-sees only its own vendor's cards, so nothing needs them to choose a card, and HIP reads
-`CUDA_VISIBLE_DEVICES` too.
+`.cache/inference-paths/<id>`, that path's `SCAN3D_DEVICE`, and that environment's `bin`
+folder first on `PATH`. `SCAN3D_INFERENCE_PATH`, set to the path's ID, is not a setting: it
+only changes the advice a failed device check gives. Every path shares the weights, the
+license and the nnInteractive model.
 
 ### Orthanc
 
-Orthanc is optional, and the integration is off until `SCAN3D_ORTHANC_URL` is set. See
-[Orthanc](ORTHANC.md).
+Orthanc is optional, and the integration is off until `SCAN3D_ORTHANC_URL` is set.
+[Configure 3DScan](ORTHANC.md#configure-3dscan) has an example.
 
 | Variable                             | Default | Purpose                                                       |
 | ------------------------------------ | ------- | ------------------------------------------------------------- |
@@ -131,26 +123,11 @@ Orthanc is optional, and the integration is off until `SCAN3D_ORTHANC_URL` is se
 
 ## Examples
 
-Change the port:
-
-```bash
-SCAN3D_PORT=9100
-```
-
 Keep the case library on another disk and allow imports from a scans folder:
 
 ```bash
 SCAN3D_DATA_DIR=/mnt/cases/3dscan
 SCAN3D_IMPORT_ROOTS=/mnt/scans
-```
-
-Connect to a local Orthanc and offer one export destination:
-
-```bash
-SCAN3D_ORTHANC_URL=http://127.0.0.1:8042
-SCAN3D_ORTHANC_USERNAME=scan3d
-SCAN3D_ORTHANC_PASSWORD=choose-a-long-password
-SCAN3D_ORTHANC_EXPORT_DESTINATIONS=workstation
 ```
 
 Serve behind an authenticating reverse proxy on the same machine:

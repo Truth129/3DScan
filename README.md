@@ -3,8 +3,8 @@
 A local, AI-assisted case-analysis workbench for radiology research. It imports CT
 studies, segments them with [TotalSegmentator](https://github.com/wasserth/TotalSegmentator),
 lets you correct the results with [nnInteractive](https://github.com/MIC-DKFZ/nnInteractive)
-or direct edits, and keeps an exact history of every change. It is designed to sit
-alongside established DICOM viewers, not to replace them.
+or direct edits, and keeps an exact history of every change. It sits alongside established
+DICOM viewers and does not replace them.
 
 > **Research use only. Not a medical device.** 3DScan is not cleared or approved for
 > diagnosis, treatment or any other clinical decision. Its AI models are research tools,
@@ -15,20 +15,16 @@ other service.
 
 ## Features
 
-- **DICOM import.** Browser upload, the `scan3d import` command, or an optional
-  [Orthanc](docs/ORTHANC.md) archive. CT is on by default; static MRI is experimental and
-  opt-in.
-- **Segmentation.** Selected TotalSegmentator tasks, on a GPU or the CPU. With
+- **Import:** browser upload, `scan3d import` or an optional [Orthanc](docs/ORTHANC.md)
+  archive. Static MRI is experimental and opt-in.
+- **Segmentation:** selected TotalSegmentator tasks on a GPU or the CPU. With
   [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
-- **Corrections.** nnInteractive prompts, direct mask edits, scissors and recipes. Every
-  save is a new revision with an exact parent, so undo is exact too.
-- **Viewer.** Linked multiplanar slices and 3D volume rendering built on Cornerstone3D and
-  vtk.js, with surfaces, masking and slabs. Three.js covers sheared stacks and offline
-  exports.
-- **Measurements.** Volumes from masks in patient space, and AI-agreement metrics that
-  compare corrected masks with the original model output.
-- **Exchange.** DICOM SEG import and export, 3D views as new DICOM series in the original
-  study, 3D Slicer exchange, PNG, and portable offline HTML.
+- **Corrections:** nnInteractive prompts, direct mask edits, scissors and recipes, with
+  exact undo.
+- **Viewer:** linked slices and 3D volume rendering.
+- **Measurements:** mask volumes and AI-agreement metrics.
+- **Exchange:** DICOM SEG import and export, 3D views as new DICOM series, 3D Slicer, PNG
+  and portable offline HTML.
 
 ## Quick start
 
@@ -44,35 +40,33 @@ scripts/bootstrap.sh --torch cpu
 
 Open <http://127.0.0.1:9010> and choose **Explore synthetic demo**, or import a scan.
 
-Use `--torch cuda` for an NVIDIA GPU. `scripts/bootstrap.sh --help` lists the options.
-Settings such as the port, the data directory and the Orthanc connection live in a
-git-ignored `scan3d.env`. See [configuration](docs/CONFIGURATION.md).
+`scripts/bootstrap.sh --help` lists the install options. Settings live in a git-ignored
+`scan3d.env`. See [configuration](docs/CONFIGURATION.md).
 
 ## Documentation
 
-| Read this                                | For                                                       |
-| ---------------------------------------- | --------------------------------------------------------- |
-| [Install](docs/INSTALL.md)               | Ubuntu walkthrough, other distributions, GPUs, AI models  |
-| [Configuration](docs/CONFIGURATION.md)   | Every setting in `scan3d.env`                             |
-| [User guide](docs/USER_GUIDE.md)         | Importing, reviewing, correcting and exporting            |
-| [Orthanc](docs/ORTHANC.md)               | Connecting to a DICOM archive                             |
-| [Architecture](docs/ARCHITECTURE.md)     | How the system works                                      |
-| [API](docs/API.md)                       | HTTP API and data model                                   |
-| [Development](docs/DEVELOPMENT.md)       | Tests, checks and project rules                           |
+| Read this                                | For                                            |
+| ---------------------------------------- | ---------------------------------------------- |
+| [Install](docs/INSTALL.md)               | Linux setup, GPUs, AI models                   |
+| [Configuration](docs/CONFIGURATION.md)   | Every setting in `scan3d.env`                  |
+| [User guide](docs/USER_GUIDE.md)         | Importing, reviewing, correcting and exporting |
+| [Orthanc](docs/ORTHANC.md)               | Connecting to a DICOM archive                  |
+| [Architecture](docs/ARCHITECTURE.md)     | How the system works                           |
+| [API](docs/API.md)                       | HTTP API and data model                        |
+| [Development](docs/DEVELOPMENT.md)       | Tests, checks and project rules                |
 
 ## Platform support
 
-3DScan runs on Linux. These combinations have been checked:
+3DScan runs on Linux.
 
-| Setup                               | Status                                                  |
-| ----------------------------------- | ------------------------------------------------------- |
-| Ubuntu 24.04 and 26.04, CPU         | Install, app and test suite verified on clean machines  |
-| AMD GPU (gfx1201) with ROCm         | Used extensively                                        |
-| NVIDIA GPU with CUDA                | Run as a second GPU on an RTX 5070 Ti, on synthetic data only. `--torch cuda` is untested |
-| Other Linux distributions, arm64    | Expected to work, untested unless listed in the install guide |
-| macOS, Windows                      | Not supported                                           |
-
-CPU inference works but is slow on full-size CTs.
+| Setup                                                | Status                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------- |
+| Ubuntu 24.04 and 26.04, CPU                          | Verified on clean machines. Slow on full-size CTs             |
+| AMD GPU (gfx1201) with ROCm                          | Used extensively                                              |
+| NVIDIA RTX 5070 Ti beside an AMD Radeon AI PRO R9700 | Supported as a [second GPU](docs/INSTALL.md#add-a-second-gpu), for TotalSegmentator and AI assist |
+| NVIDIA as the only GPU (`--torch cuda`)              | Untested                                                      |
+| Other Linux distributions, arm64                     | Expected to work, untested unless listed in the install guide |
+| macOS, Windows                                       | Not supported                                                 |
 
 ## Safety and privacy
 
@@ -85,15 +79,13 @@ CPU inference works but is slow on full-size CTs.
 
 ## Licenses
 
-3DScan is released under the [Apache License 2.0](LICENSE).
-
-The AI models are separate downloads with their own terms, which you must accept yourself:
+3DScan is released under the [Apache License 2.0](LICENSE). The AI models are separate
+downloads with their own terms, which you must accept yourself:
 
 - **nnInteractive weights:** CC BY-NC-SA 4.0, noncommercial. The engine code is Apache-2.0.
 - **TotalSegmentator:** the code is Apache-2.0, but some subtasks need a separate license
   and are noncommercial. See the
   [provider's license page](https://backend.totalsegmentator.com/license-academic/).
 
-3DScan does not change those terms, and using these models commercially may require
-permission from their authors. Bundled third-party notices are in
-[`web/public/licenses/`](web/public/licenses/).
+Using these models commercially may require permission from their authors. Third-party
+notices are in [`web/public/licenses/`](web/public/licenses/).
