@@ -838,6 +838,25 @@ describe('a 409 from predict', () => {
     await press(root.button('Run AI'));
     expect(root.named('review-messages')?.button('Reload saved work')).toBeDefined();
   });
+  it('says a mark was not saved when another tab started the draft, and Reload saved work opens that draft', async () => {
+    const server = workstation([amd, nvidia]);
+    const { root, panel } = await openAI();
+    const other = free({ generation: 2, prompts: [applied, { id: 'other-tab', kind: 'point', include: true, ras: point }] });
+    server.setRemote(other);
+    vi.mocked(api.startInteractive).mockResolvedValueOnce(other);
+    panel.value.addPrompt(point);
+    await settled();
+    await press(root.button('Run AI'));
+    expect(root.named('review-messages')?.content).toContain('Another tab has a draft for this structure');
+    expect(root.content).toContain('not saved');
+    expect(root.content).not.toContain('saving draft');
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 1');
+    expect(api.interactivePrompts).not.toHaveBeenCalled();
+    expect(server.predict).not.toHaveBeenCalled();
+    await press(root.named('review-messages')?.button('Reload saved work'));
+    expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 2');
+    expect(root.named('review-messages')?.button('Reload saved work')).toBeUndefined();
+  });
   it('leaves the refusal alone when the review cannot be read', async () => {
     const server = workstation([amd, nvidia], free());
     const { root } = await openAI();

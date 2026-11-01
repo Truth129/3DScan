@@ -293,6 +293,12 @@ tab's result or job. If the other tab has changed the draft, the page offers **R
 and saves nothing over it. A mark that could not be saved while the other tab's job ran is tried
 again when that job ends, and its message stays until the mark is saved.
 
+**If another tab starts the draft first**, a structure still has only one draft for each editing
+method. A mark made on a page that had not seen that draft is not saved. It stays on screen with a
+message, and **Reload saved work** or **Discard draft** opens the other tab's draft and clears the
+mark, so place it again there. A page with no marks of its own opens the draft, and **Refine whole
+mask** stops there, so you can check it before running.
+
 ### Add a missing structure
 
 Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a relationship, then

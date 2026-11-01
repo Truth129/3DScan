@@ -733,7 +733,14 @@ defineExpose({
           }}<button class="text-button" @click="current.cancel()">Cancel</button></span
         ><span v-else
           >{{ current.prompts.length }} {{ current.prompts.length === 1 ? 'gesture' : 'gestures' }} ·
-          {{ current.saving || current.unsaved ? 'saving draft…' : view ? 'draft saved' : `mark the ${modalityLabel}, then Apply once`
+          {{
+            current.conflict && current.unsaved
+              ? 'not saved'
+              : current.saving || current.unsaved
+                ? 'saving draft…'
+                : view
+                  ? 'draft saved'
+                  : `mark the ${modalityLabel}, then Apply once`
           }}<template v-if="pending"> · {{ pending }} unapplied</template></span
         >
         <span v-if="method === 'direct' && tool === 'scissors'"

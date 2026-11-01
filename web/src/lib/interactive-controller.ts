@@ -26,6 +26,8 @@ const snapshot = (prompts: InteractivePrompt[], options: InteractiveOptions, rel
   relationship: normalizeRelationship(relationship),
 });
 const saved = (value: InteractiveReview) => signature(snapshot(value.prompts, value.options ?? initialOptions(), value.relationship));
+/** Every save moves a generation, but a result or a job can come with none, as a whole-mask refine does. */
+const inUse = (value: InteractiveReview) => value.generation > 0 || !!value.candidate || ['predicting', 'accepting'].includes(value.status);
 type Reader = Pick<
   typeof api,
   | 'interactiveReviews'
@@ -280,6 +282,17 @@ export class InteractiveController {
       explicit = signature(requested) !== signature(this.initialRelationship);
     const value = await this.reader.startInteractive(this.caseId, this.revisionId, this.structureId, explicit ? requested : undefined, this.method);
     if (reviewMethod(value) !== this.method) throw new Error('The workstation returned a different editing method. Reload before editing.');
+    // The server hands back a draft that is already open, and it can be another tab's. A save
+    // replaces every mark at the generation it holds, and cancels a running job, so as in takeOn()
+    // this page may not hold that record while it has changes of its own to send. It stays draftless.
+    if (inUse(value)) {
+      if (this.unsaved) {
+        this.conflict = true;
+        throw new Error("Another tab has a draft for this structure, so this page's changes were not saved. Reloading shows that draft and clears them.");
+      }
+      this.adopt(value);
+      return value;
+    }
     this.review = value;
     if (!explicit) {
       const previous = this.initialRelationship,
@@ -361,6 +374,12 @@ export class InteractiveController {
     try {
       await this.flush();
       if (fullRefine && !this.review) await this.createReview();
+      // Either can have opened another tab's draft here, whose marks a run would apply unseen.
+      if (follow !== this.follow) {
+        this.error = 'Another tab has already started this draft, so nothing was run. Check it here, then run again.';
+        this.notify();
+        return;
+      }
       // A re-run has nothing pending by design, and saving may just have freed the draft.
       const replay = !!choice?.replay && !!this.review?.batches?.length;
       if (!this.review || (this.pendingCount === 0 && !fullRefine && !replay)) {
@@ -501,6 +520,9 @@ export class InteractiveController {
   }
   async discard() {
     if (this.working) return;
+    // A page that refused another tab's draft has only its own marks to drop, and that draft is
+    // not this page's to close.
+    if (this.conflict && !this.review) return this.reload();
     try {
       await this.flush();
       if (this.review) await this.reader.discardInteractive(this.caseId, this.review.id, this.review.generation);

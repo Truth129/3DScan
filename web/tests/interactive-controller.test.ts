@@ -1928,3 +1928,150 @@ describe('direct paint and erase drafts', () => {
     expect(reader.predictInteractive).not.toHaveBeenCalled();
   });
 });
+
+describe('a draft another tab started', () => {
+  const refusal = "Another tab has a draft for this structure, so this page's changes were not saved. Reloading shows that draft and clears them.";
+  const summary = { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5 };
+  const nvidia = { id: 'nvidia', label: 'NVIDIA', identity: 'nvidia|gpu|NVIDIA' };
+  const theirs = (generation = 1): InteractiveReview => ({ ...base(), generation, prompts: [point('theirs')] });
+  const published = (): InteractiveReview => ({
+    ...theirs(),
+    status: 'ready',
+    dirty: false,
+    applied_prompt_count: 1,
+    batches: [{ end: 1, autozoom: true, full_refine: false }],
+    inference_path: nvidia,
+    candidate: { generation: 1, revision_id: 'review-draft-1', summary },
+  });
+  const ids = (controller: InteractiveController) => controller.prompts.map(item => item.id);
+  /** A page that looked before the other tab started, so the start is its first news of the draft. */
+  async function behind(review = theirs()) {
+    const page = fixture(review);
+    page.reader.interactiveReviews.mockResolvedValueOnce([]);
+    page.reader.startInteractive.mockImplementation(() => page.reader.interactiveReview());
+    await page.controller.load();
+    expect(page.controller.review).toBeUndefined();
+    return page;
+  }
+
+  it('keeps its marks on screen, says so, and saves nothing over the other tab', async () => {
+    const { controller, reader } = await behind();
+    controller.append(point('mine'));
+    await expect(controller.flush()).rejects.toThrow(refusal);
+    expect([controller.conflict, controller.error]).toEqual([true, refusal]);
+    expect(ids(controller)).toEqual(['mine']);
+    expect(controller.review).toBeUndefined();
+    expect(reader.interactivePrompts).not.toHaveBeenCalled();
+  });
+  it('asks for nothing more once it has refused, because a later save would be the same overwrite', async () => {
+    const { controller, reader } = await behind();
+    controller.append(point('mine'));
+    await expect(controller.flush()).rejects.toThrow(refusal);
+    controller.append(point('later'));
+    await controller.flush();
+    await controller.apply();
+    expect(ids(controller)).toEqual(['mine']);
+    expect(reader.startInteractive).toHaveBeenCalledOnce();
+    expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+  });
+  it('runs nothing when Run AI is what found the draft, and leaves the page free', async () => {
+    const { controller, reader } = await behind();
+    controller.append(point('mine'));
+    await controller.apply();
+    expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, refusal]);
+    expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+  });
+  it('counts a relationship change as work of its own', async () => {
+    const { controller, reader } = await behind();
+    controller.editRelationship({ kind: 'subregion', parent_id: 'parent', exclusive_with: [] });
+    await expect(controller.flush()).rejects.toThrow(refusal);
+    expect(reader.startInteractive.mock.calls[0][3]).toMatchObject({ kind: 'subregion', parent_id: 'parent' });
+    expect(reader.interactivePrompts).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['a running job, which a save would cancel', { ...theirs(0), prompts: [], status: 'predicting' as const, job_id: 'prediction' }],
+    ['a Save in progress', { ...theirs(), status: 'accepting' as const, job_id: 'saving' }],
+    ['a result that moved no generation, as a whole-mask refine does', { ...published(), generation: 0, prompts: [] }],
+  ])('refuses over %s', async (_name, review) => {
+    const { controller, reader } = await behind(review);
+    controller.append(point('mine'));
+    await expect(controller.flush()).rejects.toThrow(refusal);
+    expect(reader.interactivePrompts).not.toHaveBeenCalled();
+    expect(reader.cancel).not.toHaveBeenCalled();
+  });
+  it('shows the other tab its draft on Reload saved work, and saves on top of it from there', async () => {
+    const { controller, reader } = await behind();
+    controller.append(point('mine'));
+    await expect(controller.flush()).rejects.toThrow(refusal);
+    await controller.reload();
+    expect([controller.conflict, controller.error]).toEqual([false, '']);
+    expect(ids(controller)).toEqual(['theirs']);
+    controller.append(point('after'));
+    await controller.flush();
+    expect(reader.interactivePrompts.mock.calls[0].slice(1, 3)).toEqual(['draft', 1]);
+    expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['theirs', 'after']);
+  });
+  it("drops only this page's marks on Discard, and closes nothing it was never given", async () => {
+    const { controller, reader } = await behind();
+    controller.append(point('mine'));
+    await expect(controller.flush()).rejects.toThrow(refusal);
+    await controller.discard();
+    expect(reader.discardInteractive).not.toHaveBeenCalled();
+    expect([controller.conflict, controller.error]).toEqual([false, '']);
+    expect(ids(controller)).toEqual(['theirs']);
+  });
+  it('opens the draft when this page has nothing to keep, card and all, and overwrites nothing later', async () => {
+    const { controller, reader } = await behind(published());
+    await controller.ensureDraft();
+    expect(ids(controller)).toEqual(['theirs']);
+    expect(controller.publicReview?.inference_path).toEqual(nvidia);
+    expect(controller.candidate?.revision_id).toBe('review-draft-1');
+    expect(controller.unsaved).toBe(false);
+    await controller.flush();
+    expect(reader.interactivePrompts).not.toHaveBeenCalled();
+  });
+  it("follows the other tab's job when it opens the draft that way", async () => {
+    vi.useFakeTimers();
+    try {
+      const { controller, reader } = await behind({ ...theirs(), status: 'predicting', job_id: 'prediction' });
+      await controller.ensureDraft();
+      expect(controller.working).toBe(true);
+      reader.interactiveReview.mockResolvedValueOnce({ ...published(), job_id: 'prediction' });
+      await vi.advanceTimersByTimeAsync(900);
+      expect(controller.working).toBe(false);
+      expect(controller.review?.status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('runs nothing when Refine whole mask opens the draft, whose marks the person has not seen', async () => {
+    const { controller, reader } = await behind();
+    await controller.apply(true);
+    expect(reader.predictInteractive).not.toHaveBeenCalled();
+    expect(ids(controller)).toEqual(['theirs']);
+    expect(controller.working).toBe(false);
+    expect(controller.error).toContain('nothing was run');
+  });
+  it('carries on from a draft nobody has touched, because there is nothing to lose', async () => {
+    const { controller, reader } = await behind(base());
+    controller.append(point('mine'));
+    await controller.flush();
+    expect(reader.interactivePrompts.mock.calls[0].slice(1, 3)).toEqual(['draft', 0]);
+    expect(controller.conflict).toBe(false);
+  });
+  it('leaves the later of two first marks on screen with a reload, when both reach that empty draft', async () => {
+    const { controller: first, reader } = fixture();
+    const second = new InteractiveController('case', 'base', 'liver', vi.fn(), reader);
+    controllers.push(second);
+    await Promise.all([first.load(), second.load()]);
+    first.append(point('first'));
+    second.append(point('second'));
+    const [won, lost] = await Promise.allSettled([first.flush(), second.flush()]);
+    expect([won.status, lost.status]).toEqual(['fulfilled', 'rejected']);
+    expect((await reader.interactiveReview()).prompts.map(item => item.id)).toEqual(['first']);
+    expect([second.conflict, ids(second)]).toEqual([true, ['second']]);
+    expect(second.error).toBeTruthy();
+  });
+});
