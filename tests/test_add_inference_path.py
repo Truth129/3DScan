@@ -232,7 +232,7 @@ class Rig:
             "python": True,
             "driver": "580.82.09\n",
             "driver_status": 0,
-            "free": 13 * GIB,
+            "free": 21 * GIB,
             "free_at": {},
             "freeze_status": 0,
             "plan_status": 0,
@@ -437,7 +437,7 @@ def two_cards_on_an_old_driver(rig):
 
 
 def small_disk(rig):
-    rig.scenario["free"] = 12 * GIB - 1
+    rig.scenario["free"] = 20 * GIB - 1
 
 
 def no_lock(rig):
@@ -456,7 +456,7 @@ PREFLIGHT_FAILURES = {
     unknown_driver: "nvidia-smi gave no driver version: [N/A]",
     old_driver: "NVIDIA driver 579.99.01 is too old",
     two_cards_on_an_old_driver: "NVIDIA driver 579.99.01 is too old",
-    small_disk: "Only 11 GiB is free",
+    small_disk: "Only 19 GiB is free",
     no_lock: "is missing or pins nothing",
     a_lock_with_no_pins: "is missing or pins nothing",
 }
@@ -481,8 +481,16 @@ def test_the_driver_message_names_the_floor(rig):
 
 
 def test_the_limits_themselves_are_enough(rig):
-    rig.scenario.update(driver="580.0.0\n", free=12 * GIB)
+    rig.scenario.update(driver="580.0.0\n", free=20 * GIB)
     assert rig.run("nvidia", "--dry-run").returncode == 0
+
+
+def test_the_room_a_first_install_asks_for_is_explained(rig):
+    small_disk(rig)
+    assert "needs at least 20 GiB, because where a disk cannot clone files, the environment and uv's cache each hold a full copy" in rig.run("nvidia").stderr
+    rig.scenario["free"] = 20 * GIB
+    plan = said(rig.run("nvidia", "--dry-run").stdout)
+    assert "It asks for 20 GiB free, because where a disk cannot clone files, the environment and uv's cache each hold a full copy" in plan
 
 
 def test_a_two_card_listing_reads_as_one_driver(rig):
@@ -725,6 +733,15 @@ def test_every_uv_call_is_barred_from_fetching_a_python(rig):
     rig.run("nvidia")
     uv = [call for call in rig.calls() if call["tool"] == "uv"]
     assert len(uv) == 3 and {call["env"]["UV_PYTHON_DOWNLOADS"] for call in uv} == {"never"}
+
+
+@pytest.mark.parametrize("inherited", [{}, {"UV_LINK_MODE": "hardlink"}, {"UV_LINK_MODE": "symlink"}], ids=["unset", "hardlink", "symlink"])
+def test_every_uv_call_clones_whatever_it_inherits(rig, inherited):
+    # A hard link is the cache's own file, so an edit in place here would be an edit there too.
+    rig.run("nvidia", env=inherited)
+    uv = [call for call in rig.calls() if call["tool"] == "uv"]
+    assert len(uv) == 3 and {call["env"]["UV_LINK_MODE"] for call in uv} == {"clone"}
+    assert not any("--link-mode" in call["arguments"] for call in uv)
 
 
 def test_the_checkouts_own_uv_comes_before_the_one_on_path(rig):
@@ -1575,6 +1592,12 @@ def test_the_plan_offers_the_card_only_on_a_condition_it_cannot_check(rig):
 
 def test_the_result_offers_the_card_only_on_the_same_condition(rig):
     assert OFFERED.format("this environment's", "the app shows this GPU") in said(rig.run("nvidia").stdout)
+
+
+def test_the_plan_says_when_a_hash_is_checked(rig):
+    plan = said(rig.run("nvidia", "--dry-run").stdout)
+    assert "Every package is checked" not in plan  # A wheel uv already holds is not hashed again.
+    assert "uv checks a package's hash when it fetches it, not when it reuses its cache" in plan
 
 
 def test_the_plan_says_what_a_re_run_does_to_anything_but_an_environment_equal_to_the_lock(rig):

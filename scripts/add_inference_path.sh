@@ -139,6 +139,10 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$root/.cache/uv}"
 # uv fetches a Python it cannot find unless told not to, and a runtime must not rest on an
 # interpreter nobody chose.
 export UV_PYTHON_DOWNLOADS=never
+# By default uv hard-links, on every disk, so a file edited in place here would change in its cache
+# and in any environment built from the same wheel, and a rebuild would put the edit back. A clone
+# is a file of its own for no more data. Where a disk cannot clone, uv warns and copies instead.
+export UV_LINK_MODE=clone
 # A checkout's own Python, when it has one.
 if [[ -d "$root/.tools/python" ]]; then
   export UV_PYTHON_INSTALL_DIR="$root/.tools/python"
@@ -161,12 +165,12 @@ driver="${driver%%$'\n'*}"
 
 # Only the run that starts an install needs the room. What it leaves in the environment and the
 # cache counts against the free space from then on, so asking again would refuse the re-run that
-# rebuilds it. The cache holds a second copy when it is on another disk.
+# rebuilds it. A disk that cannot clone, or a cache on another disk, holds two full copies.
 if ! marked; then
   for place in "$venv" "$UV_CACHE_DIR"; do
     free="$(free_bytes "$place")"
-    (( free >= 12 * 1024 ** 3 )) ||
-      fail "Only $(( free / 1024 ** 3 )) GiB is free for $place. This needs at least 12 GiB."
+    (( free >= 20 * 1024 ** 3 )) ||
+      fail "Only $(( free / 1024 ** 3 )) GiB is free for $place. This needs at least 20 GiB, because where a disk cannot clone files, the environment and uv's cache each hold a full copy."
   done
 fi
 
@@ -198,12 +202,14 @@ Adding the NVIDIA inference path.
   Lock         $lock
   Proof        $proof
 
-A first install downloads about 3.3 GiB and takes about 9 GiB on disk. A re-run leaves an
-environment that equals the lock alone, and needs no network to do so. Anything else, such as
-an install that did not finish, is rebuilt from empty, from what uv has already fetched where
-it can. A finished environment waits for an empty queue and stays unless uv can plan the
-rebuild. Every package is checked against a hash, with one gap: acvl-utils is published only
-as source, and the tools that build it are fetched without hashes.
+A first install downloads about 3.3 GiB and takes about 9 GiB on disk. It asks for 20 GiB free,
+because where a disk cannot clone files, the environment and uv's cache each hold a full copy.
+A re-run leaves an environment that equals the lock alone, and needs no network to do so.
+Anything else, such as an install that did not finish, is rebuilt from empty, from what uv has
+already fetched where it can. A finished environment waits for an empty queue and stays unless
+uv can plan the rebuild. uv checks a package's hash when it fetches it, not when it reuses its
+cache, and there is one gap: acvl-utils is published only as source, and the tools that build
+it are fetched without hashes.
 
 It will not touch any other Python environment, the viewer, the DICOM converter,
 TotalSegmentator's settings, scan3d.env or the running app, and it does not install a Python.

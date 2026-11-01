@@ -171,10 +171,14 @@ scripts/add_inference_path.sh nvidia
 - Python 3.14, which it never installs. It also searches `.tools/python`, where the
   bootstrap puts one
 - `nvidia-smi` reporting driver 580 or newer
-- For a first install, at least 12 GiB free where the environment goes and where uv
+- For a first install, at least 20 GiB free where the environment goes and where uv
   keeps its cache
 
-A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk.
+A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk. uv clones
+what it installs from its cache, so that the environment's files are its own. A disk that
+can do that, such as btrfs, holds the data once. Where a disk cannot, or the cache is on
+another disk, uv warns that it is falling back to a full copy, and the environment and the
+cache each hold one. That is why the script asks for more than 9 GiB.
 
 **Your existing install needs the AI packages too.** Every path must use the same
 TotalSegmentator, nnU-Net and nnInteractive versions, and the script does not check
@@ -190,9 +194,10 @@ AI weights, the license and your cases, so nothing downloads twice.
 The script installs only into a directory it made, which it marks with a
 `.scan3d-inference-path` file. It refuses any other directory that already exists,
 however empty, and a link with that name does not count, because a rebuild removes
-everything in the directory except that file. Keep nothing of your own there. Packages
-are checked against the hashes in `requirements/cuda-py314.lock`, with one gap: acvl-utils
-is published only as source, and the tools that build it are fetched without hashes.
+everything in the directory except that file. Keep nothing of your own there. uv checks a
+package against the hashes in `requirements/cuda-py314.lock` when it fetches it, not when
+it reuses its cache, and there is one gap: acvl-utils is published only as source, and the
+tools that build it are fetched without hashes.
 
 **The GPU check.** Last, the script runs `scripts/check_gpu.py --path nvidia`, which
 writes a proof to `.runtime/inference-paths/nvidia.json`, or under
@@ -243,6 +248,17 @@ versions still equal the lock, the script keeps it, and the GPU check can then f
 every run. When the fault is in the environment itself, wait until no job is queued or
 running and move the directory aside. The next run is then a first install: it starts
 from empty, needs the free space above, and does not wait for the queue.
+
+That gets you clean files, because the environment's files are clones, so damage to them
+stays there. The exception is damage in uv's cache itself, which nothing checks, because a
+hash is checked only when a package is fetched. If the same fault comes back after a fresh
+install, clear that package from the cache and run the script again. With uv in `.tools/bin`
+and the script's default cache, that is the command below. With no package named it clears
+everything, and the next install downloads it all again.
+
+```bash
+UV_CACHE_DIR=.cache/uv .tools/bin/uv cache clean <package>
+```
 
 The app notices changed PyTorch and engine packages by itself. It cannot see other
 packages or a driver change, so until you re-run the script, only the device check a job
