@@ -134,6 +134,27 @@ describe("one chooser's card", () => {
     choice.choose('nvidia');
     expect(store.get('key')).toBe('nvidia');
   });
+  it('keeps a notice through a list asked for before the one that raised it', () => {
+    const store = stored('second');
+    const choice = usePathChoice('key');
+    choice.settle([amd, nvidia]);
+    const notice = choice.notice.value;
+    expect(notice).toContain('no longer set up');
+    choice.settle([amd, nvidia], true);
+    expect(choice.notice.value).toBe(notice);
+    choice.settle([], true);
+    expect(choice.notice.value, 'a failed read is an answer too').toBe(notice);
+    choice.settle([amd, nvidia]);
+    expect(choice.notice.value, 'a later read retires it, as it always has').toBe('');
+    expect(store.get('key')).toBe('second');
+  });
+  it('lets an overlapping list raise a notice of its own', () => {
+    stored();
+    const choice = showing('nvidia');
+    choice.settle([amd], true);
+    expect(choice.selected.value).toBe('default');
+    expect(choice.notice.value).toContain('no longer set up');
+  });
   it('clears a notice when a person chooses', () => {
     stored('second');
     const choice = usePathChoice('key');
@@ -165,16 +186,45 @@ describe('reading the status', () => {
     await first;
     expect(applied.map(status => status.reason)).toEqual(['newest']);
   });
-  it('drops an older reply that arrives first, so the chooser settles once', async () => {
+  it('applies a first read that answers first, without waiting for the second', async () => {
     const { read, replies, applied } = reader();
     const first = read(),
       second = read();
     replies[0].resolve(answer('older'));
     await first;
-    expect(applied).toEqual([]);
+    expect(applied.map(status => status.reason)).toEqual(['older']);
     replies[1].resolve(answer('newest'));
     await second;
-    expect(applied.map(status => status.reason)).toEqual(['newest']);
+    expect(applied.map(status => status.reason)).toEqual(['older', 'newest']);
+  });
+  it('says when a reply landed while a read was out, and only then', async () => {
+    const seen: boolean[] = [];
+    const replies: ((status: InteractiveStatus) => void)[] = [];
+    const read = statusReader(
+      () => new Promise(resolve => replies.push(resolve)),
+      (_status, overlapped) => seen.push(overlapped),
+    );
+    const first = read(),
+      second = read();
+    replies[0](answer('first'));
+    await first;
+    replies[1](answer('second'));
+    await second;
+    const third = read();
+    replies[2](answer('third'));
+    await third;
+    expect(seen).toEqual([false, true, false]);
+  });
+  it('keeps out of order protection when three reads overlap', async () => {
+    const { read, replies, applied } = reader();
+    const reads = [read(), read(), read()];
+    replies[1].resolve(answer('second'));
+    await reads[1];
+    replies[0].resolve(answer('first'));
+    await reads[0];
+    replies[2].resolve(answer('third'));
+    await reads[2];
+    expect(applied.map(status => status.reason)).toEqual(['second', 'third']);
   });
   it('answers a failed read as unavailable with its reason, so that Check again can clear it', async () => {
     const { read, replies, applied } = reader();

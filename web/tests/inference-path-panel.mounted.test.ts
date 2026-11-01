@@ -257,6 +257,39 @@ describe('choosing a card', () => {
     expect(section().props['data-inference-path']).toBe('default');
     expect(root.named('review-ai-path')?.content).toBe('AI · AMD Test GPU');
   });
+  describe('when opening review asks twice and the first read answers first', () => {
+    async function asksTwice(paths: InferencePathRow[], remembered?: string) {
+      const server = workstation(paths, undefined, remembered);
+      const replies: ((value: InteractiveStatus) => void)[] = [];
+      server.interactiveStatus.mockImplementation(() => new Promise(resolve => replies.push(resolve)));
+      const view = await openAI();
+      void view.panel.value.show();
+      await settled();
+      expect(replies).toHaveLength(2);
+      return { ...view, server, replies };
+    }
+    it('enables the tools on that reply, which the second may never join', async () => {
+      const { root, replies } = await asksTwice([amd]);
+      expect(root.button('Point')?.props.disabled).toBe(true);
+      replies[0](status([amd]));
+      await settled();
+      expect(root.button('Point')?.props.disabled).toBeFalsy();
+    });
+    it('keeps the notice it raised, which the second read cannot have seen', async () => {
+      const { root, panel, replies, server } = await asksTwice([amd, nvidia], 'gone');
+      const message = () => root.named('review-messages')?.content ?? '';
+      replies[0](status([amd, nvidia]));
+      await settled();
+      expect(message()).toContain('The GPU chosen earlier is no longer set up on this workstation, so AMD Test GPU is selected.');
+      replies[1](status([amd, nvidia]));
+      await settled();
+      expect(message()).toContain('The GPU chosen earlier is no longer set up on this workstation, so AMD Test GPU is selected.');
+      server.interactiveStatus.mockImplementation(async () => status([amd, nvidia]));
+      await panel.value.show();
+      await settled();
+      expect(message(), 'a read made after it has seen it, and it has been reported').not.toContain('no longer set up');
+    });
+  });
   it('keeps an unavailable remembered card, blocking the run and never the marking', async () => {
     const server = workstation([amd, broken], undefined, 'broken');
     const { root, panel, section } = await openAI();

@@ -348,9 +348,9 @@ async function ensureController() {
 }
 const readRuntime = statusReader(
   () => api.interactiveStatus(),
-  status => {
+  (status, overlapped) => {
     runtime.value = status;
-    settleReviewPath(status.inference_paths ?? []);
+    settleReviewPath(status.inference_paths ?? [], overlapped);
   },
 );
 async function checkRuntime() {

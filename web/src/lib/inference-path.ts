@@ -39,14 +39,16 @@ export function choosePath(paths: readonly InferencePathRow[], remembered: strin
  * One chooser's card. What the page already shows outranks storage: a write can fail and
  * another tab can write, and neither may move a card here, so a card that goes away is
  * reported once, against what the page was showing. Only a person's choice is stored.
+ * A list asked for before the last one landed cannot retire what that one reported, which
+ * nobody would then get to read, so `overlapped` keeps the notice.
  */
 export function usePathChoice(key: string) {
   const selected = ref(''),
     notice = ref('');
-  function settle(paths: readonly InferencePathRow[]) {
+  function settle(paths: readonly InferencePathRow[], overlapped = false) {
     const choice = choosePath(paths, selected.value || readPath(key));
     selected.value = choice.selected;
-    notice.value = choice.notice;
+    notice.value = choice.notice || (overlapped ? notice.value : '');
   }
   function choose(id: string) {
     selected.value = id;
@@ -57,20 +59,27 @@ export function usePathChoice(key: string) {
 }
 
 /**
- * Read AI assist's status and apply only the newest reply: opening review asks twice, and the
- * chooser settles on the answer. A failed read is an answer too, so that Check again can clear it.
+ * Read AI assist's status and apply each reply unless a newer one has been applied: opening review
+ * asks twice, the first answer enables the tools, and the second must not wait on or undo a later
+ * one. A failed read is an answer too, so that Check again can clear it. `overlapped` says a reply
+ * landed while this read was out.
  */
-export function statusReader(read: () => Promise<InteractiveStatus>, apply: (status: InteractiveStatus) => void) {
-  let newest = 0;
+export function statusReader(read: () => Promise<InteractiveStatus>, apply: (status: InteractiveStatus, overlapped: boolean) => void) {
+  let newest = 0,
+    applied = 0;
   return async () => {
-    const request = ++newest;
+    const request = ++newest,
+      landed = applied;
     let status: InteractiveStatus;
     try {
       status = await read();
     } catch (reason) {
       status = { installed: false, model_available: false, available: false, reason: reason instanceof Error ? reason.message : String(reason) };
     }
-    if (request === newest) apply(status);
+    if (request < applied) return;
+    const overlapped = applied !== landed;
+    applied = request;
+    apply(status, overlapped);
   };
 }
 
