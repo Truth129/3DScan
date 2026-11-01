@@ -68,7 +68,7 @@ git-ignored `scan3d.env`. See [configuration](docs/CONFIGURATION.md).
 | ----------------------------------- | ------------------------------------------------------- |
 | Ubuntu 24.04 and 26.04, CPU         | Install, app and test suite verified on clean machines  |
 | AMD GPU (gfx1201) with ROCm         | Used extensively                                        |
-| NVIDIA GPU with CUDA                | **Untested**: no real NVIDIA card has run it            |
+| NVIDIA GPU with CUDA                | Run as a second GPU on an RTX 5070 Ti, on synthetic data only. `--torch cuda` is untested |
 | Other Linux distributions, arm64    | Expected to work, untested unless listed in the install guide |
 | macOS, Windows                      | Not supported                                           |
 

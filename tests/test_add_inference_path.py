@@ -593,7 +593,7 @@ def test_a_dry_run_prints_the_plan_and_changes_nothing(rig):
     assert rig.snapshot() == before
     for words in (
         "about 3.3 GiB",
-        "about 9 GiB",
+        "about 7 GiB",
         "needs no network",
         "acvl-utils",
         "without hashes",
@@ -1187,7 +1187,7 @@ def test_an_environment_that_lost_its_interpreter_gets_one_back(rig):
     package.parent.mkdir()
     package.touch()
     (rig.venv / "bin" / "python").unlink()
-    # Usual after a 9 GiB install on a nearly full disk, and a new link needs no room.
+    # Usual after a 7 GiB install on a nearly full disk, and a new link needs no room.
     rig.scenario["free"] = 10 * GIB
     completed = rig.run("nvidia")
     assert completed.returncode == 0, completed.stderr

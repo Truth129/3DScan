@@ -234,7 +234,7 @@ Adding the NVIDIA inference path.
   Lock         $lock
   Proof        $proof
 
-A first install downloads about 3.3 GiB and takes about 9 GiB on disk. It asks for 20 GiB free,
+A first install downloads about 3.3 GiB and takes about 7 GiB on disk. It asks for 20 GiB free,
 because on a disk that cannot share data between files, the environment and uv's cache each hold
 a full copy.
 A re-run leaves an environment that equals the lock alone, and needs no network to do so.

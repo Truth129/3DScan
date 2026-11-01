@@ -73,8 +73,8 @@ server you point them at.
 
 ## Testing inference paths
 
-No test needs a second GPU or a second real stack, and nothing here has run on a real
-NVIDIA card or CUDA build. These facilities show what the code does, not what a card does.
+No test needs a second GPU or a second real stack, and nothing here runs on a real NVIDIA
+card or CUDA build. These facilities show what the code does, not what a card does.
 
 - **`tests/conftest.py`** points `SCAN3D_INFERENCE_PATH_DIR` at an empty temporary folder
   and `SCAN3D_GPU_PROOF` at a file that does not exist for the whole run, so a checkout

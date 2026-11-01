@@ -536,9 +536,9 @@ and the nnInteractive model has an explicit script.
   can reach the port can read every case.
 - One process per data directory runs jobs, one job per lane. SQLite and local files are the only store, so
   the service does not scale out. It runs on Linux only.
-- A second GPU adds a choice, not capacity: one AI job runs at a time across all GPUs. No real NVIDIA card or
-  CUDA build has run this stack, because tests use stand-in interpreters and a fake PyTorch, and how far ROCm
-  and CUDA results differ is unmeasured.
+- A second GPU adds a choice, not capacity: one AI job runs at a time across all GPUs. This stack has run on
+  one real NVIDIA card, on synthetic data only. Tests use stand-in interpreters and a fake PyTorch, and how far
+  ROCm and CUDA results differ is unmeasured.
 - Review status belongs to a revision, not to a structure. CPU inference is much slower than a GPU.
 - CT import refuses gantry-tilted, enhanced or multi-frame, and localizer series. MRI is experimental and
   off by default, and other modalities have no adapter.

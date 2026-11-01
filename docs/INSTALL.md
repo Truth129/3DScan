@@ -121,8 +121,8 @@ CPU.
 | ------------------------------- | -------------- | ------------------------------------------------------------------------------- |
 | CPU                             | `--torch cpu`  | Tested with TotalSegmentator and nnInteractive. Works, but is slow on real CTs. |
 | AMD Radeon AI PRO (gfx1201)     | `--torch rocm` | The one GPU stack exercised in depth.                                           |
-| NVIDIA with CUDA 13             | `--torch cuda` | **Untested.** The code path is shared, but no real NVIDIA card has run it.      |
-| NVIDIA as a second GPU          | See below      | **Untested**, for the same reason. See [Add a second GPU](#add-a-second-gpu).   |
+| NVIDIA with CUDA 13             | `--torch cuda` | **Untested.** The code path is shared, but only the second-GPU route below has run on a card. |
+| NVIDIA as a second GPU          | See below      | Run on one card, on synthetic data only. See [Add a second GPU](#add-a-second-gpu). |
 | Other AMD GPUs                  | Manual         | Untested. Edit the device extras in `requirements/rocm10-py314-gpu.in`.         |
 
 For a GPU, install the vendor's driver first. On AMD, your user needs access to the
@@ -151,9 +151,12 @@ one. The result is an **inference path**, an interpreter plus a GPU that a perso
 choose in the app. Your existing install stays the default path, and nothing about it
 changes. To use the new GPU, see the [user guide](USER_GUIDE.md#choose-a-gpu).
 
-**No real NVIDIA card or CUDA build has run this.** The project's tests use a fake
-PyTorch, so they cover how the app behaves, not whether this stack works on a card. The
-GPU check at the end of the script is the first real evidence on your machine.
+**This has run on one real card, on synthetic data only:** an RTX 5070 Ti on CachyOS with
+driver 615.78. Both engines ran there, on volumes up to 512 x 512 x 400 voxels, and `total`
+on that size used about 4.5 GiB of the card's memory. That shows the stack runs, not that
+results are good or that they match another GPU's. The project's tests use a fake PyTorch,
+so they cover how the app behaves, not whether this stack works on your card. The GPU check
+at the end of the script is the first real evidence on your machine.
 
 ```bash
 scripts/add_inference_path.sh nvidia --dry-run
@@ -174,11 +177,11 @@ scripts/add_inference_path.sh nvidia
 - For a first install, at least 20 GiB free where the environment goes and where uv
   keeps its cache
 
-A first install downloads about 3.3 GiB and takes an estimated 9 GiB on disk. uv copies
-what it installs from its cache, so that the environment's files are its own. A disk that
-shares data between files, such as btrfs, still holds the data once. On any other disk, or
-with the cache on another disk, the environment and the cache each hold a full copy. That
-is why the script asks for more than 9 GiB.
+A first install downloads about 3.3 GiB and takes about 7 GiB on disk. uv copies what it
+installs from its cache, so that the environment's files are its own. A disk that shares
+data between files, such as btrfs, still holds the data once. On any other disk, or with the
+cache on another disk, the environment and the cache each hold a full copy. That is why the
+script asks for more than 7 GiB.
 
 **Your existing install needs the AI packages too.** Every path must use the same
 TotalSegmentator, nnU-Net and nnInteractive versions, and the script does not check
