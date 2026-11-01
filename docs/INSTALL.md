@@ -259,8 +259,10 @@ unavailable if it was last checked on that environment, or not at all if it was 
 checked, and running the script again starts from empty. Once a trial has passed, no
 download can stop the rebuild. A full disk or a killed run still can, and either leaves
 this same stopped state. A run killed during a trial can leave a folder of hard links in
-uv's cache, and `uv cache clean` removes it. Only one run can use an environment at a time,
-so a second stops with nothing changed.
+uv's cache. It holds no extra data, and `uv cache prune` removes it and keeps every package:
+with uv in `.tools/bin` and the script's default cache, that is
+`UV_CACHE_DIR=.cache/uv .tools/bin/uv cache prune`. Only one run can use an environment at a
+time, so a second stops with nothing changed.
 
 Two faults in a finished environment survive a re-run. If uv cannot read it, the script
 stops with nothing changed. If files are missing or damaged but its package names and
@@ -272,9 +274,10 @@ from empty, needs the free space above, and does not wait for the queue.
 That gets you clean files, because the environment's files are its own, so damage to them
 stays there. The exception is damage in uv's cache itself, which nothing checks, because a
 hash is checked only when a package is fetched. If the same fault comes back after a fresh
-install, clear that package from the cache and run the script again. With uv in `.tools/bin`
-and the script's default cache, that is the command below. With no package named it clears
-everything, and the next install downloads it all again.
+install, clear that package from the cache, move the directory aside again and run the
+script. With uv in `.tools/bin` and the script's default cache, the command below clears the
+package. With no package named it clears everything, and the next install downloads it all
+again.
 
 ```bash
 UV_CACHE_DIR=.cache/uv .tools/bin/uv cache clean <package>

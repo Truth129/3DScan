@@ -88,7 +88,7 @@ matches_lock() {
 # So by the time this passes, no download can stop a rebuild after its wipe, though a full disk or a
 # kill still can. The folder is in uv's cache because a hard link costs no data within a disk, and
 # --target lets uv take a base Python. Ctrl-C takes the folder with it. A kill, or a signal that
-# leaves uv running, can leave it, as links `uv cache clean` removes.
+# leaves uv running, can leave it, as links `uv cache prune` removes.
 install_in_trial() {
   "$uv" pip sync "$@" --link-mode hardlink --python "$interpreter" --target "$trial" --require-hashes "$lock"
 }
