@@ -386,6 +386,18 @@ def require(bound):
     return path
 
 
+def replaced(bound):
+    """Whether a frozen binding's ID now names another card, one that passed its own check.
+
+    A job on it could only fail as it starts, on every attempt. A path that is gone or unavailable
+    is not replaced: its job says so by name.
+    """
+    if bound is None or bound["id"] == DEFAULT:
+        return False
+    path, _, _ = _examine(bound["id"])
+    return path is not None and path.identity != bound["identity"]
+
+
 def identity(bound):
     """Compare two bindings. Absent and explicit default are one path."""
     return bound["identity"] if bound else DEFAULT

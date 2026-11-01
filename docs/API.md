@@ -485,6 +485,7 @@ still run on the CPU. A draft is free until a model result publishes, then stays
 | `batches` empty | `inference_path`, or none for `default` | Runs there, and a published result binds the draft   |
 | `batches` set   | None, or the draft's own path           | Runs on the draft's path                             |
 | `batches` set   | Another path, with `replay` false       | 409                                                  |
+| `batches` set   | None, and another card now holds the draft's path ID | 409, with `replay` too                  |
 | `batches` set   | `replay: true`                          | Repeats the draft's steps on the named path, or on its own path if none is named |
 
 **`replay`** repeats every recorded batch exactly, from the original mask, and adds any pending marks as one
@@ -535,7 +536,7 @@ A bad request is refused before any job exists:
 | 400    | The path is not set up                   | `This GPU is not set up on this workstation.`                                   |
 | 400    | The path is unavailable                  | `<label> is unavailable: <reason>`                                              |
 | 400    | `replay` with `full_refine`              | `A re-run repeats the draft's own steps, so it cannot add a whole-object refinement` |
-| 409    | Another path on a draft with `batches`   | `This draft's AI results came from <label>. Re-run its steps to use another GPU.` |
+| 409    | Another path on a draft with `batches`, or none once another card holds its path ID | `This draft's AI results came from <label>. Re-run its steps to use another GPU.` |
 
 Once queued, a problem fails the job and never the route. The job has `status: "failed"` and keeps its
 `inference_path`, and on a review job its `error` also reaches the draft's `error`. On an added path, these

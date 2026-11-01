@@ -372,13 +372,16 @@ class Store:
         step of a saved correction ran on one card. A new child is never a warm prefix, so one
         added mark on another card would silently rebuild reviewed work from the original mask.
         The lock is non-empty `batches`, which only a published result writes, so a failed
-        first run never locks. Absent means the draft's card, which keeps an old tab working.
-        Only a replay may leave that card, because it repeats every step there on purpose, and
-        the binding then moves at publish, so a failed replay leaves the draft where it was.
+        first run never locks. Absent means the draft's card, which keeps an old tab working,
+        unless another card now holds its ID: that job could never start, so absent is refused
+        as a request naming the new card is. Only a replay may leave a card, because it repeats
+        every step on purpose, and the binding then moves at publish, so a failed replay leaves
+        the draft where it was.
         """
         bound = review["inference_path"] if review["batches"] else None
         chosen = bound if requested is None else inference_paths.binding(requested)
-        if review["batches"] and not step_replay and inference_paths.identity(chosen) != inference_paths.identity(bound):
+        left = review["batches"] and not step_replay and inference_paths.identity(chosen) != inference_paths.identity(bound)
+        if left or (requested is None and inference_paths.replaced(bound)):
             label = (bound or inference_paths.binding(inference_paths.DEFAULT))["label"]
             raise ReviewConflict(f"This draft's AI results came from {label}. Re-run its steps to use another GPU.")
         return chosen

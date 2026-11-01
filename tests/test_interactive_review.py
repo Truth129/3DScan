@@ -18,7 +18,7 @@ from inference_path_stub import GPU_NAME, activate, stand_in
 from scan3d import imaging
 from scan3d.api import create_app
 from scan3d.config import Settings
-from scan3d.inference_paths import binding
+from scan3d.inference_paths import binding, replaced
 from scan3d.interactive import _batches
 from scan3d.review import public_review
 from scan3d.service import Service
@@ -946,12 +946,54 @@ def test_a_card_swapped_under_a_locked_draft_is_not_treated_as_the_same_card(exa
     draft = ran(example, marked(example), inference_path="nvidia")
     add_mark(example, draft)
     first.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU"))
-    with pytest.raises(ReviewConflict, match=f"came from {GPU_NAME}"):
-        queue(example, draft, inference_path="nvidia")
-    job, _ = run(example, draft)
+    # The second is an old tab, and a job for it could only fail on every attempt.
+    for choice in ({"inference_path": "nvidia"}, {}):
+        with pytest.raises(ReviewConflict) as refused:
+            queue(example, draft, **choice)
+        assert str(refused.value) == f"This draft's AI results came from {GPU_NAME}. Re-run its steps to use another GPU."
+    assert len(example[0].interactive_runtime.calls) == 1
+
+
+def test_a_card_swapped_after_a_job_was_queued_fails_that_job_by_name(example, paths):
+    first, _ = paths
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    queued = queue(example, draft)
+    first.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU"))
+    job = execute_next(example[0], queued)
     assert (
         job["status"] == "failed" and job["error"] == f"{GPU_NAME} changed after this job was queued. Nothing ran and no other GPU was tried. Start it again."
     )
+
+
+def test_a_card_swapped_under_a_locked_draft_leaves_a_named_re_run_as_the_way_out(example, paths):
+    first, _ = paths
+    draft = ran(example, marked(example), inference_path="nvidia")
+    first.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU"))
+    with pytest.raises(ReviewConflict, match=f"came from {GPU_NAME}"):
+        queue(example, draft, replay=True)  # It names no card to move to.
+    state = ran(example, draft, inference_path="nvidia", replay=True)
+    assert state["inference_path"] == binding("nvidia") and state["inference_path"]["label"] == "Test Replacement GPU"
+
+
+def test_an_unchanged_card_keeps_working_for_a_tab_that_names_nothing(example, paths):
+    first, _ = paths
+    draft = ran(example, marked(example), inference_path="nvidia")
+    add_mark(example, draft)
+    first.change(lambda record: record.update(checked_at="a later check of the same card"))
+    assert ran(example, draft)["inference_path"] == binding("nvidia")
+
+
+def test_only_a_card_that_passed_its_own_check_counts_as_replaced(paths):
+    first, _ = paths
+    bound = binding("nvidia")
+    assert not replaced(None) and not replaced(binding("default")) and not replaced(bound)
+    first.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU"))
+    assert replaced(bound)
+    first.change(lambda record: record.update(gpu_ready=False))
+    assert not replaced(bound)  # Unavailable: its job says so by name.
+    first.proof.unlink()
+    assert not replaced(bound)
 
 
 @pytest.mark.parametrize(
