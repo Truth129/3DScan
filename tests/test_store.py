@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from scan3d.store import Store, identifier, now, public_case, public_revision
@@ -75,3 +77,39 @@ def test_public_records_do_not_expose_local_sources():
     assert "ct_file" not in public and "directory" not in public
     assert "mask_file" not in public["structures"][0]
     assert "/private" not in __import__("json").dumps(public)
+
+
+def test_case_list_leaves_out_file_paths_and_follows_a_writer_that_skips_summaries(tmp_path):
+    store = Store(tmp_path)
+    older = case(store)
+    record = store.save(
+        "cases", dict(id=identifier(), status="imported", active_revision_id=None, source_dir="/x", references={}, series=[dict(uid="1", files=["/x/1.dcm"])])
+    )
+    listed = store.case_summaries()
+    assert [entry["id"] for entry in listed] == [record["id"], older["id"]]
+    assert listed[0]["series"] == [dict(uid="1")] and "source_dir" not in listed[0]
+    with store.connection() as con:
+        con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (record["id"], json.dumps(dict(record, status="ready"))))
+    listed = store.case_summaries()
+    assert [entry["status"] for entry in listed if entry["id"] == record["id"]] == ["ready"]
+    assert public_case(listed[0]) == public_case(store.get("cases", record["id"]))
+
+
+def test_opening_an_older_database_summarizes_its_cases(tmp_path):
+    store = Store(tmp_path)
+    record = case(store)
+    with store.connection() as con:
+        con.execute("DELETE FROM case_summaries")
+        con.execute("PRAGMA user_version=3")
+    Store(tmp_path)
+    with store.connection() as con:
+        assert [row["case_id"] for row in con.execute("SELECT case_id FROM case_summaries")] == [record["id"]]
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 4
+
+
+def test_the_write_log_stays_open_and_can_still_be_checkpointed(tmp_path):
+    store = Store(tmp_path)
+    case(store)
+    assert store.db.with_name(f"{store.db.name}-wal").exists()
+    with store.connection() as con:
+        assert con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0

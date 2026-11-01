@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import weakref
 
 from . import inference_paths
 from .errors import NotFound
@@ -68,14 +69,30 @@ class Store:
                 CREATE INDEX IF NOT EXISTS review_case ON review_sessions(case_id);
                 CREATE TABLE IF NOT EXISTS image_assets(id TEXT PRIMARY KEY, case_id TEXT NOT NULL, data TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS image_asset_case ON image_assets(case_id);
+                CREATE TABLE IF NOT EXISTS case_summaries(case_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+                -- Any write drops the summary, so a writer that skips it, such as an older build
+                -- after a rollback, leaves the list reading the full record and never a stale one.
+                CREATE TRIGGER IF NOT EXISTS case_summary_insert AFTER INSERT ON cases BEGIN DELETE FROM case_summaries WHERE case_id=NEW.id; END;
+                CREATE TRIGGER IF NOT EXISTS case_summary_update AFTER UPDATE ON cases BEGIN DELETE FROM case_summaries WHERE case_id=NEW.id; END;
+                CREATE TRIGGER IF NOT EXISTS case_summary_delete AFTER DELETE ON cases BEGIN DELETE FROM case_summaries WHERE case_id=OLD.id; END;
             """)
-            if connection.execute("PRAGMA user_version").fetchone()[0] < 3:
-                connection.execute("PRAGMA user_version=3")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
+                for row in connection.execute("SELECT data FROM cases").fetchall():
+                    self.summarize_case(connection, json.loads(row["data"]))
+                connection.execute("PRAGMA user_version=4")
+        # Closing the last connection to a WAL database checkpoints it and removes the log, which
+        # would otherwise add milliseconds to every write. This one stays idle: its read joins
+        # the database and finishes, so it holds no transaction and checkpoints still run.
+        keeper = sqlite3.connect(self.db, check_same_thread=False)
+        keeper.execute("SELECT 1 FROM cases LIMIT 1").fetchall()
+        weakref.finalize(self, keeper.close)
 
     @contextmanager
     def connection(self):
         con = sqlite3.connect(self.db, timeout=30)
         con.row_factory = sqlite3.Row
+        # Removed records are overwritten rather than left in free pages. Builds differ on the default.
+        con.execute("PRAGMA secure_delete=ON").fetchall()
         try:
             yield con
             con.commit()
@@ -106,6 +123,7 @@ class Store:
         with self.connection() as con:
             if table == "cases":
                 con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (record["id"], encoded))
+                self.summarize_case(con, record)
             elif table == "revisions":
                 con.execute("INSERT OR REPLACE INTO revisions VALUES (?,?,?)", (record["id"], record["case_id"], encoded))
             elif table == "jobs":
@@ -124,6 +142,19 @@ class Store:
                 rows = con.execute(f"SELECT data FROM {table} WHERE case_id=? ORDER BY rowid DESC", (case_id,)).fetchall()
             else:
                 rows = con.execute(f"SELECT data FROM {table} ORDER BY rowid DESC").fetchall()
+        return [json.loads(row["data"]) for row in rows]
+
+    @staticmethod
+    def summarize_case(con, case):
+        """Call after writing a case, so the library need not parse every series' file paths."""
+        con.execute("INSERT OR REPLACE INTO case_summaries VALUES (?,?)", (case["id"], json.dumps(public_case(case))))
+
+    def case_summaries(self):
+        """Every case, in the order of `list`, for `public_case`. One with no summary reads in full."""
+        with self.connection() as con:
+            rows = con.execute(
+                "SELECT COALESCE(s.data, c.data) AS data FROM cases c LEFT JOIN case_summaries s ON s.case_id=c.id ORDER BY c.rowid DESC"
+            ).fetchall()
         return [json.loads(row["data"]) for row in rows]
 
     def case_dir(self, case_id):
@@ -239,6 +270,7 @@ class Store:
                 case.update(selected_series_uid=revision["acquisition"].get("series_uid"), phase=revision["acquisition"].get("phase"))
             con.execute("INSERT INTO revisions VALUES (?,?,?)", (revision["id"], revision["case_id"], json.dumps(revision, allow_nan=False)))
             con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case), case["id"]))
+            self.summarize_case(con, case)
             if job:
                 current = json.loads(con.execute("SELECT data FROM jobs WHERE id=?", (job["id"],)).fetchone()["data"])
                 if current.get("cancel_requested"):

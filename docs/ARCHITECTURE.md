@@ -120,6 +120,12 @@ SQLite holds JSON records in `cases`, `image_assets`, `revisions`, `jobs` and `r
 record is committed only after its files are complete. Records store absolute paths, so restore a
 `scan3d backup` into the same data directory.
 
+`case_summaries` is a derived copy of each case without its file paths, so listing cases parses only
+what the library shows. Any write to `cases` drops the copy, so a writer that skips it, such as an
+older build after a rollback, makes the list read the full record and never a stale one. Each `Store`
+keeps one idle connection open, because closing the last connection to a WAL database checkpoints it
+and adds milliseconds to every write.
+
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
 - **Revisions** form a tree through `parent_id`.

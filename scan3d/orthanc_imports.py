@@ -23,7 +23,7 @@ from .orthanc_models import (
     parse_source,
     snapshot_fingerprint,
 )
-from .store import identifier, now, public_job, safe_id
+from .store import Store, identifier, now, public_job, safe_id
 
 
 class OrthancImports:
@@ -183,6 +183,7 @@ class OrthancImports:
                     error=None if cancelled else "The Orthanc import did not complete. Retry the selected series.",
                 )
                 con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case["id"]))
+                Store.summarize_case(con, case)
 
     def start(self, series_id, fingerprint, label=None):
         with self.client() as client:
@@ -240,6 +241,7 @@ class OrthancImports:
                 payload={"import_key": key, "snapshot": json_record(snapshot)},
             )
             con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (case["id"], json.dumps(case, allow_nan=False)))
+            Store.summarize_case(con, case)
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case["id"], job["status"], json.dumps(job, allow_nan=False)))
         return job
 
@@ -325,6 +327,7 @@ class OrthancImports:
                     if case["status"] == "importing":
                         case.update(status="import_cancelled", error=None)
                         con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case), case["id"]))
+                        Store.summarize_case(con, case)
                 con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job_id))
         return job
 
@@ -423,6 +426,7 @@ class OrthancImports:
                     case["references"]["orthanc"] = source_data
                     current.update(status="completed", stage="Imported; choose Open scan to prepare viewing", error=None, completed_at=now())
                     con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case["id"]))
+                    Store.summarize_case(con, case)
                     con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (current["status"], json.dumps(current, allow_nan=False), job["id"]))
         except BaseException as reason:
             # Keep failed/cancelled attempts recognizable and retryable. Staging
@@ -438,4 +442,5 @@ class OrthancImports:
                             error=None if isinstance(reason, InterruptedError) else "The Orthanc import did not complete. Retry the selected series.",
                         )
                         con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case), case["id"]))
+                        Store.summarize_case(con, case)
             raise

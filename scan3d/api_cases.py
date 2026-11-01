@@ -13,7 +13,7 @@ from .store import public_case, public_job, public_revision
 def add_routes(app, service):
     @app.get("/api/cases")
     def cases():
-        return [public_case(case, service.settings) for case in service.store.list("cases")]
+        return [public_case(case, service.settings) for case in service.store.case_summaries()]
 
     @app.get("/api/cases/{case_id}")
     def case(case_id: str):
