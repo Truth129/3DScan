@@ -223,3 +223,13 @@ def test_measurements_available_before_meshes_and_refinement_reuses_surfaces(cli
     assert refined["mesh_statistics"]["display"]["cache"]["surface_hits"] == 6
     assert refined["mesh_statistics"]["display"]["cache"]["surface_misses"] == 1
     assert refined["mesh_statistics"]["detailed"] is None
+
+
+def test_a_clean_stop_leaves_no_write_log(tmp_path):
+    settings = Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist")
+    log = settings.data_dir / "scan3d.sqlite3-wal"
+    app = create_app(settings)
+    with TestClient(app, base_url="http://127.0.0.1") as http:
+        assert http.post("/api/cases/demo").status_code == 200
+        assert log.exists()
+    assert not log.exists()

@@ -77,15 +77,22 @@ class Store:
                 CREATE TRIGGER IF NOT EXISTS case_summary_delete AFTER DELETE ON cases BEGIN DELETE FROM case_summaries WHERE case_id=OLD.id; END;
             """)
             if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
-                for row in connection.execute("SELECT data FROM cases").fetchall():
-                    self.summarize_case(connection, json.loads(row["data"]))
-                connection.execute("PRAGMA user_version=4")
+                # Under the write lock, because a summary written from an older read would hide a newer record.
+                connection.execute("BEGIN IMMEDIATE")
+                if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
+                    for row in connection.execute("SELECT data FROM cases").fetchall():
+                        self.summarize_case(connection, json.loads(row["data"]))
+                    connection.execute("PRAGMA user_version=4")
         # Closing the last connection to a WAL database checkpoints it and removes the log, which
         # would otherwise add milliseconds to every write. This one stays idle: its read joins
         # the database and finishes, so it holds no transaction and checkpoints still run.
         keeper = sqlite3.connect(self.db, check_same_thread=False)
         keeper.execute("SELECT 1 FROM cases LIMIT 1").fetchall()
-        weakref.finalize(self, keeper.close)
+        self._release_keeper = weakref.finalize(self, keeper.close)
+
+    def close(self):
+        """Empty the write log on a clean stop. A service stopped by signal runs no exit handlers."""
+        self._release_keeper()
 
     @contextmanager
     def connection(self):

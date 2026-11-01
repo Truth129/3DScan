@@ -97,6 +97,7 @@ def create_app(settings: Settings | None = None):
         service.start()
         yield
         service.stop()
+        service.store.close()
 
     app = FastAPI(title="3DScan", version=__version__, lifespan=lifespan)
     app.state.service = service

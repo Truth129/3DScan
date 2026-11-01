@@ -34,6 +34,20 @@ def files(root):
     return {path.relative_to(root): path for path in root.rglob("*") if path.is_file()}
 
 
+def test_restoring_over_a_log_left_by_a_crash_keeps_the_snapshot(library, tmp_path):
+    service, case, data = library
+    manifest = backup(data, tmp_path / "backups", log=lambda message: None)
+    service.store.save("cases", dict(case, label="Written after the backup"))
+    left_behind = (data / "scan3d.sqlite3-wal").read_bytes()
+    service.store.close()
+    (data / "scan3d.sqlite3-wal").write_bytes(left_behind)
+    shutil.copytree(tmp_path / "backups" / manifest["snapshot"], data, dirs_exist_ok=True)
+    restored = sqlite3.connect(data / "scan3d.sqlite3")
+    assert restored.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert [json.loads(row[0])["label"] for row in restored.execute("SELECT data FROM cases")] == [case["label"]]
+    restored.close()
+
+
 def test_backup_snapshots_database_and_case_files_and_skips_rebuildable_caches(library, tmp_path):
     service, case, data = library
     manifest = backup(data, tmp_path / "backups", log=lambda message: None)

@@ -92,6 +92,8 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
             check.close()
         if integrity != "ok":
             raise RuntimeError(f"The database snapshot failed its integrity check: {integrity}")
+        # SQLite cannot tell that a log belongs to another database, so a restore must overwrite any log left behind.
+        (partial / f"{DATABASE}-wal").write_bytes(b"")
         counts = dict(copied_files=0, copied_bytes=0, linked_files=0, linked_bytes=0, skipped_symlinks=0)
         included, skipped = [DATABASE], []
         for entry in sorted(data_dir.iterdir()):
@@ -119,7 +121,10 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
             "included": included,
             "skipped": skipped,
             "files": counts,
-            "restore": "Stop the service, then copy this snapshot's contents into the same data_dir. Skipped caches rebuild on demand.",
+            "restore": (
+                "Stop the service, then copy this snapshot's contents over the same data_dir. Its empty write log replaces any left there by a crash, "
+                "which would otherwise replay onto the restored database. Skipped caches rebuild on demand."
+            ),
         }
         (partial / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         partial.rename(target)

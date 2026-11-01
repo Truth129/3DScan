@@ -456,8 +456,9 @@ different source. SEG stored in Orthanc is not attached automatically: select th
 Each run writes `scan3d-<UTC time>/` with a database snapshot, the case folders, the surface cache
 and a `manifest.json`. The server can keep running.
 
-To restore, stop the server and copy a snapshot's contents back into the same data directory, since
-records store absolute paths.
+To restore, stop the server and copy a snapshot's contents over the same data directory, since
+records store absolute paths. A snapshot from before November 2026 has no `scan3d.sqlite3-wal`, so
+first move any `scan3d.sqlite3-wal` and `scan3d.sqlite3-shm` out of the data directory.
 
 A backup holds patient images, so protect it like the library. It does not cover anything held in
 Orthanc.
