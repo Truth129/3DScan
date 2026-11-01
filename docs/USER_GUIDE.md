@@ -346,7 +346,8 @@ already has, or starts one if the first request never arrived.
 While an export runs you can close the dialog, and the button reopens it unless the button is
 disabled. Changing case or revision lets go of the capture, so the button then takes a new one.
 Either way the result appears as a notice, or in the error banner if the export fails or cannot be
-confirmed. The banner also reports a request that fails after you close the dialog.
+confirmed. The banner also reports a request that fails after you close the dialog. While the 3D view
+is expanded a failure appears inside the view instead, and moves to the banner if you leave it there.
 
 ### Portable offline HTML
 

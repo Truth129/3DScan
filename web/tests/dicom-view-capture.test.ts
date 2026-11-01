@@ -583,6 +583,19 @@ describe('viewport capture through Cornerstone', () => {
     await settled();
     expect(shown.text()).not.toContain('Still not ready.');
   });
+  it('keeps every failure while expanded, and hands an unread one to the banner on restore', async () => {
+    const unread = vi.fn(),
+      shown = await viewport({ localSession: session(), onUnreadRefusal: unread });
+    click(shown.labelled('Expand 3D view'));
+    await settled();
+    shown.exposed.showRefusal('First failure.');
+    shown.exposed.showRefusal('Second failure.');
+    await settled();
+    expect(shown.text()).toContain('First failure. · Second failure.');
+    click(shown.labelled('Restore 3D view'));
+    await settled();
+    expect(unread).toHaveBeenCalledExactlyOnceWith('First failure. · Second failure.');
+  });
   it('returns the view component’s evidence', async () => {
     const shown = await open();
     await expect(shown.capture()).resolves.toEqual({ url: 'data:image/png;base64,frame', referenceImageId: 'image-a', surfaceRevisionId: '' });

@@ -72,9 +72,13 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     }
   }
   /** One poller per job. A job that has already settled stays settled, whatever an older listing says. */
-  function follow(job: DicomViewExportJob) {
+  function follow(job: DicomViewExportJob, unattended = false) {
     const known = jobs.get(job.id);
-    if (known && !pendingDicomViewExport(known)) return;
+    if (known && !pendingDicomViewExport(known)) {
+      // The server answers a repeat with the job it has, and no dialog is left to show that.
+      if (unattended) settle(known);
+      return;
+    }
     if (!pendingDicomViewExport(job)) {
       clearTimeout(timers.get(job.id));
       timers.delete(job.id);

@@ -141,6 +141,16 @@ describe('view export watcher', () => {
     await vi.advanceTimersByTimeAsync(1400);
     expect(failure).toHaveBeenCalledOnce();
   });
+  it('reports a finished job again only when a repeat comes back with no dialog to show it', () => {
+    const { watcher, success } = fixture(),
+      finished = job('completed', { result: archived });
+    watcher.follow(finished);
+    expect(success).toHaveBeenCalledOnce();
+    watcher.follow(finished);
+    expect(success).toHaveBeenCalledOnce();
+    watcher.follow(finished, true);
+    expect(success).toHaveBeenCalledTimes(2);
+  });
   it('reports a job that had already ended when it was handed over with no dialog', () => {
     const poll = vi.spyOn(api, 'job'),
       { watcher, success } = fixture();

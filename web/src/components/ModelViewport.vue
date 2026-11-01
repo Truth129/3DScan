@@ -103,6 +103,7 @@ const props = defineProps<{
   dicomViewBlockReason?: string;
 }>();
 const emit = defineEmits<{
+  unreadRefusal: [message: string];
   pick: [id: string, point: Point];
   point: [point: Point];
   gesture: [prompt: InteractivePrompt];
@@ -155,6 +156,8 @@ const { expanded, setExpanded } = useExpandedViewport(viewport, expandButton);
 // The app's banner has its dismiss button in the header, which is inert while this is expanded.
 const exportRefusal = ref('');
 watch(expanded, () => {
+  // The banner works again from here, and what nobody dismissed is not finished with.
+  if (exportRefusal.value) emit('unreadRefusal', exportRefusal.value);
   exportRefusal.value = '';
 });
 const surface = ref<HTMLElement>();
@@ -1496,8 +1499,9 @@ async function screenshot() {
 }
 /** Says whether this took the message, which only an expanded view does. */
 function showRefusal(message: string) {
-  exportRefusal.value = expanded.value ? message : '';
-  return expanded.value;
+  if (!expanded.value) return false;
+  exportRefusal.value = exportRefusal.value && message ? `${exportRefusal.value} · ${message}` : message;
+  return true;
 }
 /** Reasons that hold for either renderer. An instance left behind by a case change keeps its last props, so disposal is checked first. */
 function captureRefusal(expected: ViewCaptureRequest) {

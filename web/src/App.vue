@@ -454,13 +454,12 @@ function toast(message: string) {
   }, 5000);
 }
 const viewJobs = useDicomViewJobs({
-  activeCaseId: () => activeCase.value?.id,
+  // Not activeCase, which stays on the old case while the next one loads and nothing shows it.
+  activeCaseId: () => revision.value?.case_id,
   caseLabel: id => cases.value.find(item => item.id === id)?.label,
   showing: id => viewExportOpen.value && viewJobId.value === id,
   success: toast,
-  failure: message => {
-    error.value = message;
-  },
+  failure: alertViewExport,
 });
 const viewJob = computed(() => (viewJobId.value ? viewJobs.job(viewJobId.value) : undefined));
 function viewExportScope(): ViewExportScope {
@@ -474,6 +473,10 @@ function viewExportScope(): ViewExportScope {
     blockReason: savedExportDisabledReason.value,
     reviewing: workspaceMode.value === 'review',
   };
+}
+/** Every failure stays until someone dismisses it, so a second one must not replace the first. */
+function alertViewExport(message: string) {
+  if (!model.value?.showRefusal(message)) error.value = error.value ? `${error.value} · ${message}` : message;
 }
 function refuseViewExport(reason: unknown) {
   if (!model.value?.showRefusal(reason instanceof Error ? reason.message : String(reason))) fail(reason);
@@ -518,11 +521,12 @@ async function exportView() {
   }
 }
 function followViewJob(next: DicomViewExportJob, capture: ViewCapture) {
-  if (viewCapture.value === capture) viewJobId.value = next.id;
-  viewJobs.follow(next);
+  const held = viewCapture.value === capture;
+  if (held) viewJobId.value = next.id;
+  viewJobs.follow(next, !held);
 }
 function reportViewExport(message: string, capture: ViewCapture) {
-  error.value = capture.caseId === activeCase.value?.id ? message : `${capture.caseLabel}: ${message}`;
+  alertViewExport(capture.caseId === revision.value?.case_id ? message : `${capture.caseLabel}: ${message}`);
   // With no answer the job may exist anyway, and the dialog that could have found it has gone.
   void viewJobs.seed(capture.caseId);
 }
@@ -1589,6 +1593,7 @@ onBeforeUnmount(() => {
               :level="displayLevel"
               :dicom-view-block-reason="viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
               @export-view="exportView"
+              @unread-refusal="alertViewExport"
               @pick="picked"
               @point="setPoint"
               @gesture="interactivePanel?.addGesture($event)"

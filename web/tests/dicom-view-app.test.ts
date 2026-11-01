@@ -11,9 +11,9 @@ const fake = vi.hoisted(() => ({ capture: undefined as any, viewports: [] as any
 vi.mock('../src/components/ModelViewport.vue', () => ({
   default: {
     props: ['dicomViewBlockReason', 'modelRevisionId', 'revisionId', 'caseId'],
-    emits: ['exportView'],
+    emits: ['exportView', 'unreadRefusal'],
     setup(props: any, { emit, expose }: any) {
-      const self = { props, exportView: () => emit('exportView') };
+      const self = { props, exportView: () => emit('exportView'), unread: (message: string) => emit('unreadRefusal', message) };
       fake.viewports.push(self);
       expose({
         captureView: (request: unknown) => fake.capture(request, self),
@@ -520,6 +520,40 @@ describe('a request that fails after its dialog has gone', () => {
     expect(view.banner()).toContain('Failed to fetch');
     expect(view.banner()).toContain('may already have reached the workstation');
   });
+  it('names the case while the next one is loading, because nothing shows the old one by then', async () => {
+    const view = await posted();
+    const loading = deferred<Case>();
+    vi.mocked(api.case).mockImplementationOnce(() => loading.promise);
+    view.open('case-b');
+    await settled();
+    expect(view.dialog()).toBeUndefined();
+    view.answer.resolve(refusal());
+    await settled();
+    expect(view.banner()).toContain(`Synthetic A: ${REFUSED}`);
+  });
+  it('says something when the error answer has no text', async () => {
+    const view = await posted();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    view.answer.resolve(new Response('Bad gateway', { status: 502, statusText: '' }));
+    await settled();
+    expect(view.banner()).toContain('The server answered with status 502.');
+    expect(view.banner()).toContain('may already have reached the workstation');
+  });
+  it('shows a failure inside an expanded viewport, where it can be dismissed', async () => {
+    const view = await posted();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    fake.expanded = true;
+    view.answer.resolve(refusal());
+    await settled();
+    expect(fake.refusals.at(-1)).toBe(REFUSED);
+    expect(view.banner()).toBe('');
+    fake.expanded = false;
+    fake.viewports.at(-1).unread(REFUSED);
+    await settled();
+    expect(view.banner()).toContain(REFUSED);
+  });
   it('names the case when the workspace has moved on', async () => {
     const view = await posted();
     view.open('case-b');
@@ -655,6 +689,48 @@ describe('following a job', () => {
     polled = async () => job('failed', { error: 'Delivery is not confirmed.' });
     await settled();
     expect(view.banner()).toContain('Delivery is not confirmed.');
+  });
+  it('keeps both of two failures that land close together', async () => {
+    const second = { id: 'view-2', case_id: 'case-b', revision_id: 'revision-b1' };
+    let ended = false;
+    vi.mocked(fetch).mockImplementation((async (url: string) =>
+      Response.json(String(url).includes('case-b') ? job('queued', second) : job('queued'))) as typeof fetch);
+    vi.mocked(api.job).mockImplementation(async id => {
+      const values = id === second.id ? { ...second, error: 'Second failure.' } : { error: 'First failure.' };
+      return ended ? job('failed', values) : job('running', { ...values, error: undefined });
+    });
+    const view = await start();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    view.open('case-b');
+    await settled();
+    await view.export();
+    click(view.button('Archive in Orthanc'));
+    await settled();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    ended = true;
+    await settled();
+    expect(view.banner()).toContain('Synthetic A: First failure.');
+    expect(view.banner()).toContain('Second failure.');
+  });
+  it('reports a repeat answered with a finished job when the dialog has already gone', async () => {
+    polled = async () => job('completed', { result: archived });
+    const view = await start();
+    expect(view.text()).toContain('View archived in Orthanc');
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    await view.export();
+    const answer = deferred<Response>();
+    vi.mocked(fetch).mockImplementation((async () => answer.promise) as typeof fetch);
+    click(view.button('Archive in Orthanc'));
+    await settled();
+    click(view.labelled('Close DICOM view export'));
+    await settled();
+    expect(view.toast()).toBe('');
+    answer.resolve(Response.json(job('completed', { result: archived })));
+    await settled();
+    expect(view.toast()).toContain('View archived in Orthanc');
   });
   it('reports an earlier export that only the dialog listed', async () => {
     vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
