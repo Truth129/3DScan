@@ -60,7 +60,9 @@ def add_routes(app, service):
         job = service.store.get("jobs", job_id)
         if job["kind"] == "orthanc_import":
             return public_job(service.orthanc.cancel(job_id))
-        if job["kind"] == "orthanc_export":
+        if job["kind"] in ("orthanc_export", "orthanc_view_export"):
+            # Cancelling has no kind-specific step, but the generic path below
+            # would report a remote delivery as cancelled while it may still run.
             return public_job(service.orthanc_exports.cancel(job_id))
         if job["status"] in ("queued", "running"):
             changes = dict(cancel_requested=True)
@@ -90,6 +92,22 @@ def add_routes(app, service):
                 case_id, revision_id, body.structure_ids, body.destination, resend=body.resend, overlap_priority=body.overlap_priority
             )
         )
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view")
+    def dicom_view_availability(case_id: str, revision_id: str):
+        return service.orthanc_view_exports.availability(case_id, revision_id)
+
+    # A plain def, so that decoding the capture never runs on the event loop.
+    @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-view")
+    def dicom_view_export(
+        case_id: str,
+        revision_id: str,
+        image: UploadFile = File(...),
+        reference_image_id: str = Form(..., min_length=1, max_length=128),
+        destination: str | None = Form(None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
+        resend: bool = Form(False),
+    ):
+        return public_job(service.orthanc_view_exports.start(case_id, revision_id, image.file, reference_image_id, destination, resend=resend))
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/cinematic-reference")
     def cinematic_reference(case_id: str, revision_id: str):
