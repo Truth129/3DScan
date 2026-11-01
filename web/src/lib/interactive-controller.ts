@@ -375,6 +375,9 @@ export class InteractiveController {
       this.notify();
       if (this.cancelRequested) await this.reader.cancel(job.id);
       const value = await this.reader.interactiveReview(this.caseId, seen.id);
+      // Cancel's poll can end this follow with this read still out, and a poll armed here would
+      // belong to whatever started next, reading a job it never asked for.
+      if (follow !== this.follow) return;
       // As in poll(): a save of this page's can be in the reply already, or have landed after it.
       if (this.saving || this.review !== seen) {
         if (this.working) this.poll();

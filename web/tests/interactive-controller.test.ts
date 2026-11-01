@@ -813,6 +813,18 @@ describe('a draft that moves under a job this page follows', () => {
       expect(controller.working).toBe(false);
       return { controller, reader };
     }
+    /** Cancel's poll ends the follow with the read straight after predict still out. */
+    async function readOutlasted(read: Promise<InteractiveReview>, ended: InteractiveReview = saved()) {
+      const { controller, reader } = fixture(saved());
+      await controller.load();
+      reader.interactiveReview.mockReturnValueOnce(read).mockResolvedValueOnce(ended);
+      const run = controller.apply(true);
+      await vi.advanceTimersByTimeAsync(0);
+      await controller.cancel();
+      await vi.advanceTimersByTimeAsync(900);
+      expect(controller.working).toBe(false);
+      return { controller, reader, run };
+    }
     function holdPredict(reader: ReturnType<typeof fixture>['reader']) {
       const predict = held<ReturnType<typeof job>>();
       reader.predictInteractive.mockReturnValueOnce(predict.reply as never);
@@ -975,6 +987,36 @@ describe('a draft that moves under a job this page follows', () => {
         answer.release(job());
         await finishing;
       });
+      it('drops a read after predict the last follow left, which would arm a read inside this one', async () => {
+        const read = held<InteractiveReview>();
+        let first!: Promise<void>;
+        const { controller, reader, answer, finishing } = await ready(async ended => {
+          const page = await readOutlasted(read.reply, ended);
+          first = page.run;
+          return page;
+        });
+        read.release(running());
+        await first;
+        await quiet(reader);
+        expect([controller.working, controller.error], 'the page stays held').toEqual([true, '']);
+        answer.release(job());
+        await finishing;
+        expect(controller.job?.id, 'this follow still takes on its own job').toBe('prediction');
+      });
+      it('says nothing of a read after predict the last follow left that fails', async () => {
+        const read = failing<InteractiveReview>();
+        let first!: Promise<void>;
+        const { controller, answer, finishing } = await ready(async ended => {
+          const page = await readOutlasted(read.reply, ended);
+          first = page.run;
+          return page;
+        });
+        read.release();
+        await first;
+        expect([controller.working, controller.error]).toEqual([true, '']);
+        answer.release(job());
+        await finishing;
+      });
     });
 
     describe('with Run AI pressed inside the second that Cancel left', () => {
@@ -1018,6 +1060,27 @@ describe('a draft that moves under a job this page follows', () => {
         await run;
         expect([controller.review?.status, controller.conflict]).toEqual(['predicting', false]);
       });
+    });
+    it('drops a read after predict when a Save follows a refused record, which leaves that record where it was', async () => {
+      const { controller, reader } = fixture(result());
+      await controller.load();
+      const read = held<InteractiveReview>();
+      reader.interactiveReview.mockReturnValueOnce(read.reply);
+      const run = controller.apply(true);
+      await vi.advanceTimersByTimeAsync(0);
+      await controller.cancel();
+      await reads(reader, theirs());
+      expect([controller.working, controller.conflict, controller.review?.status]).toEqual([false, true, 'predicting']);
+      const answer = holdAccept(reader);
+      const saving = controller.accept();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.working).toBe(true);
+      read.release(running());
+      await run;
+      await quiet(reader);
+      expect(controller.working, 'the page stays held').toBe(true);
+      answer.release(job('saving', 'review_accept'));
+      await saving;
     });
     it('ignores the failure of a read that lost to one that ended the follow', async () => {
       const second = failing<InteractiveReview>();
