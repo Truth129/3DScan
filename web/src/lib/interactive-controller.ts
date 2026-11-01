@@ -64,6 +64,8 @@ export class InteractiveController {
   private follow = 0;
   /** The last follow to have a job to read about, which a run or a Save has only once it answers. */
   private reading = 0;
+  /** The last follow to have a poll, which Cancel can start before the read after predict lands. */
+  private polled = 0;
   /** What the end of a follow kept on screen for the save it is retrying, which ends with that save. */
   private retrying = '';
   private stopped = false;
@@ -394,7 +396,9 @@ export class InteractiveController {
     } catch (reason) {
       if (follow !== this.follow) return;
       this.error = reason instanceof Error ? reason.message : String(reason);
-      this.working = false;
+      // A poll that Cancel started goes on without this read, and only it can say how the job ended.
+      // It stops when the page does, so the page stays on the job until that poll has said.
+      if (this.polled !== follow) this.working = false;
       this.notify();
       // `job` is set only once predict has answered, and a save that failed this way set `conflict`.
       if (reason instanceof ApiError && reason.status === 409 && !this.job && !this.conflict && this.review) await this.catchUp(this.review);
@@ -512,6 +516,7 @@ export class InteractiveController {
     const follow = this.follow,
       over = () => this.stopped || !this.working || follow !== this.follow;
     this.reading = follow;
+    this.polled = follow;
     this.pollTimer = setTimeout(async () => {
       if (over()) return;
       const seen = this.review!;

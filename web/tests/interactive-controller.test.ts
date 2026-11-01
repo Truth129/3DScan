@@ -1102,6 +1102,62 @@ describe('a draft that moves under a job this page follows', () => {
       answer.release(job('saving', 'review_accept'));
       await saving;
     });
+    describe("a read after predict that fails with Cancel's poll going", () => {
+      const said = 'Correction job cancelled; your prompts are saved';
+      /** Run AI and Cancel, then that read fails once `meanwhile` has run. */
+      async function failedUnderCancel(meanwhile?: (reader: ReturnType<typeof fixture>['reader']) => Promise<void>) {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        const read = failing<InteractiveReview>();
+        reader.interactiveReview.mockReturnValueOnce(read.reply);
+        const run = controller.apply(true);
+        await vi.advanceTimersByTimeAsync(0);
+        await controller.cancel();
+        await meanwhile?.(reader);
+        read.release();
+        await run;
+        return { controller, reader };
+      }
+      it('stays with that poll, which alone can say how the job ended', async () => {
+        const { controller, reader } = await failedUnderCancel();
+        expect([controller.working, controller.error]).toEqual([true, 'Failed to fetch']);
+        await reads(reader, saved(1, { error: said }));
+        expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
+      });
+      it('reads on while the job is still stopping, as any follow does', async () => {
+        const { controller, reader } = await failedUnderCancel();
+        await reads(reader, running());
+        expect(controller.working).toBe(true);
+        await reads(reader, saved(1, { error: said }));
+        expect([controller.working, controller.error]).toEqual([false, said]);
+      });
+      it('takes the reply of a poll that is out when it fails', async () => {
+        const out = held<InteractiveReview>();
+        const { controller } = await failedUnderCancel(async reader => {
+          reader.interactiveReview.mockReturnValueOnce(out.reply);
+          await vi.advanceTimersByTimeAsync(900);
+        });
+        out.release(saved(1, { error: said }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect([controller.working, controller.error]).toEqual([false, said]);
+      });
+      it('leaves the page free when that poll has already ended the follow, because nothing would free it again', async () => {
+        const read = failing<InteractiveReview>();
+        const { controller, reader, run } = await readOutlasted(read.reply);
+        read.release();
+        await run;
+        expect([controller.working, controller.error]).toEqual([false, 'Failed to fetch']);
+        await quiet(reader);
+      });
+      it('frees the page as it always has when no poll is going', async () => {
+        const { controller, reader } = fixture(saved());
+        await controller.load();
+        reader.interactiveReview.mockRejectedValueOnce(new Error('Failed to fetch'));
+        await controller.apply(true);
+        expect([controller.working, controller.error]).toEqual([false, 'Failed to fetch']);
+        await quiet(reader);
+      });
+    });
     it('ignores the failure of a read that lost to one that ended the follow', async () => {
       const second = failing<InteractiveReview>();
       const { controller, reader } = await twoPolls(second.reply);
