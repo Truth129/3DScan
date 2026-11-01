@@ -619,7 +619,12 @@ def a_marker_that_points_nowhere(target):
     (target / MARKER).symlink_to(target / "nowhere")
 
 
-@pytest.mark.parametrize("marker", [no_marker, a_marker_that_is_a_directory, a_marker_that_points_nowhere])
+def a_marker_that_points_at_a_file(target):
+    # A copy of an environment made of links looks like this, and this script did not make it.
+    (target / MARKER).symlink_to(target / "a-file-of-someone-elses")
+
+
+@pytest.mark.parametrize("marker", [no_marker, a_marker_that_is_a_directory, a_marker_that_points_nowhere, a_marker_that_points_at_a_file])
 def test_the_wipe_never_reaches_a_directory_without_the_marker(rig, marker):
     # This one looks like a stopped install in every other way.
     target = rig.elsewhere / "target"
@@ -1260,6 +1265,7 @@ def test_a_finished_run_leaves_the_environment_free(rig):
 
 LATE_ARRIVALS = {
     "a-directory": "target.mkdir(); (target / 'lib').mkdir(); (target / 'lib' / 'precious').touch(); (target / 'pyvenv.cfg').touch()",
+    "a-directory-whose-marker-is-a-link": f"target.mkdir(); (target / 'precious').touch(); (target / {MARKER!r}).symlink_to('precious')",
     "an-empty-directory": "target.mkdir()",
     "a-file": "target.touch()",
     "a-link-to-a-directory": "elsewhere = target.with_name('elsewhere-entirely'); elsewhere.mkdir(); target.symlink_to(elsewhere)",
@@ -1277,7 +1283,11 @@ def test_a_target_that_arrives_after_the_guard_is_refused_too(rig, step, arrival
     assert not {"find", "uv venv", "uv pip sync", "venv-python"} & set(rig.steps())
     if arrival is LATE_ARRIVALS["a-directory"]:
         assert (target / "lib" / "precious").exists()
-    assert not (target / MARKER).exists() and not list(rig.tmp.iterdir())
+    if arrival is LATE_ARRIVALS["a-directory-whose-marker-is-a-link"]:
+        assert (target / "precious").exists() and (target / MARKER).is_symlink()
+    else:
+        assert not (target / MARKER).exists()
+    assert not list(rig.tmp.iterdir())
 
 
 def test_a_run_that_loses_mkdir_to_another_run_is_refused_by_the_lock(rig):

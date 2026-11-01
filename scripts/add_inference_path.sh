@@ -31,11 +31,16 @@ stopped() {
   fail "$1 Until a run finishes, the app shows this GPU as unavailable, or not at all if it was never checked. Fix what was reported above, then run this again."
 }
 
+# A link is not the marker, wherever it points: a copy of an environment can be made of links.
+marked() {
+  [[ -f "$marker" && ! -L "$marker" ]]
+}
+
 # The marker alone lets this script use a directory that exists, whatever its name or however
 # empty it is: `uv pip sync` removes what the lock does not list, so another environment would
 # be destroyed. A link that points nowhere still holds the name.
 refuse_unmarked() {
-  if [[ -e "$venv" || -L "$named" ]] && [[ ! -f "$marker" ]]; then
+  if [[ -e "$venv" || -L "$named" ]] && ! marked; then
     fail "$venv already exists and this script did not make it, so nothing was changed. Name a new directory with --venv."
   fi
 }
@@ -156,7 +161,7 @@ driver="${driver%%$'\n'*}"
 # Only the run that starts an install needs the room. What it leaves in the environment and the
 # cache counts against the free space from then on, so asking again would refuse the re-run that
 # rebuilds it. The cache holds a second copy when it is on another disk.
-if [[ ! -f "$marker" ]]; then
+if ! marked; then
   for place in "$venv" "$UV_CACHE_DIR"; do
     free="$(free_bytes "$place")"
     (( free >= 12 * 1024 ** 3 )) ||
@@ -217,13 +222,13 @@ fi
 # A new directory comes from plain mkdir, which cannot succeed on anything that arrived after the
 # guard above, so a directory this script did not make is never adopted. If mkdir loses to another
 # run of this script, the marker says so and the lock below settles it. Otherwise mkdir said why.
-if [[ ! -f "$marker" ]]; then
+if ! marked; then
   mkdir -p -- "$(dirname -- "$venv")"
   if mkdir -- "$venv"; then
     echo "Made by scripts/add_inference_path.sh $chosen." >"$marker"
   else
     refuse_unmarked
-    [[ -f "$marker" ]] || exit 1
+    marked || exit 1
   fi
 fi
 
