@@ -294,6 +294,17 @@ def test_concurrent_requests_and_completed_retries_reuse_one_job_and_case(rig):
     assert rig.archive.downloaded == 1
 
 
+def test_a_repeat_import_of_a_trashed_case_makes_a_new_case(rig):
+    first = start(rig).json()
+    assert execute_cpu(rig, first["id"])["status"] == "completed"
+    rig.service.store.trash_case(first["case_id"], None)
+    second = start(rig).json()
+    assert second["id"] != first["id"] and second["case_id"] != first["case_id"]
+    assert execute_cpu(rig, second["id"])["status"] == "completed"
+    assert [case["id"] for case in rig.service.store.visible_cases(EVERY_CASE)] == [second["case_id"]]
+    assert [case["id"] for case in rig.service.store.trashed_cases(EVERY_CASE)] == [first["case_id"]]
+
+
 @pytest.mark.parametrize("completeness", ["receiving", "incomplete"])
 def test_receiving_or_incomplete_series_cannot_create_a_case(rig, completeness):
     rig.archive.snapshot_doc["completeness"] = completeness

@@ -26,8 +26,13 @@ from .orthanc_models import (
 )
 from .store import Store, grant_owner, identifier, now, public_job, safe_id
 
-# Every lookup of an earlier import uses this, so launch and start agree on what exists.
-_READABLE = "AND (? IS NULL OR EXISTS(SELECT 1 FROM case_access a WHERE a.case_id=j.case_id AND a.user_id=?))"
+# Every lookup of an earlier import uses this, so launch and start agree on what exists. A case in
+# Trash counts as absent, because launch would return a case that answers 404, and start would run
+# an import nobody can see. The same scan can then sit on disk twice.
+_READABLE = (
+    "AND (? IS NULL OR EXISTS(SELECT 1 FROM case_access a WHERE a.case_id=j.case_id AND a.user_id=?)) "
+    "AND NOT EXISTS(SELECT 1 FROM trash t WHERE t.case_id=j.case_id AND t.kind='case')"
+)
 
 
 def _reader():

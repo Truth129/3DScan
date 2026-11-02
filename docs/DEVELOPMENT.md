@@ -124,8 +124,9 @@ build.
     vtk.js handles the case itself.
 - **Routes.** Every new route needs a rule in `RULES` in `scan3d/access.py`, and `check_policy`
   stops the app from starting without one, in both modes.
-  - A route with `{case_id}` gets the case rule on its own, and needs an entry only for an audit
-    action. `{job_id}` and `{upload_id}` need those rule kinds.
+  - A route with `{case_id}` gets the case rule on its own, which also hides a case in Trash, and
+    needs an entry only for an audit action or the `trashed` kind. `{job_id}` and `{upload_id}` need
+    those rule kinds.
   - Read cases through `case_summaries(scope)` or `visible_cases(scope)`. `Store.list` refuses
     `"cases"`.
 - **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `ReviewConflict` and

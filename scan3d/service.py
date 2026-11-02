@@ -13,7 +13,7 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import __version__, inference_paths
+from . import __version__, identity, inference_paths
 from .accounts import Accounts
 from .config import Settings
 from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
@@ -277,6 +277,27 @@ class Service:
                 changes.update(status="cancelled", stage="Cancelled")
             job = self.store.update_job(job_id, **changes)
         return job
+
+    def trash_case(self, case_id):
+        """Hide the case first, so this is never refused, then stop its work. Cancelled jobs stay cancelled."""
+        self.store.trash_case(case_id, identity.actor_id())
+        stopped = continuing = 0
+        for job in self.store.list("jobs", case_id):
+            if job["status"] not in ("queued", "running"):
+                continue
+            try:
+                result = self.cancel_job(job["id"])
+            except Exception:
+                # The case is already in Trash, so this must not become a 500. Claim flags what is missed here.
+                log.exception("Could not stop job %s", job["id"])
+                continue
+            # A send Orthanc has started finishes, and a queued one with a live receipt may too.
+            sending = job["kind"] in ("orthanc_export", "orthanc_view_export") and (
+                result["status"] == "failed" or (result.get("payload") or {}).get("delivery_state")
+            )
+            continuing += bool(sending)
+            stopped += not sending
+        return {"id": case_id, "jobs_stopped": stopped, "sends_continuing": continuing}
 
     def stage(self, job, name):
         self.check_cancel(job)

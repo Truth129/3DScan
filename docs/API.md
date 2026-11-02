@@ -27,7 +27,7 @@ or an unexpected 500 is plain text.
 | 400    | Invalid input, or a `Host` outside the allowlist        | `ValueError`, `TrustedHostMiddleware`     |
 | 401    | No valid session, or a wrong password                   | `SessionGate`, `POST /api/session`        |
 | 403    | Mutation from another browser origin, or access this account lacks | Same-origin middleware, `SessionGate` |
-| 404    | Record is absent, belongs to another case, or this account cannot open it | `errors.NotFound`, `SessionGate` |
+| 404    | Record is absent, belongs to another case, is in Trash, or this account cannot open it | `errors.NotFound`, `SessionGate` |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
 | 409    | Stale state; reload before retrying                     | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active |
 | 411    | Captured view or sign-in without a plain `Content-Length` | `dicom-view` upload and sign-in checks  |
@@ -63,8 +63,9 @@ paths.
 ## Sign-in
 
 With sign-in [off](CONFIGURATION.md#sign-in), every request acts as one built-in local user, and
-every rule below passes. In `password` mode `/docs`, `/redoc` and `/openapi.json` are gone, and a
-request is refused before its route reads a body.
+every rule below passes, except that a case in Trash still reads as absent. In `password` mode
+`/docs`, `/redoc` and `/openapi.json` are gone, and a request is refused before its route reads a
+body.
 
 ### Sign-in routes
 
@@ -105,14 +106,17 @@ with no session gets the 401, and a signed-in one the other.
 | Rule      | Routes                                                                  | Refusal                                        |
 | --------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
 | Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, the viewer files | None                                         |
-| Signed in | `GET /api/cases`, `GET /api/agreement`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/orthanc/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
+| Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/orthanc/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
 | Admin     | `POST /api/cases/import-local`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
 | Archive   | `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
-| Case      | Every route with a case ID in its path                                  | 401, 404 `Case not found`                      |
+| Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
+| Trashed   | `POST /api/trash/{id}/restore`                                          | 401, 404 `Case not found`                      |
 | Job       | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`         | 401, 404 `Job not found`                       |
 | Upload    | `POST /api/imports/{id}/parts`, `.../finish`, `DELETE /api/imports/{id}` | 401, 404 `Upload not found`                   |
 
 - `GET /api/cases` and `GET /api/agreement` cover only this account's cases.
+- A case in Trash reads as absent in both modes, in each route's own refusal: `Case not found`,
+  `Job not found` or `Upload not found`.
 - A malformed case, job or upload ID is also 404 here, so a refusal never shows whether an ID
   exists.
 - A job follows its case. An upload belongs to whoever started it, and one with no owner, or
@@ -270,6 +274,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `GET /api/agreement`                                 | Pooled AI-agreement report              |
 | `GET /api/cases`, `GET /api/cases/{id}`              | Case records                            |
 | `POST /api/cases/{id}/open`                          | [Library](#library): record an open     |
+| `POST /api/cases/{id}/trash`, `GET /api/trash`, `POST /api/trash/{id}/restore` | Move to Trash, list it, restore |
 | `POST /api/cases/demo`, `.../import`, `.../import-local` | Phantom, multipart or local import  |
 | `POST /api/imports`, `.../{id}/parts`, `.../{id}/finish`, `DELETE .../{id}` | Staged upload            |
 | `GET /api/orthanc/status`, `POST .../studies/query`  | Connector state, study search           |
@@ -422,11 +427,22 @@ Image-only revisions are refused.
 thing that moves a case up the list. With sign-in off, a case that does not exist answers 404
 `Case not found`.
 
+**`POST /api/cases/{id}/trash`** hides the case, stops its jobs and returns `{id, jobs_stopped,
+sends_continuing}`. Nothing on disk moves. Trash is never refused for a job, a draft or a stuck
+import. With sign-in off, a case that does not exist answers 404 `Case not found`.
+
+**`GET /api/trash`** lists this account's cases in Trash, last trashed first. Each is a Case with
+`trashed_at`.
+
+**`POST /api/trash/{id}/restore`** returns the Case as it was, and stopped jobs stay cancelled. A
+case that is not yours, or is not in Trash, answers 404 `Case not found`.
+
 ## Jobs
 
 **`POST /api/jobs/{id}/cancel`** returns the Job. A queued job cancels at once, and a running job
 stops at its next check. Once a DICOM SEG or view send has started, this stops only the local wait;
-see [DICOM SEG export](#dicom-seg-export).
+see [DICOM SEG export](#dicom-seg-export). Moving a case to Trash cancels its jobs the same way, and
+a send already started finishes.
 
 **`GET /api/jobs/{id}/measurements`** returns `{structures, completed, total}` while surfaces build.
 Ordinary polls leave them out.

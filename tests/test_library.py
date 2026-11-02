@@ -1,5 +1,6 @@
-"""The case list, on synthetic records: last-opened order for each person."""
+"""The case list and Trash, on synthetic records: nothing in Trash shows anywhere, and nothing on disk moves."""
 
+import json
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -7,8 +8,8 @@ import pytest
 
 from scan3d.api import create_app
 from scan3d.config import Settings
-from scan3d.store import now
-from test_access import BASE, account
+from scan3d.store import identifier, now
+from test_access import BASE, account, filled, ruled_routes
 
 
 @pytest.fixture(scope="module")
@@ -23,6 +24,24 @@ def rig(tmp_path_factory):
 def off_mode(tmp_path):
     app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
     return app.state.service, TestClient(app, base_url=BASE)
+
+
+def actions(service, case_id):
+    with service.store.connection() as con:
+        return [row["action"] for row in con.execute("SELECT action FROM audit_events WHERE case_id=? ORDER BY seq", (case_id,))]
+
+
+def finished_upload(service, case_id):
+    """A staged upload that has become this case, as `Uploads.finish` leaves it."""
+    folder = service.settings.data_dir / "import-uploads" / identifier()
+    folder.mkdir(parents=True)
+    (folder / "state.json").write_text(json.dumps({"case_id": case_id, "owner_id": None}))
+    return folder.name
+
+
+def absent(response, detail):
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": detail}
 
 
 def test_cases_list_last_opened_first_for_each_person(rig):
@@ -46,3 +65,127 @@ def test_opening_a_missing_case_is_not_found_with_sign_in_off(tmp_path):
     _, http = off_mode(tmp_path)
     response = http.post(f"/api/cases/{'0' * 32}/open")
     assert response.status_code == 404 and response.json() == {"detail": "Case not found"}
+
+
+def test_trash_hides_a_case_from_every_route_and_list(rig):
+    case_id = rig.service.new_case("Synthetic")["id"]
+    kept = rig.service.store.case_dir(case_id) / "kept.bin"
+    kept.write_bytes(b"synthetic")
+    counted = rig.owner.get("/api/agreement").json()["cases"]["total"]
+    assert rig.owner.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 0, "sends_continuing": 0}
+    walked = 0
+    for route, method, rule in ruled_routes(rig.app):
+        if rule.kind == "case":
+            absent(rig.owner.request(method, filled(route.path.replace("{case_id}", case_id))), "Case not found")
+            walked += 1
+    assert walked > 40
+    assert case_id not in [case["id"] for case in rig.owner.get("/api/cases").json()]
+    assert rig.owner.get("/api/agreement").json()["cases"]["total"] == counted - 1
+    listed = next(case for case in rig.owner.get("/api/trash").json() if case["id"] == case_id)
+    assert listed["trashed_at"] and "source_dir" not in listed
+    assert kept.read_bytes() == b"synthetic"
+
+
+def test_a_trashed_case_reads_as_absent_with_sign_in_off(tmp_path):
+    service, http = off_mode(tmp_path)
+    case_id = service.new_case("Synthetic")["id"]
+    job = service.store.enqueue(case_id, "include_all", {})
+    upload_id = finished_upload(service, case_id)
+    assert http.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 1, "sends_continuing": 0}
+    absent(http.get(f"/api/cases/{case_id}"), "Case not found")
+    absent(http.post(f"/api/cases/{case_id}/trash"), "Case not found")
+    absent(http.post(f"/api/cases/{'0' * 32}/trash"), "Case not found")
+    absent(http.get(f"/api/jobs/{job['id']}"), "Job not found")
+    absent(http.post(f"/api/imports/{upload_id}/finish"), "Upload not found")
+    assert http.get("/api/cases").json() == []
+    assert [case["id"] for case in http.get("/api/trash").json()] == [case_id]
+    # The gate refuses before its audit row, so a refused open leaves no sign it was allowed.
+    assert actions(service, case_id) == ["case.trash"]
+    assert http.get("/api/cases/not-a-record").status_code == 400
+    assert http.post(f"/api/trash/{case_id}/restore").status_code == 200
+    assert http.get(f"/api/cases/{case_id}").status_code == 200
+
+
+def test_a_trashed_cases_job_and_upload_read_as_absent(rig):
+    case_id = rig.service.new_case("Synthetic")["id"]
+    job_id = rig.service.store.enqueue(case_id, "include_all", {})["id"]
+    upload_id = finished_upload(rig.service, case_id)
+    rig.owner.post(f"/api/cases/{case_id}/trash")
+    for response in (rig.owner.get(f"/api/jobs/{job_id}"), rig.owner.get(f"/api/jobs/{job_id}/measurements"), rig.owner.post(f"/api/jobs/{job_id}/cancel")):
+        absent(response, "Job not found")
+    for response in (
+        rig.owner.post(f"/api/imports/{upload_id}/parts"),
+        rig.owner.post(f"/api/imports/{upload_id}/finish"),
+        rig.owner.delete(f"/api/imports/{upload_id}"),
+    ):
+        absent(response, "Upload not found")
+
+
+def test_restore_returns_the_case_unchanged_and_jobs_stay_cancelled(rig):
+    case_id = rig.service.new_case("Synthetic")["id"]
+    job_id = rig.service.store.enqueue(case_id, "include_all", {})["id"]
+    before = rig.owner.get(f"/api/cases/{case_id}").json()
+    rig.owner.post(f"/api/cases/{case_id}/trash")
+    restored = rig.owner.post(f"/api/trash/{case_id}/restore")
+    assert restored.status_code == 200 and restored.json() == before
+    assert rig.owner.get(f"/api/cases/{case_id}").json() == before
+    assert case_id not in [case["id"] for case in rig.owner.get("/api/trash").json()]
+    assert rig.service.store.get("jobs", job_id)["status"] == "cancelled"
+
+
+def test_restore_is_for_the_owner_and_only_for_a_trashed_case(rig):
+    case_id = rig.service.new_case("Synthetic")["id"]
+    absent(rig.owner.post(f"/api/trash/{case_id}/restore"), "Case not found")
+    rig.owner.post(f"/api/cases/{case_id}/trash")
+    absent(rig.other.post(f"/api/trash/{case_id}/restore"), "Case not found")
+    assert case_id in [case["id"] for case in rig.owner.get("/api/trash").json()]
+    assert case_id not in [case["id"] for case in rig.other.get("/api/trash").json()]
+    assert rig.owner.post(f"/api/trash/{case_id}/restore").status_code == 200
+
+
+def test_trash_stops_each_active_job_and_counts_a_send_apart(rig):
+    store = rig.service.store
+    case_id = rig.service.new_case("Synthetic")["id"]
+    queued = store.enqueue(case_id, "include_all", {})["id"]
+    running = store.enqueue(case_id, "include_all", {})["id"]
+    sending = store.enqueue(case_id, "orthanc_export", {"delivery_state": "pending"})["id"]
+    for job_id in (running, sending):
+        store.update_job(job_id, status="running")
+    assert rig.owner.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 2, "sends_continuing": 1}
+    assert store.get("jobs", queued)["status"] == "cancelled"
+    assert store.get("jobs", running)["cancel_requested"] is True
+    assert store.get("jobs", sending)["status"] == "running"
+
+
+def test_a_job_that_cannot_be_stopped_does_not_fail_trash(rig, monkeypatch):
+    case_id = rig.service.new_case("Synthetic")["id"]
+    rig.service.store.enqueue(case_id, "include_all", {})
+
+    def refuse(_job_id):
+        raise RuntimeError("Synthetic failure")
+
+    monkeypatch.setattr(rig.service, "cancel_job", refuse)
+    assert rig.owner.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 0, "sends_continuing": 0}
+    assert case_id in [case["id"] for case in rig.owner.get("/api/trash").json()]
+
+
+def test_trashing_twice_leaves_one_row_and_one_audit_event(rig):
+    store = rig.service.store
+    case_id = rig.service.new_case("Synthetic")["id"]
+    store.trash_case(case_id, rig.owner.user_id)
+    store.trash_case(case_id, rig.owner.user_id)
+    with store.connection() as con:
+        assert con.execute("SELECT COUNT(*) FROM trash WHERE case_id=?", (case_id,)).fetchone()[0] == 1
+    assert actions(rig.service, case_id) == ["case.trash"]
+
+
+def test_a_job_that_starts_after_trash_ends_cancelled(tmp_path):
+    service, http = off_mode(tmp_path)
+    case = http.post("/api/cases/demo").json()
+    revision = service.store.get("revisions", case["active_revision_id"])
+    assert http.post(f"/api/cases/{case['id']}/trash").status_code == 200
+    operation = dict(type="erase_region", seed_ras=None, bounds_ras=[[-5, -5, -5], [5, 5, 5]])
+    job = service.store.enqueue(case["id"], "refine", dict(revision_id=revision["id"], structure_id=revision["structures"][0]["id"], operation=operation))
+    service.execute(service.store.claim())
+    assert service.store.get("jobs", job["id"])["status"] == "cancelled"
+    assert len(service.store.list("revisions", case["id"])) == 1

@@ -38,7 +38,7 @@ class Rule:
 
 _REVISION = "/api/cases/{case_id}/revisions/{revision_id}"
 _LICENSE = "/api/totalsegmentator/license"
-# Every route without {case_id}, by method and template. A {case_id} route needs an entry only to carry an audit action.
+# Every route without {case_id}, by method and template. A {case_id} route needs an entry for an audit action or the `trashed` kind.
 RULES = {
     ("GET", "/api/health"): Rule("public"),
     ("GET", "/api/session"): Rule("public"),
@@ -53,6 +53,7 @@ RULES = {
     ("POST", "/api/session/sign-out-others"): Rule("signed_in"),
     ("GET", "/api/cases"): Rule("signed_in"),
     ("GET", "/api/agreement"): Rule("signed_in"),
+    ("GET", "/api/trash"): Rule("signed_in"),
     ("POST", "/api/cases/demo"): Rule("signed_in", "case.import"),
     ("POST", "/api/cases/import"): Rule("signed_in", "case.import"),
     ("POST", "/api/imports"): Rule("signed_in", "case.import"),
@@ -74,6 +75,7 @@ RULES = {
     ("POST", "/api/imports/{upload_id}/parts"): Rule("upload"),
     ("POST", "/api/imports/{upload_id}/finish"): Rule("upload"),
     ("DELETE", "/api/imports/{upload_id}"): Rule("upload"),
+    ("POST", "/api/trash/{case_id}/restore"): Rule("trashed"),
     ("GET", "/api/cases/{case_id}"): Rule("case", "case.open"),
     ("GET", f"{_REVISION}/slicer.zip"): Rule("case", "export.slicer"),
     ("GET", f"{_REVISION}/export.html"): Rule("case", "export.html"),
@@ -86,8 +88,8 @@ RULES = {
 _CONDITIONAL = frozenset({("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("GET", "/redoc"), ("GET", "/openapi.json"), ("GET", "/")})
 _CASE = Rule("case")
 _STATIC = Rule("public")
-# Each scoped kind reads one path parameter, and a route with that parameter must be of that kind.
-_SCOPED = {"case": "case_id", "job": "job_id", "upload": "upload_id"}
+# Each scoped kind reads one path parameter, and a route with that parameter must be of such a kind.
+_SCOPED = {"case_id": ("case", "trashed"), "job_id": ("job",), "upload_id": ("upload",)}
 
 _SIGN_IN = (401, "Sign in to continue")
 _NO_RULE = (403, "This route has no access rule")
@@ -120,7 +122,7 @@ def check_policy(routes):
             rule = rule_for(route, method)
             if rule is None:
                 raise RuntimeError(f"No access rule for {method} {route.path}")
-            if any((name in route.param_convertors) != (rule.kind == kind) for kind, name in _SCOPED.items()):
+            if any((name in route.param_convertors) != (rule.kind in kinds) for name, kinds in _SCOPED.items()):
                 raise RuntimeError(f"{method} {route.path} needs the rule for its path parameters")
             seen.add(("GET" if method == "HEAD" else method, route.path))
     stale = set(RULES) - seen - _CONDITIONAL
@@ -232,9 +234,22 @@ class SessionGate:
             refusal = self._refusal(rule, principal, params)
         else:
             principal, refusal = identity.LOCAL, None if rule else _NO_RULE
+        refusal = refusal or self._hidden(rule, params)
         if refusal is None and rule.audit:
             self._audit(rule.audit, principal, params)
         return principal, refusal
+
+    def _hidden(self, rule, params):
+        """A case in Trash reads as missing in both modes, in the route's own words, so nothing shows it exists."""
+        if rule.kind == "case":
+            case_id, detail = params["case_id"], "Case not found"
+        elif rule.kind == "job":
+            case_id, detail = self.accounts.job_case(params["job_id"]), "Job not found"
+        elif rule.kind == "upload":
+            case_id, detail = upload_owner(self.uploads, params["upload_id"])[2], "Upload not found"
+        else:
+            return None
+        return (404, detail) if case_id and self.accounts.in_trash(case_id) else None
 
     def _refusal(self, rule, principal, params):
         """Why this principal may not use this rule, or None. Falling off the end refuses."""
@@ -249,14 +264,14 @@ class SessionGate:
             return None if principal.is_admin else (403, "Administrator access is required")
         if kind == "archive":
             return None if principal.archive_access else (403, "This account cannot use the archive")
-        if kind == "case":
+        if kind in ("case", "trashed"):
             return None if self._may_open(params["case_id"], principal) else (404, "Case not found")
         if kind == "job":
             job_id = params["job_id"]
             case_id = self.accounts.job_case(job_id) if _well_formed(job_id) else None
             return None if case_id and self._may_open(case_id, principal) else (404, "Job not found")
         if kind == "upload":
-            found, owner = upload_owner(self.uploads, params["upload_id"])
+            found, owner, _ = upload_owner(self.uploads, params["upload_id"])
             # Uploads from before sign-in, or from sign-in off, belong to no one, so admins may finish them.
             allowed = found and (owner == principal.id or (owner in (None, identity.LOCAL.id) and principal.is_admin))
             return None if allowed else (404, "Upload not found")

@@ -130,6 +130,16 @@ def test_launch_finds_only_the_imports_of_the_person_asking(launch_rig):
     assert other["case_id"] is other["job"] is None
 
 
+def test_launch_treats_a_trashed_case_as_absent(launch_rig):
+    rig = launch_rig
+    job = start(rig).json()
+    assert execute_cpu(rig, job["id"])["status"] == "completed"
+    assert launch(rig).json()["case_id"] == job["case_id"]
+    rig.service.store.trash_case(job["case_id"], None)
+    result = launch(rig).json()
+    assert result["case_id"] is result["job"] is None
+
+
 def test_archive_mismatch_is_rejected_before_any_upstream_request(launch_rig, monkeypatch):
     rig = launch_rig
     with read_only(rig, monkeypatch):

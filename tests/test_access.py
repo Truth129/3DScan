@@ -261,8 +261,15 @@ def test_the_policy_refuses_what_it_cannot_decide(tmp_path, monkeypatch):
         check_policy(app.routes)
 
 
+def test_the_policy_refuses_a_trashed_rule_on_a_route_with_no_case_id(tmp_path, monkeypatch):
+    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
+    monkeypatch.setitem(RULES, ("GET", "/api/cases"), Rule("trashed"))
+    with pytest.raises(RuntimeError, match="path parameters"):
+        check_policy(app.routes)
+
+
 def test_every_kind_a_rule_names_is_one_the_gate_decides():
-    assert {rule.kind for rule in RULES.values()} == {"public", "off_only", "signed_in", "admin", "archive", "job", "upload", "case"}
+    assert {rule.kind for rule in RULES.values()} == {"public", "off_only", "signed_in", "admin", "archive", "job", "upload", "case", "trashed"}
 
 
 def test_with_sign_in_off_everything_stays_open_and_audited_rules_still_write(tmp_path):

@@ -266,6 +266,10 @@ class Accounts:
         with self.store.connection() as con:
             return con.execute("SELECT 1 FROM case_access WHERE case_id=? AND user_id=?", (case_id, user_id)).fetchone() is not None
 
+    def in_trash(self, case_id):
+        with self.store.connection() as con:
+            return con.execute("SELECT 1 FROM trash WHERE case_id=? AND kind='case'", (case_id,)).fetchone() is not None
+
     def job_case(self, job_id):
         with self.store.connection() as con:
             row = con.execute("SELECT case_id FROM jobs WHERE id=?", (job_id,)).fetchone()

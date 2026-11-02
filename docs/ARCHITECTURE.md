@@ -133,7 +133,8 @@ and adds milliseconds to every write.
 `users`, `sessions`, `case_access` and `audit_events` are ordinary tables beside those records.
 `cases` has no owner column and there are no foreign keys. A backup keeps users and audit and
 removes sessions, so a restore revives no sign-in. `case_opened` holds when each account last opened
-each case, which orders that account's list.
+each case, which orders that account's list. A `trash` row hides its case and nothing on disk moves,
+so a restored case is exactly as it was.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
@@ -173,7 +174,8 @@ process per data directory executes jobs.
 Queued jobs stay queued, except DICOM SEG and view exports, which fail locally because a send must
 be requested explicitly.
 
-**Cancellation** stops a queued job at once and a running job at its next check.
+**Cancellation** stops a queued job at once and a running job at its next check. Trash cancels a
+case's jobs, and a job that starts afterwards stops at its first check.
 
 ## Inference
 
@@ -443,7 +445,8 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
 [API.md](API.md#sign-in) lists them.
 
 - `check_policy` stops the app from starting if a route has no rule.
-- A `case_access` row is what opens a case. Admins get no exception.
+- A `case_access` row is what opens a case, unless the case is in Trash, in both modes. Admins get
+  no exception.
 - A case scope is a user ID or `EVERY_CASE`, never `None`, and only the built-in local user holds
   `EVERY_CASE`.
 - A new case belongs to its creator. Work with nobody signed in, such as the command line or sign-in
@@ -460,6 +463,7 @@ fails the request. The actions are:
 - `session.sign_in`, `session.sign_in_failed`, `session.sign_out`, `session.sign_out_others`
 - `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`
 - `case.open`, once per session and case
+- `case.trash`, `case.restore`, each written with the change itself
 - `archive.query`, `archive.launch`
 - `export.slicer`, `export.html`, `export.seg`, `export.seg_file`, `export.view`
 
@@ -475,6 +479,7 @@ when a TotalSegmentator key is saved, and model downloads.
   a shell on the machine can still read every file.
 - Every account is an administrator, and a case cannot be shared between accounts.
 - Each account imports its own copy of an Orthanc series, so the same scan can be on disk twice.
+- A case in Trash keeps its disk space, and importing it again from Orthanc makes a second copy.
 - Jobs and review sessions store who started them, but the app shows neither, and a revision records
   no reviewer. The audit log has no viewer.
 - The service does not scale out, and it runs on Linux only.

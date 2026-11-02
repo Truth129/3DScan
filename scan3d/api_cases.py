@@ -26,6 +26,20 @@ def add_routes(app, service):
         service.store.mark_opened(case_id, identity.actor_id())
         return {"id": case_id}
 
+    @app.post("/api/cases/{case_id}/trash")
+    def trash_case(case_id: str):
+        return service.trash_case(case_id)
+
+    @app.post("/api/trash/{case_id}/restore")
+    def restore_case(case_id: str):
+        service.store.restore_case(case_id, identity.actor_id())
+        return public_case(service.store.get("cases", case_id), service.settings)
+
+    @app.get("/api/trash")
+    def trashed_cases():
+        scope = identity.case_scope(identity.current())
+        return [public_case(case, service.settings) for case in service.store.trashed_cases(scope)]
+
     @app.post("/api/cases/{case_id}/process")
     def process(case_id: str, body: Process):
         return public_job(service.process(case_id, body.series_uid, body.profile, body.phase, cardiac_phase=body.cardiac_phase, rr_percent=body.rr_percent))

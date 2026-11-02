@@ -246,6 +246,17 @@ class Store:
         """Full records of the cases in a scope. Prefer `case_summaries` for a list."""
         return [json.loads(row["data"]) for row in self._scoped_cases("c.data AS data", scope)]
 
+    def trashed_cases(self, scope):
+        """The cases in a scope that are in Trash, last trashed first, for `public_case`."""
+        access, values = self._scope_join(scope)
+        with self.connection() as con:
+            rows = con.execute(
+                f"SELECT COALESCE(s.data, c.data) AS data, t.trashed_at AS trashed_at FROM trash t JOIN cases c ON c.id=t.case_id{access} "
+                "LEFT JOIN case_summaries s ON s.case_id=c.id WHERE t.kind='case' AND t.state='trashed' ORDER BY t.trashed_at DESC",
+                values,
+            ).fetchall()
+        return [{**json.loads(row["data"]), "trashed_at": row["trashed_at"]} for row in rows]
+
     def mark_opened(self, case_id, user_id):
         safe_id(case_id)
         with self.connection() as con:
@@ -256,6 +267,30 @@ class Store:
             ).rowcount
         if not changed:
             raise NotFound("Case not found")
+
+    def trash_case(self, case_id, actor_id):
+        """Nothing on disk moves, so paths and any late write stay valid. A separate row hides the case."""
+        safe_id(case_id)
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if con.execute("SELECT 1 FROM cases WHERE id=?", (case_id,)).fetchone() is None:
+                raise NotFound("Case not found")
+            # Two requests can pass the gate together. A plain insert would make the second a 500.
+            added = con.execute(
+                "INSERT INTO trash(id,kind,case_id,state,trashed_by,trashed_at) VALUES (?,'case',?,'trashed',?,?) "
+                "ON CONFLICT(case_id) WHERE kind='case' DO NOTHING",
+                (identifier(), case_id, actor_id, now()),
+            ).rowcount
+            if added:
+                Accounts._write_audit(con, "case.trash", actor_id, case_id)
+
+    def restore_case(self, case_id, actor_id):
+        safe_id(case_id)
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            if not con.execute("DELETE FROM trash WHERE case_id=? AND kind='case' AND state='trashed'", (case_id,)).rowcount:
+                raise NotFound("Case not found")
+            Accounts._write_audit(con, "case.restore", actor_id, case_id)
 
     def case_dir(self, case_id):
         path = self.directory / "cases" / safe_id(case_id)
@@ -741,6 +776,9 @@ class Store:
             job = next_job(con)
             if job is None:
                 return None
+            # Some requests enqueue after the Trash cancel has run, and queued rows outlive a restart.
+            if con.execute("SELECT 1 FROM trash WHERE case_id=? AND kind='case'", (job["case_id"],)).fetchone():
+                job["cancel_requested"] = True
             job.update(status="running", stage="Starting", started_at=now())
             con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job["id"]))
             return job

@@ -28,6 +28,16 @@ def test_revision_activation_and_completed_job_are_atomic(tmp_path):
     assert store.get("jobs", job["id"])["status"] == "completed"
 
 
+def test_a_job_claimed_on_a_trashed_case_is_flagged_and_still_running(tmp_path):
+    store = Store(tmp_path)
+    record = case(store)
+    queued = store.enqueue(record["id"], "refine", {})
+    store.trash_case(record["id"], None)
+    job = store.claim()
+    assert job["id"] == queued["id"] and job["status"] == "running" and job["cancel_requested"] is True
+    assert store.get("jobs", queued["id"])["cancel_requested"] is True
+
+
 def test_cross_case_revision_cannot_be_activated(tmp_path):
     store = Store(tmp_path)
     a, b = case(store), case(store)

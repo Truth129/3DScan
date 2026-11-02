@@ -47,12 +47,12 @@ def _store_range(stream, length, path, offset, received):
 
 
 def upload_owner(root, upload_id):
-    """Return (found, owner_id) for the access gate. A malformed ID is simply not found."""
+    """Return (found, owner_id, case_id) for the access gate. A malformed ID is simply not found."""
     try:
         state = json.loads((root / safe_id(upload_id) / "state.json").read_text())
     except (OSError, ValueError):
-        return False, None
-    return True, state.get("owner_id")
+        return False, None, None
+    return True, state.get("owner_id"), state.get("case_id")
 
 
 def _progress(upload_id, state):
