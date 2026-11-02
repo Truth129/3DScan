@@ -262,6 +262,22 @@ class Service:
         if self.cancelled(job):
             raise InterruptedError("Processing cancelled")
 
+    def cancel_job(self, job_id):
+        job = self.store.get("jobs", job_id)
+        if job["kind"] == "orthanc_import":
+            return self.orthanc.cancel(job_id)
+        if job["kind"] in ("orthanc_export", "orthanc_view_export"):
+            # The generic path below would report a remote delivery as cancelled
+            # while it may still run, and each kind words that in its own way.
+            manager = self.orthanc_exports if job["kind"] == "orthanc_export" else self.orthanc_view_exports
+            return manager.cancel(job_id)
+        if job["status"] in ("queued", "running"):
+            changes = dict(cancel_requested=True)
+            if job["status"] == "queued":
+                changes.update(status="cancelled", stage="Cancelled")
+            job = self.store.update_job(job_id, **changes)
+        return job
+
     def stage(self, job, name):
         self.check_cancel(job)
         self.store.update_job(job["id"], stage=name)
