@@ -118,8 +118,8 @@ Import runs on the CPU and is bound to the snapshot you selected:
   frame of reference. If the series changed, refresh and select it again.
 - Importing the same snapshot again reuses your case or job.
 - Failed, cancelled and interrupted imports can be retried without touching earlier source files.
-- A series the validator refuses fails its import with the validator's reason.
   They do not resume on their own after a restart.
+- A series the validator refuses fails its import with the validator's reason.
 
 3DScan keeps its own copy of imported files. Its backups do not cover Orthanc's archive.
 
