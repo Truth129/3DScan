@@ -655,6 +655,7 @@ function resetCaseView() {
  */
 async function openCase(id: string, returning = false) {
   const previous = returning ? undefined : activeCase.value?.id;
+  let shown = false;
   libraryOpen.value = false;
   const generation = ++caseGeneration;
   resetCaseView();
@@ -672,6 +673,7 @@ async function openCase(id: string, returning = false) {
     if (row) cases.value = [{ ...row, opened_at: new Date().toISOString() }, ...cases.value.filter(item => item !== row)];
     if (next.active_revision_id) await loadRevision(id, next.active_revision_id, generation);
     if (generation !== caseGeneration || !alive) return;
+    shown = true;
     const pending = await recoverCaseJob(id, localStorage.getItem(`scan3d-job:${id}`), api);
     if (generation !== caseGeneration || !alive) return;
     if (pending) track(pending);
@@ -682,7 +684,7 @@ async function openCase(id: string, returning = false) {
     const gone = caseIsGone(reason);
     // Not awaited, so a newer open cannot start here and lose to the return. Its read is only the list.
     if (gone) void closeCase(id);
-    const back = previous && previous !== id ? openCase(previous, true) : undefined,
+    const back = (gone || !shown) && previous && previous !== id ? openCase(previous, true) : undefined,
       latest = caseGeneration;
     await back;
     // Opening clears the banner, so this goes last, unless a newer open has replaced the return.

@@ -779,6 +779,14 @@ describe('the Library', () => {
       expect(stored.get('scan3d-case')).toBe('case');
       expect(root.content).toContain('The workstation is busy.');
     });
+    it('stays on a case that loaded when only its job read fails', async () => {
+      const { root, stored } = await listed();
+      vi.mocked(api.jobs).mockRejectedValueOnce(busy);
+      await press(root.button('OTHER'));
+      expect(vi.mocked(api.case).mock.calls.map(([id]) => id)).toEqual(['other']);
+      expect(stored.get('scan3d-case')).toBe('other');
+      expect(root.content).toContain('The workstation is busy.');
+    });
     it('goes back once, however many opens fail', async () => {
       const { root } = await listed();
       vi.mocked(api.revision).mockRejectedValueOnce(busy).mockRejectedValueOnce(busy).mockRejectedValueOnce(busy);
