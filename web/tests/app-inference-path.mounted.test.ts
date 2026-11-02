@@ -897,6 +897,22 @@ describe('the Library', () => {
     vi.mocked(api.case).mockResolvedValue({ ...scan, series: [series('FIRST'), series('ADDED')] });
     await press(root.button('Select series'));
     expect(root.content).toContain('ADDED');
+    vi.mocked(api.case).mockResolvedValue({ ...scan, series: [series('FIRST')] });
+    await press(root.button('Select series'));
+    expect(root.content, 'a stale read').toContain('ADDED');
+  });
+  it('keeps the newer list when an older read answers last', async () => {
+    workstation([amd]);
+    let older!: (rows: Case[]) => void;
+    const root = await start();
+    vi.mocked(api.cases)
+      .mockReturnValueOnce(new Promise(resolve => (older = resolve)))
+      .mockResolvedValueOnce([{ ...scan, label: 'NEWER' }]);
+    await press(root.named('case-button'));
+    await heartbeat();
+    older([{ ...scan, label: 'OLDER' }]);
+    await settled();
+    expect(root.named('case-row-open')?.content).toContain('NEWER');
   });
 
   describe('Reset to scan', () => {

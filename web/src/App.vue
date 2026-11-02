@@ -566,8 +566,13 @@ watch(() => `${activeCase.value?.id}:${revision.value?.id}`, dropViewCapture);
 watch(viewJob, next => {
   if (viewCapture.value && !viewExportOpen.value && !pendingDicomViewExport(next)) dropViewCapture();
 });
+let casesRequest = 0;
 async function refreshCases() {
-  cases.value = await api.cases();
+  const ticket = ++casesRequest,
+    next = await api.cases();
+  // Most callers do not wait for this, so an older answer can arrive last.
+  if (ticket !== casesRequest) return;
+  cases.value = next;
   casesUnread.value = false;
 }
 async function loadRevision(id: string, rid: string, generation: number, preserve = false) {
@@ -1030,12 +1035,13 @@ function openPrepare() {
   segmentationOpen.value = false;
   const id = activeCase.value?.id,
     generation = caseGeneration;
-  // A series added while this page was closed finished with nothing listening.
+  // A series added while this page was closed finished with nothing listening. Series never leave a case, so a shorter list is a stale read.
   if (id)
     void api
       .case(id)
       .then(current => {
-        if (generation === caseGeneration && activeCase.value?.id === id) activeCase.value.series = current.series;
+        if (generation !== caseGeneration || activeCase.value?.id !== id) return;
+        if (current.series.length > activeCase.value.series.length) activeCase.value.series = current.series;
       })
       .catch(() => {});
 }
