@@ -63,6 +63,15 @@ browser.
 **Renaming.** Choose **Rename** on a row, then **Save**. Do not put patient identifiers in a case
 name. A case that is still importing can be renamed when the import finishes.
 
+**Moving to Trash.** Choose **Move to Trash** on a row. Nothing is deleted, so it asks for no
+confirmation. **Undo** shows for 10 seconds, and reopens the case if it was open and you have not
+opened another. After that, choose **Restore** on the **Trash** tab. Marks in progress are saved
+first, and the message says if any could not be.
+
+A case in Trash still uses disk space, and deleting it for good is not available yet. Trash is per
+account. Moving a case to Trash stops its jobs and they do not restart, but a send Orthanc has
+started finishes. While a case is in Trash, importing it from Orthanc again makes a new case.
+
 If a case goes away while you have it open, the page says so and returns to the Library, within a
 minute or when you return to the tab.
 

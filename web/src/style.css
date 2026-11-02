@@ -366,13 +366,16 @@ h3 {
   padding: 4px 0;
   border-bottom: 1px solid var(--line);
 }
-.case-row-open {
+.case-row-open,
+.case-row-text {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
   padding: 8px 10px;
+}
+.case-row-open {
   border: 0;
   border-radius: 5px;
   background: none;
@@ -381,13 +384,12 @@ h3 {
 .case-row-open:hover {
   background: var(--surface-hover);
 }
-.case-row-open strong,
-.case-row-open small {
+.case-row :is(strong, small) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.case-row-open strong {
+.case-row strong {
   color: var(--white);
   font-size: 13px;
   font-weight: 500;
@@ -395,7 +397,7 @@ h3 {
 .case-row.active .case-row-open strong {
   color: var(--accent);
 }
-.case-row-open small {
+.case-row small {
   color: var(--text-secondary);
   font-size: 11px;
 }
@@ -674,6 +676,13 @@ h3 {
   border-radius: 6px;
   font-size: 12px;
   pointer-events: none;
+}
+.undo-toast {
+  bottom: 96px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  pointer-events: auto;
 }
 /* Job status lives in the fixed header, so a running job never takes height from a viewer. */
 .job-banner {
@@ -2877,6 +2886,7 @@ h3 {
     flex-wrap: wrap;
   }
   .case-row-open,
+  .case-row-text,
   .case-row-fields input {
     flex-basis: 100%;
   }
@@ -2889,6 +2899,9 @@ h3 {
     min-width: calc(100% - 26px);
     font-size: 11px;
     padding: 11px 14px;
+  }
+  .undo-toast {
+    bottom: 117px;
   }
   .error-banner {
     font-size: 11px;

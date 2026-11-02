@@ -491,6 +491,177 @@ describe('the Library', () => {
     expect(root.named('case-toolbar')).toBeDefined();
     expect(root.content).not.toContain('Nothing recorded');
   });
+  describe('Trash', () => {
+    const other = { ...scan, id: 'other', label: 'OTHER' };
+    const moved = { jobs_stopped: 0, sends_continuing: 0 };
+    function trashing(result = moved) {
+      vi.spyOn(api, 'trash').mockImplementation(async id => ({ ...result, id }));
+      vi.spyOn(api, 'restore').mockImplementation(async () => scan);
+    }
+    async function openLibrary() {
+      const root = await start();
+      await press(root.named('case-button'));
+      return root;
+    }
+    /** The real panel has no marks here, so stand in for what it would report. */
+    function panelReports(root: FakeElement, saveDrafts: () => Promise<boolean>) {
+      (root.named('interactive-review') as unknown as { __vueParentComponent: ComponentInternalInstance }).__vueParentComponent.exposed!.saveDrafts =
+        saveDrafts;
+    }
+    const undo = (root: FakeElement) => press(root.named('undo-toast')!.button('Undo'));
+
+    it('moves the open case to Trash and brings it back with Undo', async () => {
+      const { stored } = workstation([amd]);
+      trashing();
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      expect(api.trash).toHaveBeenCalledExactlyOnceWith('case');
+      expect(stored.has('scan3d-case')).toBe(false);
+      expect(root.named('case-toolbar')).toBeUndefined();
+      expect(root.named('case-library')).toBeDefined();
+      expect(root.named('undo-toast')?.content).toContain('Moved to Trash.');
+      expect(root.content).not.toContain('no longer available');
+      await undo(root);
+      expect(api.restore).toHaveBeenCalledExactlyOnceWith('case');
+      expect(stored.get('scan3d-case')).toBe('case');
+      expect(root.named('case-toolbar')).toBeDefined();
+      expect(root.named('undo-toast')).toBeUndefined();
+      expect(root.content).toContain('Case restored.');
+    });
+    it('names the job that stops, and Undo then says it did not restart', async () => {
+      workstation([amd]);
+      trashing({ jobs_stopped: 2, sends_continuing: 1 });
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      expect(root.named('undo-toast')?.content).toContain('Moved to Trash. 2 jobs stopped. A send Orthanc has started will finish.');
+      await undo(root);
+      expect(root.content).toContain('Case restored. Stopped jobs did not restart.');
+    });
+    it('takes Undo away after ten seconds', async () => {
+      const timeout = setTimeout;
+      vi.stubGlobal('setTimeout', ((callback: () => void, delay?: number) => timeout(callback, delay === 10_000 ? 1 : delay)) as typeof setTimeout);
+      workstation([amd]);
+      trashing();
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      await vi.waitFor(() => expect(root.named('undo-toast')).toBeUndefined());
+    });
+    it('saves the marks before the case goes', async () => {
+      workstation([amd]);
+      trashing();
+      const root = await openLibrary();
+      let finish!: (saved: boolean) => void;
+      panelReports(root, () => new Promise(resolve => (finish = resolve)));
+      await press(root.button('Move to Trash'));
+      expect(api.trash).not.toHaveBeenCalled();
+      finish(true);
+      await settled();
+      expect(api.trash).toHaveBeenCalledOnce();
+      expect(root.named('undo-toast')?.content).not.toContain('could not be saved');
+    });
+    it('moves the case when a mark could not be saved, and says so', async () => {
+      workstation([amd]);
+      trashing();
+      const root = await openLibrary();
+      panelReports(root, async () => false);
+      await press(root.button('Move to Trash'));
+      expect(api.trash).toHaveBeenCalledOnce();
+      expect(root.named('undo-toast')?.content).toContain('Moved to Trash. Your latest marks could not be saved.');
+    });
+    it('asks the panel nothing about a case that is not open', async () => {
+      workstation([amd]);
+      trashing();
+      vi.mocked(api.cases).mockImplementation(async () => [other, scan]);
+      const root = await openLibrary();
+      panelReports(root, async () => false);
+      await press(root.button('Move to Trash'));
+      expect(api.trash).toHaveBeenCalledExactlyOnceWith('other');
+      expect(root.named('case-toolbar'), 'the open case stays open').toBeDefined();
+      expect(root.named('undo-toast')?.content).not.toContain('could not be saved');
+      await undo(root);
+      expect(api.case).not.toHaveBeenCalledWith('other');
+    });
+    it('keeps a case opened while the move waited, and Undo leaves it open', async () => {
+      const { stored } = workstation([amd]);
+      trashing();
+      vi.mocked(api.cases).mockImplementation(async () => [scan, other]);
+      const root = await openLibrary();
+      let finish!: (saved: boolean) => void;
+      panelReports(root, () => new Promise(resolve => (finish = resolve)));
+      await press(root.button('Move to Trash'));
+      await press(root.button('OTHER'));
+      finish(true);
+      await settled();
+      expect(stored.get('scan3d-case')).toBe('other');
+      expect(root.named('case-toolbar')).toBeDefined();
+      vi.mocked(api.case).mockClear();
+      await undo(root);
+      expect(api.restore).toHaveBeenCalledOnce();
+      expect(api.case).not.toHaveBeenCalled();
+      expect(stored.get('scan3d-case')).toBe('other');
+    });
+    it('never takes over a case that is still opening', async () => {
+      const { stored } = workstation([amd]);
+      trashing();
+      vi.mocked(api.cases).mockImplementation(async () => [scan, other]);
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      let answer!: (next: Case) => void;
+      vi.mocked(api.case).mockClear();
+      vi.mocked(api.case).mockReturnValueOnce(new Promise(resolve => (answer = resolve)));
+      await press(root.button('OTHER'));
+      await undo(root);
+      expect(api.restore).toHaveBeenCalledOnce();
+      answer(other);
+      await settled();
+      expect(api.case).toHaveBeenCalledExactlyOnceWith('other');
+      expect(stored.get('scan3d-case')).toBe('other');
+    });
+    it('restores from the Trash tab without opening the case', async () => {
+      workstation([amd]);
+      trashing();
+      vi.mocked(api.cases).mockImplementation(async () => [scan]);
+      vi.mocked(api.trashed).mockImplementation(async () => [{ ...other, trashed_at: '2026-11-02T12:00:00Z' }]);
+      const root = await openLibrary();
+      await press(root.named('case-library')!.button('Trash'));
+      vi.mocked(api.case).mockClear();
+      vi.mocked(api.trashed).mockClear();
+      await press(root.button('Restore'));
+      expect(api.restore).toHaveBeenCalledExactlyOnceWith('other');
+      expect(api.case).not.toHaveBeenCalled();
+      expect(api.trashed, 'the row goes').toHaveBeenCalledOnce();
+      expect(root.content).toContain('Case restored.');
+    });
+    it('takes Undo away once the Trash tab has restored the case', async () => {
+      workstation([amd]);
+      trashing();
+      vi.mocked(api.trashed).mockImplementation(async () => [{ ...scan, trashed_at: '2026-11-02T12:00:00Z' }]);
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      await press(root.named('case-library')!.button('Trash'));
+      await press(root.button('Restore'));
+      expect(root.named('undo-toast')).toBeUndefined();
+    });
+    it('keeps the case open when the move fails, and says why', async () => {
+      const { stored } = workstation([amd]);
+      vi.spyOn(api, 'trash').mockRejectedValue(new ApiError(503, 'The workstation is busy.'));
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      expect(root.content).toContain('The workstation is busy.');
+      expect(root.named('undo-toast')).toBeUndefined();
+      expect(stored.get('scan3d-case')).toBe('case');
+    });
+    it('reads Trash on a heartbeat only while the Library shows', async () => {
+      workstation([amd]);
+      const root = await start();
+      await heartbeat();
+      expect(api.trashed).not.toHaveBeenCalled();
+      await press(root.named('case-button'));
+      vi.mocked(api.trashed).mockClear();
+      await heartbeat();
+      expect(api.trashed).toHaveBeenCalledOnce();
+    });
+  });
   it('asks about the open case when a request says it has gone', async () => {
     const server = workstation([amd]);
     const root = await openPanel();

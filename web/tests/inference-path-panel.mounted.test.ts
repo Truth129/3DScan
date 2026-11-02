@@ -126,7 +126,7 @@ async function open() {
     caseId = ref('case'),
     revisionId = ref('base'),
     selected = ref('liver'),
-    panel = ref<{ addPrompt(ras: Point): void; addGesture(prompt: InteractivePrompt): void; show(): Promise<void> }>(),
+    panel = ref<{ addPrompt(ras: Point): void; addGesture(prompt: InteractivePrompt): void; show(): Promise<void>; saveDrafts(): Promise<boolean> }>(),
     app = createApp({
       render: () =>
         h(InteractiveReviewPanel, {
@@ -175,6 +175,23 @@ async function clickAnyway(button: FakeElement | undefined) {
   (button!.props.onClick as () => void)();
   await settled();
 }
+
+describe('saving before a case goes', () => {
+  it('sends a mark at once, ahead of the 250 ms wait', async () => {
+    workstation([amd], draft());
+    const { panel } = await openAI();
+    panel.value.addPrompt(point);
+    expect(await panel.value.saveDrafts()).toBe(true);
+    expect(api.interactivePrompts).toHaveBeenCalledOnce();
+  });
+  it('saveDrafts says false when a mark could not be saved', async () => {
+    workstation([amd], draft());
+    const { panel } = await openAI();
+    vi.mocked(api.interactivePrompts).mockRejectedValue(new Error('No answer'));
+    panel.value.addPrompt(point);
+    expect(await panel.value.saveDrafts()).toBe(false);
+  });
+});
 
 describe('choosing a card', () => {
   it('makes no readiness request in Direct edit and sends no card, even after visiting AI assist', async () => {

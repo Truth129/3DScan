@@ -547,6 +547,15 @@ defineExpose({
       await Promise.all([checkRuntime(), ensureController()]);
     }
   },
+  /**
+   * Marks are saved 250 ms after they are drawn, and a case moved to Trash must return with them.
+   * False when a mark could not be saved, because the panel that shows why is about to go.
+   */
+  saveDrafts: async () => {
+    const values = [...controllers.values()];
+    await Promise.allSettled(values.map(controller => controller.flush()));
+    return !values.some(controller => controller.unsaved);
+  },
 });
 </script>
 

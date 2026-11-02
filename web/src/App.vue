@@ -62,6 +62,7 @@ import type { ImageAsset } from './lib/image-domain';
 import { imageContext, imagePresentation, referenceImageKey } from './lib/image-domain';
 import { pathBlocked, pathField, runSummary, SEGMENT_PATH_KEY, usePathChoice } from './lib/inference-path';
 import { caseIsGone, jobIsGone, outboundExportKinds, recoverCaseJob } from './lib/jobs';
+import { trashMessage } from './lib/library';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import {
   freezeViewCapture,
@@ -117,7 +118,9 @@ const importing = ref(false),
   segImportBusy = ref(false),
   importOpen = ref(false);
 const libraryOpen = ref(false),
-  caseButton = ref<HTMLButtonElement>();
+  libraryStamp = ref(0),
+  caseButton = ref<HTMLButtonElement>(),
+  trashOffer = ref<{ id: string; message: string; reopen: boolean; stopped: number }>();
 const libraryShown = computed(() => libraryOpen.value || (!activeCase.value && !loading.value));
 const selected = ref(''),
   display = ref<StructureDisplay>({}),
@@ -320,6 +323,7 @@ const catalogGate = new SourceRequestGate();
 let revisionRequest = 0;
 let pollTimer = 0,
   noticeTimer = 0,
+  trashOfferTimer = 0,
   caseGeneration = 0,
   measurementToken = '',
   alive = true;
@@ -687,7 +691,10 @@ async function closeCase(id: string, message = 'That case is no longer available
 let checkingCase = false;
 /** An idle tab must not keep showing a case that has gone, and a rename elsewhere reaches this header. */
 async function checkOpenCase() {
-  if (libraryShown.value) void refreshCases().catch(() => {});
+  if (libraryShown.value) {
+    libraryStamp.value++;
+    void refreshCases().catch(() => {});
+  }
   const id = activeCase.value?.id,
     generation = caseGeneration;
   if (!id || checkingCase) return;
@@ -721,6 +728,48 @@ function openFromLibrary(id: string) {
 function renamed(next: Case) {
   cases.value = cases.value.map(item => (item.id === next.id ? { ...item, label: next.label } : item));
   if (activeCase.value?.id === next.id) activeCase.value.label = next.label;
+}
+async function moveToTrash(id: string) {
+  const open = activeCase.value?.id === id,
+    generation = caseGeneration;
+  error.value = '';
+  try {
+    const saved = !open || (await interactivePanel.value?.saveDrafts()) !== false;
+    const result = await api.trash(id);
+    // A case opened while this waited must stay open.
+    if (open && generation === caseGeneration) await closeCase(id, '');
+    else await refreshCases();
+    libraryStamp.value++;
+    const message = trashMessage(result) + (saved ? '' : ' Your latest marks could not be saved.');
+    trashOffer.value = { id, message, reopen: open, stopped: result.jobs_stopped };
+    clearTimeout(trashOfferTimer);
+    trashOfferTimer = window.setTimeout(() => (trashOffer.value = undefined), 10_000);
+  } catch (reason) {
+    fail(reason);
+    libraryStamp.value++;
+    void refreshCases().catch(() => {});
+  }
+}
+async function restoreCase(id: string, reopen = false, stopped = 0) {
+  error.value = '';
+  if (trashOffer.value?.id === id) trashOffer.value = undefined;
+  try {
+    await api.restore(id);
+    await refreshCases();
+    libraryStamp.value++;
+    // Loading means another case is on its way, and that one stays the person's choice.
+    if (reopen && !activeCase.value && !loading.value) await openCase(id);
+    toast(stopped ? 'Case restored. Stopped jobs did not restart.' : 'Case restored.');
+  } catch (reason) {
+    fail(reason);
+    libraryStamp.value++;
+  }
+}
+function undoTrash() {
+  const offer = trashOffer.value;
+  trashOffer.value = undefined;
+  clearTimeout(trashOfferTimer);
+  if (offer) void restoreCase(offer.id, offer.reopen, offer.stopped);
 }
 async function imported(next: Case) {
   importOpen.value = false;
@@ -1184,6 +1233,7 @@ onBeforeUnmount(() => {
   alive = false;
   clearTimeout(pollTimer);
   clearTimeout(noticeTimer);
+  clearTimeout(trashOfferTimer);
   document.removeEventListener('keydown', keyboard);
   setCaseCheck(undefined);
 });
@@ -1273,6 +1323,10 @@ onBeforeUnmount(() => {
     </header>
 
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
+    <div v-if="trashOffer" class="toast undo-toast" role="status">
+      <span>{{ trashOffer.message }}</span
+      ><button class="text-button" type="button" @click="undoTrash">Undo</button>
+    </div>
 
     <div class="app-body" :class="{ 'library-covered': libraryOpen && activeCase }">
       <main v-if="loading && !revision" class="app-loading">
@@ -1982,6 +2036,7 @@ onBeforeUnmount(() => {
         v-if="libraryShown"
         :cases="cases"
         :open-id="activeCase?.id"
+        :stamp="libraryStamp"
         :closable="!!activeCase"
         :importing="importing"
         :mr-enabled="mrEnabled"
@@ -1991,6 +2046,8 @@ onBeforeUnmount(() => {
         @import-scan="importOpen = true"
         @demo="demo"
         @renamed="renamed"
+        @trash="moveToTrash"
+        @restore="restoreCase"
       />
     </div>
     <ImportDialog v-if="importOpen" :busy="importing" :mr-enabled="mrEnabled" @close="importOpen = false" @imported="imported" @demo="demo" />

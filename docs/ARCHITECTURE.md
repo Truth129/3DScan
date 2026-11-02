@@ -56,7 +56,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX writer   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                |
 | `web/src/components/AuthGate.vue`, `web/src/lib/session.ts`             | Sign-in form, overlay and session state                |
-| `web/src/components/CaseLibrary.vue`, `web/src/lib/library.ts`          | The Library: search, rename and case text              |
+| `web/src/components/CaseLibrary.vue`, `web/src/lib/library.ts`          | The Library: search, rename, Trash and case text       |
 | `web/src/lib/ct-volume.ts`, `ct-worker.ts`                              | Source session and worker                              |
 | `web/src/lib/cornerstone-*.ts`, `vtk-*.ts`                              | Slice review, MPR and the native 3D view               |
 | `web/src/lib/scene.ts`, `ct-volume-renderer.ts`, `gpu-ct-plane.ts`      | The Three.js renderer                                  |

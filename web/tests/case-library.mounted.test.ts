@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ref } from 'vue';
 import CaseLibrary from '../src/components/CaseLibrary.vue';
 import { api, ApiError } from '../src/lib/api';
 import type { Case } from '../src/types';
-import { click, mount, settled, type MountedElement } from './mounted';
+import { click, deferred, mount, settled, type MountedElement } from './mounted';
 
 const NOTICE = 'Research use only · not for diagnostic use';
 const scan = (id: string, label: string, values: Partial<Case> = {}): Case => ({
@@ -18,13 +19,14 @@ const liver = scan('liver', 'Liver'),
   chest = scan('chest', 'Chest');
 
 function library(values: Record<string, unknown>) {
-  const view = mount(CaseLibrary, () => ({ cases: [liver, chest], closable: true, importing: false, mrEnabled: false, notice: NOTICE, ...values }));
+  const view = mount(CaseLibrary, () => ({ cases: [liver, chest], stamp: 0, closable: true, importing: false, mrEnabled: false, notice: NOTICE, ...values }));
   return Object.assign(view, {
     search: () => view.labelled('Search cases')!,
     nameField: () => view.labelled('Case name'),
     rows: () => view.all(element => element.className.split(' ').includes('case-row')),
     section: () => view.labelled('Library')!,
     form: () => view.all(element => element.tagName === 'FORM')[0],
+    tab: (name: string) => view.all(element => element.tagName === 'BUTTON' && element.textContent.trim().startsWith(name))[0],
   });
 }
 function fill(element: MountedElement, value: string) {
@@ -33,7 +35,11 @@ function fill(element: MountedElement, value: string) {
 }
 const press = (element: MountedElement, key: string) => element.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key }));
 const submit = (element: MountedElement) => element.dispatchEvent(new Event('submit', { cancelable: true }));
+const pressNumber = (element: MountedElement | undefined, detail: number) => element!.dispatchEvent(Object.assign(new Event('click'), { detail }));
 
+beforeEach(() => {
+  vi.spyOn(api, 'trashed').mockImplementation(async () => []);
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -158,6 +164,120 @@ describe('renaming', () => {
   });
 });
 
+describe('moving a case to Trash', () => {
+  it('ignores the second press of a double-click', () => {
+    const trash = vi.fn(),
+      view = library({ onTrash: trash });
+    pressNumber(view.button('Move to Trash'), 1);
+    pressNumber(view.button('Move to Trash'), 2);
+    expect(trash).toHaveBeenCalledExactlyOnceWith('liver');
+  });
+  it('returns the cursor to search, even from the press it ignores', () => {
+    const view = library({}),
+      button = view.button('Move to Trash');
+    button!.focus();
+    pressNumber(button, 2);
+    expect(document.activeElement).toBe(view.search());
+  });
+  it('takes a press from the keyboard, which counts no clicks', () => {
+    const trash = vi.fn(),
+      view = library({ onTrash: trash });
+    pressNumber(view.button('Move to Trash'), 0);
+    expect(trash).toHaveBeenCalledExactlyOnceWith('liver');
+  });
+  it('offers it on a case that is still importing', () => {
+    const view = library({ cases: [scan('new', 'New', { status: 'importing' })] });
+    expect(view.button('Move to Trash')).toBeDefined();
+  });
+});
+
+describe('Trash', () => {
+  const old = scan('old', 'Old', { trashed_at: '2026-11-02T12:00:00Z' });
+
+  it('says Trash still uses disk space and offers only Restore', async () => {
+    vi.mocked(api.trashed).mockResolvedValue([old]);
+    const restore = vi.fn(),
+      view = library({ onRestore: restore });
+    await settled();
+    expect(view.tab('Trash').textContent.trim()).toBe('Trash1');
+    click(view.tab('Trash'));
+    await settled();
+    expect(view.text()).toContain('Cases in Trash still use disk space. Deleting them for good is not available yet.');
+    const when = new Date(old.trashed_at!).toLocaleDateString();
+    expect(view.rows()[0].textContent).toContain(`Old${when} · Ready`);
+    expect(
+      view
+        .rows()[0]
+        .descendants()
+        .filter(element => element.tagName === 'BUTTON')
+        .map(button => button.textContent),
+    ).toEqual(['Restore']);
+    expect(view.text()).not.toMatch(/delete forever|empty trash/i);
+    click(view.button('Restore'));
+    expect(restore).toHaveBeenCalledExactlyOnceWith('old');
+    expect(document.activeElement).toBe(view.search());
+  });
+  it('says so when it is empty, and still says what Trash does', async () => {
+    const view = library({});
+    await settled();
+    click(view.tab('Trash'));
+    await settled();
+    expect(view.text()).toContain('Trash is empty.');
+    expect(view.text()).toContain('still use disk space');
+    expect(view.text()).toContain(NOTICE);
+  });
+  it('searches Trash, where Enter opens nothing', async () => {
+    vi.mocked(api.trashed).mockResolvedValue([old]);
+    const open = vi.fn(),
+      view = library({ onOpen: open });
+    await settled();
+    click(view.tab('Trash'));
+    await settled();
+    fill(view.search(), 'knee');
+    await settled();
+    expect(view.text()).toContain('No cases match.');
+    fill(view.search(), 'old');
+    await settled();
+    press(view.search(), 'Enter');
+    expect(view.rows()).toHaveLength(1);
+    expect(open).not.toHaveBeenCalled();
+  });
+  it('reads Trash again on a new stamp, and only the newest answer counts', async () => {
+    const stamp = ref(0),
+      slow = deferred<Case[]>(),
+      view = library({
+        get stamp() {
+          return stamp.value;
+        },
+      });
+    await settled();
+    click(view.tab('Trash'));
+    vi.mocked(api.trashed).mockReturnValueOnce(slow.promise).mockResolvedValueOnce([old]);
+    stamp.value = 1;
+    await settled();
+    stamp.value = 2;
+    await settled();
+    slow.resolve([]);
+    await settled();
+    expect(view.rows()).toHaveLength(1);
+  });
+  it('keeps the last list when a read fails', async () => {
+    vi.mocked(api.trashed).mockResolvedValueOnce([old]);
+    const stamp = ref(0),
+      view = library({
+        get stamp() {
+          return stamp.value;
+        },
+      });
+    await settled();
+    click(view.tab('Trash'));
+    vi.mocked(api.trashed).mockRejectedValueOnce(new Error('No answer'));
+    stamp.value = 1;
+    await settled();
+    expect(view.rows()).toHaveLength(1);
+  });
+});
+
 describe('an empty library', () => {
   it('shows the import buttons and the research notice on an empty library', () => {
     const importScan = vi.fn(),
@@ -170,6 +290,14 @@ describe('an empty library', () => {
     click(view.button('Explore synthetic demo'));
     expect(importScan).toHaveBeenCalledOnce();
     expect(demo).toHaveBeenCalledOnce();
+  });
+  it('says where the cases went when Trash holds every one', async () => {
+    vi.mocked(api.trashed).mockResolvedValue([scan('old', 'Old')]);
+    const view = library({ cases: [] });
+    await settled();
+    expect(view.text()).toContain('All your cases are in Trash');
+    expect(view.text()).not.toContain('No cases yet');
+    expect(view.button('Explore synthetic demo')).toBeDefined();
   });
   it('names MR only where it is offered', () => {
     expect(library({ cases: [], mrEnabled: true }).text()).toContain('Explore CT and static 3D MR scans');
