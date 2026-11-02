@@ -305,7 +305,7 @@ def test_total_v3_replaces_shared_anatomy_preserves_unique_labels_and_reuses_cac
     assert by_id["total:vertebrae_S1"] == next(entry for entry in first["structures"] if entry["id"] == "total:vertebrae_S1")
     old_liver = next(entry for entry in first["structures"] if entry["id"] == "total:liver")
     assert not np.array_equal(nib.load(old_liver["mask_file"]).dataobj, nib.load(by_id["total_v3:liver"]["mask_file"]).dataobj)
-    assert result["operation"]["replacement_policy"] == "same_task_or_exact_name_v1"
+    assert result["operation"]["replacement_policy"] == "same_task_or_exact_name_within_model_v2"
     assert set(result["operation"]["replaced_structure_ids"]) == {"total:liver", "total:spleen"}
     assert result["operation"]["replacement_id_map"] == {"total:liver": "total_v3:liver", "total:spleen": "total_v3:spleen"}
     assert result["segmentation_runs"][-1]["tasks"] == ["total_v3"]

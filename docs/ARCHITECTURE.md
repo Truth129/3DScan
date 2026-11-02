@@ -30,6 +30,7 @@ and complements a diagnostic viewer rather than replacing one.
 | -------- | -------------------- | ------------------------------------------------------------------------ |
 | Server   | API process          | `scan3d serve`: FastAPI, two lane threads, CPU pools, built viewer files |
 | Server   | TotalSegmentator     | A subprocess per task, started by the GPU lane in the job's interpreter  |
+| Server   | nnU-Net worker       | The same kind of subprocess for a pinned nnU-Net model                   |
 | Server   | nnInteractive worker | A long-lived supervised child with the warm model for one inference path |
 | Browser  | Main thread          | Vue 3 workspace, Cornerstone3D, vtk.js and Three.js rendering            |
 | Browser  | CT worker            | Web Worker that decodes slabs, holds the source and reslices frames      |
@@ -43,6 +44,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/service.py`, `store.py`, `config.py`, `__main__.py`             | Lanes, revision building, SQLite, settings, the CLI    |
 | `scan3d/dicom.py`, `enhanced_mr.py`, `modalities.py`, `image_assets.py` | Series validation, conversion, image identity          |
 | `scan3d/segmentation*.py`                                               | TotalSegmentator runs, task catalog, result merging    |
+| `scan3d/nnunet_models.py`, `nnunet_worker.py`                           | Pinned nnU-Net models and their worker                 |
 | `scan3d/review.py`, `relationships.py`, `direct_edit.py`, `scissors.py` | Correction sessions and deterministic edits            |
 | `scan3d/interactive*.py`                                                | nnInteractive engine, worker, batching, prompts        |
 | `scan3d/inference_paths.py`                                             | Inference paths: discovery, binding, child environment |
@@ -137,6 +139,8 @@ and adds milliseconds to every write.
   of other tasks with an exactly matching anatomical name, so `total_v3:liver` replaces
   `total:liver`. Voxels are never subtracted. A conflicting result fails before anything is
   published.
+- **Comparing models.** A pinned nnU-Net model's structures match only that model's, so
+  `mrsegmentator:liver` and `total:liver` stay side by side. Its run has the source `nnunet_model`.
 
 ## Jobs and lanes
 

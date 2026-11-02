@@ -107,7 +107,7 @@ An immutable source image.
 ```
 
 - `review_status`: `unreviewed`, `reviewed` or `corrected`.
-- `source`: `dicom`, `totalsegmentator`, `refinement`, `slicer_correction`, `include_all_outputs`,
+- `source`: `dicom`, `totalsegmentator`, `nnunet_model`, `refinement`, `slicer_correction`, `include_all_outputs`,
   `dicom_seg_import`, `synthetic_demo`, `direct_edit_correction`, `direct_edit_new_structure`,
   `nninteractive_correction` or `nninteractive_new_structure`.
 - `acquisition`: `{series_uid, profile, phase, cardiac_phase?, rr_percent?}`.
@@ -252,8 +252,10 @@ capabilities, presentation, enabled}]}`.
 **`GET /api/segmentation-options?modality=CT`** returns `{engine_version, tasks, license_configured,
 defaults, remove_small_blobs_mm3, inference_paths}`. The default task is `total` for CT and
 `total_mr` for MR. Each task has `id`, `label`, `modality`, `classes`, `class_count`,
-`model_class_count`, `description`, `license_required`, `license_available`, `available`,
-`uses_organ_crop`, `robust_crop_default`, `robust_crop_supported` and `body_seg_supported`.
+`model_class_count`, `description`, `engine`, `license_required`, `license_available`, `available`,
+`uses_organ_crop`, `robust_crop_default`, `robust_crop_supported`, `body_seg_supported` and
+`remove_small_blobs_supported`. A pinned nnU-Net model adds `engine_version` and `comparison: true`,
+and `available` is false until its weights are installed.
 
 **License.** `GET /api/totalsegmentator/license` returns `{configured, validated, validated_at}`
 offline. `PUT` takes `{license_key}`, checks its format, validates it with the TotalSegmentator
@@ -313,6 +315,8 @@ See [Choosing a path](#choosing-a-path).
 - The run replaces its task's structures and same-named ones of other tasks; see
   [ARCHITECTURE.md](ARCHITECTURE.md#store-and-revision-model). Ambiguous names and conflicting
   relationships fail before publishing.
+- A pinned nnU-Net model runs alone, with no crop or small-blob options, and needs its weights
+  installed. Its structures match only that model's.
 - `operation` records `replacement_policy`, `replaced_structure_ids` and `replacement_id_map`, plus
   [`runtime`](#what-a-run-records) if the run named a path.
 

@@ -2,18 +2,20 @@
 
 Inference IDs retain their task prefix for provenance. Matching ignores only
 case, underscores and whitespace, so similarly named structures and left/right
-counterparts remain separate. Previous revisions and their metadata are inputs,
-never mutable working state.
+counterparts remain separate. A nnU-Net model's outputs match only that model's,
+so its masks stay beside another model's for comparison. Previous revisions and
+their metadata are inputs, never mutable working state.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
 
+from .nnunet_models import MODELS
 from .relationships import INDEPENDENT, normalize_relationship
 
 
-REPLACEMENT_POLICY = "same_task_or_exact_name_v1"
+REPLACEMENT_POLICY = "same_task_or_exact_name_within_model_v2"
 
 
 def _anatomical_name(entry):
@@ -31,6 +33,11 @@ def _anatomical_name(entry):
     if not name:
         raise ValueError("Segments must have an anatomical name")
     return name
+
+
+def _identity(entry):
+    task = entry.get("task")
+    return task if task in MODELS else None, _anatomical_name(entry)
 
 
 def _ids(entries):
@@ -65,7 +72,8 @@ def merge_task_outputs(previous, incoming, selected_tasks, *, reference_image_id
     """Return independent merged metadata and an auditable replacement record.
 
     A selected task replaces its prior outputs wholesale, including newly empty
-    labels. Other tasks lose only labels matching a nonempty incoming structure.
+    labels. Other tasks lose only labels matching a nonempty incoming structure
+    from the same model family.
     Explicit relationships follow the replacement IDs; conflicting or invalid
     graphs fail before a revision is built. No overlap-based voxel edits occur.
     """
@@ -86,9 +94,9 @@ def merge_task_outputs(previous, incoming, selected_tasks, *, reference_image_id
     tasks = set(selected_tasks)
     by_name = {}
     for entry in incoming:
-        key = _anatomical_name(entry)
+        key = _identity(entry)
         if key in by_name:
-            raise ValueError(f"Incoming segmentation has ambiguous duplicate anatomical name: {key}")
+            raise ValueError(f"Incoming segmentation has ambiguous duplicate anatomical name: {key[1]}")
         by_name[key] = entry
 
     replacements, removed, candidates = {}, [], {}
@@ -97,7 +105,7 @@ def merge_task_outputs(previous, incoming, selected_tasks, *, reference_image_id
         candidates[entry["id"]] = [] if value is None else [value]
     preserved = []
     for entry in previous:
-        target = by_name.get(_anatomical_name(entry))
+        target = by_name.get(_identity(entry))
         if entry["id"] in incoming_ids:
             # An exact ID remains the same logical structure on a task rerun.
             target = by_id[entry["id"]]

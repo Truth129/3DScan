@@ -64,6 +64,16 @@ Each run creates a revision that replaces that task's results **and** any segmen
 anatomical names, including manual corrections. Matching ignores capitalization, underscores and
 whitespace. Other segments are kept, and the earlier revision stays in **Revision history**.
 
+### Compare a second model
+
+**Whole body — MRSegmentator** is a separate model for CT and MRI, with 40 structures. Install it
+once with `scripts/download_segmentation_model.py mrsegmentator`.
+
+- Its segments sit in their own **MRSegmentator** group, named like **Liver (MRSegmentator)**.
+- A run replaces only that model's earlier segments, so TotalSegmentator's stay beside them. The same
+  applies the other way round.
+- It runs alone, without the crop or small-blob options, and always at full settings: five folds.
+
 A task's weights download on its first run. AI jobs run one at a time across all GPUs, on the device
 set by `SCAN3D_DEVICE` unless you [choose another GPU](#choose-a-gpu), and a CPU is much slower.
 Progress shows at the top of the window, with **Cancel job**. Imports, opening a CT, direct edits
