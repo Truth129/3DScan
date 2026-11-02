@@ -789,7 +789,7 @@ async function imported(next: Case) {
   importOpen.value = false;
   error.value = '';
   try {
-    await refreshCases();
+    void refreshCases().catch(() => {});
     await openCase(next.id);
     toast(`Scan imported. Select a ${sourceKinds.value} series to continue.`);
   } catch (reason) {
@@ -804,9 +804,7 @@ async function openOrthancCase(id: string) {
   closeOrthancLaunch();
   loading.value = true;
   try {
-    // An import may have finished while the launch panel was recovering a lost
-    // response; include that case before the workspace selects its header item.
-    await refreshCases();
+    void refreshCases().catch(() => {});
     await openCase(id);
   } catch (reason) {
     fail(reason);
@@ -829,7 +827,7 @@ async function demo() {
   error.value = '';
   try {
     const next = await api.demo();
-    await refreshCases();
+    void refreshCases().catch(() => {});
     importOpen.value = false;
     await openCase(next.id);
     toast('Synthetic demonstration only. No patient anatomy or inference validation.');

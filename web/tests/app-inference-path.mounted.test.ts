@@ -691,6 +691,18 @@ describe('the Library', () => {
     expect(stored.get('scan3d-case')).toBe('other');
     expect(root.named('case-toolbar')).toBeDefined();
   });
+  it('opens a new case though the list cannot be read', async () => {
+    const { stored } = workstation([amd]);
+    stored.delete('scan3d-case');
+    vi.mocked(api.cases).mockResolvedValueOnce([]);
+    vi.spyOn(api, 'demo').mockImplementation(async () => scan);
+    const root = await start();
+    vi.mocked(api.cases).mockRejectedValue(new Error('No list'));
+    await press(root.button('Explore synthetic demo'));
+    expect(stored.get('scan3d-case')).toBe('case');
+    expect(root.named('case-toolbar')).toBeDefined();
+    expect(root.content).not.toContain('No list');
+  });
   describe('a case that will not open', () => {
     const other = { ...scan, id: 'other', label: 'OTHER' },
       third = { ...scan, id: 'third', label: 'THIRD' },
