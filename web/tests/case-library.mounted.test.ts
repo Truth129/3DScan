@@ -124,6 +124,20 @@ describe('Escape', () => {
     expect(close).not.toHaveBeenCalled();
     expect(view.labelled('Close Library')).toBeUndefined();
   });
+  it('still closes with the focus on the page, unless a dialog owns the key', () => {
+    const stray = () =>
+      document.dispatchEvent(Object.defineProperty(Object.assign(new Event('keydown'), { key: 'Escape' }), 'target', { value: document.body }));
+    const close = vi.fn(),
+      view = library({ onClose: close });
+    stray();
+    expect(close).toHaveBeenCalledOnce();
+    vi.spyOn(document, 'querySelector').mockReturnValueOnce(view.root);
+    stray();
+    expect(close, 'the dialog answers this one').toHaveBeenCalledOnce();
+    view.unmount();
+    stray();
+    expect(close, 'nothing listens once the Library has gone').toHaveBeenCalledOnce();
+  });
 });
 
 describe('renaming', () => {
@@ -149,6 +163,16 @@ describe('renaming', () => {
     expect(renamed).toHaveBeenCalledExactlyOnceWith(next);
     expect(view.form()).toBeUndefined();
     expect(view.text()).not.toContain(refusal);
+  });
+  it('returns the cursor to the name after a refusal, so Esc and Enter still work', async () => {
+    vi.spyOn(api, 'rename').mockRejectedValue(new ApiError(409, 'Refused'));
+    const view = library({});
+    click(view.button('Rename'));
+    await settled();
+    view.button('Save')!.focus();
+    submit(view.form());
+    await settled();
+    expect(document.activeElement).toBe(view.nameField());
   });
   it('asks for a name', async () => {
     const rename = vi.spyOn(api, 'rename'),

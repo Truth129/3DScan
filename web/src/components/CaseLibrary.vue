@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import { caseDate, filterCases, formatSize, statusLabel } from '../lib/library';
 import { session } from '../lib/session';
@@ -71,13 +71,14 @@ async function readTrash() {
     /* The next heartbeat reads it again. */
   }
 }
+/** A template ref in a v-for is an array, so ask the one form there can be. */
+const nameField = () => root.value?.querySelector<HTMLInputElement>('[aria-label="Case name"]');
 async function startRename(item: Case) {
   renaming.value = item.id;
   draft.value = item.label;
   refusal.value = '';
   await nextTick();
-  // A template ref in a v-for is an array, so ask the one form there can be.
-  const field = root.value?.querySelector<HTMLInputElement>('[aria-label="Case name"]');
+  const field = nameField();
   focusOn(field);
   field?.select();
 }
@@ -98,6 +99,8 @@ async function saveRename() {
     await stopRename();
   } catch (reason) {
     refusal.value = reason instanceof Error ? reason.message : String(reason);
+    // Save was disabled while this waited, which dropped the focus to the page.
+    focusOn(nameField());
   } finally {
     saving.value = false;
   }
@@ -145,6 +148,10 @@ function escape() {
   if (renaming.value && tab.value === 'cases') void stopRename();
   else if (props.closable) emit('close');
 }
+/** A click on plain page, or a focused control that went away, leaves the key outside the section. */
+function strayEscape(event: KeyboardEvent) {
+  if (event.key === 'Escape' && event.target === document.body && !document.querySelector('.dialog-backdrop')) escape();
+}
 watch(() => props.stamp, readTrash);
 onMounted(() => {
   // First, so the Orthanc launch dialog, which mounts in this render and focuses after a tick, has the last
@@ -152,7 +159,9 @@ onMounted(() => {
   focusSearch();
   void readTrash();
   void readSizes();
+  document.addEventListener('keydown', strayEscape);
 });
+onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
 </script>
 
 <template>
