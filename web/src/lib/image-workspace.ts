@@ -39,6 +39,17 @@ export function preparedImageChoices(assets: readonly ImageAsset[], revisions: r
     ];
   });
 }
+/** The image-only revision this one grew from. Each Process run makes a root, so walking parents finds this image's own. */
+export function scanRevisionOf(revisions: readonly Revision[], active: Revision | undefined) {
+  const byId = new Map(revisions.map(item => [item.id, item])),
+    seen = new Set<string>();
+  let current = active;
+  while (current?.parent_id && !seen.has(current.id)) {
+    seen.add(current.id);
+    current = byId.get(current.parent_id);
+  }
+  return current && current.id !== active?.id && !current.structures.length ? current : undefined;
+}
 export function validWindow(value: unknown, presentation: ImagePresentation): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : presentation.default_window;
 }

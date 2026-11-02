@@ -5,6 +5,7 @@ import {
   formatImageValue,
   preparedImageChoices,
   sameImageSource,
+  scanRevisionOf,
   sequenceSummary,
   sourceScope,
   SourceRequestGate,
@@ -20,7 +21,7 @@ import { freshVolumeSettings, getVolumePreset, MR_SIGNAL_PRESET, samplePresetTra
 import { CTVolumeRenderer } from '../src/lib/ct-volume-renderer';
 import { restoreSegmentationSettings } from '../src/lib/segmentation-settings';
 import { normalizePortableState } from '../src/lib/portable-viewer';
-import type { Revision, SegmentationCatalog, Series } from '../src/types';
+import type { Revision, SegmentationCatalog, Series, Structure } from '../src/types';
 import type * as THREE from 'three';
 
 const geometry = {
@@ -227,6 +228,41 @@ describe('MR signal display without HU assumptions', () => {
     expect(renderer.material.uniforms.uTransfer.value).toBe(texture);
     expect(renderer.material.uniforms.uVolume.value).toBe(volume);
     renderer.dispose();
+  });
+});
+
+describe('the scan behind a revision', () => {
+  const liver = { id: 'liver' } as Structure;
+  const scan = (id: string): Revision => revision(id, 'T1');
+  const grown = (id: string, parent_id: string): Revision => ({ ...scan(id), kind: 'segmentation', parent_id, structures: [liver] });
+
+  it('finds the root', () => {
+    const root = scan('root'),
+      first = grown('first', 'root'),
+      second = grown('second', 'first');
+    expect(scanRevisionOf([second, first, root], second)).toBe(root);
+  });
+  it("finds this image's own root, because each Process run makes one", () => {
+    const older = scan('older'),
+      newer = scan('newer'),
+      result = grown('result', 'newer');
+    expect(scanRevisionOf([older, newer, result, grown('other', 'older')], result)).toBe(newer);
+  });
+  it('offers nothing on an image-only revision', () => {
+    const root = scan('root');
+    expect(scanRevisionOf([root], root)).toBeUndefined();
+  });
+  it('offers nothing when the root has structures, as the demo does', () => {
+    const root = { ...scan('root'), structures: [liver] },
+      result = grown('result', 'root');
+    expect(scanRevisionOf([root, result], result)).toBeUndefined();
+  });
+  it('survives a broken parent chain', () => {
+    const orphan = grown('orphan', 'missing'),
+      looped = grown('looped', 'looped');
+    expect(scanRevisionOf([orphan], orphan)).toBeUndefined();
+    expect(scanRevisionOf([looped], looped)).toBeUndefined();
+    expect(scanRevisionOf([], undefined)).toBeUndefined();
   });
 });
 

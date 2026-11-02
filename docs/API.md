@@ -287,7 +287,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `POST /api/cases/{id}/segment`                       | Run TotalSegmentator                    |
 | `POST /api/cases/{id}/refinements`, `.../corrections` | Mask operation, Slicer correction      |
 | `POST /api/cases/{id}/dicom-seg/imports`             | Import DICOM SEG                        |
-| `POST /api/cases/{id}/activate`                      | Undo or redo                            |
+| `POST /api/cases/{id}/activate`                      | Undo, redo or Reset to scan             |
 | `GET /api/cases/{id}/images`, `.../images/{image}`   | Image assets                            |
 | `GET /api/cases/{id}/jobs`                           | A case's jobs, newest first             |
 | `GET /api/jobs/{id}`, `POST .../cancel`, `GET .../measurements` | Poll, cancel, partial results |
@@ -416,7 +416,8 @@ empties the mask is refused.
   world-axis-aligned bounds.
 
 **`POST /api/cases/{id}/activate`** takes `{revision_id}` and returns the Case. This is undo and
-redo: masks, volumes and relationships return exactly.
+redo: masks, volumes and relationships return exactly. Reset to scan is this route with the
+image-only revision.
 
 **`PATCH /api/cases/{id}/revisions/{rid}`** takes `{review_status}` and returns the Revision.
 Image-only revisions are refused.

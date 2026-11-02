@@ -391,6 +391,10 @@ In **Revision history**, **↶ Undo to parent** restores the previous revision e
 **Activate** switches to any other. Nothing is deleted. **Current** and **Before** in the 3D header
 compare surfaces with the parent, and **Compare CT overlay with parent** does so on the slices.
 
+**Reset to scan** returns to the image with no segmentation by activating its image-only revision.
+Nothing is deleted, and an open draft stays with its version. The case leaves pooled agreement
+until a segmentation is active again.
+
 To record your review, set **Revision status** under **Review status & tools** to **Unreviewed**,
 **Reviewed** or **Corrected**. It applies to the whole revision.
 

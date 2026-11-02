@@ -50,6 +50,7 @@ import { useImageProbe } from './lib/use-image-probe';
 import {
   preparedImageChoices,
   sameImageSource,
+  scanRevisionOf,
   sourceScope,
   SourceRequestGate,
   validWindow,
@@ -334,6 +335,7 @@ const structure = computed(
 );
 const pendingSelection = computed(() => pendingStructures.value.some(s => s.id === selected.value));
 const parentRevision = computed(() => revisions.value.find(r => r.id === revision.value?.parent_id));
+const scanRevision = computed(() => scanRevisionOf(revisions.value, revision.value));
 const shownRevision = computed(() =>
   before.value && parentRevision.value
     ? parentRevision.value
@@ -1134,7 +1136,7 @@ async function refine(operation: Operation) {
     actionBusy.value = false;
   }
 }
-async function activate(id: string) {
+async function activate(id: string, message = 'Revision activated. Previous revisions remain available.') {
   if (!activeCase.value) return;
   actionBusy.value = true;
   error.value = '';
@@ -1144,7 +1146,7 @@ async function activate(id: string) {
     if (generation !== caseGeneration) return;
     activeCase.value = current;
     await loadRevision(current.id, id, generation, true);
-    toast('Revision activated. Previous revisions remain available.');
+    toast(message);
   } catch (reason) {
     fail(reason);
   } finally {
@@ -1652,6 +1654,22 @@ onBeforeUnmount(() => {
                   <p class="help">Activate a previous revision for exact undo. Every mask and measurement is preserved.</p>
                   <button class="button secondary compact" :disabled="!revision.parent_id || busy" @click="revision.parent_id && activate(revision.parent_id)">
                     ↶ Undo to parent
+                  </button>
+                  <button
+                    v-if="scanRevision"
+                    class="button secondary compact"
+                    :disabled="busy"
+                    title="Activates the image with no segmentation. Nothing is deleted."
+                    @click="
+                      activate(
+                        scanRevision!.id,
+                        interactiveDraft
+                          ? 'Back to the scan. Your draft stays with its version in Revision history.'
+                          : 'Back to the scan. Earlier versions stay in Revision history.',
+                      )
+                    "
+                  >
+                    Reset to scan
                   </button>
                 </div>
                 <div v-for="item in revisions" :key="item.id" class="revision-row">

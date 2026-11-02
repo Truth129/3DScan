@@ -4,7 +4,7 @@ import App from '../src/App.vue';
 import { api, ApiError } from '../src/lib/api';
 import { SEGMENT_PATH_KEY } from '../src/lib/inference-path';
 import { runCaseCheck } from '../src/lib/session';
-import type { Case, InferencePathRow, Job, Revision, SegmentationCatalog } from '../src/types';
+import type { Case, InferencePathRow, InteractiveReview, Job, Revision, SegmentationCatalog, Structure } from '../src/types';
 import { choose, createApp, FakeElement, press, settled } from './fake-dom';
 
 // These draw on a GPU canvas. The call sites under test are in App itself, and every other
@@ -704,6 +704,63 @@ describe('the Library', () => {
     expect(root.named('case-title')?.content).toContain('RENAMED');
     expect(api.revision).not.toHaveBeenCalled();
     expect(root.button('Select series'), 'the series this tab read stay').toBeUndefined();
+  });
+
+  describe('Reset to scan', () => {
+    const liver: Structure = {
+      id: 'liver',
+      name: 'liver',
+      task: 'total',
+      group: 'organs',
+      color: '#aa0000',
+      volume_ml: 1,
+      voxel_count: 1,
+      centroid_ras: null,
+      bounds_ras: null,
+      qc: [],
+    };
+    const segmented: Revision = { ...prepared, id: 'segmented', parent_id: 'prepared', kind: 'segmentation', source: 'segmented', structures: [liver] };
+    function segmentedCase() {
+      const server = workstation([amd], { revisions: [segmented, prepared] });
+      vi.mocked(api.case).mockImplementation(async () => ({ ...scan, active_revision_id: 'segmented' }));
+      vi.mocked(api.revision).mockImplementation(async (_case, id) => (id === 'prepared' ? prepared : segmented));
+      vi.spyOn(api, 'agreement').mockImplementation(() => new Promise(() => {}));
+      return { ...server, activate: vi.spyOn(api, 'activate').mockImplementation(async () => scan) };
+    }
+
+    it('offers Reset to scan and activates the image-only revision', async () => {
+      const { activate } = segmentedCase();
+      const root = await start();
+      await press(root.button('Revision history'));
+      await press(root.button('Reset to scan'));
+      expect(activate).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
+      expect(root.content).toContain('Back to the scan. Earlier versions stay in Revision history.');
+      expect(root.named('case-toolbar')).toBeDefined();
+    });
+    it('says that an open draft stays with its version', async () => {
+      segmentedCase();
+      const root = await start();
+      await press(root.button('Revision history'));
+      (root.named('interactive-review') as unknown as { __vueParentComponent: ComponentInternalInstance }).__vueParentComponent.emit('state', {
+        id: 'draft',
+      } as InteractiveReview);
+      await settled();
+      await press(root.button('Reset to scan'));
+      expect(root.content).toContain('Back to the scan. Your draft stays with its version in Revision history.');
+    });
+    it('waits for a running job, as Activate does', async () => {
+      segmentedCase();
+      vi.mocked(api.jobs).mockImplementation(async () => [queued]);
+      const root = await start();
+      await press(root.button('Revision history'));
+      expect(root.button('Reset to scan')?.props.disabled).toBe(true);
+    });
+    it('offers nothing on the scan itself', async () => {
+      workstation([amd]);
+      const root = await start();
+      await press(root.button('Revision history'));
+      expect(root.button('Reset to scan')).toBeUndefined();
+    });
   });
 
   describe('a job that reads as gone', () => {
