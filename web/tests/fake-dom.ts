@@ -17,6 +17,10 @@ export class FakeElement {
   addEventListener() {}
   removeEventListener() {}
   scrollTo() {}
+  focus() {}
+  querySelector() {
+    return null;
+  }
   close() {}
   getRootNode() {
     return this;

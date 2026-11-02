@@ -168,19 +168,20 @@ interface Posted {
 let revisions: Record<string, Revision>, posts: Posted[], listed: Job[], polled: () => Promise<Job>;
 
 async function app() {
-  localStorage.removeItem('scan3d-case');
+  localStorage.setItem('scan3d-case', 'case-a');
   const view = mount(App, () => ({}));
   await settled();
-  const select = () => view.labelled('Select case')! as unknown as HTMLSelectElement;
   return Object.assign(view, {
     dicom: () => view.all(element => element.className === 'dicom')[0],
     dialog: () => view.all(element => element.tagName === 'DIALOG')[0] as (MountedElement & { open: boolean }) | undefined,
     banner: () => view.all(element => element.className === 'error-banner')[0]?.textContent ?? '',
     toast: () => view.all(element => element.className === 'toast')[0]?.textContent ?? '',
-    /** Change case the way the header does. */
-    open(id: string) {
-      Object.assign(select(), { value: id });
-      select().dispatchEvent(new Event('change'));
+    /** Change case the way a person does, through the Library. */
+    async open(id: string) {
+      click(view.labelled('Select case'));
+      await settled();
+      click(view.all(element => element.getAttribute('data-case-id') === id)[0].children.find(element => element.className === 'case-row-open'));
+      await settled();
     },
     async export() {
       click(view.all(element => element.className === 'dicom')[0]);
@@ -220,6 +221,9 @@ beforeEach(() => {
   vi.spyOn(api, 'cases').mockImplementation(async () => cases);
   vi.spyOn(api, 'health').mockResolvedValue({ status: 'ok' });
   vi.spyOn(api, 'case').mockImplementation(async id => cases.find(item => item.id === id)!);
+  vi.spyOn(api, 'markOpened').mockImplementation(async id => ({ id }));
+  vi.spyOn(api, 'sizes').mockResolvedValue({ sizes: {} });
+  vi.spyOn(api, 'trashed').mockResolvedValue([]);
   vi.spyOn(api, 'revision').mockImplementation(async (_id, rid) => revisions[rid]);
   vi.spyOn(api, 'revisions').mockImplementation(async id => Object.values(revisions).filter(item => item.case_id === id));
   vi.spyOn(api, 'images').mockResolvedValue([]);
@@ -387,7 +391,6 @@ describe('the recheck after the capture', () => {
     expect(posts).toHaveLength(0);
   }
   it('discards the capture when the case changes', () => during(view => view.open('case-b')));
-  it('discards the capture when the same case is reopened', () => during(view => view.open('case-a')));
   it('discards the capture when the revision changes', async () => {
     vi.spyOn(api, 'activate').mockImplementation(async () => ({ ...cases[0], active_revision_id: 'revision-a1' }));
     await during(async view => {
@@ -413,8 +416,7 @@ describe('the recheck after the capture', () => {
     const held = holdCapture(),
       view = await app();
     await view.export();
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     expect(fake.viewports.at(-1).props.caseId).toBe('case-b');
     held.resolve();
     await settled();
@@ -425,8 +427,7 @@ describe('the recheck after the capture', () => {
     fake.capture = () => held.promise;
     const view = await app();
     await view.export();
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     held.reject(new DOMException('The shared CT source request was cancelled.', 'AbortError'));
     await settled();
     expect(view.banner()).toContain('The view changed during capture. Try again.');
@@ -438,8 +439,7 @@ describe('a held capture', () => {
     const view = await app();
     await view.export();
     expect(view.dialog()?.open).toBe(true);
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     expect(view.dialog()).toBeUndefined();
   });
   it('is dropped with its revision', async () => {
@@ -472,8 +472,7 @@ describe('a held capture', () => {
     await view.export();
     click(view.button('Archive in Orthanc'));
     await settled();
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     expect(view.dialog()).toBeUndefined();
     queued.resolve(Response.json(job('queued')));
     await settled();
@@ -524,8 +523,7 @@ describe('a request that fails after its dialog has gone', () => {
     const view = await posted();
     const loading = deferred<Case>();
     vi.mocked(api.case).mockImplementationOnce(() => loading.promise);
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     expect(view.dialog()).toBeUndefined();
     view.answer.resolve(refusal());
     await settled();
@@ -556,8 +554,7 @@ describe('a request that fails after its dialog has gone', () => {
   });
   it('names the case when the workspace has moved on', async () => {
     const view = await posted();
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     expect(view.dialog()).toBeUndefined();
     view.answer.resolve(refusal());
     await settled();
@@ -641,8 +638,7 @@ describe('following a job', () => {
   });
   it('names the case when a failure lands after moving to another', async () => {
     const view = await start();
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     expect(view.dialog()).toBeUndefined();
     polled = async () => job('failed', { error: 'Delivery not confirmed.' });
     await settled();
@@ -696,8 +692,7 @@ describe('following a job', () => {
     click(view.labelled('Close DICOM view export'));
     await settled();
     vi.mocked(api.case).mockImplementationOnce(() => loading.promise);
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     polled = async () => job('failed', { error: 'Delivery not confirmed.' });
     await settled();
     expect(view.banner()).toContain('Synthetic A: Delivery not confirmed.');
@@ -714,8 +709,7 @@ describe('following a job', () => {
     const view = await start();
     click(view.labelled('Close DICOM view export'));
     await settled();
-    view.open('case-b');
-    await settled();
+    await view.open('case-b');
     await view.export();
     click(view.button('Archive in Orthanc'));
     await settled();

@@ -469,7 +469,7 @@ input[type='range'] {
   .header-case {
     margin-left: 0;
   }
-  .header-case select {
+  .case-button {
     font-size: 12px;
   }
   .app-footer {

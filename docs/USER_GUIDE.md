@@ -9,8 +9,8 @@ new revision, so earlier work is never overwritten.
 > verify anatomy on the source images.
 
 Start 3DScan with `.venv/bin/scan3d serve` and open **http://127.0.0.1:9010**. See
-[installation](INSTALL.md) and [configuration](CONFIGURATION.md). **Explore synthetic demo** opens
-a phantom with ready-made masks and no patient data.
+[installation](INSTALL.md) and [configuration](CONFIGURATION.md). **Explore synthetic demo**, on an
+empty Library and in the import dialog, opens a phantom with ready-made masks and no patient data.
 
 ## Sign in
 
@@ -28,7 +28,8 @@ It asks for a password of 10 to 1,024 characters, twice. `--display-name` sets t
 header. The first admin receives every case that has no owner.
 
 **Signing in.** Enter your username and password. Over a network, use the HTTPS address. Each
-account sees only its own cases. Cases created on the command line go to the oldest admin.
+account sees only its own cases. Cases created on the command line go to the oldest admin. You land
+on the [Library](#library), and a reload stays on your case.
 
 **Shared computer.** Tick this on a computer other people use. You are signed out when the browser
 closes, and after 12 hours at most, and the browser stores no scan data for this session.
@@ -48,6 +49,22 @@ intact. Signing in as someone else reloads the page.
 
 `.venv/bin/scan3d users list` shows the accounts. Anyone with a shell on the machine can still read
 every file, so protect the machine and the data directory as well.
+
+## Library
+
+The Library lists your cases, the ones you opened last first. Choose the case name in the header to
+open it, over the case you are working on. **Esc** or **×** returns to that case exactly as you left
+it, and choosing the case's own row does the same.
+
+**Finding a case.** Type in **Search cases**. Every word must appear in the case name, a series
+description or modality, or the status. **Enter** opens the first match. A search stays in your
+browser.
+
+**Renaming.** Choose **Rename** on a row, then **Save**. Do not put patient identifiers in a case
+name. A case that is still importing can be renamed when the import finishes.
+
+If a case goes away while you have it open, the page says so and returns to the Library, within a
+minute or when you return to the tab.
 
 ## Import a study
 

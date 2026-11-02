@@ -14,7 +14,9 @@ import type {
   SegmentRelationship,
   SegmentationCatalog,
   SegmentationSettings,
+  StorageReport,
   TotalSegmentatorLicenseStatus,
+  TrashResult,
   ProcessRequest,
 } from '../types';
 import { presentRevision, presentStructures } from './appearance';
@@ -136,6 +138,13 @@ export const api = {
   agreement: (id: string, rid: string, signal?: AbortSignal) => request<RevisionAgreement>(`${revisionUrl(id, rid)}/agreement`, { signal }),
   agreementSummary: (signal?: AbortSignal) => request<AgreementAggregate>('/api/agreement', { signal }),
   activate: (id: string, rid: string) => request<Case>(`${caseUrl(id)}/activate`, json('POST', { revision_id: rid })),
+  rename: (id: string, label: string) => request<Case>(caseUrl(id), json('PATCH', { label })),
+  markOpened: (id: string) => request<{ id: string }>(`${caseUrl(id)}/open`, { method: 'POST' }),
+  trash: (id: string) => request<TrashResult>(`${caseUrl(id)}/trash`, { method: 'POST' }),
+  restore: (id: string) => request<Case>(`/api/trash/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
+  trashed: () => request<Case[]>('/api/trash'),
+  sizes: () => request<{ sizes: Record<string, number> }>('/api/sizes'),
+  storage: () => request<StorageReport>('/api/storage'),
   review: async (id: string, rid: string, status: ReviewStatus) =>
     presentRevision(await request<Revision>(revisionUrl(id, rid), json('PATCH', { review_status: status }))),
   refine: (id: string, rid: string, structure: string, operation: Operation) =>

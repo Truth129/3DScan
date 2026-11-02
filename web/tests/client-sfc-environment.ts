@@ -119,6 +119,7 @@ class MemoryElement extends MemoryNode {
   focus() {
     memoryDocument.activeElement = this;
   }
+  select() {}
   /** Vue asks this when a v-model writes a new value into a text field. */
   getRootNode() {
     return memoryDocument;

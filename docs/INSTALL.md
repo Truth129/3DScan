@@ -68,8 +68,8 @@ Open <http://127.0.0.1:9010>. On a remote server, use an SSH tunnel rather than 
 ssh -L 9010:127.0.0.1:9010 user@server
 ```
 
-To try it without any scans, choose **Explore synthetic demo** in the app, or run
-`.venv/bin/scan3d demo`. The demo does not run AI models.
+To try it without any scans, choose **Explore synthetic demo** in the app, which shows while the
+Library is empty, or run `.venv/bin/scan3d demo`. The demo does not run AI models.
 
 ### 5. Add the AI models (optional)
 

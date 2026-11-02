@@ -323,6 +323,125 @@ h3 {
   display: flex;
   flex-direction: column;
 }
+/* Hidden, not removed: viewers keep their size and state, and nothing under the Library takes focus. */
+.library-covered > :not(.case-library) {
+  visibility: hidden;
+}
+.case-library {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  overflow: auto;
+  background: var(--bg);
+}
+.case-library:focus {
+  outline: none;
+}
+.case-library > .inspector-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+.case-library-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 20px 24px 32px;
+}
+.case-library-search {
+  width: 100%;
+}
+.case-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.case-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.case-row-open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  text-align: left;
+}
+.case-row-open:hover {
+  background: var(--surface-hover);
+}
+.case-row-open strong,
+.case-row-open small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.case-row-open strong {
+  color: var(--white);
+  font-size: 13px;
+  font-weight: 500;
+}
+.case-row.active .case-row-open strong {
+  color: var(--accent);
+}
+.case-row-open small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.case-row-form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+.case-row-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.case-row-fields input {
+  flex: 1;
+}
+.case-library-error {
+  color: #d5a88d;
+  font-size: 11px;
+}
+.case-library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px 0 24px;
+  text-align: center;
+}
+.case-library-empty h2 {
+  color: var(--white);
+  font-size: 24px;
+  font-weight: 400;
+}
+.case-library-empty p {
+  max-width: 560px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.case-library-notice {
+  text-align: center;
+  text-transform: uppercase;
+}
 .app-header {
   position: relative;
   height: 65px;
@@ -370,14 +489,24 @@ h3 {
 .header-case {
   margin-left: 12px;
   max-width: 300px;
+  min-width: 0;
   flex: 1;
 }
-.header-case select {
+.case-button {
   width: 100%;
+  overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--white);
   font-size: 11px;
   padding: 8px 11px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.case-button:hover {
+  border-color: var(--control-border-hover);
 }
 .worker-status {
   margin-left: auto;
@@ -1551,65 +1680,6 @@ h3 {
   font-size: 10px;
   margin-top: 8px;
 }
-.welcome {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 30px 20px 60px;
-  background: radial-gradient(ellipse at 50% 46%, var(--surface-hover) 0, transparent 62%);
-}
-.welcome-orbit {
-  width: 160px;
-  height: 175px;
-  margin-bottom: 20px;
-}
-.welcome-orbit svg {
-  width: 100%;
-  height: 100%;
-  stroke: var(--text-secondary);
-  stroke-width: 1;
-}
-.welcome-orbit path {
-  fill: #e8ecf20a;
-}
-.welcome-orbit circle {
-  stroke: var(--muted);
-}
-.welcome .eyebrow {
-  font-size: 9px;
-  color: var(--text-secondary);
-}
-.welcome h1 {
-  font-size: 42px;
-  font-weight: 400;
-  letter-spacing: -1.7px;
-  margin: 18px 0;
-  color: var(--white);
-}
-.welcome p {
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.8;
-}
-.welcome .button-row {
-  margin-top: 28px;
-  gap: 12px;
-}
-.welcome-features {
-  display: flex;
-  gap: 43px;
-  margin-top: 65px;
-  font: 9px var(--mono);
-  color: var(--muted);
-}
-.welcome-features strong {
-  font: 10px sans-serif;
-  color: var(--text-secondary);
-  margin-left: 8px;
-}
 .app-loading {
   display: flex;
   flex: 1;
@@ -2523,7 +2593,7 @@ h3 {
   .brand > span {
     font-size: 20px;
   }
-  .header-case select {
+  .case-button {
     font-size: 10px;
     padding: 7px;
     max-width: 160px;
@@ -2734,53 +2804,6 @@ h3 {
   .review-status {
     padding-top: 18px;
   }
-  .welcome {
-    justify-content: center;
-    padding: 20px 23px 45px;
-  }
-  .welcome-orbit {
-    width: 125px;
-    height: 139px;
-    margin-bottom: 12px;
-  }
-  .welcome .eyebrow {
-    font-size: 7px;
-    letter-spacing: 0.1em;
-  }
-  .welcome h1 {
-    font-size: 29px;
-    letter-spacing: -1px;
-    margin: 17px 0;
-  }
-  .welcome p {
-    font-size: 11px;
-    line-height: 1.9;
-  }
-  .welcome p br {
-    display: none;
-  }
-  .welcome .button-row {
-    flex-direction: column;
-    align-self: stretch;
-    gap: 10px;
-    margin-top: 24px;
-  }
-  .welcome .button {
-    width: 100%;
-    min-height: 43px;
-    font-size: 11px;
-  }
-  .welcome-features {
-    gap: 18px;
-    margin-top: 30px;
-    flex-direction: column;
-    text-align: left;
-    align-self: stretch;
-    padding-left: 10px;
-  }
-  .welcome-features strong {
-    font-size: 10px;
-  }
   .prepare-workspace {
     padding: 28px 20px 35px;
   }
@@ -2845,6 +2868,21 @@ h3 {
   }
   .import-dialog footer > .button {
     font-size: 10px;
+  }
+  .case-library-body {
+    padding: 14px 16px 24px;
+  }
+  .case-row,
+  .case-row-fields {
+    flex-wrap: wrap;
+  }
+  .case-row-open,
+  .case-row-fields input {
+    flex-basis: 100%;
+  }
+  .case-library-empty .button-row {
+    flex-direction: column;
+    align-self: stretch;
   }
   .toast {
     bottom: 66px;

@@ -60,6 +60,27 @@ export interface Case {
   phase?: string;
   synthetic?: boolean;
   import_source?: { kind: string };
+  opened_at?: string | null;
+  trashed_at?: string;
+}
+export interface TrashResult {
+  id: string;
+  jobs_stopped: number;
+  sends_continuing: number;
+}
+/** Another owner's row has no `id` and no `label`, so it says only whose it is, when and how large. */
+export interface StorageRow {
+  id?: string;
+  label: string | null;
+  owner: string | null;
+  created_at: string;
+  trashed_at?: string | null;
+  size: number;
+}
+export interface StorageReport {
+  cases: StorageRow[];
+  totals: { cases: number; trash: number; shared_caches: number; other: number };
+  disk: { total: number; free: number };
 }
 export interface Job {
   id: string;

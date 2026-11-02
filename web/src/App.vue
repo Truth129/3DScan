@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import AnatomyPanel from './components/AnatomyPanel.vue';
+import CaseLibrary from './components/CaseLibrary.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
 import { displayStructures, normalizeStructureColor } from './lib/display-appearance';
 import WorkspacePanels from './components/WorkspacePanels.vue';
@@ -115,6 +116,9 @@ const importing = ref(false),
   actionBusy = ref(false),
   segImportBusy = ref(false),
   importOpen = ref(false);
+const libraryOpen = ref(false),
+  caseButton = ref<HTMLButtonElement>();
+const libraryShown = computed(() => libraryOpen.value || (!activeCase.value && !loading.value));
 const selected = ref(''),
   display = ref<StructureDisplay>({}),
   point = ref<Point>([0, 0, 0]);
@@ -638,6 +642,7 @@ function resetCaseView() {
   seriesUid.value = '';
 }
 async function openCase(id: string) {
+  libraryOpen.value = false;
   const generation = ++caseGeneration;
   resetCaseView();
   try {
@@ -647,6 +652,8 @@ async function openCase(id: string) {
     seriesUid.value = next.selected_series_uid || '';
     acquisition.value = acquisitionSelection(undefined, next.phase || '');
     localStorage.setItem('scan3d-case', id);
+    // The list order must not be able to fail an open.
+    void api.markOpened(id).catch(() => {});
     if (next.active_revision_id) await loadRevision(id, next.active_revision_id, generation);
     if (generation !== caseGeneration || !alive) return;
     const pending = await recoverCaseJob(id, localStorage.getItem(`scan3d-job:${id}`), api);
@@ -680,6 +687,7 @@ async function closeCase(id: string, message = 'That case is no longer available
 let checkingCase = false;
 /** An idle tab must not keep showing a case that has gone, and a rename elsewhere reaches this header. */
 async function checkOpenCase() {
+  if (libraryShown.value) void refreshCases().catch(() => {});
   const id = activeCase.value?.id,
     generation = caseGeneration;
   if (!id || checkingCase) return;
@@ -693,6 +701,26 @@ async function checkOpenCase() {
   } finally {
     checkingCase = false;
   }
+}
+function toggleLibrary() {
+  if (libraryOpen.value) closeLibrary();
+  else {
+    libraryOpen.value = true;
+    void refreshCases().catch(fail);
+  }
+}
+function closeLibrary() {
+  libraryOpen.value = false;
+  void nextTick(() => caseButton.value?.focus());
+}
+/** Reopening the open case would drop the review view, and this row only asks to see it again. */
+function openFromLibrary(id: string) {
+  if (id === activeCase.value?.id) closeLibrary();
+  else void openCase(id);
+}
+function renamed(next: Case) {
+  cases.value = cases.value.map(item => (item.id === next.id ? { ...item, label: next.label } : item));
+  if (activeCase.value?.id === next.id) activeCase.value.label = next.label;
 }
 async function imported(next: Case) {
   importOpen.value = false;
@@ -1142,13 +1170,9 @@ onMounted(async () => {
   if (results[0].status === 'fulfilled') {
     cases.value = results[0].value;
     if (orthancLaunch.value.kind === 'none') {
+      // A saved case that has gone closes and lands on the Library, never on a different case.
       const saved = localStorage.getItem('scan3d-case');
-      const candidate =
-        cases.value.find(c => c.id === saved) ||
-        cases.value.find(c => c.active_revision_id && !c.synthetic) ||
-        cases.value.find(c => c.active_revision_id) ||
-        cases.value[0];
-      if (candidate) await openCase(candidate.id);
+      if (saved) await openCase(saved);
     }
   } else fail(results[0].reason);
   if (results[1].status === 'fulfilled') health.value = results[1].value;
@@ -1177,10 +1201,18 @@ onBeforeUnmount(() => {
       <div class="header-divider"></div>
       <span class="header-context">ANATOMY WORKSPACE</span>
       <div class="header-case">
-        <select :value="activeCase?.id || ''" aria-label="Select case" @change="openCase(($event.target as HTMLSelectElement).value)">
-          <option v-if="!cases.length" value="">No cases yet</option>
-          <option v-for="item in cases" :key="item.id" :value="item.id">{{ item.label }}</option>
-        </select>
+        <button
+          ref="caseButton"
+          class="case-button"
+          type="button"
+          aria-label="Select case"
+          :value="activeCase?.id || ''"
+          :title="activeCase?.label"
+          :aria-expanded="libraryShown"
+          @click="toggleLibrary"
+        >
+          {{ activeCase?.label ?? 'Library' }}
+        </button>
       </div>
       <div v-if="activeCase && job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
         <span v-if="busyJob" class="spinner"></span>
@@ -1242,35 +1274,8 @@ onBeforeUnmount(() => {
 
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
 
-    <div class="app-body">
-      <main v-if="!activeCase && !loading" class="welcome">
-        <div class="welcome-orbit">
-          <svg viewBox="0 0 180 200" fill="none">
-            <path
-              d="M78 29c-10 19-8 35-19 52-9 14-32 28-32 56 0 30 19 41 38 32 18-8 17-40 17-69V29Zm24 0c10 19 8 35 19 52 9 14 32 28 32 56 0 30-19 41-38 32-18-8-17-40-17-69V29Z"
-            />
-            <path d="M90 20v56m0-10L68 91m22-25 22 25" />
-            <circle cx="90" cy="100" r="82" stroke-dasharray="3 7" />
-          </svg>
-        </div>
-        <span class="eyebrow">FROM SCAN TO SPATIAL UNDERSTANDING</span>
-        <h1>A clearer view of anatomy.</h1>
-        <p>
-          Explore {{ mrEnabled ? 'CT and static 3D MR' : 'CT' }} scans with linked slices and 3D views.<br />Segment locally. Review the source images. Refine
-          with confidence.
-        </p>
-        <div class="button-row">
-          <button class="button primary large" @click="importOpen = true">Import your first scan →</button
-          ><button class="button secondary large" :disabled="importing" @click="demo">Explore synthetic demo</button>
-        </div>
-        <p class="eyebrow welcome-notice">{{ researchNotice }}</p>
-        <div class="welcome-features">
-          <span>01 <strong>Local AI inference</strong></span
-          ><span>02 <strong>Revisioned corrections</strong></span
-          ><span>03 <strong>Portable 3D viewer</strong></span>
-        </div>
-      </main>
-      <main v-else-if="loading && !revision" class="app-loading">
+    <div class="app-body" :class="{ 'library-covered': libraryOpen && activeCase }">
+      <main v-if="loading && !revision" class="app-loading">
         <span class="spinner"></span>
         <p>Opening case workspace…</p>
       </main>
@@ -1973,6 +1978,20 @@ onBeforeUnmount(() => {
           ><span>Verify anatomy on the source images</span>
         </footer>
       </template>
+      <CaseLibrary
+        v-if="libraryShown"
+        :cases="cases"
+        :open-id="activeCase?.id"
+        :closable="!!activeCase"
+        :importing="importing"
+        :mr-enabled="mrEnabled"
+        :notice="researchNotice"
+        @open="openFromLibrary"
+        @close="closeLibrary"
+        @import-scan="importOpen = true"
+        @demo="demo"
+        @renamed="renamed"
+      />
     </div>
     <ImportDialog v-if="importOpen" :busy="importing" :mr-enabled="mrEnabled" @close="importOpen = false" @imported="imported" @demo="demo" />
     <OrthancLaunchDialog
@@ -2008,10 +2027,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.welcome-notice {
-  margin-top: 24px;
-  text-transform: uppercase;
-}
 .signal-window-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(90px, 1fr));

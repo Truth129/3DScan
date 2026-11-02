@@ -155,6 +155,17 @@ describe('opening the page', () => {
     expect(localStorage.getItem('scan3d-last-user')).toBe(ravi.id);
     expect(reload).not.toHaveBeenCalled();
   });
+  it('starts at the Library after the form, keeping the job keys', async () => {
+    localStorage.setItem('scan3d-last-user', asha.id);
+    localStorage.setItem('scan3d-case', 'case-of-asha');
+    localStorage.setItem('scan3d-job:case-of-asha', 'job-of-asha');
+    const view = await gate(seen(null));
+    accepts = seen(asha);
+    await signIn(view);
+    expect(app(view).getAttribute('data-case')).toBeNull();
+    expect(localStorage.getItem('scan3d-job:case-of-asha')).toBe('job-of-asha');
+    localStorage.removeItem('scan3d-job:case-of-asha');
+  });
 });
 
 describe('a session that ends in use', () => {
@@ -174,6 +185,16 @@ describe('a session that ends in use', () => {
     expect(app(view).className).not.toContain('session-covered');
     expect((await held).status).toBe(200);
     expect(reload).not.toHaveBeenCalled();
+  });
+  it('keeps the open case when the same person signs in on the overlay', async () => {
+    const view = await gate(seen(asha));
+    localStorage.setItem('scan3d-case', 'case-of-asha');
+    current = seen(null);
+    await heartbeat();
+    accepts = seen(asha);
+    await signIn(view);
+    expect(localStorage.getItem('scan3d-case')).toBe('case-of-asha');
+    localStorage.removeItem('scan3d-case');
   });
   it('covers the app when a heartbeat finds no session', async () => {
     const view = await gate(seen(asha));

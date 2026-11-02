@@ -4,6 +4,7 @@ import App from '../App.vue';
 import { setReauthentication } from '../lib/api-fetch';
 import {
   clearLocalKeys,
+  forgetOpenCase,
   getSession,
   leavePage,
   rememberUser,
@@ -130,6 +131,8 @@ async function submit() {
   try {
     const view = await signIn(username.value, password.value, shared.value);
     reads++;
+    // Someone arriving from the form starts at the Library. On the overlay, the open case stays.
+    if (!appUser.value) forgetOpenCase();
     follow(view);
   } catch (reason) {
     message.value = sessionFailure(reason);

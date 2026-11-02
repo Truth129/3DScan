@@ -68,6 +68,15 @@ export function clearLocalKeys() {
   }
 }
 
+/** The job keys stay: a running job must still be found on the next open. */
+export function forgetOpenCase() {
+  try {
+    localStorage.removeItem('scan3d-case');
+  } catch {
+    /* With storage unavailable there is nothing to forget. */
+  }
+}
+
 /**
  * A session can end with no tab open, so a different account opening the app is the first sign of a
  * new person. Nothing stored means an upgrade, which must not lose a running job's key.

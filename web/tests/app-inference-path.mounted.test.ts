@@ -86,7 +86,8 @@ afterEach(() => {
 
 /** The browser App reads at start-up, and the routes it reads, with the network closed. */
 function workstation(paths: InferencePathRow[], { remembered = '', revisions = [prepared], job = queued } = {}) {
-  const stored = new Map(remembered ? [[SEGMENT_PATH_KEY, remembered]] : []);
+  const stored = new Map([['scan3d-case', 'case']]);
+  if (remembered) stored.set(SEGMENT_PATH_KEY, remembered);
   vi.stubGlobal('localStorage', {
     getItem: (key: string) => stored.get(key) ?? null,
     setItem: (key: string, value: string) => stored.set(key, value),
@@ -100,6 +101,9 @@ function workstation(paths: InferencePathRow[], { remembered = '', revisions = [
   vi.spyOn(api, 'cases').mockImplementation(async () => [scan]);
   vi.spyOn(api, 'health').mockImplementation(async () => ({}));
   vi.spyOn(api, 'case').mockImplementation(async () => scan);
+  vi.spyOn(api, 'markOpened').mockImplementation(async id => ({ id }));
+  vi.spyOn(api, 'sizes').mockImplementation(async () => ({ sizes: {} }));
+  vi.spyOn(api, 'trashed').mockImplementation(async () => []);
   vi.spyOn(api, 'revision').mockImplementation(async () => revisions[0]);
   vi.spyOn(api, 'revisions').mockImplementation(async () => revisions);
   vi.spyOn(api, 'images').mockImplementation(async () => []);
@@ -335,11 +339,13 @@ describe('a segmentation that is refused', () => {
   });
   it('reads nothing for a refusal that arrives after the case was opened again', async () => {
     const server = workstation([amd, nvidia]);
+    vi.mocked(api.cases).mockImplementation(async () => [scan, { ...scan, id: 'other', label: 'OTHER' }]);
     const root = await openPanel();
     let refuse!: (reason: Error) => void;
     server.segment.mockReturnValueOnce(new Promise<Job>((_, reject) => (refuse = reject)));
     await submit(root);
-    await choose(root.select('Select case'), 'case');
+    await press(root.named('case-button'));
+    await press(root.button('OTHER'));
     const options = vi.mocked(api.segmentationOptions);
     options.mockClear();
     refuse(new ApiError(400, refusal));
@@ -435,6 +441,56 @@ describe('the Library', () => {
     await settled();
   }
 
+  it('lands on the Library with nothing saved', async () => {
+    const { stored } = workstation([amd]);
+    stored.delete('scan3d-case');
+    const root = await start();
+    expect(root.named('case-library')).toBeDefined();
+    expect(root.named('case-button')?.content.trim()).toBe('Library');
+    expect(api.case).not.toHaveBeenCalled();
+  });
+  it('closes without reopening the open case', async () => {
+    workstation([amd]);
+    const root = await start();
+    vi.mocked(api.case).mockClear();
+    await press(root.named('case-button'));
+    expect(root.named('library-covered'), 'the workspace stays mounted under it').toBeDefined();
+    expect(root.named('case-toolbar')).toBeDefined();
+    await press(root.named('case-row-open'));
+    expect(root.named('case-library')).toBeUndefined();
+    expect(root.named('library-covered')).toBeUndefined();
+    expect(api.case).not.toHaveBeenCalled();
+  });
+  it('shows a new name in the header', async () => {
+    workstation([amd]);
+    const root = await start();
+    vi.spyOn(api, 'rename').mockImplementation(async () => ({ ...scan, label: 'RENAMED' }));
+    await press(root.named('case-button'));
+    await press(root.button('Rename'));
+    (root.named('case-row-form')!.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+    await settled();
+    expect(root.named('case-button')?.content.trim()).toBe('RENAMED');
+    expect(root.named('case-row-open')?.content).toContain('RENAMED');
+  });
+  it('reads the list on a heartbeat only while the Library shows', async () => {
+    workstation([amd]);
+    const root = await start();
+    vi.mocked(api.cases).mockClear();
+    await heartbeat();
+    expect(api.cases).not.toHaveBeenCalled();
+    await press(root.named('case-button'));
+    vi.mocked(api.cases).mockClear();
+    await heartbeat();
+    expect(api.cases).toHaveBeenCalledOnce();
+  });
+  it('records an open, and a failed record does not fail it', async () => {
+    workstation([amd]);
+    vi.mocked(api.markOpened).mockRejectedValue(new Error('Nothing recorded'));
+    const root = await start();
+    expect(api.markOpened).toHaveBeenCalledExactlyOnceWith('case');
+    expect(root.named('case-toolbar')).toBeDefined();
+    expect(root.content).not.toContain('Nothing recorded');
+  });
   it('asks about the open case when a request says it has gone', async () => {
     const server = workstation([amd]);
     const root = await openPanel();
