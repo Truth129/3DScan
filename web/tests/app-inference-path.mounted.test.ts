@@ -673,6 +673,24 @@ describe('the Library', () => {
       expect(api.trashed).toHaveBeenCalledOnce();
     });
   });
+  it('leaves a case that is opening alone on a heartbeat', async () => {
+    const { stored } = workstation([amd]);
+    const other = { ...scan, id: 'other', label: 'OTHER' };
+    vi.mocked(api.cases).mockImplementation(async () => [scan, other]);
+    const root = await start();
+    await press(root.named('case-button'));
+    let answer!: (next: Case) => void;
+    vi.mocked(api.case).mockClear();
+    vi.mocked(api.case).mockReturnValueOnce(new Promise(resolve => (answer = resolve)));
+    await press(root.button('OTHER'));
+    vi.mocked(api.case).mockRejectedValue(new ApiError(404, 'Case not found'));
+    await heartbeat();
+    answer(other);
+    await settled();
+    expect(api.case).toHaveBeenCalledExactlyOnceWith('other');
+    expect(stored.get('scan3d-case')).toBe('other');
+    expect(root.named('case-toolbar')).toBeDefined();
+  });
   it('asks about the open case when a request says it has gone', async () => {
     const server = workstation([amd]);
     const root = await openPanel();

@@ -699,7 +699,8 @@ async function checkOpenCase() {
   }
   const id = activeCase.value?.id,
     generation = caseGeneration;
-  if (!id || checkingCase) return;
+  // While another case opens this one is on its way out, and closing it would abandon that open.
+  if (!id || checkingCase || loading.value) return;
   checkingCase = true;
   try {
     const current = await api.case(id);
