@@ -8,36 +8,54 @@ from pathlib import Path
 def new_password():
     # From a prompt only: a flag or variable would leave it in shell history or the process list.
     import getpass
+    from .identity import check_password
 
     password = getpass.getpass("New password: ")
     if password != getpass.getpass("Repeat the password: "):
         raise SystemExit("The passwords do not match")
+    check_password(password)
     return password
 
 
 def manage_users(args):
     # Not through Service, so this runs beside a live server and loads no imaging or worker code.
+    from contextlib import closing
     from .accounts import Accounts
+    from .backup import DATABASE
     from .config import Settings
     from .errors import NotFound
+    from .identity import check_username
     from .store import Store
 
-    store = Store(Settings.from_env().data_dir)
-    accounts = Accounts(store)
     try:
+        data_dir = Settings.from_env().data_dir
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    # Store creates what it opens, so a mistyped folder would otherwise pass for an empty one.
+    if args.action != "add" and not (data_dir / DATABASE).is_file():
+        raise SystemExit(f"There is no 3DScan database in {data_dir}. Check SCAN3D_DATA_DIR, or add the first account.")
+    try:
+        password = None
         if args.action == "add":
-            user_id = accounts.add_user(args.name, new_password(), args.display_name)
-            print(f"Added {args.name} ({user_id}). Cases given to the oldest admin: {accounts.adopt_orphans()}")
-        elif args.action == "passwd":
-            accounts.set_password(args.name, new_password())
-            print(f"Changed the password of {args.name} and signed it out everywhere")
-        else:
-            for user in accounts.users():
-                print(user["id"], user["username"], user["role"], "disabled" if user["disabled_at"] else "active", sep="\t")
+            # Before Store creates the database, so a refused add leaves nothing behind.
+            check_username(args.name)
+            password = new_password()
+        with closing(Store(data_dir)) as store:
+            accounts = Accounts(store)
+            if args.action == "add":
+                user_id = accounts.add_user(args.name, password, args.display_name)
+                print(f"Added {args.name} ({user_id}) in {data_dir}. Cases given to the oldest admin: {accounts.adopt_orphans()}")
+            elif args.action == "passwd":
+                accounts.require_user(args.name)
+                accounts.set_password(args.name, new_password())
+                print(f"Changed the password of {args.name} and signed it out everywhere")
+            else:
+                for user in accounts.users():
+                    print(user["id"], user["username"], user["role"], "disabled" if user["disabled_at"] else "active", sep="\t")
     except (NotFound, ValueError) as exc:
         raise SystemExit(str(exc)) from None
-    finally:
-        store.close()
+    except (EOFError, KeyboardInterrupt):
+        raise SystemExit("Nothing was changed") from None
 
 
 def main():

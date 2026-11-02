@@ -96,8 +96,7 @@ class Accounts:
 
     def add_user(self, username, password, display_name=None):
         """Every account is an administrator with the archive until members exist."""
-        if not identity.valid_username(username):
-            raise ValueError("A username needs 1 to 64 letters, digits or . _ @ -")
+        identity.check_username(username)
         name = (username if display_name is None else display_name).strip()
         if not name or len(name) > _DISPLAY_NAME_LENGTH or any(ord(char) < 32 or ord(char) == 127 for char in name):
             raise ValueError(f"A display name needs 1 to {_DISPLAY_NAME_LENGTH} printable characters")
@@ -127,6 +126,11 @@ class Accounts:
             con.execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
             self._write_audit(con, "user.password", target=row["id"])
         return row["id"]
+
+    def require_user(self, username):
+        with self.store.connection() as con:
+            if con.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone() is None:
+                raise NotFound("User not found")
 
     def users(self):
         with self.store.connection() as con:

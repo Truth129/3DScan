@@ -490,7 +490,7 @@ def test_the_cli_adds_changes_and_lists_accounts(tmp_path, monkeypatch, capsys):
     store.save("cases", {"id": identifier()})
     password = generated_password()
     added = run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", "--display-name", "First Person", passwords=[password, password])
-    assert "first" in added and added.rstrip().endswith(": 1") and password not in added
+    assert "first" in added and str(tmp_path / "data") in added and added.rstrip().endswith(": 1") and password not in added
     listing = run_cli(monkeypatch, capsys, tmp_path, "list")
     user_id, username, role, state = listing.strip().split("\t")
     assert (username, role, state) == ("first", "admin", "active") and "scrypt" not in listing
@@ -508,10 +508,36 @@ def test_the_cli_needs_admin_matching_passwords_and_a_known_account(tmp_path, mo
         run_cli(monkeypatch, capsys, tmp_path, "add", "first")
     with pytest.raises(SystemExit, match="do not match"):
         run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", passwords=["a" * 12, "b" * 12])
-    with pytest.raises(SystemExit, match="User not found"):
-        run_cli(monkeypatch, capsys, tmp_path, "passwd", "nobody", passwords=["a" * 12, "a" * 12])
     with pytest.raises(SystemExit, match="password needs"):
         run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", passwords=["short", "short"])
+    assert not (tmp_path / "data").exists()
+    Store(tmp_path / "data")
+    with pytest.raises(SystemExit, match="User not found"):
+        run_cli(monkeypatch, capsys, tmp_path, "passwd", "nobody")
+
+
+@pytest.mark.parametrize("interruption", [EOFError, KeyboardInterrupt])
+def test_an_interrupted_prompt_changes_nothing(tmp_path, monkeypatch, capsys, interruption):
+    def answers():
+        yield "a" * 12
+        raise interruption
+
+    with pytest.raises(SystemExit, match="Nothing was changed"):
+        run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", passwords=answers())
+    assert not (tmp_path / "data").exists()
+
+
+@pytest.mark.parametrize("arguments", [["list"], ["passwd", "first"]])
+def test_the_cli_refuses_a_folder_with_no_database_and_names_it(tmp_path, monkeypatch, capsys, arguments):
+    with pytest.raises(SystemExit) as refused:
+        run_cli(monkeypatch, capsys, tmp_path, *arguments)
+    assert str(tmp_path / "data") in str(refused.value) and not (tmp_path / "data").exists()
+
+
+def test_the_cli_refuses_a_bad_name_before_asking_for_a_password(tmp_path, monkeypatch, capsys):
+    with pytest.raises(SystemExit, match="username needs"):
+        run_cli(monkeypatch, capsys, tmp_path, "add", "two words", "--admin")
+    assert not (tmp_path / "data").exists()
 
 
 def test_a_username_is_unique_whatever_its_case(rig):

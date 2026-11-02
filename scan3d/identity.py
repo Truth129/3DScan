@@ -69,6 +69,11 @@ def valid_username(username):
     return _USERNAME.fullmatch(username) is not None
 
 
+def check_username(username):
+    if not valid_username(username):
+        raise ValueError("A username needs 1 to 64 letters, digits or . _ @ -")
+
+
 def check_password(password):
     shortest, longest = PASSWORD_LENGTHS
     if not shortest <= len(password) <= longest:
