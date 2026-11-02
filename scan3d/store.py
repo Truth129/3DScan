@@ -105,6 +105,19 @@ class Store:
                   BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
                 CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_events
                   BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
+                CREATE TABLE IF NOT EXISTS trash(
+                  id TEXT PRIMARY KEY,
+                  kind TEXT NOT NULL CHECK(kind IN ('case','revisions')),
+                  case_id TEXT NOT NULL,
+                  revision_ids TEXT NOT NULL DEFAULT '[]',
+                  image_ids TEXT NOT NULL DEFAULT '[]',
+                  prior_active_revision TEXT,
+                  state TEXT NOT NULL CHECK(state IN ('trashed','purging','purged')),
+                  trashed_by TEXT, trashed_at TEXT NOT NULL);
+                CREATE UNIQUE INDEX IF NOT EXISTS trash_case ON trash(case_id) WHERE kind='case';
+                CREATE TABLE IF NOT EXISTS case_opened(
+                  user_id TEXT NOT NULL, case_id TEXT NOT NULL, opened_at TEXT NOT NULL,
+                  PRIMARY KEY(user_id, case_id)) WITHOUT ROWID;
             """)
             if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
                 # Under the write lock, because a summary written from an older read would hide a newer record.
@@ -115,6 +128,8 @@ class Store:
                     connection.execute("PRAGMA user_version=4")
             if connection.execute("PRAGMA user_version").fetchone()[0] < 5:
                 connection.execute("PRAGMA user_version=5")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 6:
+                connection.execute("PRAGMA user_version=6")
         # Closing the last connection to a WAL database checkpoints it and removes the log, which
         # would otherwise add milliseconds to every write. This one stays idle: its read joins
         # the database and finishes, so it holds no transaction and checkpoints still run.
@@ -201,25 +216,46 @@ class Store:
             grant_owner(con, record["id"])
         return record
 
-    def _scoped_cases(self, columns, scope, joins=""):
-        """Newest first. A scope is EVERY_CASE or a user id; anything else is a defect, never an open filter."""
+    @staticmethod
+    def _scope_join(scope):
+        """A scope is EVERY_CASE or a user id; anything else is a defect, never an open filter."""
         if scope is identity.EVERY_CASE:
-            query, values = f"SELECT {columns} FROM cases c{joins}", ()
-        elif isinstance(scope, str) and scope:
-            query, values = f"SELECT {columns} FROM cases c JOIN case_access a ON a.case_id=c.id AND a.user_id=?{joins}", (scope,)
-        else:
-            raise TypeError("A case scope is EVERY_CASE or a user id")
+            return "", ()
+        if isinstance(scope, str) and scope:
+            return " JOIN case_access a ON a.case_id=c.id AND a.user_id=?", (scope,)
+        raise TypeError("A case scope is EVERY_CASE or a user id")
+
+    def _scoped_cases(self, columns, scope, joins=""):
+        """Rows of a scope, last opened first, then newest. A case in Trash reads as absent."""
+        access, values = self._scope_join(scope)
+        opener = identity.LOCAL.id if scope is identity.EVERY_CASE else scope
         with self.connection() as con:
-            rows = con.execute(f"{query} ORDER BY c.rowid DESC", values).fetchall()
-        return [json.loads(row["data"]) for row in rows]
+            return con.execute(
+                f"SELECT {columns} FROM cases c{access}{joins} LEFT JOIN case_opened o ON o.user_id=? AND o.case_id=c.id "
+                "WHERE NOT EXISTS(SELECT 1 FROM trash t WHERE t.case_id=c.id AND t.kind='case') "
+                "ORDER BY o.opened_at IS NULL, o.opened_at DESC, c.rowid DESC",
+                (*values, opener),
+            ).fetchall()
 
     def case_summaries(self, scope):
         """The cases in a scope, for `public_case`. One with no summary reads in full."""
-        return self._scoped_cases("COALESCE(s.data, c.data) AS data", scope, " LEFT JOIN case_summaries s ON s.case_id=c.id")
+        rows = self._scoped_cases("COALESCE(s.data, c.data) AS data, o.opened_at AS opened_at", scope, " LEFT JOIN case_summaries s ON s.case_id=c.id")
+        return [{**json.loads(row["data"]), "opened_at": row["opened_at"]} for row in rows]
 
     def visible_cases(self, scope):
         """Full records of the cases in a scope. Prefer `case_summaries` for a list."""
-        return self._scoped_cases("c.data AS data", scope)
+        return [json.loads(row["data"]) for row in self._scoped_cases("c.data AS data", scope)]
+
+    def mark_opened(self, case_id, user_id):
+        safe_id(case_id)
+        with self.connection() as con:
+            changed = con.execute(
+                "INSERT INTO case_opened(user_id,case_id,opened_at) SELECT ?,?,? WHERE EXISTS(SELECT 1 FROM cases WHERE id=?) "
+                "ON CONFLICT(user_id,case_id) DO UPDATE SET opened_at=excluded.opened_at",
+                (user_id, case_id, now(), case_id),
+            ).rowcount
+        if not changed:
+            raise NotFound("Case not found")
 
     def case_dir(self, case_id):
         path = self.directory / "cases" / safe_id(case_id)

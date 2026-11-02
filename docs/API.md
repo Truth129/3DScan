@@ -145,6 +145,8 @@ Public records never contain filesystem paths or archive credentials.
 set `import_source`: `{kind, source_key, study_uid, series_uid, frame_of_reference_uid, snapshot,
 instance_count, content_digest, manifest_sha256, completeness, warnings}`.
 
+Only `GET /api/cases` adds `opened_at`, the last time this account opened the case, or `null`.
+
 ### Series
 
 ```text
@@ -267,6 +269,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `GET /api/interactive/status`                        | nnInteractive state and inference paths |
 | `GET /api/agreement`                                 | Pooled AI-agreement report              |
 | `GET /api/cases`, `GET /api/cases/{id}`              | Case records                            |
+| `POST /api/cases/{id}/open`                          | [Library](#library): record an open     |
 | `POST /api/cases/demo`, `.../import`, `.../import-local` | Phantom, multipart or local import  |
 | `POST /api/imports`, `.../{id}/parts`, `.../{id}/finish`, `DELETE .../{id}` | Staged upload            |
 | `GET /api/orthanc/status`, `POST .../studies/query`  | Connector state, study search           |
@@ -410,6 +413,14 @@ redo: masks, volumes and relationships return exactly.
 
 **`PATCH /api/cases/{id}/revisions/{rid}`** takes `{review_status}` and returns the Revision.
 Image-only revisions are refused.
+
+## Library
+
+**`GET /api/cases`** lists the account's cases, last opened first, then newest.
+
+**`POST /api/cases/{id}/open`** records an open for this account and returns `{id}`. It is the only
+thing that moves a case up the list. With sign-in off, a case that does not exist answers 404
+`Case not found`.
 
 ## Jobs
 

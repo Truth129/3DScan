@@ -93,7 +93,7 @@ def test_case_list_leaves_out_file_paths_and_follows_a_writer_that_skips_summari
         con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (record["id"], json.dumps(dict(record, status="ready"))))
     listed = store.case_summaries(EVERY_CASE)
     assert [entry["status"] for entry in listed if entry["id"] == record["id"]] == ["ready"]
-    assert public_case(listed[0]) == public_case(store.get("cases", record["id"]))
+    assert public_case(listed[0]) == {**public_case(store.get("cases", record["id"])), "opened_at": None}
 
 
 def test_opening_an_older_database_summarizes_its_cases(tmp_path):
@@ -105,7 +105,7 @@ def test_opening_an_older_database_summarizes_its_cases(tmp_path):
     Store(tmp_path)
     with store.connection() as con:
         assert [row["case_id"] for row in con.execute("SELECT case_id FROM case_summaries")] == [record["id"]]
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_the_write_log_stays_open_and_can_still_be_checkpointed(tmp_path):

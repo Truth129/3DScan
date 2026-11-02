@@ -21,6 +21,11 @@ def add_routes(app, service):
     def case(case_id: str):
         return public_case(service.store.get("cases", case_id), service.settings)
 
+    @app.post("/api/cases/{case_id}/open")
+    def mark_opened(case_id: str):
+        service.store.mark_opened(case_id, identity.actor_id())
+        return {"id": case_id}
+
     @app.post("/api/cases/{case_id}/process")
     def process(case_id: str, body: Process):
         return public_job(service.process(case_id, body.series_uid, body.profile, body.phase, cardiac_phase=body.cardiac_phase, rr_percent=body.rr_percent))
