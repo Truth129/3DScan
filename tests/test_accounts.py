@@ -378,6 +378,25 @@ def test_work_with_no_person_goes_to_the_oldest_active_admin(rig):
     assert rows(rig, "SELECT user_id FROM case_access WHERE case_id=?", case["id"]) == [(rig.user_id,)]
 
 
+def test_a_case_never_gains_a_second_owner(rig):
+    younger, case_id = identifier(), identifier()
+
+    def grant(principal):
+        identity.activate(principal)
+        try:
+            with rig.store.connection() as con:
+                con.execute("BEGIN IMMEDIATE")
+                grant_owner(con, case_id)
+        finally:
+            identity.activate(None)
+
+    grant(Principal(younger, "younger", "Younger", "admin", True))
+    # With no person, a retry falls to the oldest admin, who must not join the owner.
+    for retried_by in (Principal(younger, "younger", "Younger", "admin", True), LOCAL, None, Principal(identifier(), "other", "Other", "admin", True)):
+        grant(retried_by)
+    assert rows(rig, "SELECT user_id FROM case_access") == [(younger,)]
+
+
 def test_with_no_admin_a_new_case_has_no_owner_until_one_exists(tmp_path):
     store = Store(tmp_path)
     store.create_case({"id": identifier()})

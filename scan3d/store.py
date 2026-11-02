@@ -729,16 +729,21 @@ class Store:
 
 
 def grant_owner(con, case_id):
-    """Own a new case, inside the transaction that writes it.
+    """Own a case that has no owner yet, inside the transaction that writes it.
 
     Nobody is signed in on the command line or with sign-in off, so that work goes to the oldest
     active admin. With no admin there is no owner yet, and `adopt_orphans` settles it later. A
-    retried Orthanc import reuses its case, so the row may already be there.
+    retried Orthanc import reuses its case and keeps the owner it has: the rule is in this
+    statement, so no caller can add a second one.
     """
     actor = identity.actor_id()
     owner = Accounts.oldest_admin(con) if actor in (None, identity.LOCAL.id) else actor
     if owner:
-        con.execute("INSERT OR IGNORE INTO case_access(case_id,user_id,role,granted_by,granted_at) VALUES (?,?,'owner',?,?)", (case_id, owner, actor, now()))
+        con.execute(
+            "INSERT OR IGNORE INTO case_access(case_id,user_id,role,granted_by,granted_at) "
+            "SELECT ?,?,'owner',?,? WHERE NOT EXISTS(SELECT 1 FROM case_access WHERE case_id=?)",
+            (case_id, owner, actor, now(), case_id),
+        )
 
 
 def public_case(record, settings=None):
