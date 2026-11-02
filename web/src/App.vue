@@ -762,7 +762,7 @@ async function moveToTrash(id: string) {
   error.value = '';
   try {
     const saved = !open || (await interactivePanel.value?.saveDrafts()) !== false;
-    viewJobs.release(id);
+    viewJobs.hide(id);
     const result = await api.trash(id);
     // A case opened while this waited must stay open.
     if (open && generation === caseGeneration) await closeCase(id, '');
@@ -774,10 +774,11 @@ async function moveToTrash(id: string) {
     clearTimeout(trashOfferTimer);
     trashOfferTimer = window.setTimeout(() => (trashOffer.value = undefined), 10_000);
   } catch (reason) {
+    // A case already gone stays hidden, and its jobs stay out of sight with it.
+    if (!caseIsGone(reason)) viewJobs.show(id);
     fail(reason);
     libraryStamp.value++;
     void refreshCases().catch(() => {});
-    void viewJobs.seed(id);
   }
 }
 async function restoreCase(id: string, reopen = false, stopped = 0) {
@@ -786,10 +787,11 @@ async function restoreCase(id: string, reopen = false, stopped = 0) {
   try {
     await api.restore(id);
     void refreshCases().catch(() => {});
-    void viewJobs.seed(id);
     libraryStamp.value++;
     // Loading means another case is on its way, and that one stays the person's choice.
     if (reopen && !activeCase.value && !loading.value) await openCase(id);
+    // Last, because opening clears the alert that a failed send would raise.
+    viewJobs.show(id);
     toast(stopped ? 'Case restored. Stopped jobs did not restart.' : 'Case restored.');
   } catch (reason) {
     fail(reason);

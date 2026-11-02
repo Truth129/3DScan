@@ -20,7 +20,9 @@ const POLL_MS = 1400;
 export function useDicomViewJobs(options: DicomViewJobOptions) {
   const jobs = shallowReactive(new Map<string, DicomViewExportJob>()),
     timers = new Map<string, ReturnType<typeof setTimeout>>(),
-    followed = new Set<string>();
+    followed = new Set<string>(),
+    hidden = new Set<string>(),
+    parked = new Set<string>();
   let disposed = false;
 
   function named(message: string, caseId: string) {
@@ -52,23 +54,24 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     timers.delete(id);
     try {
       const next = (await api.job(id)) as DicomViewExportJob;
-      if (disposed || !followed.has(id)) return;
+      if (disposed) return;
       if (pendingDicomViewExport(next)) {
         jobs.set(id, next);
         schedule(id);
       } else settle(next);
     } catch (reason) {
-      if (disposed || !followed.has(id)) return;
+      if (disposed) return;
       // The server answered that it has no such job, so nothing will ever settle it.
       // Anything else may be a restart, and the job can still finish or be interrupted.
-      if (reason instanceof ApiError && [400, 404].includes(reason.status))
+      if (!(reason instanceof ApiError && [400, 404].includes(reason.status))) schedule(id);
+      else if (hidden.has(jobs.get(id)!.case_id)) parked.add(id);
+      else
         settle({
           ...jobs.get(id)!,
           status: 'failed',
           stage: 'Unknown',
           error: 'This DICOM view export can no longer be followed. Check Orthanc before exporting it again.',
         });
-      else schedule(id);
     }
   }
   /** One poller per job. A job that has already settled stays settled, whatever an older listing says. */
@@ -99,13 +102,17 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       /* The next opening of the case looks again. */
     }
   }
-  /** Trash hides a case's jobs, and its send finishes unseen. Without this the 404 reads as a lost send. */
-  function release(caseId: string) {
-    for (const id of followed) {
+  /** Trash answers for a case's jobs with a 404, and its send carries on unseen. That must not read as a lost send. */
+  function hide(caseId: string) {
+    hidden.add(caseId);
+  }
+  /** Asks at once, so a person hears how a send ended while its case was hidden. */
+  function show(caseId: string) {
+    hidden.delete(caseId);
+    for (const id of parked) {
       if (jobs.get(id)?.case_id !== caseId) continue;
-      followed.delete(id);
-      clearTimeout(timers.get(id));
-      timers.delete(id);
+      parked.delete(id);
+      void poll(id);
     }
   }
   onScopeDispose(() => {
@@ -113,5 +120,5 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     timers.forEach(clearTimeout);
     timers.clear();
   });
-  return { job: (id: string) => jobs.get(id), follow, seed, release };
+  return { job: (id: string) => jobs.get(id), follow, seed, hide, show };
 }

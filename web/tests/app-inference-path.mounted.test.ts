@@ -9,7 +9,15 @@ import { choose, createApp, FakeElement, press, settled } from './fake-dom';
 
 // These draw on a GPU canvas. The call sites under test are in App itself, and every other
 // child is the real component.
-vi.mock('../src/components/ModelViewport.vue', () => ({ default: { inheritAttrs: false, render: () => null } }));
+vi.mock('../src/components/ModelViewport.vue', () => ({
+  default: {
+    inheritAttrs: false,
+    setup(_props: unknown, { expose }: { expose: (exposed: object) => void }) {
+      expose({ showRefusal: () => false });
+      return () => null;
+    },
+  },
+}));
 vi.mock('../src/components/CTReviewRail.vue', () => ({ default: { inheritAttrs: false, render: () => null } }));
 
 const row = (id: string, label: string, extra: Partial<InferencePathRow> = {}): InferencePathRow => ({
@@ -592,10 +600,7 @@ describe('the Library', () => {
       await undo(root);
       expect(api.case).not.toHaveBeenCalledWith('other');
     });
-    it('lets go of a view send when its case moves, and takes it up again on Undo', async () => {
-      const timeout = setTimeout;
-      vi.stubGlobal('setTimeout', ((callback: () => void, delay?: number) => timeout(callback, delay === 1400 ? 1 : delay)) as typeof setTimeout);
-      workstation([amd]);
+    describe('a view send', () => {
       const sending = {
         id: 'send',
         case_id: 'other',
@@ -605,29 +610,42 @@ describe('the Library', () => {
         stage: 'Sending',
         created_at: '',
       };
-      trashing();
-      vi.mocked(api.cases).mockImplementation(async () => [other, scan]);
-      vi.mocked(api.jobs).mockImplementation(async () => [sending] as Job[]);
-      let inTrash = false;
-      vi.mocked(api.trash).mockImplementation(async id => {
-        inTrash = true;
-        return { id, jobs_stopped: 0, sends_continuing: 1 };
+      const pause = () => new Promise(resolve => realTimeout(resolve, 20));
+      const realTimeout = setTimeout;
+      /** The poll interval is real time, so shorten it. */
+      async function following() {
+        vi.stubGlobal('setTimeout', ((callback: () => void, delay?: number) => realTimeout(callback, delay === 1400 ? 1 : delay)) as typeof setTimeout);
+        workstation([amd]);
+        trashing();
+        vi.mocked(api.cases).mockImplementation(async () => [other, scan]);
+        vi.mocked(api.jobs).mockImplementation(async () => [sending] as Job[]);
+        const job = vi.spyOn(api, 'job').mockImplementation(async () => sending as Job);
+        const root = await openLibrary();
+        await press(root.button('OTHER'));
+        await settled();
+        await press(root.named('case-button'));
+        return { root, job };
+      }
+      it('waits while its case is in Trash, and asks again on Undo', async () => {
+        const { root, job } = await following();
+        job.mockRejectedValue(new ApiError(404, 'Job not found'));
+        await press(root.button('Move to Trash'));
+        await pause();
+        expect(root.content).not.toContain('can no longer be followed');
+        job.mockClear();
+        await pause();
+        expect(job, 'parked until the case is back').not.toHaveBeenCalled();
+        job.mockImplementation(async () => ({ ...sending, status: 'failed', error: 'Delivery not confirmed.' }) as Job);
+        await undo(root);
+        await vi.waitFor(() => expect(root.content).toContain('Delivery not confirmed.'));
       });
-      vi.spyOn(api, 'job').mockImplementation(async () => {
-        if (inTrash) throw new ApiError(404, 'Job not found');
-        return sending as Job;
+      it('carries on when Trash is refused', async () => {
+        const { root, job } = await following();
+        vi.mocked(api.trash).mockRejectedValue(new TypeError('Failed to fetch'));
+        await press(root.button('Move to Trash'));
+        job.mockRejectedValue(new ApiError(404, 'Job not found'));
+        await vi.waitFor(() => expect(root.content).toContain('can no longer be followed'));
       });
-      const root = await openLibrary();
-      await press(root.button('OTHER'));
-      await settled();
-      await press(root.named('case-button'));
-      await press(root.button('Move to Trash'));
-      await new Promise(resolve => timeout(resolve, 20));
-      expect(root.content).not.toContain('can no longer be followed');
-      vi.mocked(api.jobs).mockClear();
-      inTrash = false;
-      await undo(root);
-      expect(api.jobs).toHaveBeenCalledWith('other');
     });
     it('reopens on Undo when the list cannot be read', async () => {
       const { stored } = workstation([amd]);
