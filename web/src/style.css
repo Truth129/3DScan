@@ -554,12 +554,16 @@ h3 {
 .case-button {
   width: 100%;
   overflow: hidden;
-  background: var(--surface);
+  /* A chevron in two strokes, because an ::after would be clipped with the name. */
+  background:
+    linear-gradient(45deg, transparent 40%, var(--text-secondary) 40%, var(--text-secondary) 65%, transparent 65%) no-repeat right 15px center / 5px 5px,
+    linear-gradient(-45deg, transparent 40%, var(--text-secondary) 40%, var(--text-secondary) 65%, transparent 65%) no-repeat right 11px center / 5px 5px,
+    var(--surface);
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--white);
   font-size: 11px;
-  padding: 8px 11px;
+  padding: 8px 28px 8px 11px;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2661,7 +2665,7 @@ h3 {
   }
   .case-button {
     font-size: 10px;
-    padding: 7px;
+    padding: 7px 26px 7px 7px;
     max-width: 160px;
   }
   .app-header > .button {
@@ -2950,6 +2954,11 @@ h3 {
   .case-library-empty .button-row {
     flex-direction: column;
     align-self: stretch;
+  }
+  .case-storage tbody th {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 110px;
   }
   .toast {
     bottom: 66px;
