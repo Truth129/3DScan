@@ -106,8 +106,8 @@ with no session gets the 401, and a signed-in one the other.
 | Rule      | Routes                                                                  | Refusal                                        |
 | --------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
 | Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, the viewer files | None                                         |
-| Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/orthanc/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
-| Admin     | `POST /api/cases/import-local`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
+| Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `GET /api/sizes`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/orthanc/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
+| Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
 | Archive   | `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
 | Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
 | Trashed   | `POST /api/trash/{id}/restore`                                          | 401, 404 `Case not found`                      |
@@ -276,6 +276,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `PATCH /api/cases/{id}`                              | [Library](#library): rename             |
 | `POST /api/cases/{id}/open`                          | [Library](#library): record an open     |
 | `POST /api/cases/{id}/trash`, `GET /api/trash`, `POST /api/trash/{id}/restore` | Move to Trash, list it, restore |
+| `GET /api/sizes`, `GET /api/storage`                 | Case sizes, the storage report          |
 | `POST /api/cases/demo`, `.../import`, `.../import-local` | Phantom, multipart or local import  |
 | `POST /api/imports`, `.../{id}/parts`, `.../{id}/finish`, `DELETE .../{id}` | Staged upload            |
 | `GET /api/orthanc/status`, `POST .../studies/query`  | Connector state, study search           |
@@ -424,7 +425,7 @@ Image-only revisions are refused.
 
 **`GET /api/cases`** lists the account's cases, last opened first, then newest.
 
-**`PATCH /api/cases/{id}`** takes `{label}` and returns the Case. The label is trimmed, and a body
+**`PATCH /api/cases/{id}`** takes `{label}` and returns the Case. The label is trimmed, and a label
 over 128 characters is a 422.
 
 - An empty name or a control character answers 400 `A case name must contain 1 to 128 printable
@@ -432,19 +433,30 @@ over 128 characters is a 422.
 - While `status` is `importing` it answers 409 `This case is still importing. Rename it when the
   import finishes.`
 
-**`POST /api/cases/{id}/open`** records an open for this account and returns `{id}`. It is the only
-thing that moves a case up the list. With sign-in off, a case that does not exist answers 404
-`Case not found`.
+**`POST /api/cases/{id}/open`** records an open for this account, which puts the case first in its
+list, and returns `{id}`. With sign-in off, a case that does not exist answers 404 `Case not found`.
 
 **`POST /api/cases/{id}/trash`** hides the case, stops its jobs and returns `{id, jobs_stopped,
-sends_continuing}`. Nothing on disk moves. Trash is never refused for a job, a draft or a stuck
-import. With sign-in off, a case that does not exist answers 404 `Case not found`.
+sends_continuing}`, where `sends_continuing` counts sends Orthanc has started, which finish. Nothing
+on disk moves. Trash is never refused for a job, a draft or a stuck import. With sign-in off, a case
+that does not exist answers 404 `Case not found`.
 
 **`GET /api/trash`** lists this account's cases in Trash, last trashed first. Each is a Case with
 `trashed_at`.
 
 **`POST /api/trash/{id}/restore`** returns the Case as it was, and stopped jobs stay cancelled. A
 case that is not yours, or is not in Trash, answers 404 `Case not found`.
+
+**`GET /api/sizes`** returns `{sizes}`, allocated bytes by case ID for this account's cases, including
+any in Trash. Sizes are measured on each request and leave out shared caches.
+
+**`GET /api/storage`** returns `{cases, totals, disk}` for an admin. A member gets 403
+`Administrator access is required`.
+
+- `cases` is every case as `{id, label, owner, created_at, trashed_at, size}`. Another owner's case
+  gives only `{label: null, owner, created_at, size}`. With sign-in off every row is complete.
+- `totals` is `{cases, trash, shared_caches, other}` in bytes, covering every account.
+- `disk` is `{total, free}` for the data directory's volume.
 
 ## Jobs
 

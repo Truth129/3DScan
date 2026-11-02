@@ -246,6 +246,12 @@ class Store:
         """Full records of the cases in a scope. Prefer `case_summaries` for a list."""
         return [json.loads(row["data"]) for row in self._scoped_cases("c.data AS data", scope)]
 
+    def case_ids(self, scope):
+        """Every case in a scope, including any in Trash, for measuring."""
+        access, values = self._scope_join(scope)
+        with self.connection() as con:
+            return [row["id"] for row in con.execute(f"SELECT c.id AS id FROM cases c{access}", values).fetchall()]
+
     def trashed_cases(self, scope):
         """The cases in a scope that are in Trash, last trashed first, for `public_case`."""
         access, values = self._scope_join(scope)
@@ -256,6 +262,23 @@ class Store:
                 values,
             ).fetchall()
         return [{**json.loads(row["data"]), "trashed_at": row["trashed_at"]} for row in rows]
+
+    def storage_rows(self, scope):
+        """Every case with its owner. A label reads only for its owner, because labels can hold patient text."""
+        self._scope_join(scope)  # A bad scope must raise here too, or it would show every label.
+        viewer = None if scope is identity.EVERY_CASE else scope
+        with self.connection() as con:
+            rows = con.execute(
+                "SELECT COALESCE(s.data, c.data) AS data, a.user_id AS owner_id, u.display_name AS owner, t.trashed_at AS trashed_at FROM cases c "
+                "LEFT JOIN case_summaries s ON s.case_id=c.id LEFT JOIN case_access a ON a.case_id=c.id AND a.role='owner' "
+                "LEFT JOIN users u ON u.id=a.user_id LEFT JOIN trash t ON t.case_id=c.id AND t.kind='case' ORDER BY c.rowid DESC"
+            ).fetchall()
+        result = []
+        for row in rows:
+            case = json.loads(row["data"])
+            label = case.get("label") if viewer is None or row["owner_id"] == viewer else None
+            result.append(dict(id=case["id"], label=label, owner=row["owner"], created_at=case.get("created_at"), trashed_at=row["trashed_at"]))
+        return result
 
     def mark_opened(self, case_id, user_id):
         safe_id(case_id)

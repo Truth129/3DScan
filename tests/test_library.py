@@ -1,6 +1,7 @@
-"""The case list, rename and Trash, on synthetic records: nothing in Trash shows anywhere, and nothing on disk moves."""
+"""The Library's backend on synthetic records: last-opened order, rename, Trash and sizes."""
 
 import json
+import os
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ import pytest
 
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.disk_usage import tree_bytes
 from scan3d.store import identifier, now
 from test_access import BASE, account, filled, ruled_routes
 
@@ -42,6 +44,11 @@ def finished_upload(service, case_id):
 def imported(service):
     """A bare case past its import, which is what Rename accepts."""
     return service.store.save("cases", dict(service.new_case("Synthetic"), status="imported"))["id"]
+
+
+def fill(path, size):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x" * size)
 
 
 def absent(response, detail):
@@ -229,3 +236,61 @@ def test_rename_waits_for_an_import(rig):
     case_id = rig.service.new_case("Synthetic")["id"]
     response = rig.owner.patch(f"/api/cases/{case_id}", json={"label": "Synthetic renamed"})
     assert response.status_code == 409 and response.json() == {"detail": "This case is still importing. Rename it when the import finishes."}
+
+
+def test_tree_bytes_counts_a_link_once_and_skips_what_is_missing(tmp_path):
+    fill(tmp_path / "outside.bin", 100_000)
+    fill(tmp_path / "case" / "mask.bin", 100_000)
+    alone = tree_bytes(tmp_path / "case")
+    assert alone >= 100_000
+    os.link(tmp_path / "case" / "mask.bin", tmp_path / "case" / "same-mask.bin")
+    (tmp_path / "case" / "scan-link").symlink_to(tmp_path / "outside.bin")
+    assert tree_bytes(tmp_path / "case") < alone + 100_000
+    assert tree_bytes(tmp_path / "missing") == 0
+
+
+def test_sizes_cover_your_own_cases_including_trash(rig):
+    kept, trashed = rig.service.new_case("Synthetic")["id"], rig.service.new_case("Synthetic")["id"]
+    for case_id in (kept, trashed):
+        fill(rig.service.store.case_dir(case_id) / "scan.bin", 8192)
+    rig.owner.post(f"/api/cases/{trashed}/trash")
+    sizes = rig.owner.get("/api/sizes").json()["sizes"]
+    assert sizes[kept] >= 8192 and sizes[trashed] >= 8192
+    assert kept not in rig.other.get("/api/sizes").json()["sizes"]
+
+
+def test_storage_lists_every_case_and_labels_only_your_own(rig):
+    case = rig.service.new_case("Synthetic")
+    fill(rig.service.store.case_dir(case["id"]) / "scan.bin", 8192)
+    before = rig.other.get("/api/storage").json()["totals"]["trash"]
+    rig.owner.post(f"/api/cases/{case['id']}/trash")
+    mine = next(row for row in rig.owner.get("/api/storage").json()["cases"] if row.get("id") == case["id"])
+    assert mine["label"] == "Synthetic" and mine["trashed_at"] and mine["size"] >= 8192
+    report = rig.other.get("/api/storage").json()
+    theirs = next(row for row in report["cases"] if row["created_at"] == case["created_at"])
+    assert theirs == {"label": None, "owner": "Someone", "created_at": case["created_at"], "size": mine["size"]}
+    assert report["totals"]["trash"] == before + mine["size"]
+
+
+def test_storage_refuses_a_member(rig):
+    response = rig.member.get("/api/storage")
+    assert response.status_code == 403 and response.json() == {"detail": "Administrator access is required"}
+
+
+def test_storage_totals_cover_cases_trash_caches_and_the_rest(tmp_path):
+    service, http = off_mode(tmp_path)
+    root = service.settings.data_dir
+    kept, trashed = service.new_case("Synthetic")["id"], service.new_case("Synthetic")["id"]
+    service.store.trash_case(trashed, "local")
+    fill(root / "cases" / kept / "scan.bin", 8192)
+    fill(root / "cases" / trashed / "scan.bin", 16384)
+    fill(root / "review-cache" / "chunk.bin", 32768)
+    fill(root / "cases" / "stray" / "left.bin", 65536)
+    fill(root / "elsewhere" / "left.bin", 131072)
+    report = http.get("/api/storage").json()
+    assert report["totals"]["cases"] == tree_bytes(root / "cases" / kept) >= 8192
+    assert report["totals"]["trash"] == tree_bytes(root / "cases" / trashed) >= 16384
+    assert report["totals"]["shared_caches"] == tree_bytes(root / "review-cache") >= 32768
+    assert report["totals"]["other"] >= 65536 + 131072
+    assert [row["label"] for row in report["cases"]] == ["Synthetic", "Synthetic"]
+    assert 0 < report["disk"]["free"] <= report["disk"]["total"]

@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from . import identity
 from .api_models import Activate, CaseRename, DicomSegExport, Process, Refine, Review, Segment
+from .disk_usage import case_sizes, storage_report
 from .errors import NotFound
 from .store import public_case, public_job, public_revision
 
@@ -43,6 +44,15 @@ def add_routes(app, service):
     def trashed_cases():
         scope = identity.case_scope(identity.current())
         return [public_case(case, service.settings) for case in service.store.trashed_cases(scope)]
+
+    @app.get("/api/sizes")
+    def sizes():
+        scope = identity.case_scope(identity.current())
+        return {"sizes": case_sizes(service.settings.data_dir, service.store.case_ids(scope))}
+
+    @app.get("/api/storage")
+    def storage():
+        return storage_report(service.store, service.settings.data_dir, identity.case_scope(identity.current()))
 
     @app.post("/api/cases/{case_id}/process")
     def process(case_id: str, body: Process):

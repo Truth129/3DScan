@@ -198,6 +198,8 @@ def test_a_scope_that_is_neither_everything_nor_a_person_is_a_defect(rig):
     for scope in (None, ""):
         with pytest.raises(TypeError):
             rig.service.store.case_summaries(scope)
+        with pytest.raises(TypeError):
+            rig.service.store.storage_rows(scope)
     with pytest.raises(ValueError, match="scope"):
         rig.service.store.list("cases")
 

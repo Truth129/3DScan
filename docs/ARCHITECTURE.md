@@ -52,6 +52,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/imaging.py`, `surfaces.py`, `surface_glb.py`                    | Masks, measurements, slice geometry, GLB surfaces      |
 | `scan3d/review_volume.py`, `volume_mask_union.py`                       | Volume and frame transport, display unions             |
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange       |
+| `scan3d/disk_usage.py`                                                  | Case sizes and the storage report                      |
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX writer   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                |
 | `web/src/components/AuthGate.vue`, `web/src/lib/session.ts`             | Sign-in form, overlay and session state                |
@@ -116,6 +117,8 @@ cases/<case>/
   revisions/<id>/        revision.json, model.glb and on-demand exports
   refinements/, corrections/, reviews/, seg-imports/, dicom-exports/
   dicom-view-captures/   Retained 3D view captures, each named by its SHA-256
+  uploads/               Slicer corrections as received
+  synthetic/             The demo phantom
 surface-cache/, review-cache/, analysis-cache/, agreement-cache/, cinematic-cache/
 import-uploads/          Staged browser uploads, removed after a day of inactivity
 ```
@@ -449,6 +452,8 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
   no exception.
 - A case scope is a user ID or `EVERY_CASE`, never `None`, and only the built-in local user holds
   `EVERY_CASE`.
+- `storage_rows` is the one reader of every case. A label reads only for its owner, and another
+  owner's row gives only owner, date and size.
 - A new case belongs to its creator. Work with nobody signed in, such as the command line or sign-in
   off, goes to the oldest active admin. A case with no owner goes to that admin when an account is
   added, or at startup in password mode.
@@ -481,6 +486,7 @@ when a TotalSegmentator key is saved, and model downloads.
 - Every account is an administrator, and a case cannot be shared between accounts.
 - Each account imports its own copy of an Orthanc series, so the same scan can be on disk twice.
 - A case in Trash keeps its disk space, and importing it again from Orthanc makes a second copy.
+- Case sizes leave out shared caches, which several cases can use at once.
 - Jobs and review sessions store who started them, but the app shows neither, and a revision records
   no reviewer. The audit log has no viewer.
 - The service does not scale out, and it runs on Linux only.
