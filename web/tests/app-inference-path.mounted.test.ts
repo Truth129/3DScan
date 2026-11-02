@@ -703,6 +703,18 @@ describe('the Library', () => {
     expect(first.content).toContain('OTHER');
     expect(first.content).toContain('Opened');
   });
+  it('says the list could not be read, not that there are no cases, and reads it again', async () => {
+    workstation([amd]);
+    vi.mocked(api.cases).mockRejectedValueOnce(new Error('No answer'));
+    const root = await start();
+    expect(root.content).toContain('Cases could not be read. Trying again.');
+    expect(root.content).not.toContain('No cases yet');
+    expect(api.case, 'nothing reopens on its own').not.toHaveBeenCalled();
+    await heartbeat();
+    expect(root.content).not.toContain('Cases could not be read.');
+    expect(root.named('case-row-open')).toBeDefined();
+    expect(api.case).not.toHaveBeenCalled();
+  });
   it('opens a new case though the list cannot be read', async () => {
     const { stored } = workstation([amd]);
     stored.delete('scan3d-case');

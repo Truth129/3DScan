@@ -438,10 +438,11 @@ describe('Storage', () => {
 });
 
 describe('an empty library', () => {
-  it('shows the import buttons and the research notice on an empty library', () => {
+  it('shows the import buttons and the research notice on an empty library', async () => {
     const importScan = vi.fn(),
       demo = vi.fn(),
       view = library({ cases: [], onImportScan: importScan, onDemo: demo });
+    await settled();
     expect(view.text()).toContain('No cases yet');
     expect(view.text()).toContain('Explore CT scans with linked slices and 3D views.');
     expect(view.text()).toContain(NOTICE);
@@ -456,13 +457,35 @@ describe('an empty library', () => {
     await settled();
     expect(view.text()).toContain('All your cases are in Trash');
     expect(view.text()).not.toContain('No cases yet');
+    expect(view.button('Import a scan →')).toBeDefined();
+    expect(view.button('Import your first scan →')).toBeUndefined();
     expect(view.button('Explore synthetic demo')).toBeDefined();
   });
-  it('names MR only where it is offered', () => {
-    expect(library({ cases: [], mrEnabled: true }).text()).toContain('Explore CT and static 3D MR scans');
+  it('says nothing about being empty until Trash has answered', async () => {
+    const answer = deferred<Case[]>();
+    vi.mocked(api.trashed).mockReturnValue(answer.promise);
+    const view = library({ cases: [] });
+    await settled();
+    expect(view.all(element => element.tagName === 'H2')).toHaveLength(0);
+    expect(view.text()).not.toContain('No cases match.');
+    answer.resolve([]);
+    await settled();
+    expect(view.text()).toContain('No cases yet');
   });
-  it('holds the demo back while an import runs', () => {
+  it('is still empty when Trash cannot be read', async () => {
+    vi.mocked(api.trashed).mockRejectedValue(new Error('No answer'));
+    const view = library({ cases: [] });
+    await settled();
+    expect(view.text()).toContain('No cases yet');
+  });
+  it('names MR only where it is offered', async () => {
+    const view = library({ cases: [], mrEnabled: true });
+    await settled();
+    expect(view.text()).toContain('Explore CT and static 3D MR scans');
+  });
+  it('holds the demo back while an import runs', async () => {
     const view = library({ cases: [], importing: true });
+    await settled();
     expect((view.button('Explore synthetic demo') as unknown as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -119,6 +119,7 @@ const importing = ref(false),
   segImportBusy = ref(false),
   importOpen = ref(false);
 const libraryOpen = ref(false),
+  casesUnread = ref(false),
   libraryStamp = ref(0),
   caseButton = ref<HTMLButtonElement>(),
   trashOffer = ref<{ id: string; message: string; reopen: boolean; stopped: number }>();
@@ -567,6 +568,7 @@ watch(viewJob, next => {
 });
 async function refreshCases() {
   cases.value = await api.cases();
+  casesUnread.value = false;
 }
 async function loadRevision(id: string, rid: string, generation: number, preserve = false) {
   const ticket = ++revisionRequest;
@@ -1240,7 +1242,10 @@ onMounted(async () => {
       const saved = localStorage.getItem('scan3d-case');
       if (saved) await openCase(saved);
     }
-  } else fail(results[0].reason);
+  } else {
+    casesUnread.value = true;
+    fail(results[0].reason);
+  }
   if (results[1].status === 'fulfilled') health.value = results[1].value;
   loading.value = false;
 });
@@ -2068,6 +2073,7 @@ onBeforeUnmount(() => {
       <CaseLibrary
         v-if="libraryShown"
         :cases="cases"
+        :cases-unread="casesUnread"
         :open-id="activeCase?.id"
         :stamp="libraryStamp"
         :closable="!!activeCase"

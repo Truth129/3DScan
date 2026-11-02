@@ -5,7 +5,16 @@ import { caseDate, filterCases, formatSize, statusLabel } from '../lib/library';
 import { session } from '../lib/session';
 import type { Case, StorageReport, StorageRow } from '../types';
 
-const props = defineProps<{ cases: Case[]; openId?: string; stamp: number; closable: boolean; importing: boolean; mrEnabled: boolean; notice: string }>();
+const props = defineProps<{
+  cases: Case[];
+  casesUnread: boolean;
+  openId?: string;
+  stamp: number;
+  closable: boolean;
+  importing: boolean;
+  mrEnabled: boolean;
+  notice: string;
+}>();
 const emit = defineEmits<{ open: [id: string]; close: []; importScan: []; demo: []; renamed: [next: Case]; trash: [id: string]; restore: [id: string] }>();
 
 const root = ref<HTMLElement>(),
@@ -17,6 +26,7 @@ const tab = ref<'cases' | 'trash' | 'storage'>('cases'),
   saving = ref(false),
   refusal = ref(''),
   trashed = ref<Case[]>([]),
+  trashRead = ref(false),
   sizes = ref<Record<string, number>>(),
   storage = ref<StorageReport>(),
   storageError = ref('');
@@ -72,6 +82,9 @@ async function readTrash() {
     if (ticket === trashReads) trashed.value = next;
   } catch {
     /* The next heartbeat reads it again. */
+  } finally {
+    // The empty state waits for this, or someone with a full Trash would see No cases yet first.
+    if (ticket === trashReads) trashRead.value = true;
   }
 }
 /** A template ref in a v-for is an array, so ask the one form there can be. */
@@ -190,19 +203,21 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
         @keydown.enter.prevent="openFirstMatch"
       />
       <template v-if="tab === 'cases'">
-        <div v-if="!cases.length && !query" class="case-library-empty">
+        <p v-if="casesUnread" class="empty-search">Cases could not be read. Trying again.</p>
+        <div v-else-if="!cases.length && !query && trashRead" class="case-library-empty">
           <h2>{{ trashed.length ? 'All your cases are in Trash' : 'No cases yet' }}</h2>
           <p>
             Explore {{ mrEnabled ? 'CT and static 3D MR' : 'CT' }} scans with linked slices and 3D views. Segment locally. Review the source images. Refine with
             confidence.
           </p>
           <div class="button-row">
-            <button class="button primary large" type="button" @click="emit('importScan')">Import your first scan →</button
+            <button class="button primary large" type="button" @click="emit('importScan')">
+              {{ trashed.length ? 'Import a scan →' : 'Import your first scan →' }}</button
             ><button class="button secondary large" type="button" :disabled="importing" @click="emit('demo')">Explore synthetic demo</button>
           </div>
         </div>
-        <p v-else-if="!shownCases.length" class="empty-search">No cases match.</p>
-        <ul v-else class="case-rows">
+        <p v-else-if="query && !shownCases.length" class="empty-search">No cases match.</p>
+        <ul v-else-if="shownCases.length" class="case-rows">
           <li v-for="item in shownCases" :key="item.id" class="case-row" :class="{ active: item.id === openId }" :data-case-id="item.id">
             <form v-if="renaming === item.id" class="case-row-form" @submit.prevent="saveRename">
               <div class="case-row-fields">
