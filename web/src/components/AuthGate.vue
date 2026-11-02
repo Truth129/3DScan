@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import App from '../App.vue';
 import { setReauthentication } from '../lib/api-fetch';
-import { clearLocalKeys, getSession, leavePage, session, sessionFailure, signIn, watchOtherTabs, type SessionView } from '../lib/session';
+import { clearLocalKeys, getSession, leavePage, rememberUser, session, sessionFailure, signIn, watchOtherTabs, type SessionView } from '../lib/session';
 
 const HEARTBEAT_MS = 60_000;
 
@@ -76,6 +76,7 @@ function follow(view: SessionView) {
   if (!user) cover();
   else if (appUser.value && user.id !== appUser.value) leave();
   else {
+    if (!appUser.value) rememberUser(user.id);
     appUser.value = user.id;
     username.value = user.username;
     uncover();

@@ -8,7 +8,7 @@ import { click, mount, settled, type MountedElement } from './mounted';
 // App draws on a GPU canvas, and here it only has to be there or not.
 vi.mock('../src/App.vue', async () => {
   const { h } = await import('vue');
-  return { default: { render: () => h('div', { class: 'app-shell' }, 'Workspace') } };
+  return { default: { render: () => h('div', { class: 'app-shell', 'data-case': localStorage.getItem('scan3d-case') }, 'Workspace') } };
 });
 
 const asha: SessionUser = { id: 'asha-id', username: 'asha', display_name: 'Asha', role: 'admin' };
@@ -144,6 +144,16 @@ describe('opening the page', () => {
     click(view.button('Try again'));
     await settled();
     expect(app(view)).toBeDefined();
+  });
+  it('clears what the last person left before the app opens for someone else', async () => {
+    localStorage.setItem('scan3d-last-user', asha.id);
+    localStorage.setItem('scan3d-case', 'case-of-asha');
+    const view = await gate(seen(null));
+    accepts = seen(ravi);
+    await signIn(view, 'ravi');
+    expect(app(view).getAttribute('data-case')).toBeNull();
+    expect(localStorage.getItem('scan3d-last-user')).toBe(ravi.id);
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 

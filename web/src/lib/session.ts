@@ -17,6 +17,7 @@ type TabChange = 'signed-in' | 'signed-out';
 
 const LOCAL_KEYS = ['scan3d-case', 'scan3d-orthanc-import-job'];
 const LOCAL_PREFIXES = ['scan3d-job:', 'scan3d-review-target:', 'scan3d-dicom-seg:'];
+const LAST_USER_KEY = 'scan3d-last-user';
 
 /** The session as last read. AuthGate keeps it current, so a component can follow it without a prop. */
 export const session = shallowRef<SessionView>();
@@ -56,6 +57,20 @@ export function clearLocalKeys() {
     for (const key of keys) if (key && (LOCAL_KEYS.includes(key) || LOCAL_PREFIXES.some(prefix => key.startsWith(prefix)))) localStorage.removeItem(key);
   } catch {
     /* With storage unavailable there is nothing to clear. */
+  }
+}
+
+/**
+ * A session can end with no tab open, so a different account opening the app is the first sign of a
+ * new person. Nothing stored means an upgrade, which must not lose a running job's key.
+ */
+export function rememberUser(id: string) {
+  try {
+    const last = localStorage.getItem(LAST_USER_KEY);
+    if (last && last !== id) clearLocalKeys();
+    localStorage.setItem(LAST_USER_KEY, id);
+  } catch {
+    /* With storage unavailable there is nothing to compare. */
   }
 }
 
