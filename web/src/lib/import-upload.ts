@@ -1,6 +1,6 @@
 import type { Case } from '../types';
 import { ApiError, request } from './api';
-import { reportStatus } from './api-fetch';
+import { reportStatus, waitForSession } from './api-fetch';
 
 export interface ImportProgress {
   phase: 'uploading' | 'retrying' | 'indexing';
@@ -97,6 +97,16 @@ function sendForm<T>(url: string, body: FormData, progress: (fraction: number) =
   });
 }
 
+/** The server refused this batch before reading it, so it can go again once someone signs back in. */
+async function sendSignedIn<T>(url: string, body: FormData, progress: (fraction: number) => void, signal: AbortSignal) {
+  try {
+    return await sendForm<T>(url, body, progress, signal);
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 401) || !(await waitForSession())) throw error;
+    return sendForm<T>(url, body, progress, signal);
+  }
+}
+
 function wait(milliseconds: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal.aborted) {
@@ -115,7 +125,7 @@ function wait(milliseconds: number, signal: AbortSignal) {
   });
 }
 
-export const browserTransport: ImportTransport = { json: request, form: sendForm, wait };
+export const browserTransport: ImportTransport = { json: request, form: sendSignedIn, wait };
 
 /** Lost connections and an unavailable server, for example during a restart, are retried. */
 const transient = (error: unknown) => error instanceof TypeError || (error instanceof ApiError && [502, 503, 504].includes(error.status));

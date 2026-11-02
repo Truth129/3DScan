@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../src/lib/api';
-import { planImportBatches, uploadImport, type ImportProgress, type ImportTransport } from '../src/lib/import-upload';
+import { setReauthentication } from '../src/lib/api-fetch';
+import { browserTransport, planImportBatches, uploadImport, type ImportProgress, type ImportTransport } from '../src/lib/import-upload';
 
 function file(name: string, size: number, relative = '') {
   const value = new File([new Uint8Array(size).fill(7)], name);
@@ -109,6 +110,62 @@ describe('import upload batches', () => {
     await expect(
       uploadImport([file('a', 1), file('b', 1), file('c', 1)], '', { signal: controller.signal, onProgress: () => undefined, transport }),
     ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(calls).toEqual(['POST /api/imports', 'FORM /api/imports/u1/parts', 'DELETE /api/imports/u1']);
+  });
+});
+
+describe('a batch refused because the session ended', () => {
+  /** Answers each send with the next status, as far as sendForm looks. */
+  function requests(...statuses: number[]) {
+    const sent: unknown[] = [];
+    class FakeRequest {
+      upload = {};
+      status = 0;
+      response: unknown = null;
+      statusText = '';
+      responseType = '';
+      onload = () => {};
+      open() {}
+      send(body: unknown) {
+        sent.push(body);
+        this.status = statuses.shift()!;
+        this.response = this.status === 200 ? { received: 1 } : { detail: 'Sign in to continue' };
+        queueMicrotask(() => this.onload());
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', FakeRequest);
+    return sent;
+  }
+  const send = (body: FormData) => browserTransport.form('/api/imports/u1/parts', body, () => undefined, new AbortController().signal);
+
+  afterEach(() => {
+    setReauthentication(undefined);
+    vi.unstubAllGlobals();
+  });
+
+  it('waits for a sign-in and sends the same batch once more', async () => {
+    const sent = requests(401, 200),
+      body = new FormData();
+    let signedIn = () => {};
+    setReauthentication(() => new Promise<void>(resolve => (signedIn = resolve)));
+    const answer = send(body);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await new Promise(resolve => setTimeout(resolve));
+    expect(sent).toHaveLength(1);
+    signedIn();
+    await expect(answer).resolves.toEqual({ received: 1 });
+    expect(sent).toEqual([body, body]);
+  });
+  it('does not treat a 401 as an interrupted connection', async () => {
+    requests(401);
+    await expect(send(new FormData())).rejects.toMatchObject({ status: 401 });
+    const { transport, calls } = rig(async () => {
+      throw new ApiError(401, 'Sign in to continue');
+    });
+    await expect(uploadImport([file('a', 1)], '', { signal: new AbortController().signal, onProgress: () => undefined, transport })).rejects.toThrow(
+      'Sign in to continue',
+    );
+    expect(transport.wait).not.toHaveBeenCalled();
     expect(calls).toEqual(['POST /api/imports', 'FORM /api/imports/u1/parts', 'DELETE /api/imports/u1']);
   });
 });
