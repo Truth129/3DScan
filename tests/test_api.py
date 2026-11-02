@@ -184,6 +184,21 @@ def test_lazy_detailed_export_and_revision_scoped_surface_assets(client):
     assert detailed.exists()
 
 
+def test_api_responses_are_not_kept_unless_their_route_says_how(client):
+    http, _service = client
+    case = http.post("/api/cases/demo").json()
+    prefix = f"/api/cases/{case['id']}"
+    revision = f"{prefix}/revisions/{case['active_revision_id']}"
+    for path in ("/api/cases", prefix, f"{prefix}/images", f"{prefix}/jobs", f"{prefix}/reviews", f"{prefix}/revisions", revision):
+        response = http.get(path)
+        assert response.status_code == 200 and response.headers["cache-control"] == "private, no-store", path
+    # A 304 updates the stored copy's headers, so it must not turn these into no-store either.
+    for url in (http.get(f"{revision}/ct-volume").json()["chunks"][0]["url"], f"{revision}/model.glb"):
+        stored = http.get(url)
+        again = http.get(url, headers={"If-None-Match": stored.headers["etag"]})
+        assert again.status_code == 304 and stored.headers["cache-control"] == again.headers["cache-control"] == "private, no-cache"
+
+
 def test_measurements_available_before_meshes_and_refinement_reuses_surfaces(client, monkeypatch):
     from scan3d import surfaces
 

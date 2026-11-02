@@ -50,8 +50,8 @@ def test_content_hashed_build_assets_are_immutable(client, path):
     assert conditional.headers["cache-control"] == policy
 
 
-def test_other_static_files_and_api_headers_remain_unmodified(client):
-    for path in ("/assets/reference.js", "/readme.txt", "/api/cases"):
+def test_other_static_files_remain_unmodified(client):
+    for path in ("/assets/reference.js", "/readme.txt"):
         response = client.get(path)
         assert response.status_code == 200
         assert "cache-control" not in response.headers

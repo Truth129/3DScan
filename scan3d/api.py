@@ -184,6 +184,9 @@ def create_app(settings: Settings | None = None):
         if private:
             # Archive queries and validation failures can contain study identity.
             response.headers["Cache-Control"] = "no-store"
+        elif request.scope["path"].startswith("/api/"):
+            # A browser keeps whatever is not marked, and a kept case list outlives the session that read it.
+            response.headers.setdefault("Cache-Control", "private, no-store")
         return response
 
     for module in (api_system, api_session, api_imports, api_cases, api_reviews, api_viewer):

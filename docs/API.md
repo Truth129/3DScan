@@ -50,7 +50,8 @@ paths.
   `SCAN3D_ALLOWED_HOSTS`.
 - **Private responses.** `/api/session`, `/api/orthanc/*`, the license route, `.../dicom-seg`, a
   prepared `segment.dcm` and `.../dicom-view` use `Cache-Control: no-store`, errors included.
-  Candidate records, descriptors, agreement reports and frames use `private, no-store`.
+  Candidate records, descriptors, agreement reports and frames use `private, no-store`. So does any
+  other `/api/` response that sets no header of its own.
 - **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces and `model.glb` use
   `Cache-Control: private, no-cache` with an `ETag`, and a matching `If-None-Match` gets a 304, so a
   browser keeps them but checks with the server before each use. `slicer.zip` has the same policy
