@@ -187,6 +187,7 @@ The button opens `<3DScan root>#orthanc-series=<id>&orthanc-source=<key>` in a n
 - `<id>` and `<key>` stay in the URL fragment, so the browser does not send them in the page request.
 - A link for a different archive is refused, so regenerate the button if `SCAN3D_ORTHANC_URL` changes.
 - If the browser reaches 3DScan under a new name, add it to `SCAN3D_ALLOWED_HOSTS`.
+- With sign-in on, the page asks for it first and keeps the link.
 
 In Explorer 2, click a study, click a series, then click the cube icon at the right of its toolbar.
 
@@ -218,5 +219,6 @@ alignment. Editing ROIs and saving them back has not been checked. OHIF has been
 - Keep Orthanc's REST API on loopback, or at least off untrusted networks, and keep authentication
   on. Restrict the DICOM port to known peers with a firewall as well as `DicomModalities`.
 - Keep credentials in `scan3d.env` with mode 600 (`chmod 600 scan3d.env`). Never commit them.
-- 3DScan has no sign-in of its own, so anyone who can reach it can read every case.
+- With sign-in off, anyone who can reach 3DScan can read every case, so keep it on loopback. See
+  [Sign-in](CONFIGURATION.md#sign-in).
 - A VPN or authenticating reverse proxy between machines is yours to choose, configure and secure.

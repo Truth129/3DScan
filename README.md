@@ -70,9 +70,9 @@ Open <http://127.0.0.1:9010> and choose **Explore synthetic demo**, or import a 
 
 ## Safety and privacy
 
-- **There is no sign-in.** Anyone who can reach the port can read every case. By default
-  3DScan listens on `127.0.0.1` only. Do not expose it to a network without an
-  authenticating proxy or VPN in front of it.
+- **Sign-in follows the address.** By default 3DScan listens on `127.0.0.1` only, with sign-in
+  off, so anything that can reach the port can read every case. Any other address requires an
+  account, and a sign-in needs HTTPS there. See [Sign-in](docs/CONFIGURATION.md#sign-in).
 - **Your data directory holds patient images.** Protect and back it up like any other
   clinical data. Never put patient data in a bug report, screenshot or pull request.
 - **Check that your use of patient data is allowed** under your own institution's rules.

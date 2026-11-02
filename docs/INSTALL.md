@@ -4,7 +4,8 @@
 the checkout, and needs no root access itself.
 
 **3DScan is for research use only.** It is not a medical device and is not cleared or approved for
-diagnosis or treatment. It has no sign-in, so keep it on a machine and network you control. See
+diagnosis or treatment. Keep it on a machine and network you control. Sign-in is off by default on
+a loopback address, and any other address [needs an account](CONFIGURATION.md#sign-in). See
 [What is not supported](#what-is-not-supported).
 
 ## Requirements
@@ -282,15 +283,28 @@ service before running `scan3d serve` by hand on the same library.
 
 See the [user guide](USER_GUIDE.md) for what a backup contains and how to restore it.
 
+## Upgrade to a version with sign-in
+
+An install on loopback alone keeps working with sign-in off. A host published beyond loopback now
+needs an account before anyone can use the app:
+
+```bash
+.venv/bin/scan3d users add NAME --admin
+```
+
+- Existing cases go to the first admin.
+- Sign out once on each device to clear older cached scan data.
+
+The [user guide](USER_GUIDE.md#sign-in) covers everyday use.
+
 ## What is not supported
 
 - **Clinical use.** Nothing here has regulatory clearance or clinical validation.
 - **macOS and Windows.** Only Linux is supported.
-- **Several users.** There is no sign-in, audit trail or per-user access control, and a single
-  worker set owns each data directory.
-- **Exposing it to a network.** Anyone who can reach the port can read every case. Keep the default
-  loopback address, or put an authenticating proxy or VPN in front of it and list its host name in
-  `SCAN3D_ALLOWED_HOSTS`.
+- **Sharing a case between users.** Each account sees only its own cases, and every account is an
+  administrator. A single worker set owns each data directory.
+- **Plain HTTP beyond loopback.** A sign-in is refused there. Keep the default loopback address, or
+  put an HTTPS reverse proxy in front of it and list its host name in `SCAN3D_ALLOWED_HOSTS`.
 - **MRI by default.** It is implemented but experimental, and is off unless you set
   `SCAN3D_MODALITIES=CT,MR`.
 
@@ -302,6 +316,8 @@ See the [user guide](USER_GUIDE.md) for what a backup contains and how to restor
 | Compressed CT will not import             | Your `dcm2niix` may lack JPEG 2000 or JPEG-LS support. Use the pinned build.                                                        |
 | Blank page at the app's address           | The viewer is not built. Run `scripts/bootstrap.sh` again without `--skip-web`.                                                     |
 | `Invalid host header`                     | Add the name you browse to in `SCAN3D_ALLOWED_HOSTS`.                                                                               |
+| `Sign in through the HTTPS address`       | Open the app at its HTTPS address. Beyond loopback, plain HTTP cannot sign in.                                                      |
+| `SCAN3D_AUTH=off is refused…`             | Remove `SCAN3D_AUTH=off`, or keep every host on loopback. See [Sign-in](CONFIGURATION.md#sign-in).                                  |
 | The app shows **GPU setup required**      | Run `scripts/check_gpu.py`, or set `SCAN3D_DEVICE=auto` or `cpu`.                                                                   |
 | Import by path is refused                 | Add the folder to `SCAN3D_IMPORT_ROOTS`. Browser upload needs no entry.                                                             |
 | AI task fails with an out-of-memory error | Close other GPU work, choose a larger GPU, or set `SCAN3D_DEVICE=cpu`, which moves only the default path.                           |
