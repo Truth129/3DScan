@@ -258,6 +258,31 @@ describe('the overlay stays on top', () => {
   });
 });
 
+describe('where the cursor goes', () => {
+  it('starts in the username on the first load', async () => {
+    const view = await gate(seen(null));
+    expect(document.activeElement).toBe(named(view, 'username'));
+  });
+  it('moves to the form that replaces the command', async () => {
+    const view = await gate(seen(null, true));
+    current = seen(null);
+    await heartbeat();
+    expect(document.activeElement).toBe(named(view, 'username'));
+  });
+  it('starts in the password on the overlay, where the name is filled in', async () => {
+    const view = await gate(seen(asha));
+    current = seen(null);
+    await heartbeat();
+    expect(document.activeElement).toBe(named(view, 'password'));
+  });
+  it('stays with someone typing when a heartbeat replaces the session', async () => {
+    const view = await gate(seen(null));
+    named(view, 'password').focus();
+    await heartbeat();
+    expect(document.activeElement).toBe(named(view, 'password'));
+  });
+});
+
 describe('other tabs', () => {
   it('releases the overlay for a sign-in, and reloads for a sign-out', async () => {
     const view = await gate(seen(asha));

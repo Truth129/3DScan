@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import App from '../App.vue';
 import { setReauthentication } from '../lib/api-fetch';
 import { clearLocalKeys, getSession, leavePage, rememberUser, session, sessionFailure, signIn, watchOtherTabs, type SessionView } from '../lib/session';
@@ -22,6 +22,12 @@ const title = computed(() => {
   if (unreachable.value) return 'The workstation cannot be reached';
   if (session.value?.setup_required) return 'Create the first account';
   return appUser.value ? 'Your session has ended' : 'Sign in to 3DScan';
+});
+// The form can replace another screen while covered, and a boolean keeps a heartbeat from taking focus from someone typing.
+const formShown = computed(() => covered.value && !unreachable.value && !!session.value && !session.value.setup_required);
+watch(formShown, shown => {
+  // A name already filled in leaves the password to type.
+  if (shown) void nextTick(() => (username.value ? passwordField : usernameField).value?.focus());
 });
 let reads = 0,
   held: Promise<void> | undefined,
@@ -52,8 +58,6 @@ function cover() {
   if (covered.value) return;
   covered.value = true;
   raise();
-  // A name already filled in leaves the password to type.
-  void nextTick(() => (username.value ? passwordField : usernameField).value?.focus());
 }
 function uncover() {
   covered.value = false;
