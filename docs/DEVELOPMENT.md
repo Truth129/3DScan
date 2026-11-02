@@ -65,8 +65,9 @@ Read each script's `--help` first:
 - Others need a Vulkan-capable GPU unless they offer `--software`.
 - `dicom_view_export_smoke.py` needs `--orthanc-binary`, a `--scratch` directory and `dcm2niix` on
   `PATH`.
-- `sign_in_smoke.py` needs a `--stage` under `/tmp`, and the repository and `web/tests` on
-  `PYTHONPATH`. It starts a real `scan3d serve` in password mode, on a port from 9031 to 9034.
+- `sign_in_smoke.py` and `library_smoke.py` need a `--stage` under `/tmp`, and the repository and
+  `web/tests` on `PYTHONPATH`. Each starts a real `scan3d serve` in password mode, on a port from
+  9031 to 9034.
 
 A gate that starts its own server exits if a port it needs is in use. After SIGKILL, a chromedriver
 or server it started can still hold that port. Gates that take `--base-url` test whatever server
@@ -82,8 +83,8 @@ build.
   data directory isolates neither. A test that wants added paths or a default proof sets its own.
 - **Browser gates** run outside pytest, so that fixture does not reach them.
   - `web/tests/interactive_test_server.py`, `dicom_seg_import_smoke.py`,
-    `dicom_view_export_smoke.py` and `sign_in_smoke.py` point `SCAN3D_INFERENCE_PATH_DIR` inside
-    their temporary data.
+    `dicom_view_export_smoke.py`, `sign_in_smoke.py` and `library_smoke.py` point
+    `SCAN3D_INFERENCE_PATH_DIR` inside their temporary data.
   - Without `SCAN3D_DEVICE=cpu`, a gate still shows this checkout's default card.
   - A plain `scan3d serve` behind `--base-url` lists whatever the checkout has.
 - **`tests/inference_path_stub.py`** builds a real second interpreter with no second PyTorch.
