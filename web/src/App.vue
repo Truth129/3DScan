@@ -76,6 +76,7 @@ import {
 import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
+import { startDownload } from './lib/session';
 import { useFloatingDetails } from './lib/use-floating-details';
 import { useFoldingControls } from './lib/use-folding-controls';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
@@ -1856,7 +1857,8 @@ onBeforeUnmount(() => {
                 <details class="slicer-fallback">
                   <summary>External correction with Slicer</summary>
                   <div class="button-row">
-                    <a class="button secondary compact" :href="`${base}/slicer.zip`" download>Slicer bundle ↓</a
+                    <a class="button secondary compact" :href="`${base}/slicer.zip`" download @click.prevent="startDownload(`${base}/slicer.zip`).catch(fail)"
+                      >Slicer bundle ↓</a
                     ><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button>
                   </div>
                   <p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p>

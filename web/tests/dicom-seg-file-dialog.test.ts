@@ -102,9 +102,28 @@ describe('a folder case with no Orthanc', () => {
     );
     expect(links).toEqual([]);
     expect(view.text()).toContain('2 masks ready as one DICOM SEG file.');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ mode: 'off', user: { id: 'local' }, setup_required: false })),
+    );
     click(view.button('Download SEG file'));
+    await settled();
     expect(links).toEqual([{ href: '/api/cases/case-a/revisions/revision-a/dicom-seg/seg-a/segment.dcm', download: '' }]);
     expect(create).toHaveBeenCalledTimes(1);
+  });
+  it('says so when it cannot check the session before saving', async () => {
+    const view = await dialog(availability({ exports: [fileJob('completed')] })),
+      links = savedLinks();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+    click(view.button('Download SEG file'));
+    await settled();
+    expect(links).toEqual([]);
+    expect(view.text()).toContain('The workstation cannot be reached.');
   });
   it('reopens with an earlier file ready, and asks again once the selection changes', async () => {
     const view = await dialog(availability({ exports: [fileJob('completed')] }));

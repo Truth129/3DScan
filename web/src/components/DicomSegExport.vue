@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { dicomSegFileUrl } from '../lib/api';
 import { defaultOverlapOrder, dicomSegExportSummary, moveOverlapRank, nonemptySavedStructures, unfinishedOverlapRanking } from '../lib/dicom-seg';
 import { prettyName } from '../lib/geometry';
+import { sessionFailure, startDownload } from '../lib/session';
 import { useDicomSegExport } from '../lib/use-dicom-seg-export';
 import { visibleVolumeMaskIds } from '../lib/volume-mask';
 import type { Revision, ReviewStatus, StructureDisplay } from '../types';
@@ -110,12 +111,9 @@ async function moveRank(id: string, offset: -1 | 1) {
 /** Preparing can outlast the dialog, so saving is a second click rather than a surprise download. */
 function saveFile() {
   if (!prepared.value) return void prepareFile(selected.value, overlapPriority.value);
-  const link = document.createElement('a');
-  link.href = dicomSegFileUrl(props.caseId, props.revision.id, prepared.value.export_id);
-  link.download = '';
-  document.body.append(link);
-  link.click();
-  link.remove();
+  startDownload(dicomSegFileUrl(props.caseId, props.revision.id, prepared.value.export_id)).catch(reason => {
+    error.value = sessionFailure(reason);
+  });
 }
 onBeforeUnmount(() => dialog.value?.close());
 </script>
