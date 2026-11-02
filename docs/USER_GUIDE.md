@@ -78,7 +78,8 @@ totals, the free space, and every case with its owner, date and size. A case tha
 use at once.
 
 If a case goes away while you have it open, the page says so and returns to the Library, within a
-minute or when you return to the tab.
+minute or when you return to the tab. If a case will not open, the page says why and you return to
+the case you had open.
 
 ## Import a study
 

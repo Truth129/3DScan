@@ -691,6 +691,60 @@ describe('the Library', () => {
     expect(stored.get('scan3d-case')).toBe('other');
     expect(root.named('case-toolbar')).toBeDefined();
   });
+  describe('a case that will not open', () => {
+    const other = { ...scan, id: 'other', label: 'OTHER' },
+      third = { ...scan, id: 'third', label: 'THIRD' },
+      busy = new ApiError(503, 'The workstation is busy.');
+    async function listed() {
+      const { stored } = workstation([amd]);
+      vi.mocked(api.cases).mockImplementation(async () => [scan, other, third]);
+      vi.mocked(api.case).mockImplementation(async id => [scan, other, third].find(item => item.id === id)!);
+      const root = await start();
+      await press(root.named('case-button'));
+      vi.mocked(api.case).mockClear();
+      vi.mocked(api.revision).mockClear();
+      return { root, stored };
+    }
+    it('goes back to the open case when the row had gone, and says so', async () => {
+      const { root, stored } = await listed();
+      vi.mocked(api.case).mockRejectedValueOnce(new ApiError(404, 'Case not found'));
+      await press(root.button('OTHER'));
+      expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
+      expect(root.named('case-toolbar')).toBeDefined();
+      expect(stored.get('scan3d-case')).toBe('case');
+      expect(root.content).toContain('That case is no longer available.');
+    });
+    it('goes back to the open case on any other failure, and says why', async () => {
+      const { root, stored } = await listed();
+      vi.mocked(api.case).mockRejectedValueOnce(busy);
+      await press(root.button('OTHER'));
+      expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
+      expect(root.button('Select series'), 'not left on the series page').toBeUndefined();
+      expect(stored.get('scan3d-case')).toBe('case');
+      expect(root.content).toContain('The workstation is busy.');
+    });
+    it('goes back once, however many opens fail', async () => {
+      const { root } = await listed();
+      vi.mocked(api.revision).mockRejectedValueOnce(busy).mockRejectedValueOnce(busy).mockRejectedValueOnce(busy);
+      await press(root.button('OTHER'));
+      expect(vi.mocked(api.case).mock.calls.map(([id]) => id)).toEqual(['other', 'case']);
+      expect(root.content).toContain('The workstation is busy.');
+    });
+    it('leaves a newer open alone', async () => {
+      const { root, stored } = await listed();
+      let back!: (next: Case) => void;
+      vi.mocked(api.case)
+        .mockRejectedValueOnce(busy)
+        .mockReturnValueOnce(new Promise(resolve => (back = resolve)));
+      await press(root.button('OTHER'));
+      await press(root.named('case-button'));
+      await press(root.button('THIRD'));
+      back(scan);
+      await settled();
+      expect(stored.get('scan3d-case')).toBe('third');
+      expect(root.content).not.toContain('The workstation is busy.');
+    });
+  });
   it('asks about the open case when a request says it has gone', async () => {
     const server = workstation([amd]);
     const root = await openPanel();

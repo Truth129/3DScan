@@ -647,7 +647,12 @@ function resetCaseView() {
   acquisition.value = acquisitionSelection();
   seriesUid.value = '';
 }
-async function openCase(id: string) {
+/**
+ * Starting an open resets the view, so a failed one goes back to the case that was showing. A return
+ * goes no further, or two cases that both fail would keep opening each other.
+ */
+async function openCase(id: string, returning = false) {
+  const previous = returning ? undefined : activeCase.value?.id;
   libraryOpen.value = false;
   const generation = ++caseGeneration;
   resetCaseView();
@@ -669,8 +674,14 @@ async function openCase(id: string) {
     void viewJobs.seed(id);
   } catch (reason) {
     if (generation !== caseGeneration) return;
-    if (caseIsGone(reason)) await closeCase(id);
-    else fail(reason);
+    const gone = caseIsGone(reason);
+    // Not awaited, so a newer open cannot start here and lose to the return. Its read is only the list.
+    if (gone) void closeCase(id);
+    const back = previous && previous !== id ? openCase(previous, true) : undefined,
+      latest = caseGeneration;
+    await back;
+    // Opening clears the banner, so this goes last, unless a newer open has replaced the return.
+    if (!gone && latest === caseGeneration) fail(reason);
   } finally {
     if (generation === caseGeneration) loading.value = false;
   }
