@@ -3,6 +3,7 @@ import { h, type ComponentInternalInstance } from 'vue';
 import App from '../src/App.vue';
 import { api, ApiError } from '../src/lib/api';
 import { SEGMENT_PATH_KEY } from '../src/lib/inference-path';
+import { runCaseCheck } from '../src/lib/session';
 import type { Case, InferencePathRow, Job, Revision, SegmentationCatalog } from '../src/types';
 import { choose, createApp, FakeElement, press, settled } from './fake-dom';
 
@@ -425,5 +426,81 @@ describe('a case that has gone', () => {
     vi.spyOn(api, 'revision').mockRejectedValue(new ApiError(404, 'Revision does not belong to this case'));
     await start();
     expect(stored.get('scan3d-case')).toBe('case');
+  });
+});
+
+describe('the Library', () => {
+  async function heartbeat() {
+    runCaseCheck();
+    await settled();
+  }
+
+  it('asks about the open case when a request says it has gone', async () => {
+    const server = workstation([amd]);
+    const root = await openPanel();
+    vi.mocked(api.case).mockClear();
+    server.segment.mockRejectedValueOnce(new ApiError(404, 'Case not found'));
+    await submit(root);
+    expect(api.case).toHaveBeenCalledExactlyOnceWith('case');
+    expect(root.content).not.toContain('Case not found');
+    expect(server.stored.get('scan3d-case')).toBe('case');
+  });
+  it('closes the open case when a heartbeat finds it gone', async () => {
+    const { stored } = workstation([amd]);
+    const root = await start();
+    vi.mocked(api.case).mockRejectedValue(new ApiError(404, 'Case not found'));
+    await heartbeat();
+    expect(stored.has('scan3d-case')).toBe(false);
+    expect(root.named('case-toolbar')).toBeUndefined();
+    expect(root.content).toContain('That case is no longer available.');
+  });
+  it.each([
+    ['a lost connection', new TypeError('Failed to fetch')],
+    ['a server error', new ApiError(503, 'Case not found')],
+    ['a 404 about something else', new ApiError(404, 'Revision does not belong to this case')],
+  ])('keeps the case open on any other heartbeat failure: %s', async (_name, reason) => {
+    const { stored } = workstation([amd]);
+    const root = await start();
+    vi.mocked(api.case).mockRejectedValue(reason);
+    await heartbeat();
+    expect(stored.get('scan3d-case')).toBe('case');
+    expect(root.named('case-toolbar')).toBeDefined();
+    expect(root.content).not.toContain('That case is no longer available.');
+  });
+  it('takes only the label from a heartbeat', async () => {
+    workstation([amd]);
+    const root = await start();
+    vi.mocked(api.revision).mockClear();
+    const series = [{ uid: 'later', description: '', modality: 'CT', slice_count: 1, spacing: [1, 1, 1], warnings: [] }];
+    vi.mocked(api.case).mockResolvedValue({ ...scan, label: 'RENAMED', active_revision_id: 'later', series });
+    await heartbeat();
+    expect(root.named('case-title')?.content).toContain('RENAMED');
+    expect(api.revision).not.toHaveBeenCalled();
+    expect(root.button('Select series'), 'the series this tab read stay').toBeUndefined();
+  });
+
+  describe('a job that reads as gone', () => {
+    /** A case in Trash answers `Job not found`. The poll interval is real time, so shorten it. */
+    async function polling() {
+      const timeout = setTimeout;
+      vi.stubGlobal('setTimeout', ((callback: () => void, delay?: number) => timeout(callback, delay === 1400 ? 1 : delay)) as typeof setTimeout);
+      const server = workstation([amd]);
+      vi.spyOn(api, 'job').mockRejectedValue(new ApiError(404, 'Job not found'));
+      return { server, root: await openPanel() };
+    }
+    it('closes a case that has gone with it', async () => {
+      const { root } = await polling();
+      vi.mocked(api.case).mockRejectedValue(new ApiError(404, 'Case not found'));
+      await submit(root);
+      await vi.waitFor(() => expect(root.named('case-toolbar')).toBeUndefined());
+      expect(root.content).not.toContain('Job not found');
+    });
+    it('reports it on a case that is still there', async () => {
+      const { server, root } = await polling();
+      await submit(root);
+      await vi.waitFor(() => expect(root.content).toContain('Job not found'));
+      expect(root.named('case-toolbar')).toBeDefined();
+      expect(server.stored.has('scan3d-job:case')).toBe(false);
+    });
   });
 });

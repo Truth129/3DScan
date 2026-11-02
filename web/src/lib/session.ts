@@ -25,6 +25,11 @@ let tabs: BroadcastChannel | undefined,
   leaving = false;
 const announce = (change: TabChange) => tabs?.postMessage(change);
 
+let caseCheck: (() => void) | undefined;
+/** App answers each heartbeat. With no App, as in the portable bundle, nothing does. */
+export const setCaseCheck = (check?: () => void) => (caseCheck = check);
+export const runCaseCheck = () => caseCheck?.();
+
 export const getSession = () => request<SessionView>('/api/session');
 
 export async function signIn(username: string, password: string, sharedDevice: boolean) {

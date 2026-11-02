@@ -77,7 +77,7 @@ import {
 import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
-import { startDownload } from './lib/session';
+import { setCaseCheck, startDownload } from './lib/session';
 import { useFloatingDetails } from './lib/use-floating-details';
 import { useFoldingControls } from './lib/use-folding-controls';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
@@ -443,7 +443,9 @@ const mrEnabled = computed(() => Array.isArray(health.value.modalities) && healt
 const sourceKinds = computed(() => (mrEnabled.value ? 'CT or static MR' : 'CT'));
 
 function fail(reason: unknown) {
-  error.value = reason instanceof Error ? reason.message : String(reason);
+  // The answer may name an older case, so ask about the open one rather than close on this alone.
+  if (caseIsGone(reason)) void checkOpenCase();
+  else error.value = reason instanceof Error ? reason.message : String(reason);
 }
 function openExport() {
   if (!revision.value || savedExportDisabledReason.value) return;
@@ -661,18 +663,35 @@ async function openCase(id: string) {
   }
 }
 /** Nothing of a case that has gone stays on screen, and this browser stops reopening it. */
-async function closeCase(id: string) {
+async function closeCase(id: string, message = 'That case is no longer available.') {
   caseGeneration++;
   resetCaseView();
   activeCase.value = undefined;
   loading.value = false;
   localStorage.removeItem(`scan3d-job:${id}`);
   if (localStorage.getItem('scan3d-case') === id) localStorage.removeItem('scan3d-case');
-  toast('That case is no longer available.');
+  if (message) toast(message);
   try {
     await refreshCases();
   } catch (reason) {
     fail(reason);
+  }
+}
+let checkingCase = false;
+/** An idle tab must not keep showing a case that has gone, and a rename elsewhere reaches this header. */
+async function checkOpenCase() {
+  const id = activeCase.value?.id,
+    generation = caseGeneration;
+  if (!id || checkingCase) return;
+  checkingCase = true;
+  try {
+    const current = await api.case(id);
+    // Only the label: the whole record would overwrite the series and active revision on screen.
+    if (generation === caseGeneration && activeCase.value?.id === id) activeCase.value.label = current.label;
+  } catch (reason) {
+    if (generation === caseGeneration && activeCase.value?.id === id && caseIsGone(reason)) await closeCase(id);
+  } finally {
+    checkingCase = false;
   }
 }
 async function imported(next: Case) {
@@ -791,11 +810,17 @@ function poll() {
         await closeCase(job.value.case_id);
         return;
       }
-      fail(reason);
-      if (jobIsGone(reason)) {
-        localStorage.removeItem(`scan3d-job:${job.value.case_id}`);
-        job.value = undefined;
-      } else poll();
+      if (!jobIsGone(reason)) {
+        fail(reason);
+        poll();
+        return;
+      }
+      // A hidden case's job answers `Job not found`, so only the case itself can say which it is.
+      const gone = job.value.case_id;
+      localStorage.removeItem(`scan3d-job:${gone}`);
+      job.value = undefined;
+      await checkOpenCase();
+      if (activeCase.value?.id === gone) fail(reason);
     }
   }, 1400);
 }
@@ -1112,6 +1137,7 @@ function keyboard(event: KeyboardEvent) {
 }
 onMounted(async () => {
   document.addEventListener('keydown', keyboard);
+  setCaseCheck(checkOpenCase);
   const results = await Promise.allSettled([api.cases(), api.health()]);
   if (results[0].status === 'fulfilled') {
     cases.value = results[0].value;
@@ -1135,6 +1161,7 @@ onBeforeUnmount(() => {
   clearTimeout(pollTimer);
   clearTimeout(noticeTimer);
   document.removeEventListener('keydown', keyboard);
+  setCaseCheck(undefined);
 });
 </script>
 

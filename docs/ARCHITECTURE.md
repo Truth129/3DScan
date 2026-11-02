@@ -461,6 +461,10 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
 **Sessions and passwords.** Only the SHA-256 of a session token is stored. Passwords use scrypt, with
 n=2^17, r=8 and p=1.
 
+**An open tab.** Each session read, every 60 seconds and on focus, also reads the open case. A tab
+closes a case that answers `Case not found`, and takes only the label from any other answer. Lost
+connections and server errors never close a case.
+
 **Audit.** `audit_events` is append-only, enforced by triggers. Rows hold IDs and counts, never a
 label, search term or typed username. A row means a request was allowed to start, and a failed write
 fails the request. The actions are:

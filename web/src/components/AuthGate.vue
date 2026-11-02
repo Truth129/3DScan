@@ -2,7 +2,18 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import App from '../App.vue';
 import { setReauthentication } from '../lib/api-fetch';
-import { clearLocalKeys, getSession, leavePage, rememberUser, session, sessionFailure, signIn, watchOtherTabs, type SessionView } from '../lib/session';
+import {
+  clearLocalKeys,
+  getSession,
+  leavePage,
+  rememberUser,
+  runCaseCheck,
+  session,
+  sessionFailure,
+  signIn,
+  watchOtherTabs,
+  type SessionView,
+} from '../lib/session';
 
 const HEARTBEAT_MS = 60_000;
 
@@ -91,7 +102,10 @@ async function refresh() {
   const ticket = ++reads;
   try {
     const view = await getSession();
-    if (ticket === reads) follow(view);
+    if (ticket !== reads) return;
+    follow(view);
+    // A read under the overlay would park on a 401.
+    if (!covered.value) runCaseCheck();
   } catch {
     if (ticket !== reads || session.value) return;
     unreachable.value = true;

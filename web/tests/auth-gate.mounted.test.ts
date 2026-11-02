@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AuthGate from '../src/components/AuthGate.vue';
 import UserMenu from '../src/components/UserMenu.vue';
 import { apiFetch } from '../src/lib/api-fetch';
-import { session, type SessionUser, type SessionView } from '../src/lib/session';
+import { session, setCaseCheck, type SessionUser, type SessionView } from '../src/lib/session';
 import { click, mount, settled, type MountedElement } from './mounted';
 
 // App draws on a GPU canvas, and here it only has to be there or not.
@@ -217,6 +217,17 @@ describe('a session that ends in use', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     await heartbeat();
     expect(overlay(view).open).toBe(false);
+  });
+  it('runs the case check on a heartbeat, and not while covered', async () => {
+    await gate(seen(asha));
+    const check = vi.fn();
+    setCaseCheck(check);
+    await heartbeat();
+    expect(check).toHaveBeenCalledOnce();
+    current = seen(null);
+    await heartbeat();
+    expect(check).toHaveBeenCalledOnce();
+    setCaseCheck(undefined);
   });
   it('drops an answer that a sign-in overtook', async () => {
     const view = await gate(seen(null));
