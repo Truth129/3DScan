@@ -824,6 +824,15 @@ describe('the Library', () => {
     expect(api.revision).not.toHaveBeenCalled();
     expect(root.button('Select series'), 'the series this tab read stay').toBeUndefined();
   });
+  it('reads the series again for the series page, because one can be added while it is closed', async () => {
+    workstation([amd]);
+    const series = (uid: string) => ({ uid, description: uid, modality: 'CT', slice_count: 1, spacing: [1, 1, 1], warnings: [] });
+    vi.mocked(api.case).mockResolvedValue({ ...scan, series: [series('FIRST')] });
+    const root = await start();
+    vi.mocked(api.case).mockResolvedValue({ ...scan, series: [series('FIRST'), series('ADDED')] });
+    await press(root.button('Select series'));
+    expect(root.content).toContain('ADDED');
+  });
 
   describe('Reset to scan', () => {
     const liver: Structure = {

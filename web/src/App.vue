@@ -1022,6 +1022,16 @@ function openPrepare() {
   ctExpanded.value = false;
   prepareOpen.value = true;
   segmentationOpen.value = false;
+  const id = activeCase.value?.id,
+    generation = caseGeneration;
+  // A series added while this page was closed finished with nothing listening.
+  if (id)
+    void api
+      .case(id)
+      .then(current => {
+        if (generation === caseGeneration && activeCase.value?.id === id) activeCase.value.series = current.series;
+      })
+      .catch(() => {});
 }
 async function cancel() {
   if (!job.value) return;
