@@ -385,7 +385,7 @@ and runs no DICOM listener. See [ORTHANC.md](ORTHANC.md).
 - An import binds an immutable snapshot of the series. A CPU job downloads it into staging and
   verifies hashes and DICOM identities before publishing the originals. Interrupted transfers never
   resume automatically.
-- The launch route finds a matching import but creates nothing.
+- The launch route finds this account's matching import but creates nothing.
 
 ## DICOM SEG and other exchange
 
