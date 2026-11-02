@@ -90,7 +90,7 @@ def test_trash_hides_a_case_from_every_route_and_list(rig):
     assert rig.owner.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 0, "sends_continuing": 0}
     walked = 0
     for route, method, rule in ruled_routes(rig.app):
-        if rule.kind == "case":
+        if rule.kind in ("case", "case_archive"):
             absent(rig.owner.request(method, filled(route.path.replace("{case_id}", case_id))), "Case not found")
             walked += 1
     assert walked > 40

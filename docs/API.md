@@ -1108,6 +1108,7 @@ supported, unsupported_reason}`. `completeness` is `receiving`, `incomplete`, `c
 each series with `in_case`. **`POST`** takes `{series_id, snapshot}` and returns an `orthanc_import`
 job that adds the series to the case. It is refused for a case not imported from Orthanc, a series
 of another study, or a series the case already holds. The case keeps its status and open result.
+Both need the case and archive access.
 
 **`POST /api/orthanc/launch`** takes `{series_id, source_key}` and returns `{study, series, case_id,
 job}`, creating nothing and transferring no DICOM.

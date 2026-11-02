@@ -40,7 +40,6 @@ def add_routes(app, service):
     def orthanc_import(body: OrthancImport):
         return JSONResponse(public_job(service.orthanc.start(body.series_id, body.snapshot, body.label)), headers={"Cache-Control": "no-store"})
 
-    # Under the case path, so the access rule for a case guards both routes.
     @app.get("/api/cases/{case_id}/orthanc-series")
     def case_orthanc_series(case_id: str):
         return JSONResponse(service.orthanc.case_series(case_id), headers={"Cache-Control": "no-store"})

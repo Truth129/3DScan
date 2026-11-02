@@ -38,7 +38,7 @@ class Rule:
 
 _REVISION = "/api/cases/{case_id}/revisions/{revision_id}"
 _LICENSE = "/api/totalsegmentator/license"
-# Every route without {case_id}, by method and template. A {case_id} route needs an entry for an audit action or the `trashed` kind.
+# Every route without {case_id}, by method and template. A {case_id} route needs an entry for an audit action or another kind.
 RULES = {
     ("GET", "/api/health"): Rule("public"),
     ("GET", "/api/session"): Rule("public"),
@@ -80,6 +80,8 @@ RULES = {
     ("POST", "/api/trash/{case_id}/restore"): Rule("trashed"),
     ("GET", "/api/cases/{case_id}"): Rule("case", "case.open"),
     ("PATCH", "/api/cases/{case_id}"): Rule("case", "case.rename"),
+    ("GET", "/api/cases/{case_id}/orthanc-series"): Rule("case_archive"),
+    ("POST", "/api/cases/{case_id}/orthanc-series"): Rule("case_archive", "case.import"),
     ("GET", f"{_REVISION}/slicer.zip"): Rule("case", "export.slicer"),
     ("GET", f"{_REVISION}/export.html"): Rule("case", "export.html"),
     ("POST", f"{_REVISION}/export.html"): Rule("case", "export.html"),
@@ -92,10 +94,11 @@ _CONDITIONAL = frozenset({("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("
 _CASE = Rule("case")
 _STATIC = Rule("public")
 # Each scoped kind reads one path parameter, and a route with that parameter must be of such a kind.
-_SCOPED = {"case_id": ("case", "trashed"), "job_id": ("job",), "upload_id": ("upload",)}
+_SCOPED = {"case_id": ("case", "case_archive", "trashed"), "job_id": ("job",), "upload_id": ("upload",)}
 
 _SIGN_IN = (401, "Sign in to continue")
 _NO_RULE = (403, "This route has no access rule")
+_NO_ARCHIVE = (403, "This account cannot use the archive")
 
 
 def rule_for(route, method):
@@ -244,7 +247,7 @@ class SessionGate:
 
     def _hidden(self, rule, params):
         """A case in Trash reads as missing in both modes, in the route's own words, so nothing shows it exists."""
-        if rule.kind == "case":
+        if rule.kind in ("case", "case_archive"):
             case_id, detail = params["case_id"], "Case not found"
         elif rule.kind == "job":
             case_id, detail = self.accounts.job_case(params["job_id"]), "Job not found"
@@ -266,9 +269,11 @@ class SessionGate:
         if kind == "admin":
             return None if principal.is_admin else (403, "Administrator access is required")
         if kind == "archive":
-            return None if principal.archive_access else (403, "This account cannot use the archive")
-        if kind in ("case", "trashed"):
-            return None if self._may_open(params["case_id"], principal) else (404, "Case not found")
+            return None if principal.archive_access else _NO_ARCHIVE
+        if kind in ("case", "case_archive", "trashed"):
+            if not self._may_open(params["case_id"], principal):
+                return (404, "Case not found")
+            return _NO_ARCHIVE if kind == "case_archive" and not principal.archive_access else None
         if kind == "job":
             job_id = params["job_id"]
             case_id = self.accounts.job_case(job_id) if _well_formed(job_id) else None

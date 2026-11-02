@@ -195,6 +195,17 @@ def test_archive_routes_refuse_an_account_without_the_archive(rig):
         assert response.status_code == 403 and response.json() == {"detail": "This account cannot use the archive"}
 
 
+def test_a_cases_archive_series_need_the_case_and_the_archive(rig):
+    body = {"series_id": "00000000-00000000-00000000-00000000-00000000", "snapshot": "0" * 64}
+    own = rig.member.post("/api/cases/demo").json()["id"]
+    for response in (rig.member.get(f"/api/cases/{own}/orthanc-series"), rig.member.post(f"/api/cases/{own}/orthanc-series", json=body)):
+        assert response.status_code == 403 and response.json() == {"detail": "This account cannot use the archive"}
+    assert rig.member.get(f"/api/cases/{rig.case['id']}/orthanc-series").status_code == 404
+    rig.owner.post(f"/api/cases/{rig.case['id']}/orthanc-series", json=body)
+    with rig.service.store.connection() as con:
+        assert con.execute("SELECT 1 FROM audit_events WHERE action='case.import' AND case_id=?", (rig.case["id"],)).fetchone()
+
+
 def test_lists_hold_only_your_own_cases(rig):
     assert rig.case["id"] in [case["id"] for case in rig.owner.get("/api/cases").json()]
     assert rig.other.get("/api/cases").json() == []
@@ -281,7 +292,8 @@ def test_the_policy_refuses_a_trashed_rule_on_a_route_with_no_case_id(tmp_path, 
 
 
 def test_every_kind_a_rule_names_is_one_the_gate_decides():
-    assert {rule.kind for rule in RULES.values()} == {"public", "off_only", "signed_in", "admin", "archive", "job", "upload", "case", "trashed"}
+    kinds = {"public", "off_only", "signed_in", "admin", "archive", "job", "upload", "case", "case_archive", "trashed"}
+    assert {rule.kind for rule in RULES.values()} == kinds
 
 
 def test_with_sign_in_off_everything_stays_open_and_audited_rules_still_write(tmp_path):
