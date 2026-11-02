@@ -550,6 +550,12 @@ def test_the_cli_refuses_a_bad_name_before_asking_for_a_password(tmp_path, monke
     assert not (tmp_path / "data").exists()
 
 
+def test_the_cli_refuses_a_data_folder_it_cannot_use(tmp_path, monkeypatch, capsys):
+    (tmp_path / "data").touch()
+    with pytest.raises(SystemExit, match="Cannot use"):
+        run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", passwords=["a" * 12, "a" * 12])
+
+
 def test_a_username_is_unique_whatever_its_case(rig):
     with pytest.raises(ValueError, match="already in use"):
         rig.accounts.add_user("READER", generated_password())

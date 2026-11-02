@@ -20,6 +20,7 @@ def new_password():
 def manage_users(args):
     # Not through Service, so this runs beside a live server and loads no imaging or worker code.
     from contextlib import closing
+    import sqlite3
     from .accounts import Accounts
     from .backup import DATABASE
     from .config import Settings
@@ -56,6 +57,8 @@ def manage_users(args):
         raise SystemExit(str(exc)) from None
     except (EOFError, KeyboardInterrupt):
         raise SystemExit("Nothing was changed") from None
+    except (OSError, sqlite3.Error) as exc:
+        raise SystemExit(f"Cannot use {data_dir}: {exc}") from None
 
 
 def main():
