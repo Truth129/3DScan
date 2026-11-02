@@ -110,10 +110,17 @@ export interface SegmentationTask {
   classes: string[];
   license_required: boolean;
   license_available: boolean;
+  /** False when the task's license or its model weights are missing. */
+  available?: boolean;
+  engine?: string;
+  engine_version?: string;
+  /** A separate model whose segments stay beside other models' segments. */
+  comparison?: boolean;
   class_count: number;
   robust_crop_default: boolean;
   robust_crop_supported: boolean;
   body_seg_supported: boolean;
+  remove_small_blobs_supported?: boolean;
 }
 export interface SegmentationCatalog {
   engine_version: string;

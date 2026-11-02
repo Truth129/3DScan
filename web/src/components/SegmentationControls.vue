@@ -40,9 +40,16 @@ const pathLine = computed(() =>
 const otherReasons = computed(() => (paths.value.length > 1 ? otherPathReasons(paths.value, props.inferencePath) : []));
 const cardUnavailable = computed(() => paths.value.length > 1 && paths.value.some(row => !row.available));
 const unavailable = computed(
-  () => !task.value || (task.value.license_required && !task.value.license_available) || pathBlocked(paths.value, props.inferencePath),
+  () =>
+    !task.value ||
+    task.value.available === false ||
+    (task.value.license_required && !task.value.license_available) ||
+    pathBlocked(paths.value, props.inferencePath),
 );
 const fixedCrop = computed(() => !!task.value?.robust_crop_default);
+const otherEngines = computed(() => [
+  ...new Set((props.catalog?.tasks ?? []).filter(item => item.comparison).map(item => `${item.engine} ${item.engine_version}`)),
+]);
 function selectTask(event: Event) {
   const id = (event.target as HTMLSelectElement).value,
     next = props.catalog?.tasks.find(item => item.id === id);
@@ -50,7 +57,7 @@ function selectTask(event: Event) {
     task: id,
     robust_crop: !!next?.robust_crop_default || (!!next?.robust_crop_supported && !!props.catalog?.defaults.robust_crop),
     body_seg: !!next?.body_seg_supported && !!props.catalog?.defaults.body_seg,
-    remove_small_blobs: !!props.catalog?.defaults.remove_small_blobs,
+    remove_small_blobs: next?.remove_small_blobs_supported !== false && !!props.catalog?.defaults.remove_small_blobs,
   });
 }
 function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: Event) {
@@ -86,7 +93,8 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
           :disabled="working || loading || !catalog"
       /></label>
       <p v-if="catalog" class="segmentation-catalog-caption">
-        {{ catalog.tasks.length }} {{ catalog.tasks[0]?.modality || '' }} tasks · TotalSegmentator {{ catalog.engine_version }}
+        {{ catalog.tasks.length }} {{ catalog.tasks[0]?.modality || '' }} tasks · TotalSegmentator {{ catalog.engine_version
+        }}<span v-for="engine in otherEngines" :key="engine"> · {{ engine }}</span>
       </p>
     </div>
     <!-- prettier-ignore -->
@@ -97,6 +105,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
           <option v-if="!catalog" value="total">{{ loading ? 'Loading available tasks…' : 'Tasks unavailable' }}</option>
           <option v-for="item in searchedTasks.options" :key="item.id" :value="item.id" :disabled="item.license_required && !item.license_available">
             {{ item.label }}{{ item.license_required && !item.license_available ? ' · license required' : ''
+            }}{{ item.comparison && item.available === false ? ' · not installed' : ''
             }}{{ searchedTasks.retainedSelection && item.id === modelValue.task ? ' · current' : '' }}
           </option>
         </select></label
@@ -137,11 +146,18 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
             @change="check('body_seg', $event)"
           />Body crop <code>-bs</code></label
         >
-        <label :title="`Remove disconnected components smaller than ${catalog?.remove_small_blobs_mm3 ?? 200} mm³.`"
+        <label
+          :class="{ unavailable: task?.remove_small_blobs_supported === false }"
+          :title="
+            task?.remove_small_blobs_supported === false
+              ? 'This task does not support removing small blobs.'
+              : `Remove disconnected components smaller than ${catalog?.remove_small_blobs_mm3 ?? 200} mm³.`
+          "
           ><input
             type="checkbox"
             aria-label="Remove small blobs"
             :checked="modelValue.remove_small_blobs"
+            :disabled="task?.remove_small_blobs_supported === false"
             @change="check('remove_small_blobs', $event)"
           />Remove small blobs <code>-rmb</code></label
         >
@@ -166,9 +182,15 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
       </ul>
     </details>
     <p class="segmentation-note">
-      Creates a new revision. Replaces this task’s segments and existing segments with matching anatomical names, including manual corrections. Keeps unrelated
-      segments; earlier revisions remain available.<span v-if="modelValue.remove_small_blobs">
-        Components below {{ catalog?.remove_small_blobs_mm3 ?? 200 }} mm³ will be removed.</span
+      Creates a new revision.
+      <template v-if="task?.comparison"
+        >Replaces only this model’s earlier segments, including manual corrections to them. Other models’ segments stay, so you can compare them; earlier
+        revisions remain available.</template
+      >
+      <template v-else
+        >Replaces this task’s segments and existing segments with matching anatomical names, including manual corrections. Keeps unrelated segments; earlier
+        revisions remain available.</template
+      ><span v-if="modelValue.remove_small_blobs"> Components below {{ catalog?.remove_small_blobs_mm3 ?? 200 }} mm³ will be removed.</span
       ><span v-if="paths.length > 1"> One AI job runs at a time across GPUs. Each GPU keeps its own saved results, and results can differ between GPUs.</span>
     </p>
     <TotalSegmentatorLicense :disabled="working || loading" @pending="licensePending = $event" @changed="emit('license-changed')" />

@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { createSSRApp } from 'vue';
+import { renderToString } from '@vue/server-renderer';
+import SegmentationControls from '../src/components/SegmentationControls.vue';
 import { restoreSegmentationSettings } from '../src/lib/segmentation-settings';
 import type { SegmentationCatalog, SegmentationTask } from '../src/types';
 
@@ -24,6 +27,8 @@ const catalog: SegmentationCatalog = {
     task('lung_vessels'),
     task('required', { robust_crop_default: true, body_seg_supported: false }),
     task('licensed', { license_required: true, license_available: false }),
+    task('compared', { comparison: true, remove_small_blobs_supported: false }),
+    task('uninstalled', { comparison: true, available: false, description: 'Run the download script.' }),
   ],
 };
 
@@ -33,6 +38,10 @@ describe('restore segmentation settings', () => {
     const expected = { task: 'lung_vessels', robust_crop: true, body_seg: false, remove_small_blobs: true };
     expect(restoreSegmentationSettings(undefined, saved)).toEqual(expected);
     expect(restoreSegmentationSettings(catalog, saved)).toEqual(expected);
+  });
+  it('falls back from a model without weights and clears options a model lacks', () => {
+    expect(restoreSegmentationSettings(catalog, { tasks: ['uninstalled'] }).task).toBe('total');
+    expect(restoreSegmentationSettings(catalog, { tasks: ['compared'], remove_small_blobs: true }).remove_small_blobs).toBe(false);
   });
   it('resets CT-only or another case without recorded settings to defaults', () => {
     const changed = restoreSegmentationSettings(catalog, { task: 'lung_vessels', remove_small_blobs: true });
@@ -49,5 +58,32 @@ describe('restore segmentation settings', () => {
   });
   it.each(['licensed', 'removed-task'])('falls back safely from unavailable task %s', id => {
     expect(restoreSegmentationSettings(catalog, { tasks: [id], robust_crop: true, body_seg: true, remove_small_blobs: true })).toEqual(catalog.defaults);
+  });
+});
+
+describe('comparison models in the panel', () => {
+  const render = (id: string) =>
+    renderToString(
+      createSSRApp(SegmentationControls, {
+        modelValue: { task: id, robust_crop: false, body_seg: false, remove_small_blobs: false },
+        catalog,
+        busy: false,
+        loading: false,
+      }),
+    );
+  const runDisabled = (html: string) => /<button class="button primary"[^>]*>/.exec(html)?.[0].includes('disabled');
+
+  it('explains how to install a model without weights and blocks its run', async () => {
+    const html = await render('uninstalled');
+    expect(html).toContain('Run the download script.');
+    expect(html).toContain('· not installed');
+    expect(runDisabled(html)).toBe(true);
+  });
+  it('says a model keeps other models and offers no small-blob option', async () => {
+    const html = await render('compared');
+    expect(html).toContain('Other models’ segments stay');
+    expect(html).not.toContain('existing segments with matching anatomical names');
+    expect(/<input[^>]*aria-label="Remove small blobs"[^>]*>/.exec(html)?.[0]).toContain('disabled');
+    expect(runDisabled(html)).toBe(false);
   });
 });
