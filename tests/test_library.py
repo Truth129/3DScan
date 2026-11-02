@@ -84,6 +84,9 @@ def test_trash_hides_a_case_from_every_route_and_list(rig):
     kept = rig.service.store.case_dir(case_id) / "kept.bin"
     kept.write_bytes(b"synthetic")
     counted = rig.owner.get("/api/agreement").json()["cases"]["total"]
+    # The update trigger deletes the summary, so the Trash route itself must strip this path.
+    with rig.service.store.connection() as con:
+        con.execute("UPDATE cases SET data=json_set(data,'$.source_dir','/synthetic') WHERE id=?", (case_id,))
     assert rig.owner.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 0, "sends_continuing": 0}
     walked = 0
     for route, method, rule in ruled_routes(rig.app):
