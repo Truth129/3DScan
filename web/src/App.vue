@@ -35,6 +35,7 @@ import DicomSegExport from './components/DicomSegExport.vue';
 import DicomSegImport from './components/DicomSegImport.vue';
 import DicomViewExport from './components/DicomViewExport.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
+import UserMenu from './components/UserMenu.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
 import { api, revisionUrl } from './lib/api';
@@ -1199,6 +1200,7 @@ onBeforeUnmount(() => {
         <span class="live-dot"></span><span>{{ workerText }}</span>
       </div>
       <button class="button primary compact" @click="importOpen = true"><span>+</span> Import scan</button>
+      <UserMenu />
       <div v-if="error" class="error-banner" role="alert">
         <span>⚠ {{ error }}</span
         ><button aria-label="Dismiss error" @click="error = ''">×</button>

@@ -119,6 +119,10 @@ class MemoryElement extends MemoryNode {
   focus() {
     memoryDocument.activeElement = this;
   }
+  /** Vue asks this when a v-model writes a new value into a text field. */
+  getRootNode() {
+    return memoryDocument;
+  }
   showModal() {
     this.open = true;
   }
@@ -160,6 +164,8 @@ export default <Environment>{
     Object.assign(global, {
       document: memoryDocument,
       window: global,
+      Document: MemoryDocument,
+      ShadowRoot: class {},
       HTMLElement: MemoryElement,
       Element: MemoryElement,
       SVGElement: class {},
@@ -171,6 +177,10 @@ export default <Environment>{
       location: { hash: '', pathname: '/', search: '', origin: 'http://localhost' },
       history: { state: null, replaceState() {} },
       localStorage: {
+        get length() {
+          return storage.size;
+        },
+        key: (index: number) => [...storage.keys()][index] ?? null,
         getItem: (key: string) => storage.get(key) ?? null,
         setItem: (key: string, value: string) => storage.set(key, value),
         removeItem: (key: string) => storage.delete(key),
