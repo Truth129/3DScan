@@ -31,7 +31,8 @@ export function caseDate(value: string | null | undefined) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString();
 }
 
-export function trashMessage(result: TrashResult) {
-  const stopped = result.jobs_stopped === 1 ? ' 1 job stopped.' : result.jobs_stopped > 1 ? ` ${result.jobs_stopped} jobs stopped.` : '';
-  return `Moved to Trash.${stopped}${result.sends_continuing > 0 ? ' A send Orthanc has started will finish.' : ''}`;
+export function trashMessage(result: TrashResult, label?: string) {
+  const moved = label ? `“${label}” moved to Trash.` : 'Moved to Trash.',
+    stopped = result.jobs_stopped === 1 ? ' 1 job stopped.' : result.jobs_stopped > 1 ? ` ${result.jobs_stopped} jobs stopped.` : '';
+  return `${moved}${stopped}${result.sends_continuing > 0 ? ' A send Orthanc has started will finish.' : ''}`;
 }

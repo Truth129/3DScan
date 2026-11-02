@@ -75,4 +75,8 @@ describe('trashMessage', () => {
     expect(trashMessage(result(0, 1))).toBe('Moved to Trash. A send Orthanc has started will finish.');
     expect(trashMessage(result(2, 1))).toBe('Moved to Trash. 2 jobs stopped. A send Orthanc has started will finish.');
   });
+  it('names the case when it has a name', () => {
+    expect(trashMessage(result(0, 0), 'Alpha phantom')).toBe('“Alpha phantom” moved to Trash.');
+    expect(trashMessage(result(1, 1), 'Alpha phantom')).toBe('“Alpha phantom” moved to Trash. 1 job stopped. A send Orthanc has started will finish.');
+  });
 });

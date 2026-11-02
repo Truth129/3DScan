@@ -530,7 +530,7 @@ describe('the Library', () => {
       expect(stored.has('scan3d-case')).toBe(false);
       expect(root.named('case-toolbar')).toBeUndefined();
       expect(root.named('case-library')).toBeDefined();
-      expect(root.named('undo-toast')?.content).toContain('Moved to Trash.');
+      expect(root.named('undo-toast')?.content).toContain(`“${scan.label}” moved to Trash.`);
       expect(root.content).not.toContain('no longer available');
       await undo(root);
       expect(api.restore).toHaveBeenCalledExactlyOnceWith('case');
@@ -544,7 +544,7 @@ describe('the Library', () => {
       trashing({ jobs_stopped: 2, sends_continuing: 1 });
       const root = await openLibrary();
       await press(root.button('Move to Trash'));
-      expect(root.named('undo-toast')?.content).toContain('Moved to Trash. 2 jobs stopped. A send Orthanc has started will finish.');
+      expect(root.named('undo-toast')?.content).toContain(' moved to Trash. 2 jobs stopped. A send Orthanc has started will finish.');
       await undo(root);
       expect(root.content).toContain('Case restored. Stopped jobs did not restart.');
     });
@@ -577,7 +577,7 @@ describe('the Library', () => {
       panelReports(root, async () => false);
       await press(root.button('Move to Trash'));
       expect(api.trash).toHaveBeenCalledOnce();
-      expect(root.named('undo-toast')?.content).toContain('Moved to Trash. Your latest marks could not be saved.');
+      expect(root.named('undo-toast')?.content).toContain(' moved to Trash. Your latest marks could not be saved.');
     });
     it('asks the panel nothing about a case that is not open', async () => {
       workstation([amd]);

@@ -750,7 +750,8 @@ function renamed(next: Case) {
 }
 async function moveToTrash(id: string) {
   const open = activeCase.value?.id === id,
-    generation = caseGeneration;
+    generation = caseGeneration,
+    label = cases.value.find(item => item.id === id)?.label;
   error.value = '';
   try {
     const saved = !open || (await interactivePanel.value?.saveDrafts()) !== false;
@@ -759,7 +760,7 @@ async function moveToTrash(id: string) {
     if (open && generation === caseGeneration) await closeCase(id, '');
     else await refreshCases();
     libraryStamp.value++;
-    const message = trashMessage(result) + (saved ? '' : ' Your latest marks could not be saved.');
+    const message = trashMessage(result, label) + (saved ? '' : ' Your latest marks could not be saved.');
     trashOffer.value = { id, message, reopen: open, stopped: result.jobs_stopped };
     clearTimeout(trashOfferTimer);
     trashOfferTimer = window.setTimeout(() => (trashOffer.value = undefined), 10_000);
