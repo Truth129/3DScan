@@ -95,8 +95,7 @@ The view is `{mode, user, setup_required}`:
 
 Each username gets three free failures, then waits of 1, 2, 4, 8 and 16 seconds, then 30 seconds. A
 wait refuses without checking the password and never locks the account. At most two sign-ins hash
-at once and 20 wait for a turn. One that waits over a second, or finds 20 waiting, also gets 429,
-with N of 1.
+at once. One that waits over a second for a turn also gets 429, with N of 1.
 
 ### Access rules
 

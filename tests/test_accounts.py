@@ -1,9 +1,11 @@
 """Accounts, passwords, sessions, cookies, the audit log and the sign-in mode."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 import secrets
 import sqlite3
+import threading
 import time
 from types import SimpleNamespace
 
@@ -186,25 +188,33 @@ def test_the_throttle_table_is_bounded_oldest_out(rig):
     assert len(rig.accounts.throttle.entries) == 4096 and "name0" not in rig.accounts.throttle.entries and "name4096" in rig.accounts.throttle.entries
 
 
-def test_only_two_hashes_run_at_once(rig):
-    rig.accounts.hashing.acquire()
-    rig.accounts.hashing.acquire()
-    try:
-        response = sign_in(rig)
-    finally:
-        rig.accounts.hashing.release()
-        rig.accounts.hashing.release()
-    assert response.status_code == 429 and response.headers["retry-after"] == "1"
+def test_two_hashes_run_at_once_and_any_number_wait_their_turn(rig, monkeypatch):
+    lock, running, peaks = threading.Lock(), [], []
+
+    def verify(password, stored):
+        with lock:
+            running.append(password)
+            peaks.append(len(running))
+        time.sleep(0.005)
+        with lock:
+            running.remove(password)
+        return True
+
+    monkeypatch.setattr(identity, "verify_password", verify)
+
+    async def burst():
+        return await asyncio.gather(*(rig.accounts.queued_sign_in("reader", "any") for _ in range(30)))
+
+    assert len(asyncio.run(burst())) == 30 and max(peaks) == 2
 
 
-def test_a_flood_of_attempts_can_hold_only_so_many_threads(rig):
-    for _ in range(20):
-        rig.accounts.waiting.acquire()
+def test_no_free_slot_refuses_only_after_a_wait(rig):
+    # At once, a refused attacker could retry at once and keep every correct password out.
+    rig.accounts.hashing = asyncio.Semaphore(0)
+    started = time.monotonic()
     response = sign_in(rig)
     assert response.status_code == 429 and response.headers["retry-after"] == "1"
-    # One free place admits a correct password, and each attempt gives its place back.
-    rig.accounts.waiting.release()
-    assert sign_in(rig).status_code == 200 and sign_in(rig).status_code == 200
+    assert time.monotonic() - started >= 1
 
 
 def test_an_expired_session_is_refused_and_removed_at_the_next_sign_in(rig):

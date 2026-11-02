@@ -1,10 +1,11 @@
-"""Signing in and out. Handlers are plain def, so scrypt stays off the event loop."""
+"""Signing in and out. Only sign_in is async, to queue on the event loop; scrypt stays off it."""
 
 import re
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import identity
 from .access import COOKIE, SECURE_COOKIE, cleared_cookie, session_cookie
@@ -30,7 +31,7 @@ def add_routes(app, service):
         return view(identity.current())
 
     @app.post("/api/session")
-    def sign_in(body: SignIn, request: Request):
+    async def sign_in(body: SignIn, request: Request):
         if not password_mode:
             raise ValueError("Sign-in is off on this workstation")
         https = urlsplit(request.headers.get("origin", "")).scheme == "https"
@@ -38,14 +39,14 @@ def add_routes(app, service):
         if not https and _host_name(request.headers.get("host", "")) not in LOOPBACK_HOSTS:
             raise HTTPException(403, "Sign in through the HTTPS address")
         try:
-            token, principal = accounts.sign_in(body.username, body.password.get_secret_value(), body.shared_device)
+            token, principal = await accounts.queued_sign_in(body.username, body.password.get_secret_value(), body.shared_device)
         except TooManyAttempts as exc:
             detail = f"Too many attempts. Try again in {exc.seconds} seconds."
             raise HTTPException(429, detail, headers={"Retry-After": str(exc.seconds)}) from None
         except WrongPassword:
             raise HTTPException(401, "Wrong username or password") from None
         cookie = session_cookie(SECURE_COOKIE if https else COOKIE, token, body.shared_device)
-        return JSONResponse(view(principal), headers={"Set-Cookie": cookie})
+        return JSONResponse(await run_in_threadpool(view, principal), headers={"Set-Cookie": cookie})
 
     @app.delete("/api/session")
     def sign_out(request: Request):

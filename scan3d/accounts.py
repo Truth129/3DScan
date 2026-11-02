@@ -4,6 +4,7 @@ All SQL on the sign-in tables lives here, except the case lists and the grant in
 `store`, which are part of writing and reading a case.
 """
 
+import asyncio
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -13,6 +14,8 @@ import secrets
 import sqlite3
 import threading
 import time
+
+from starlette.concurrency import run_in_threadpool
 
 from . import identity
 from .errors import NotFound
@@ -88,11 +91,7 @@ class Accounts:
         self.store = store
         self.throttle = _Throttle()
         # Each hash takes 128 MiB and a core, so a burst of attempts must not hold many.
-        self.hashing = threading.BoundedSemaphore(2)
-        # An attempt waits for a slot on one of the 40 worker threads, so a flood could otherwise
-        # hold them all. Attempts must still wait: if a busy slot refused at once, ten attackers
-        # would keep both busy and every correct password would be refused.
-        self.waiting = threading.BoundedSemaphore(20)
+        self.hashing = asyncio.Semaphore(2)
 
     def add_user(self, username, password, display_name=None):
         """Every account is an administrator with the archive until members exist."""
@@ -166,32 +165,37 @@ class Accounts:
         if seconds := self.throttle.remaining(key):
             raise TooManyAttempts(seconds)
 
+    async def queued_sign_in(self, username, password, shared_device=False):
+        """Run `sign_in` in a hashing slot, waiting up to a second for one.
+
+        The wait is on the event loop, so a flood holds no worker thread. It has to be a wait: if a
+        busy slot refused at once, a refused attacker could retry at once and keep both slots busy.
+        """
+        self._refuse_during_wait(username.casefold())
+        try:
+            async with asyncio.timeout(1):
+                await self.hashing.acquire()
+        except TimeoutError:
+            raise TooManyAttempts(1) from None
+        try:
+            return await run_in_threadpool(self.sign_in, username, password, shared_device)
+        finally:
+            self.hashing.release()
+
     def sign_in(self, username, password, shared_device=False):
         """Return (token, principal), or raise WrongPassword or TooManyAttempts."""
         key = username.casefold()
+        # Attempts queue for a slot, and one that failed while this one queued sets a wait.
         self._refuse_during_wait(key)
-        if not self.waiting.acquire(blocking=False):
-            raise TooManyAttempts(1)
-        try:
-            admitted = self.hashing.acquire(timeout=1)
-        finally:
-            self.waiting.release()
-        if not admitted:
-            raise TooManyAttempts(1)
-        try:
-            # Attempts queue for a slot, and one that failed while this one queued sets a wait.
-            self._refuse_during_wait(key)
-            account = None
-            if identity.valid_username(username):
-                with self.store.connection() as con:
-                    account = con.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-            if account is None or account["disabled_at"] is not None or account["password_hash"] is None:
-                identity.burn_password(password)
-                accepted = False
-            else:
-                accepted = identity.verify_password(password, account["password_hash"])
-        finally:
-            self.hashing.release()
+        account = None
+        if identity.valid_username(username):
+            with self.store.connection() as con:
+                account = con.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        if account is None or account["disabled_at"] is not None or account["password_hash"] is None:
+            identity.burn_password(password)
+            accepted = False
+        else:
+            accepted = identity.verify_password(password, account["password_hash"])
         if not accepted:
             self.throttle.failed(key)
             self.audit("session.sign_in_failed", target=account["id"] if account else None)
