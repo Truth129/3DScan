@@ -139,7 +139,8 @@ and adds milliseconds to every write.
 removes sessions, so a restore revives no sign-in.
 
 `case_opened` holds when each account last opened each case, which orders that account's list. A
-`trash` row hides its case and nothing on disk moves, so a restored case is exactly as it was.
+`trash` row hides its case and nothing on disk moves, so a restored case keeps its files and
+revisions.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.

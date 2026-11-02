@@ -445,8 +445,9 @@ that does not exist answers 404 `Case not found`.
 **`GET /api/trash`** lists this account's cases in Trash, last trashed first. Each is a Case with
 `trashed_at`.
 
-**`POST /api/trash/{id}/restore`** returns the Case as it was, and stopped jobs stay cancelled. A
-case that is not yours, or is not in Trash, answers 404 `Case not found`.
+**`POST /api/trash/{id}/restore`** returns the Case. Stopped jobs stay cancelled, so an import in
+progress comes back as `import_cancelled`. A case that is not yours, or is not in Trash, answers 404
+`Case not found`.
 
 **`GET /api/sizes`** returns `{sizes}`, allocated bytes by case ID for this account's cases, including
 any in Trash. Sizes are measured on each request and leave out shared caches.
