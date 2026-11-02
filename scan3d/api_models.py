@@ -119,6 +119,10 @@ class Activate(Input):
     revision_id: str
 
 
+class CaseRename(Input):
+    label: str = Field(max_length=128)
+
+
 class Review(Input):
     review_status: Literal["unreviewed", "reviewed", "corrected"]
 

@@ -77,6 +77,7 @@ RULES = {
     ("DELETE", "/api/imports/{upload_id}"): Rule("upload"),
     ("POST", "/api/trash/{case_id}/restore"): Rule("trashed"),
     ("GET", "/api/cases/{case_id}"): Rule("case", "case.open"),
+    ("PATCH", "/api/cases/{case_id}"): Rule("case", "case.rename"),
     ("GET", f"{_REVISION}/slicer.zip"): Rule("case", "export.slicer"),
     ("GET", f"{_REVISION}/export.html"): Rule("case", "export.html"),
     ("POST", f"{_REVISION}/export.html"): Rule("case", "export.html"),

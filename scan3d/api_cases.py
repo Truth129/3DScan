@@ -6,7 +6,7 @@ from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import identity
-from .api_models import Activate, DicomSegExport, Process, Refine, Review, Segment
+from .api_models import Activate, CaseRename, DicomSegExport, Process, Refine, Review, Segment
 from .errors import NotFound
 from .store import public_case, public_job, public_revision
 
@@ -20,6 +20,10 @@ def add_routes(app, service):
     @app.get("/api/cases/{case_id}")
     def case(case_id: str):
         return public_case(service.store.get("cases", case_id), service.settings)
+
+    @app.patch("/api/cases/{case_id}")
+    def rename_case(case_id: str, body: CaseRename):
+        return public_case(service.store.rename_case(case_id, body.label), service.settings)
 
     @app.post("/api/cases/{case_id}/open")
     def mark_opened(case_id: str):

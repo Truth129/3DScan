@@ -292,6 +292,27 @@ class Store:
                 raise NotFound("Case not found")
             Accounts._write_audit(con, "case.restore", actor_id, case_id)
 
+    def rename_case(self, case_id, label):
+        from .uploads import ImportConflict
+
+        safe_id(case_id)
+        label = label.strip()
+        if not label or len(label) > 128 or any(ord(char) < 32 or ord(char) == 127 for char in label):
+            raise ValueError("A case name must contain 1 to 128 printable characters")
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM cases WHERE id=?", (case_id,)).fetchone()
+            if row is None:
+                raise NotFound("Case not found")
+            case = json.loads(row["data"])
+            # An import holds its record in memory and saves it whole at the end, which would undo a new name.
+            if case.get("status") == "importing":
+                raise ImportConflict("This case is still importing. Rename it when the import finishes.")
+            case["label"] = label
+            con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case_id))
+            self.summarize_case(con, case)
+        return case
+
     def case_dir(self, case_id):
         path = self.directory / "cases" / safe_id(case_id)
         path.mkdir(parents=True, exist_ok=True)
@@ -363,13 +384,22 @@ class Store:
         return asset
 
     def activate(self, case_id, revision_id):
-        self.revision(case_id, revision_id)
-        case = self.get("cases", case_id)
-        case["active_revision_id"] = revision_id
-        case["status"] = "ready"
         acquisition = self.revision(case_id, revision_id).get("acquisition")
-        case.update(selected_series_uid=acquisition.get("series_uid") if acquisition else None, phase=acquisition.get("phase") if acquisition else None)
-        return self.save("cases", case)
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            row = con.execute("SELECT data FROM cases WHERE id=?", (case_id,)).fetchone()
+            if row is None:
+                raise NotFound("Case not found")
+            case = json.loads(row["data"])
+            case.update(
+                active_revision_id=revision_id,
+                status="ready",
+                selected_series_uid=acquisition.get("series_uid") if acquisition else None,
+                phase=acquisition.get("phase") if acquisition else None,
+            )
+            con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case_id))
+            self.summarize_case(con, case)
+        return case
 
     def commit_revision(self, revision, job=None, expected_active_revision_id=None, review_guard=None):
         """Revision visibility, case activation and job completion are one transaction."""

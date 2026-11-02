@@ -1,4 +1,4 @@
-"""The case list and Trash, on synthetic records: nothing in Trash shows anywhere, and nothing on disk moves."""
+"""The case list, rename and Trash, on synthetic records: nothing in Trash shows anywhere, and nothing on disk moves."""
 
 import json
 from types import SimpleNamespace
@@ -37,6 +37,11 @@ def finished_upload(service, case_id):
     folder.mkdir(parents=True)
     (folder / "state.json").write_text(json.dumps({"case_id": case_id, "owner_id": None}))
     return folder.name
+
+
+def imported(service):
+    """A bare case past its import, which is what Rename accepts."""
+    return service.store.save("cases", dict(service.new_case("Synthetic"), status="imported"))["id"]
 
 
 def absent(response, detail):
@@ -189,3 +194,38 @@ def test_a_job_that_starts_after_trash_ends_cancelled(tmp_path):
     service.execute(service.store.claim())
     assert service.store.get("jobs", job["id"])["status"] == "cancelled"
     assert len(service.store.list("revisions", case["id"])) == 1
+
+
+def test_trash_restore_and_rename_audit_ids_only(rig):
+    case_id = imported(rig.service)
+    rig.owner.patch(f"/api/cases/{case_id}", json={"label": "Synthetic private name"})
+    rig.owner.post(f"/api/cases/{case_id}/trash")
+    rig.owner.post(f"/api/trash/{case_id}/restore")
+    with rig.service.store.connection() as con:
+        rows = [tuple(row) for row in con.execute("SELECT actor_id,action,case_id,target,detail FROM audit_events WHERE case_id=? ORDER BY seq", (case_id,))]
+    assert rows == [(rig.owner.user_id, action, case_id, None, "{}") for action in ("case.rename", "case.trash", "case.restore")]
+
+
+def test_rename_updates_the_list_and_the_record(rig):
+    case_id = imported(rig.service)
+    response = rig.owner.patch(f"/api/cases/{case_id}", json={"label": "  Synthetic renamed  "})
+    assert response.status_code == 200 and response.json()["label"] == "Synthetic renamed"
+    assert rig.service.store.get("cases", case_id)["label"] == "Synthetic renamed"
+    assert next(case for case in rig.owner.get("/api/cases").json() if case["id"] == case_id)["label"] == "Synthetic renamed"
+
+
+def test_rename_refuses_an_empty_or_unprintable_name(rig):
+    case_id = imported(rig.service)
+    for label in ("", "   ", "Synthetic\x07name", "Synthetic\x7fname"):
+        response = rig.owner.patch(f"/api/cases/{case_id}", json={"label": label})
+        assert response.status_code == 400 and response.json() == {"detail": "A case name must contain 1 to 128 printable characters"}
+    assert rig.owner.patch(f"/api/cases/{case_id}", json={"label": "x" * 129}).status_code == 422
+    with pytest.raises(ValueError, match="1 to 128"):
+        rig.service.store.rename_case(case_id, "x" * 129)
+    assert rig.service.store.get("cases", case_id)["label"] == "Synthetic"
+
+
+def test_rename_waits_for_an_import(rig):
+    case_id = rig.service.new_case("Synthetic")["id"]
+    response = rig.owner.patch(f"/api/cases/{case_id}", json={"label": "Synthetic renamed"})
+    assert response.status_code == 409 and response.json() == {"detail": "This case is still importing. Rename it when the import finishes."}

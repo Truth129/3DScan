@@ -273,6 +273,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `GET /api/interactive/status`                        | nnInteractive state and inference paths |
 | `GET /api/agreement`                                 | Pooled AI-agreement report              |
 | `GET /api/cases`, `GET /api/cases/{id}`              | Case records                            |
+| `PATCH /api/cases/{id}`                              | [Library](#library): rename             |
 | `POST /api/cases/{id}/open`                          | [Library](#library): record an open     |
 | `POST /api/cases/{id}/trash`, `GET /api/trash`, `POST /api/trash/{id}/restore` | Move to Trash, list it, restore |
 | `POST /api/cases/demo`, `.../import`, `.../import-local` | Phantom, multipart or local import  |
@@ -422,6 +423,14 @@ Image-only revisions are refused.
 ## Library
 
 **`GET /api/cases`** lists the account's cases, last opened first, then newest.
+
+**`PATCH /api/cases/{id}`** takes `{label}` and returns the Case. The label is trimmed, and a body
+over 128 characters is a 422.
+
+- An empty name or a control character answers 400 `A case name must contain 1 to 128 printable
+  characters`.
+- While `status` is `importing` it answers 409 `This case is still importing. Rename it when the
+  import finishes.`
 
 **`POST /api/cases/{id}/open`** records an open for this account and returns `{id}`. It is the only
 thing that moves a case up the list. With sign-in off, a case that does not exist answers 404
