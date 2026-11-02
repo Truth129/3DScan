@@ -270,7 +270,7 @@ describe('Trash', () => {
     fill(view.search(), 'knee');
     await settled();
     expect(view.text()).toContain('No cases match.');
-    fill(view.search(), 'old');
+    fill(view.search(), 'l');
     await settled();
     press(view.search(), 'Enter');
     expect(view.rows()).toHaveLength(1);
