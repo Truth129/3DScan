@@ -665,6 +665,9 @@ async function openCase(id: string, returning = false) {
     localStorage.setItem('scan3d-case', id);
     // The list order must not be able to fail an open.
     void api.markOpened(id).catch(() => {});
+    // The Library shows this list before its own read answers, and a row must not jump when it does.
+    const row = cases.value.find(item => item.id === id);
+    if (row) cases.value = [{ ...row, opened_at: new Date().toISOString() }, ...cases.value.filter(item => item !== row)];
     if (next.active_revision_id) await loadRevision(id, next.active_revision_id, generation);
     if (generation !== caseGeneration || !alive) return;
     const pending = await recoverCaseJob(id, localStorage.getItem(`scan3d-job:${id}`), api);

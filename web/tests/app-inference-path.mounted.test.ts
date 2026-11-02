@@ -691,6 +691,18 @@ describe('the Library', () => {
     expect(stored.get('scan3d-case')).toBe('other');
     expect(root.named('case-toolbar')).toBeDefined();
   });
+  it('puts an opened case first before the next list read answers', async () => {
+    workstation([amd]);
+    vi.mocked(api.cases).mockImplementation(async () => [scan, { ...scan, id: 'other', label: 'OTHER' }]);
+    const root = await start();
+    await press(root.named('case-button'));
+    await press(root.button('OTHER'));
+    vi.mocked(api.cases).mockReturnValue(new Promise(() => {}));
+    await press(root.named('case-button'));
+    const [first] = root.all.filter(node => node.props.class === 'case-row-open');
+    expect(first.content).toContain('OTHER');
+    expect(first.content).toContain('Opened');
+  });
   it('opens a new case though the list cannot be read', async () => {
     const { stored } = workstation([amd]);
     stored.delete('scan3d-case');
