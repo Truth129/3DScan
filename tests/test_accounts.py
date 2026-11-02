@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import secrets
 import sqlite3
+import time
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -223,6 +224,33 @@ def test_a_session_slides_at_most_every_ten_minutes_and_keeps_its_cookie_name(ri
     slid = rig.http.get("/api/cases")
     assert slid.headers["set-cookie"] == f"scan3d_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000"
     assert datetime.fromisoformat(rows(rig, "SELECT expires_at FROM sessions")[0][0]) > datetime.now(timezone.utc) + timedelta(days=29)
+
+
+def test_a_burst_of_reads_slides_a_session_once(rig, monkeypatch):
+    token = sign_in(rig).headers["set-cookie"].split(";")[0].split("=", 1)[1]
+    session_time(rig, last_seen_at=ago(minutes=11))
+    slide = rig.accounts._slide
+
+    def behind_another_read(*arguments):
+        # Both reads saw the old time, and the other one writes first.
+        monkeypatch.setattr(rig.accounts, "_slide", slide)
+        assert rig.accounts.principal(token).slid
+        return slide(*arguments)
+
+    monkeypatch.setattr(rig.accounts, "_slide", behind_another_read)
+    assert not rig.accounts.principal(token).slid
+
+
+def test_a_held_write_lock_neither_delays_nor_fails_a_read(rig):
+    token = sign_in(rig).headers["set-cookie"].split(";")[0].split("=", 1)[1]
+    session_time(rig, last_seen_at=ago(minutes=11))
+    with rig.store.connection() as con:
+        con.execute("BEGIN IMMEDIATE")
+        started = time.monotonic()
+        principal = rig.accounts.principal(token)
+        assert time.monotonic() - started < 5
+    assert principal.id == rig.user_id and not principal.slid
+    assert rig.accounts.principal(token).slid
 
 
 def test_signing_out_on_a_request_that_slid_still_clears_the_cookie(rig):

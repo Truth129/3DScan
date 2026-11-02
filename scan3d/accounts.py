@@ -216,12 +216,25 @@ class Accounts:
             slid = False
             # A shared device has a hard cap, so it never moves.
             if not row["shared_device"] and moment - datetime.fromisoformat(row["last_seen_at"]) >= SLIDE_INTERVAL:
-                slid = bool(
-                    con.execute(
-                        "UPDATE sessions SET last_seen_at=?,expires_at=? WHERE token_hash=?", (_stamp(moment), _stamp(moment + SESSION_LIFETIME), hashed)
-                    ).rowcount
-                )
+                slid = self._slide(con, hashed, row["last_seen_at"], moment)
         return self._principal(row, hashed, row["shared_device"], slid)
+
+    @staticmethod
+    def _slide(con, hashed, seen, moment):
+        """Move a session on, if nothing else did and the write lock is free.
+
+        A plain read must never wait on the lock to keep a session fresh. Losing costs nothing,
+        because a later request slides it instead, and only the first of a burst commits.
+        """
+        con.execute("PRAGMA busy_timeout=0").fetchall()
+        try:
+            changed = con.execute(
+                "UPDATE sessions SET last_seen_at=?,expires_at=? WHERE token_hash=? AND last_seen_at=?",
+                (_stamp(moment), _stamp(moment + SESSION_LIFETIME), hashed, seen),
+            ).rowcount
+        except sqlite3.OperationalError:
+            return False
+        return bool(changed)
 
     def end_session(self, hashed):
         with self.store.connection() as con:
