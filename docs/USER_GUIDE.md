@@ -520,6 +520,9 @@ restore.
 MRI is off by default. Set `SCAN3D_MODALITIES=CT,MR` and restart to offer static 3D MR series. Labels
 change to **Open MR →** and **Segment MR…**, and `total_mr` is the default task.
 
+One phase of a dynamic scan imports as a static volume when it is its own series. A series that
+holds several phases is refused.
+
 MR signal values are not HU, so review each sequence separately. MR uses Three.js, and DICOM SEG
 import and export are CT only.
 

@@ -174,6 +174,65 @@ def test_mr_legal_empty_optional_and_type2_values_do_not_invent_dimensions(tmp_p
         assert record["echo_time_ms"] is None
 
 
+def tag_every_slice(directory, **tags):
+    for path in directory.glob("*.dcm"):
+        for attribute, value in tags.items():
+            change(path, attribute, value)
+
+
+@pytest.mark.parametrize("phase", [1, 3, 6])
+def test_mr_one_phase_exported_from_a_dynamic_scan_is_a_static_volume(tmp_path, phase):
+    source = write_mr_series(tmp_path / "source")
+    tag_every_slice(source, NumberOfTemporalPositions=6, TemporalPositionIdentifier=phase)
+    (record,) = dicom.index_dicom(source)
+    assert record["supported"] and record["warnings"] == []
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        {"NumberOfTemporalPositions": 6},
+        {"NumberOfTemporalPositions": 6, "TemporalPositionIdentifier": 7},
+        {"NumberOfTemporalPositions": 6, "TemporalPositionIdentifier": 0},
+    ],
+)
+def test_mr_phase_tags_that_do_not_prove_one_position_stay_refused(tmp_path, tags):
+    source = write_mr_series(tmp_path / "source")
+    tag_every_slice(source, **tags)
+    (record,) = dicom.index_dicom(source)
+    assert not record["supported"] and "Dynamic/cine" in record["unsupported_reason"]
+
+
+def test_mr_series_holding_several_phases_stays_refused(tmp_path):
+    source = write_mr_series(tmp_path / "source", count=6)
+    tag_every_slice(source, NumberOfTemporalPositions=2, TemporalPositionIdentifier=1)
+    for path in sorted(source.glob("*.dcm"))[3:]:
+        change(path, "TemporalPositionIdentifier", 2)
+    (record,) = dicom.index_dicom(source)
+    assert not record["supported"] and "Dynamic/cine" in record["unsupported_reason"]
+
+
+def test_mr_repeated_positions_stay_refused_when_every_slice_names_one_phase(tmp_path):
+    """Wrong phase tags must not let two phases through as one volume."""
+    source = write_mr_series(tmp_path / "source", count=6)
+    tag_every_slice(source, NumberOfTemporalPositions=2, TemporalPositionIdentifier=1)
+    for path in sorted(source.glob("*.dcm"))[3:]:
+        position = pydicom.dcmread(source / f"{int(path.stem) - 3:03d}.dcm").ImagePositionPatient
+        change(path, "ImagePositionPatient", position)
+    (record,) = dicom.index_dicom(source)
+    assert not record["supported"] and "Repeated slice positions" in record["unsupported_reason"]
+
+
+@pytest.mark.skipif(not shutil.which("dcm2niix"), reason="Native dcm2niix is not installed")
+@pytest.mark.parametrize("manufacturer", ["Philips Medical Systems", "SIEMENS", "GE MEDICAL SYSTEMS"])
+def test_real_mr_conversion_of_one_phase_stays_one_3d_volume(tmp_path, manufacturer):
+    source = write_mr_series(tmp_path / "source")
+    tag_every_slice(source, NumberOfTemporalPositions=6, TemporalPositionIdentifier=3, Manufacturer=manufacturer)
+    (record,) = dicom.index_dicom(source)
+    image = nib.load(dicom.convert_series(record["files"], tmp_path / "output"))
+    assert sorted(image.shape) == [5, 10, 12]
+
+
 def test_mr_missing_and_empty_optional_values_have_the_same_unknown_meaning(tmp_path):
     source = write_mr_series(tmp_path / "source")
     for path in source.glob("*.dcm"):

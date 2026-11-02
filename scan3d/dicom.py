@@ -466,13 +466,21 @@ def _validate_conventional_mr(items, *, enhanced_frames=False, source_frame_keys
     ):
         errors.append("Diffusion, perfusion and flow-encoded MR acquisitions are unsupported")
     try:
-        counts = [
-            int(ds[attribute].value)
-            for _, ds in items
+        totals, phases, cardiac = (
+            {int(ds[attribute].value) for _, ds in items if attribute in ds and not _unknown_optional_value(ds[attribute].value)}
             for attribute in ("NumberOfTemporalPositions", "TemporalPositionIdentifier", "CardiacNumberOfImages")
-            if attribute in ds and not _unknown_optional_value(ds[attribute].value)
-        ]
-        dynamic = any(count != 1 for count in counts)
+        )
+        # One phase exported alone keeps its "k of N" tags, so N > 1 is not a second
+        # dimension by itself. Every slice must name the same valid position, though:
+        # without an identifier, this series cannot be told from one holding all N.
+        dynamic = (
+            bool(cardiac - {1})
+            or len(totals) > 1
+            or len(phases) > 1
+            or any(value < 1 for value in totals | phases)
+            or any(phase > total for phase in phases for total in totals)
+            or (max(totals, default=1) > 1 and not phases)
+        )
     except (ValueError, TypeError, OverflowError):
         dynamic = True
     if dynamic:
