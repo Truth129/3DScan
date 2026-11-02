@@ -391,7 +391,13 @@ class OrthancImports:
                 frame_uid = self._verify(directory, snapshot, manifest, cancelled=cancelled)
                 series = index_dicom(directory)
                 if len(series) != 1 or series[0]["uid"] != snapshot.series_uid or not series[0]["supported"]:
-                    raise ValueError("The selected DICOM series cannot form a supported reference image; check its acquisition geometry")
+                    # Reasons name rules and DICOM attributes, never a value from the scan.
+                    reasons = "; ".join(filter(None, (row["unsupported_reason"] for row in series)))
+                    raise ValueError(
+                        f"The selected DICOM series cannot form a supported reference image: {reasons}"
+                        if reasons
+                        else "The selected DICOM series cannot form a supported reference image; check its acquisition geometry"
+                    )
                 service.check_cancel(job)
                 destination = service.store.case_dir(job["case_id"]) / "sources" / job["id"] / "dicom"
                 destination.parent.mkdir(parents=True, exist_ok=True)

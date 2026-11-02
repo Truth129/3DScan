@@ -468,6 +468,22 @@ def test_manifest_provenance_is_checked_against_actual_source_content(rig, mutat
     assert not rig.service.store.get("cases", job["case_id"]).get("source_dir")
 
 
+def test_a_refused_series_reports_the_validators_own_reason(rig):
+    entry = rig.archive.snapshot_doc["instances"][-1]
+    dataset = pydicom.dcmread(io.BytesIO(rig.archive.files[entry["id"]]))
+    dataset.ImagePositionPatient = [0, 0, 500]
+    output = io.BytesIO()
+    dataset.save_as(output, enforce_file_format=True)
+    rig.archive.files[entry["id"]] = output.getvalue()
+    entry["size"] = len(output.getvalue())
+    rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
+    job = start(rig).json()
+    result = execute_cpu(rig, job["id"])
+    assert result["status"] == "failed"
+    assert result["error"] == "The selected DICOM series cannot form a supported reference image: Nonuniform slice spacing or missing slices"
+    assert not rig.service.store.get("cases", job["case_id"]).get("source_dir")
+
+
 def test_transfer_failure_keeps_original_source_unpublished_and_can_retry(rig):
     rig.archive.download_error = OrthancError("The synthetic DICOM transfer was interrupted.")
     job = start(rig).json()
