@@ -72,6 +72,11 @@ A case in Trash still uses disk space, and deleting it for good is not available
 account. Moving a case to Trash stops its jobs and they do not restart, but a send Orthanc has
 started finishes. While a case is in Trash, importing it from Orthanc again makes a new case.
 
+**Storage.** Each row shows the size of its case. An admin also has the **Storage** tab, with the
+totals, the free space, and every case with its owner, date and size. A case that is not yours shows
+**Not your case** in place of its name. Case sizes leave out shared caches, which several cases can
+use at once.
+
 If a case goes away while you have it open, the page says so and returns to the Library, within a
 minute or when you return to the tab.
 

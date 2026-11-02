@@ -1,26 +1,52 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
-import { caseDate, filterCases, statusLabel } from '../lib/library';
-import type { Case } from '../types';
+import { caseDate, filterCases, formatSize, statusLabel } from '../lib/library';
+import { session } from '../lib/session';
+import type { Case, StorageReport, StorageRow } from '../types';
 
 const props = defineProps<{ cases: Case[]; openId?: string; stamp: number; closable: boolean; importing: boolean; mrEnabled: boolean; notice: string }>();
 const emit = defineEmits<{ open: [id: string]; close: []; importScan: []; demo: []; renamed: [next: Case]; trash: [id: string]; restore: [id: string] }>();
 
 const root = ref<HTMLElement>(),
   searchField = ref<HTMLInputElement>();
-const tab = ref<'cases' | 'trash'>('cases'),
+const tab = ref<'cases' | 'trash' | 'storage'>('cases'),
   query = ref(''),
   renaming = ref(''),
   draft = ref(''),
   saving = ref(false),
   refusal = ref(''),
-  trashed = ref<Case[]>([]);
+  trashed = ref<Case[]>([]),
+  sizes = ref<Record<string, number>>(),
+  storage = ref<StorageReport>(),
+  storageError = ref('');
 const shownCases = computed(() => filterCases(props.cases, query.value)),
-  shownTrash = computed(() => filterCases(trashed.value, query.value));
+  shownTrash = computed(() => filterCases(trashed.value, query.value)),
+  // `session` is unset in App's test suites, and with sign-in off the user is an admin.
+  storageOffered = computed(() => session.value?.user?.role !== 'member'),
+  totals = computed(() => {
+    if (!storage.value) return [];
+    const { cases, trash, shared_caches, other } = storage.value.totals;
+    return [
+      ['Cases', cases],
+      ['Trash', trash],
+      ['Shared caches', shared_caches],
+      ['Other', other],
+      ['Free space', storage.value.disk.free],
+    ] as const;
+  });
 
+function sizeOf(id: string) {
+  if (!sizes.value) return '…';
+  const bytes = sizes.value[id];
+  return bytes === undefined ? '—' : formatSize(bytes);
+}
 const meta = (item: Case) =>
-  [caseDate(item.trashed_at ?? item.opened_at ?? item.created_at), statusLabel(item.status), item.synthetic ? 'Synthetic' : ''].filter(Boolean).join(' · ');
+  [caseDate(item.trashed_at ?? item.opened_at ?? item.created_at), statusLabel(item.status), sizeOf(item.id), item.synthetic ? 'Synthetic' : '']
+    .filter(Boolean)
+    .join(' · ');
+/** Only your own row has a label, so only your own row can say it is in Trash. */
+const storageName = (row: StorageRow) => `${row.label ?? 'Not your case'}${row.trashed_at ? ' · In Trash' : ''}`;
 
 /** A long list stays where it is. */
 function focusOn(element: HTMLElement | null | undefined) {
@@ -76,6 +102,31 @@ async function saveRename() {
     saving.value = false;
   }
 }
+/** Once, on mount: this walks the disk, so no poll or heartbeat reads it. */
+async function readSizes() {
+  try {
+    sizes.value = (await api.sizes()).sizes;
+  } catch {
+    sizes.value = {};
+  }
+}
+let readingStorage = false;
+async function readStorage() {
+  if (readingStorage) return;
+  readingStorage = true;
+  storageError.value = '';
+  try {
+    storage.value = await api.storage();
+  } catch (reason) {
+    storageError.value = reason instanceof Error ? reason.message : String(reason);
+  } finally {
+    readingStorage = false;
+  }
+}
+function showStorage() {
+  tab.value = 'storage';
+  void readStorage();
+}
 /**
  * The next row slides under a double-click's second press, which takes the focus before it is ignored,
  * and Enter must not then trash that row. Keyboard activation has `detail` 0.
@@ -100,6 +151,7 @@ onMounted(() => {
   // word and Enter cannot open a case behind it.
   focusSearch();
   void readTrash();
+  void readSizes();
 });
 </script>
 
@@ -110,10 +162,12 @@ onMounted(() => {
       <button :class="{ active: tab === 'trash' }" type="button" @click="tab = 'trash'">
         Trash<span v-if="trashed.length" class="tab-count">{{ trashed.length }}</span>
       </button>
+      <button v-if="storageOffered" :class="{ active: tab === 'storage' }" type="button" @click="showStorage">Storage</button>
       <button v-if="closable" type="button" class="panel-hide inspector-hide" aria-label="Close Library" title="Close Library" @click="emit('close')">×</button>
     </header>
     <div class="case-library-body">
       <input
+        v-if="tab !== 'storage'"
         ref="searchField"
         v-model="query"
         class="case-library-search"
@@ -158,7 +212,7 @@ onMounted(() => {
           </li>
         </ul>
       </template>
-      <template v-else>
+      <template v-else-if="tab === 'trash'">
         <p class="help">Cases in Trash still use disk space. Deleting them for good is not available yet.</p>
         <p v-if="!trashed.length" class="empty-search">Trash is empty.</p>
         <p v-else-if="!shownTrash.length" class="empty-search">No cases match.</p>
@@ -171,6 +225,39 @@ onMounted(() => {
             <button class="text-button" type="button" @click="bringBack(item.id, $event)">Restore</button>
           </li>
         </ul>
+      </template>
+      <template v-else>
+        <p v-if="storageError" class="case-library-error" role="alert">{{ storageError }}</p>
+        <p v-else-if="!storage" class="empty-search">Measuring storage…</p>
+        <template v-if="storage">
+          <dl class="case-library-totals">
+            <div v-for="[name, bytes] in totals" :key="name">
+              <dt>{{ name }}</dt>
+              <dd>{{ formatSize(bytes) }}</dd>
+            </div>
+          </dl>
+          <p class="help">Case sizes leave out shared caches, which several cases can use at once.</p>
+          <div class="case-storage" role="region" aria-label="Storage by case" tabindex="0">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Case</th>
+                  <th scope="col">Owner</th>
+                  <th scope="col">Created</th>
+                  <th scope="col">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, index) in storage.cases" :key="index">
+                  <th scope="row">{{ storageName(row) }}</th>
+                  <td>{{ row.owner ?? 'No owner' }}</td>
+                  <td>{{ caseDate(row.created_at) }}</td>
+                  <td>{{ formatSize(row.size) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
       </template>
       <p class="eyebrow case-library-notice">{{ notice }}</p>
     </div>

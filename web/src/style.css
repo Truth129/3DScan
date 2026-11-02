@@ -440,6 +440,63 @@ h3 {
   font-size: 13px;
   line-height: 1.8;
 }
+.case-library-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 28px;
+}
+.case-library-totals div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.case-library-totals dt {
+  color: var(--text-secondary);
+  font: 9px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.case-library-totals dd {
+  margin: 0;
+  color: var(--white);
+  font: 14px var(--mono);
+}
+.case-storage {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.case-storage:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.case-storage table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.case-storage :is(th, td) {
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  color: var(--text-secondary);
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+.case-storage thead th {
+  border-top: 0;
+  font-size: 10px;
+}
+.case-storage tbody th {
+  color: var(--white);
+}
+.case-storage :is(th, td):last-child {
+  font-family: var(--mono);
+  text-align: right;
+}
 .case-library-notice {
   text-align: center;
   text-transform: uppercase;
