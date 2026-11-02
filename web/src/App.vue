@@ -757,6 +757,7 @@ async function moveToTrash(id: string) {
   error.value = '';
   try {
     const saved = !open || (await interactivePanel.value?.saveDrafts()) !== false;
+    viewJobs.release(id);
     const result = await api.trash(id);
     // A case opened while this waited must stay open.
     if (open && generation === caseGeneration) await closeCase(id, '');
@@ -771,6 +772,7 @@ async function moveToTrash(id: string) {
     fail(reason);
     libraryStamp.value++;
     void refreshCases().catch(() => {});
+    void viewJobs.seed(id);
   }
 }
 async function restoreCase(id: string, reopen = false, stopped = 0) {
@@ -779,6 +781,7 @@ async function restoreCase(id: string, reopen = false, stopped = 0) {
   try {
     await api.restore(id);
     void refreshCases().catch(() => {});
+    void viewJobs.seed(id);
     libraryStamp.value++;
     // Loading means another case is on its way, and that one stays the person's choice.
     if (reopen && !activeCase.value && !loading.value) await openCase(id);

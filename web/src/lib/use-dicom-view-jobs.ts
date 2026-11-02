@@ -52,13 +52,13 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     timers.delete(id);
     try {
       const next = (await api.job(id)) as DicomViewExportJob;
-      if (disposed) return;
+      if (disposed || !followed.has(id)) return;
       if (pendingDicomViewExport(next)) {
         jobs.set(id, next);
         schedule(id);
       } else settle(next);
     } catch (reason) {
-      if (disposed) return;
+      if (disposed || !followed.has(id)) return;
       // The server answered that it has no such job, so nothing will ever settle it.
       // Anything else may be a restart, and the job can still finish or be interrupted.
       if (reason instanceof ApiError && [400, 404].includes(reason.status))
@@ -99,10 +99,19 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       /* The next opening of the case looks again. */
     }
   }
+  /** Trash hides a case's jobs, and its send finishes unseen. Without this the 404 reads as a lost send. */
+  function release(caseId: string) {
+    for (const id of followed) {
+      if (jobs.get(id)?.case_id !== caseId) continue;
+      followed.delete(id);
+      clearTimeout(timers.get(id));
+      timers.delete(id);
+    }
+  }
   onScopeDispose(() => {
     disposed = true;
     timers.forEach(clearTimeout);
     timers.clear();
   });
-  return { job: (id: string) => jobs.get(id), follow, seed };
+  return { job: (id: string) => jobs.get(id), follow, seed, release };
 }

@@ -592,6 +592,43 @@ describe('the Library', () => {
       await undo(root);
       expect(api.case).not.toHaveBeenCalledWith('other');
     });
+    it('lets go of a view send when its case moves, and takes it up again on Undo', async () => {
+      const timeout = setTimeout;
+      vi.stubGlobal('setTimeout', ((callback: () => void, delay?: number) => timeout(callback, delay === 1400 ? 1 : delay)) as typeof setTimeout);
+      workstation([amd]);
+      const sending = {
+        id: 'send',
+        case_id: 'other',
+        revision_id: 'prepared',
+        kind: 'orthanc_view_export',
+        status: 'running',
+        stage: 'Sending',
+        created_at: '',
+      };
+      trashing();
+      vi.mocked(api.cases).mockImplementation(async () => [other, scan]);
+      vi.mocked(api.jobs).mockImplementation(async () => [sending] as Job[]);
+      let inTrash = false;
+      vi.mocked(api.trash).mockImplementation(async id => {
+        inTrash = true;
+        return { id, jobs_stopped: 0, sends_continuing: 1 };
+      });
+      vi.spyOn(api, 'job').mockImplementation(async () => {
+        if (inTrash) throw new ApiError(404, 'Job not found');
+        return sending as Job;
+      });
+      const root = await openLibrary();
+      await press(root.button('OTHER'));
+      await settled();
+      await press(root.named('case-button'));
+      await press(root.button('Move to Trash'));
+      await new Promise(resolve => timeout(resolve, 20));
+      expect(root.content).not.toContain('can no longer be followed');
+      vi.mocked(api.jobs).mockClear();
+      inTrash = false;
+      await undo(root);
+      expect(api.jobs).toHaveBeenCalledWith('other');
+    });
     it('reopens on Undo when the list cannot be read', async () => {
       const { stored } = workstation([amd]);
       trashing();

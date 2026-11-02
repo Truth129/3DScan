@@ -80,6 +80,32 @@ describe('view export watcher', () => {
     await vi.advanceTimersByTimeAsync(14000);
     expect(poll).toHaveBeenCalledTimes(4);
   });
+  it('asks nothing about a case that goes to Trash, and a read on its way reports nothing', async () => {
+    let answer!: (reason: unknown) => void;
+    const poll = vi.spyOn(api, 'job').mockReturnValueOnce(new Promise((_, reject) => (answer = reject)));
+    const { watcher, failure } = fixture();
+    watcher.follow(job('running'));
+    await vi.advanceTimersByTimeAsync(1400);
+    watcher.release('case-a');
+    answer(new ApiError(404, 'Job not found'));
+    await vi.advanceTimersByTimeAsync(14000);
+    expect(poll).toHaveBeenCalledOnce();
+    expect(failure).not.toHaveBeenCalled();
+  });
+  it('leaves other cases alone, and follows a released job again after Undo', async () => {
+    vi.spyOn(api, 'jobs').mockResolvedValue([job('running')]);
+    vi.spyOn(api, 'job').mockImplementation(async id => job('completed', { id, result: sent }));
+    const { watcher, success } = fixture();
+    watcher.follow(job('running', { id: 'view-2', case_id: 'case-b' }));
+    watcher.follow(job('running'));
+    watcher.release('case-a');
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(api.job).toHaveBeenCalledExactlyOnceWith('view-2');
+    await watcher.seed('case-a');
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(api.job).toHaveBeenCalledWith('view-1');
+    expect(success).toHaveBeenCalledTimes(2);
+  });
   it('reports success as a toast', async () => {
     vi.spyOn(api, 'job').mockResolvedValue(job('completed', { result: archived }));
     const { watcher, success, failure } = fixture();
