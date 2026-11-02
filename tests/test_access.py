@@ -86,7 +86,7 @@ def test_another_users_case_reads_as_absent_on_every_case_route(rig):
     case_id = rig.case["id"]
     assert rig.owner.get(f"/api/cases/{case_id}").status_code == 200
     for route, method, rule in ruled_routes(rig.app):
-        if rule.kind != "case":
+        if rule.kind not in ("case", "case_archive"):
             continue
         path = route.path.replace("{case_id}", case_id)
         response = rig.other.request(method, filled(path))
@@ -201,6 +201,8 @@ def test_a_cases_archive_series_need_the_case_and_the_archive(rig):
     for response in (rig.member.get(f"/api/cases/{own}/orthanc-series"), rig.member.post(f"/api/cases/{own}/orthanc-series", json=body)):
         assert response.status_code == 403 and response.json() == {"detail": "This account cannot use the archive"}
     assert rig.member.get(f"/api/cases/{rig.case['id']}/orthanc-series").status_code == 404
+    assert rig.member.post(f"/api/cases/{own}/trash").status_code == 200
+    assert rig.member.get(f"/api/cases/{own}/orthanc-series").status_code == 404
     rig.owner.post(f"/api/cases/{rig.case['id']}/orthanc-series", json=body)
     with rig.service.store.connection() as con:
         assert con.execute("SELECT 1 FROM audit_events WHERE action='case.import' AND case_id=?", (rig.case["id"],)).fetchone()

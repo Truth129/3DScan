@@ -241,6 +241,9 @@ class SessionGate:
         else:
             principal, refusal = identity.LOCAL, None if rule else _NO_RULE
         refusal = refusal or self._hidden(rule, params)
+        # After the Trash check, so a case in Trash reads as absent here too.
+        if refusal is None and rule.kind == "case_archive" and not principal.archive_access:
+            refusal = _NO_ARCHIVE
         if refusal is None and rule.audit:
             self._audit(rule.audit, principal, params)
         return principal, refusal
@@ -271,9 +274,7 @@ class SessionGate:
         if kind == "archive":
             return None if principal.archive_access else _NO_ARCHIVE
         if kind in ("case", "case_archive", "trashed"):
-            if not self._may_open(params["case_id"], principal):
-                return (404, "Case not found")
-            return _NO_ARCHIVE if kind == "case_archive" and not principal.archive_access else None
+            return None if self._may_open(params["case_id"], principal) else (404, "Case not found")
         if kind == "job":
             job_id = params["job_id"]
             case_id = self.accounts.job_case(job_id) if _well_formed(job_id) else None
