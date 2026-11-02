@@ -8,7 +8,8 @@ import re
 import sqlite3
 import weakref
 
-from . import inference_paths
+from . import identity, inference_paths
+from .accounts import Accounts
 from .errors import NotFound
 from .fileio import atomic_json
 from .identifiers import identifier
@@ -173,7 +174,10 @@ class Store:
         return record
 
     def list(self, table, case_id=None):
-        if table not in ("cases", "revisions", "jobs", "review_sessions", "image_assets"):
+        # Cases are private to their owners, so a new global reader must fail loudly here.
+        if table == "cases":
+            raise ValueError("Read cases through visible_cases or case_summaries, with a scope")
+        if table not in ("revisions", "jobs", "review_sessions", "image_assets"):
             raise ValueError("Unknown record type")
         with self.connection() as con:
             if case_id:
@@ -187,13 +191,35 @@ class Store:
         """Call after writing a case, so the library need not parse every series' file paths."""
         con.execute("INSERT OR REPLACE INTO case_summaries VALUES (?,?)", (case["id"], json.dumps(public_case(case))))
 
-    def case_summaries(self):
-        """Every case, in the order of `list`, for `public_case`. One with no summary reads in full."""
+    def create_case(self, record):
+        """A case and its owner are one write, so a crash can never leave a new case with neither."""
+        safe_id(record["id"])
         with self.connection() as con:
-            rows = con.execute(
-                "SELECT COALESCE(s.data, c.data) AS data FROM cases c LEFT JOIN case_summaries s ON s.case_id=c.id ORDER BY c.rowid DESC"
-            ).fetchall()
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("INSERT INTO cases VALUES (?,?)", (record["id"], json.dumps(record, allow_nan=False)))
+            self.summarize_case(con, record)
+            grant_owner(con, record["id"])
+        return record
+
+    def _scoped_cases(self, columns, scope, joins=""):
+        """Newest first. A scope is EVERY_CASE or a user id; anything else is a defect, never an open filter."""
+        if scope is identity.EVERY_CASE:
+            query, values = f"SELECT {columns} FROM cases c{joins}", ()
+        elif isinstance(scope, str) and scope:
+            query, values = f"SELECT {columns} FROM cases c JOIN case_access a ON a.case_id=c.id AND a.user_id=?{joins}", (scope,)
+        else:
+            raise TypeError("A case scope is EVERY_CASE or a user id")
+        with self.connection() as con:
+            rows = con.execute(f"{query} ORDER BY c.rowid DESC", values).fetchall()
         return [json.loads(row["data"]) for row in rows]
+
+    def case_summaries(self, scope):
+        """The cases in a scope, for `public_case`. One with no summary reads in full."""
+        return self._scoped_cases("COALESCE(s.data, c.data) AS data", scope, " LEFT JOIN case_summaries s ON s.case_id=c.id")
+
+    def visible_cases(self, scope):
+        """Full records of the cases in a scope. Prefer `case_summaries` for a list."""
+        return self._scoped_cases("c.data AS data", scope)
 
     def case_dir(self, case_id):
         path = self.directory / "cases" / safe_id(case_id)
@@ -563,6 +589,7 @@ class Store:
                 payload=payload,
                 cancel_requested=False,
                 review_session_id=session_id,
+                requested_by=identity.actor_id(),
                 **({"inference_path": chosen} if chosen else {}),
             )
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
@@ -653,6 +680,7 @@ class Store:
             created_at=now(),
             payload=payload,
             cancel_requested=False,
+            requested_by=identity.actor_id(),
             **fields,
         )
         return self.save("jobs", job)
@@ -700,6 +728,19 @@ class Store:
             self.reconcile_review(review["case_id"], review["id"])
 
 
+def grant_owner(con, case_id):
+    """Own a new case, inside the transaction that writes it.
+
+    Nobody is signed in on the command line or with sign-in off, so that work goes to the oldest
+    active admin. With no admin there is no owner yet, and `adopt_orphans` settles it later. A
+    retried Orthanc import reuses its case, so the row may already be there.
+    """
+    actor = identity.actor_id()
+    owner = Accounts.oldest_admin(con) if actor in (None, identity.LOCAL.id) else actor
+    if owner:
+        con.execute("INSERT OR IGNORE INTO case_access(case_id,user_id,role,granted_by,granted_at) VALUES (?,?,'owner',?,?)", (case_id, owner, actor, now()))
+
+
 def public_case(record, settings=None):
     """Client view; with settings, series of a modality not offered here read as unavailable."""
     result = {k: v for k, v in record.items() if k not in ("source_dir", "references")}
@@ -738,7 +779,7 @@ def public_revision(record):
 
 
 def public_job(record):
-    public = {k: v for k, v in record.items() if k not in ("payload", "cancel_requested", "measurements")}
+    public = {k: v for k, v in record.items() if k not in ("payload", "cancel_requested", "measurements", "requested_by")}
     # A send Orthanc has started runs to its end, so a client must stop offering Cancel.
     if (record.get("payload") or {}).get("delivery_state"):
         public["delivery_started"] = True

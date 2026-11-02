@@ -21,6 +21,7 @@ from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from .dicom_seg_jobs import prepared_digest, series_files
 from .errors import NotFound
 from .fileio import atomic_json
+from .identity import actor_id
 from .image_assets import reference_image
 from .orthanc import OrthancError
 from .orthanc_models import DicomUID, Digest, OrthancID, Positive, SourceManifest, json_record, parse_source
@@ -460,6 +461,7 @@ class OrthancExports:
                 created_at=now(),
                 cancel_requested=False,
                 payload=payload,
+                requested_by=actor_id(),
             )
             job["result"] = {self.result_key: summarize(payload)}
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))

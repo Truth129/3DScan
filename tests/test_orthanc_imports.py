@@ -17,10 +17,11 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian
 import pytest
 
-from scan3d import dicom
+from scan3d import dicom, identity
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.errors import NotFound
+from scan3d.identity import EVERY_CASE
 from scan3d.orthanc import OrthancChanged, OrthancError, snapshot_fingerprint
 from scan3d.service import Service
 from scan3d.orthanc_models import json_record, parse_download, parse_snapshot
@@ -201,6 +202,32 @@ def execute_cpu(rig, job_id):
     return rig.service.store.get("jobs", job_id)
 
 
+def start_as(rig, user_id):
+    identity.activate(identity.Principal(user_id, "name", "Name", "admin", True))
+    try:
+        return rig.service.orthanc.start(SERIES, rig.archive.snapshot_doc["snapshot"])
+    finally:
+        identity.activate(None)
+
+
+def test_an_import_belongs_to_who_started_it_and_dedupe_grants_nobody_else(rig):
+    def owners(case_id):
+        with rig.service.store.connection() as con:
+            return sorted(row["user_id"] for row in con.execute("SELECT user_id FROM case_access WHERE case_id=?", (case_id,)))
+
+    first, second = "a" * 32, "b" * 32
+    job = start_as(rig, first)
+    assert job["requested_by"] == first and owners(job["case_id"]) == [first]
+    # The second person gets the running job back, and must gain nothing by asking.
+    assert start_as(rig, second)["id"] == job["id"] and owners(job["case_id"]) == [first]
+    # A retry reuses the failed case, which still holds no scan. Its new job needs its starter to read it.
+    rig.service.store.update_job(job["id"], status="failed")
+    retry = start_as(rig, first)
+    assert retry["case_id"] == job["case_id"] and owners(job["case_id"]) == [first]
+    rig.service.store.update_job(retry["id"], status="failed")
+    assert start_as(rig, second)["case_id"] == job["case_id"] and owners(job["case_id"]) == [first, second]
+
+
 def test_queries_remain_private_and_modality_policy_applies_before_import(rig):
     status = rig.http.get("/api/orthanc/status")
     assert status.status_code == 200 and status.json()["connected"] is True
@@ -215,7 +242,7 @@ def test_queries_remain_private_and_modality_policy_applies_before_import(rig):
     assert series.json()["series"][0]["supported"] is False
     rejected = start(rig)
     assert rejected.status_code == 400 and "not enabled" in rejected.json()["detail"]
-    assert rig.service.store.list("cases") == []
+    assert rig.service.store.visible_cases(EVERY_CASE) == []
 
 
 @pytest.mark.parametrize("error", [OrthancError("Synthetic unavailable"), NotFound("Synthetic wrong endpoint"), ValueError("Synthetic bad configuration")])
@@ -254,7 +281,7 @@ def test_concurrent_requests_and_completed_retries_reuse_one_job_and_case(rig):
     assert all(response.status_code == 200 for response in responses)
     identities = {response.json()["id"] for response in responses}
     assert len(identities) == 1
-    assert len(rig.service.store.list("cases")) == len(rig.service.store.list("jobs")) == 1
+    assert len(rig.service.store.visible_cases(EVERY_CASE)) == len(rig.service.store.list("jobs")) == 1
     job_id = next(iter(identities))
     completed = execute_cpu(rig, job_id)
     assert completed["status"] == "completed", completed
@@ -268,7 +295,7 @@ def test_receiving_or_incomplete_series_cannot_create_a_case(rig, completeness):
     rig.archive.snapshot_doc["completeness"] = completeness
     response = start(rig)
     assert response.status_code == 409 and response.headers["cache-control"] == "no-store"
-    assert rig.service.store.list("cases") == rig.service.store.list("jobs") == []
+    assert rig.service.store.visible_cases(EVERY_CASE) == rig.service.store.list("jobs") == []
 
 
 def test_changed_selection_size_limits_and_upstream_errors_have_distinct_meanings(rig):
@@ -281,7 +308,7 @@ def test_changed_selection_size_limits_and_upstream_errors_have_distinct_meaning
     rig.archive.snapshot_doc["instances"][0]["size"] = rig.settings.upload_limit + 1
     response = start(rig)
     assert response.status_code == 400 and "size limit" in response.json()["detail"]
-    assert rig.service.store.list("cases") == []
+    assert rig.service.store.visible_cases(EVERY_CASE) == []
 
 
 def test_success_promotes_exact_bytes_manifest_and_private_source_binding(rig):

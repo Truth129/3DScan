@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.fileio import extract_zip
+from scan3d.identity import EVERY_CASE
 from scan3d.service import Service
 
 
@@ -104,7 +105,7 @@ def test_invalid_operations_and_cross_origin_fail_before_job(client):
     data_dir = service.settings.data_dir
     for inside in (data_dir, data_dir / "cases" / case["id"], data_dir.parent):
         assert "outside the application's data directory" in http.post("/api/cases/import-local", json={"path": str(inside)}).json()["detail"]
-    assert len(service.store.list("cases")) == 1
+    assert len(service.store.visible_cases(EVERY_CASE)) == 1
     assert http.post("/api/cases/demo", headers={"origin": "https://unrelated.example"}).status_code == 403
     assert http.get("/api/cases", headers={"host": "unrelated.example"}).status_code == 400
     assert http.get("/api/health", headers={"host": "review.example:8443"}).status_code == 200

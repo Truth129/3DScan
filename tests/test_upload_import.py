@@ -19,6 +19,7 @@ import pytest
 from scan3d import dicom
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.identity import EVERY_CASE
 from scan3d.uploads import MAX_PARTS, Uploads
 
 
@@ -80,7 +81,7 @@ def test_folder_import_accepts_more_files_than_one_multipart_form(rig):
         response = send(rig, upload, [(name, 0, len(contents[name]), contents[name]) for name in names[first : first + upload["max_parts"]]])
         assert response.status_code == 200, response.text
     assert response.json()["received_files"] == 1001
-    assert rig.service.store.list("cases") == []
+    assert rig.service.store.visible_cases(EVERY_CASE) == []
     response = finish(rig, upload)
     assert response.status_code == 200, response.text
     case = response.json()
@@ -137,7 +138,7 @@ def test_imports_reject_unsafe_duplicate_undeclared_and_oversized_files(rig):
     assert send(rig, extra, [("IM1", 0, 4, b"1234")]).status_code == 200
     undeclared = send(rig, extra, [("IM2", 0, 4, b"5678")])
     assert undeclared.status_code == 400 and "more files than declared" in undeclared.json()["detail"]
-    assert rig.service.store.list("cases") == []
+    assert rig.service.store.visible_cases(EVERY_CASE) == []
 
 
 def test_finish_repeats_safely_and_cancel_discards_staged_files(rig):
@@ -146,7 +147,7 @@ def test_finish_repeats_safely_and_cancel_discards_staged_files(rig):
     first, second = finish(rig, upload), finish(rig, upload)
     assert first.status_code == second.status_code == 200
     assert first.json()["id"] == second.json()["id"]
-    assert [case["id"] for case in rig.service.store.list("cases")] == [first.json()["id"]]
+    assert [case["id"] for case in rig.service.store.visible_cases(EVERY_CASE)] == [first.json()["id"]]
     assert send(rig, upload, [("IM1", 0, 4, b"data")]).status_code == 409
     assert rig.http.delete(f"/api/imports/{upload['id']}").status_code == 409
 
@@ -164,7 +165,7 @@ def test_finish_repeats_safely_and_cancel_discards_staged_files(rig):
     for _ in range(2):
         response = finish(rig, failed)
         assert response.status_code == 400 and response.json()["detail"] == rig.failure["message"]
-    case = next(case for case in rig.service.store.list("cases") if case["id"] != first.json()["id"])
+    case = next(case for case in rig.service.store.visible_cases(EVERY_CASE) if case["id"] != first.json()["id"])
     assert case["status"] == "import_failed" and case["error"] == rig.failure["message"]
 
 

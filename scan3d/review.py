@@ -19,6 +19,7 @@ import numpy as np
 from .fileio import atomic_json, code_fingerprint, hash_file as _digest
 from . import __version__, imaging, inference_paths
 from .errors import NotFound
+from .identity import actor_id
 from .interactive_prompts import normalize_options, normalize_prompts
 from .relationships import (
     INDEPENDENT,
@@ -266,6 +267,7 @@ class ReviewManager:
             updated_at=now(),
             schema_version=2,
             method=method,
+            created_by=actor_id(),
         )
         # A reused draft can hold a job that has ended, which only a read settles.
         return self.get(case_id, self.store.open_review(record)["id"])
@@ -341,6 +343,7 @@ class ReviewManager:
             updated_at=now(),
             schema_version=2,
             method=method,
+            created_by=actor_id(),
         )
         return self.store.save("review_sessions", record)
 

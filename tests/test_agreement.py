@@ -24,6 +24,7 @@ from scan3d.agreement import aggregate_agreement, mask_agreement, revision_agree
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.demo import create_demo
+from scan3d.identity import EVERY_CASE
 from scan3d.service import Service
 from scan3d.store import identifier
 
@@ -470,11 +471,14 @@ def test_reports_never_modify_masks_revisions_or_provenance(history):
         return {path: path.read_bytes() for path in data.rglob("*") if path.is_file() and not path.name.startswith("scan3d.sqlite3")}
 
     def records():
-        return {table: service.store.list(table) for table in ("cases", "revisions", "jobs", "review_sessions", "image_assets")}
+        return {
+            "cases": service.store.visible_cases(EVERY_CASE),
+            **{table: service.store.list(table) for table in ("revisions", "jobs", "review_sessions", "image_assets")},
+        }
 
     before_files, before_records = files(), records()
     revision_agreement(service, case_id, corrected["id"])
-    aggregate_agreement(service)
+    aggregate_agreement(service, EVERY_CASE)
     after = files()
     assert records() == before_records
     assert {path: after[path] for path in before_files} == before_files
@@ -490,7 +494,7 @@ def test_aggregate_counts_decided_active_revisions_and_keeps_synthetic_cases_apa
     service.store.set_review_status(demo["id"], demo["active_revision_id"], "reviewed")
     history.image_case("Prepared image without segmentation")
     service.new_case("Imported series, not yet prepared")
-    summary = aggregate_agreement(service)
+    summary = aggregate_agreement(service, EVERY_CASE)
     assert summary["selection"] == {"revision": "active", "review_statuses": ["reviewed", "corrected"]}
     assert summary["cases"] == {"total": 4, "included": 2, "skipped": {"no_active_revision": 1, "no_segmentation": 1, "unreviewed": 0, "unavailable": 0}}
     real, synthetic = summary["pools"]["real"], summary["pools"]["synthetic"]
@@ -521,7 +525,7 @@ def test_aggregate_counts_decided_active_revisions_and_keeps_synthetic_cases_apa
     assert {(item["case_id"], item["pool"]) for item in summary["revisions"]} == {(case_id, "real"), (demo["id"], "synthetic")}
     # A newer, undecided revision withdraws the case until it is reviewed.
     segment_task(history, refined, "lung_vessels")
-    summary = aggregate_agreement(service)
+    summary = aggregate_agreement(service, EVERY_CASE)
     assert summary["cases"]["skipped"]["unreviewed"] == 1
     assert summary["pools"]["real"] == {"cases": 0, "excluded": 0, "summary": None, "tasks": []}
 

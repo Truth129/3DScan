@@ -9,6 +9,7 @@ import pydicom
 from pydicom.errors import InvalidDicomError
 
 from .fileio import atomic_json, code_fingerprint, hash_file
+from .identity import actor_id
 from .image_assets import assert_reference_image
 from .store import ReviewConflict, identifier, now
 
@@ -166,6 +167,7 @@ def stage_import(service, case_id, revision_id, uploads):
             created_at=now(),
             payload=payload,
             cancel_requested=False,
+            requested_by=actor_id(),
         )
         con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
     return job

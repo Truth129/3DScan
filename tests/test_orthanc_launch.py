@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from scan3d.errors import NotFound
+from scan3d.identity import EVERY_CASE
 from scan3d.orthanc import OrthancClient, OrthancError, series_summary
 from scan3d.orthanc_models import snapshot_fingerprint
 from test_orthanc import Archive, STUDY as TRANSPORT_STUDY
@@ -103,7 +104,7 @@ def test_launch_returns_only_public_current_selection_without_creating_work(laun
     assert result["study"]["id"] == STUDY
     assert result["series"] == {**series_summary(rig.archive.snapshot(SERIES)), "supported": True, "unsupported_reason": None}
     assert result["case_id"] is result["job"] is None
-    assert rig.service.store.list("cases") == rig.service.store.list("jobs") == []
+    assert rig.service.store.visible_cases(EVERY_CASE) == rig.service.store.list("jobs") == []
     for private in ('"instances"', "file_uuid", "source_key", "synthetic-user", "private-test-password", "https://synthetic.example.test"):
         assert private not in response.text
 
@@ -136,7 +137,7 @@ def test_invalid_launch_shape_never_contacts_archive(launch_rig, body):
     response = rig.http.post("/api/orthanc/launch", json=body)
     assert response.status_code == 422 and response.headers["cache-control"] == "no-store"
     assert rig.archive.calls == []
-    assert rig.service.store.list("cases") == rig.service.store.list("jobs") == []
+    assert rig.service.store.visible_cases(EVERY_CASE) == rig.service.store.list("jobs") == []
 
 
 @pytest.mark.parametrize("status", ["queued", "running"])

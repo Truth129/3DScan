@@ -163,8 +163,7 @@ class Service:
             series=[],
             references={},
         )
-        self.store.save("cases", record)
-        return record
+        return self.store.create_case(record)
 
     def finish_import(self, case, source):
         from .dicom import index_dicom

@@ -8,6 +8,7 @@ import time
 
 import pydicom
 
+from . import identity
 from .config import MODALITIES
 from .errors import NotFound
 from .fileio import atomic_json
@@ -23,7 +24,7 @@ from .orthanc_models import (
     parse_source,
     snapshot_fingerprint,
 )
-from .store import Store, identifier, now, public_job, safe_id
+from .store import Store, grant_owner, identifier, now, public_job, safe_id
 
 
 class OrthancImports:
@@ -239,9 +240,11 @@ class OrthancImports:
                 created_at=now(),
                 cancel_requested=False,
                 payload={"import_key": key, "snapshot": json_record(snapshot)},
+                requested_by=identity.actor_id(),
             )
             con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (case["id"], json.dumps(case, allow_nan=False)))
             Store.summarize_case(con, case)
+            grant_owner(con, case["id"])
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case["id"], job["status"], json.dumps(job, allow_nan=False)))
         return job
 
