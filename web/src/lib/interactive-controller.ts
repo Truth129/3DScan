@@ -26,7 +26,7 @@ const snapshot = (prompts: InteractivePrompt[], options: InteractiveOptions, rel
   relationship: normalizeRelationship(relationship),
 });
 const saved = (value: InteractiveReview) => signature(snapshot(value.prompts, value.options ?? initialOptions(), value.relationship));
-/** Every save moves a generation, but a result or a job can come with none, as a whole-mask refine does. */
+/** Saves and runs move a generation, but a draft from an older build can hold a result at none. */
 const inUse = (value: InteractiveReview) => value.generation > 0 || !!value.candidate || ['predicting', 'accepting'].includes(value.status);
 type Reader = Pick<
   typeof api,
@@ -424,10 +424,10 @@ export class InteractiveController {
     }
   }
   /**
-   * A 409 from predict can mean this page is behind, and no save may ever tell it: publishing a
-   * result moves no generation, so another tab's lock and its Re-run would never arrive. Only
+   * A 409 from predict can mean this page is behind with no newer generation to show for it: a Save
+   * moves none, and a draft from an older build can hold a lock published at this one. Only
    * `review` moves, because install() and adopt() reset the marks and their history. A newer
-   * generation holds another tab's marks, and this page's next save would overwrite them if it
+   * generation holds another tab's work, and this page's next save would overwrite it if it
    * took that generation on, so that asks for a reload instead.
    */
   private async catchUp(seen: InteractiveReview) {
@@ -457,7 +457,7 @@ export class InteractiveController {
    * Takes on a record read from the server, unless another tab's work is in it. A save sends this
    * page's marks, options and relationship at the generation it holds, so holding a newer one would
    * let that save past the server's check and overwrite the work. A generation can move with
-   * nothing in it changed, as a re-run's does at enqueue. Both sides are the server's own records,
+   * nothing in it changed, as every run's does at enqueue. Both sides are the server's own records,
    * so a mark it normalised still compares equal.
    */
   private takeOn(seen: InteractiveReview, value: InteractiveReview) {
@@ -530,6 +530,8 @@ export class InteractiveController {
       this.notify();
     } catch (reason) {
       this.error = reason instanceof Error ? reason.message : String(reason);
+      // Refused for a newer generation, which only a reload can bring, so asking again cannot pass.
+      if (reason instanceof ApiError && reason.status === 409) this.conflict = true;
       this.notify();
     }
   }

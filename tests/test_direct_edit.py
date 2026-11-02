@@ -228,7 +228,7 @@ def test_queued_and_running_direct_edits_cannot_publish_after_superseding_genera
     draft = service.reviews.create(case["id"], base["id"], base["structures"][0]["id"], method="direct")
     draft = service.reviews.update(case["id"], draft["id"], 0, [stroke()])
     queued = service.reviews.predict(case["id"], draft["id"], draft["generation"])
-    service.reviews.update(case["id"], draft["id"], draft["generation"], [])
+    service.reviews.update(case["id"], draft["id"], queued["payload"]["generation"], [])
     assert service.store.get("jobs", queued["id"])["status"] == "cancelled"
     assert service.store.claim() is None
     draft = service.reviews.get(case["id"], draft["id"])
@@ -239,7 +239,7 @@ def test_queued_and_running_direct_edits_cannot_publish_after_superseding_genera
 
     def save_then_supersede(mask, image, path):
         original(mask, image, path)
-        service.reviews.update(case["id"], draft["id"], draft["generation"], [])
+        service.reviews.update(case["id"], draft["id"], queued["payload"]["generation"], [])
 
     monkeypatch.setattr(imaging, "_save_mask", save_then_supersede)
     service.execute(claimed)

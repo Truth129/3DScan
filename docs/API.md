@@ -371,6 +371,8 @@ and returns a `review_predict` job, which applies every pending mark and publish
 a revision. With nothing pending, it needs `full_refine`, a changed relationship or `replay`. See
 [Choosing a path](#choosing-a-path).
 
+- Queuing a run moves `generation`, and publishing its result does not. A client that has not seen
+  the run gets 409, so it can neither cancel the run nor replace its result.
 - A policy-only Apply reuses the previous prediction with no inference.
 - `full_refine` (nnInteractive only) refines the whole mask from the current candidate, and can take
   longer than a local correction.
@@ -380,7 +382,7 @@ marks the new revision `corrected`. The candidate must be current and change mas
 on a still-active base. Only a direct edit of an existing segment may save empty, at 0 mL.
 
 **`POST .../reviews/{sid}/discard`** takes `{expected_generation}`, closes the draft, invalidates
-its aliases and cancels pending work.
+its aliases and cancels a pending run. A running `review_accept` refuses it with 409.
 
 Stale generations, closed or busy sessions and a changed active base return 409. Prompts and
 completed candidates survive a restart.
@@ -514,7 +516,7 @@ one more batch. On its own path, a worker that still holds those batches reuses 
 pending marks. Nothing need be pending, and a pending relationship goes with it as a model run. With
 `batches` empty, it adds nothing.
 
-- Once queued, the re-run's new generation makes the old candidate `dirty`, so it cannot be
+- Once queued, the new generation makes the old candidate `dirty`, so it cannot be
   accepted. It stays in `candidate` until the new one publishes, which also changes the draft's
   `inference_path`.
 - After a failed or cancelled re-run it stays, still `dirty`, and the draft can re-run on any

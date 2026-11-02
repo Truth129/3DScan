@@ -272,7 +272,7 @@ def test_cancelled_or_superseded_cut_cannot_publish_surfaces_or_revision(direct_
 
     def supersede(structure, *args, **kwargs):
         result = original(structure, *args, **kwargs)
-        service.reviews.update(case["id"], draft["id"], draft["generation"], [])
+        service.reviews.update(case["id"], draft["id"], queued["payload"]["generation"], [])
         return result
 
     monkeypatch.setattr(surfaces, "prepare_surface", supersede)

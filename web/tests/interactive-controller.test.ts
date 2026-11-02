@@ -35,7 +35,7 @@ function fixture(initial?: InteractiveReview, method: InteractiveMethod = 'nnint
     }),
     interactiveReview: vi.fn(async () => clone(remote!)),
     predictInteractive: vi.fn(async () => {
-      remote = { ...remote!, status: 'predicting', job_id: job.id };
+      remote = { ...remote!, generation: remote!.generation + 1, status: 'predicting', job_id: job.id };
       return job;
     }),
     acceptInteractive: vi.fn(async () => ({ ...job, kind: 'review_accept' })),
@@ -567,7 +567,7 @@ describe('a draft that moves under a job this page follows', () => {
     await vi.advanceTimersByTimeAsync(900);
   };
   async function ownJob() {
-    const { controller, reader, changed } = fixture(saved());
+    const { controller, reader, changed } = fixture(saved(0)); // Queuing the run brings it to 1.
     await controller.load();
     await controller.apply(true);
     expect(controller.working).toBe(true);
@@ -639,7 +639,7 @@ describe('a draft that moves under a job this page follows', () => {
       expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, stale]);
       expect(controller.review?.generation).toBe(1);
     });
-    it('goes on through a generation that moved with nothing in it changed, as a re-run moves it at enqueue', async () => {
+    it('goes on through a generation that moved with nothing in it changed, as a run moves it at enqueue', async () => {
       const { controller, reader } = await page();
       await reads(reader, running(2));
       expect([controller.working, controller.conflict]).toEqual([true, false]);
@@ -1862,6 +1862,15 @@ describe('direct paint and erase drafts', () => {
     expect(controller.prompts).toEqual([]);
     expect(controller.review).toBeUndefined();
     expect(controller.hasDraftChanges).toBe(false);
+  });
+
+  it('offers a reload when a discard is refused for a newer generation, because repeating it cannot pass', async () => {
+    const { controller, reader } = fixture(base());
+    await controller.load();
+    reader.discardInteractive.mockRejectedValueOnce(new ApiError(409, 'The correction draft changed; reload its current prompts'));
+    await controller.discard();
+    expect(controller.conflict).toBe(true);
+    expect(controller.review?.id).toBe('draft');
   });
 
   it('rejects adoption or creation under the wrong method instead of silently invoking AI', async () => {

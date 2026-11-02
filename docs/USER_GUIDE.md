@@ -252,10 +252,10 @@ or re-run or discard a draft that has a result. Work that needs no GPU continues
 that GPU keeps **Re-run on this GPU**, even with one GPU left. If the GPU comes back, **Check again**
 clears the message.
 
-**With a draft in two tabs**, if the other tab changed the draft, this page offers **Reload saved
-work** and saves nothing over it. If the other tab started the draft first, a mark made here is not
-saved. **Reload saved work** or **Discard draft** opens that draft and clears the mark, so place it
-again there.
+**With a draft in two tabs**, if the other tab changed or ran the draft, this page offers **Reload
+saved work** and saves nothing over it. If the other tab started the draft first, a mark made here
+is not saved. **Reload saved work** or **Discard draft** opens that draft and clears the mark, so
+place it again there.
 
 ### Add a missing structure
 

@@ -351,7 +351,8 @@ class Store:
             con.execute("BEGIN IMMEDIATE")
             review = self._review_row(con, session_id, case_id)
             self._review_generation(review, generation)
-            if review["status"] == "accepting" and not discard:
+            # Accept moves no generation, so this stops a tab that has not seen the Save, Discard included.
+            if review["status"] == "accepting":
                 raise ReviewConflict("Wait for acceptance to finish or cancel it before editing")
             if review.get("job_id"):
                 row = con.execute("SELECT data FROM jobs WHERE id=?", (review["job_id"],)).fetchone()
@@ -489,9 +490,11 @@ class Store:
                 # model on any card, so they ignore the choice, and a stale client cannot break them.
                 if review["method"] != "direct" and not policy_only:
                     chosen = self._review_path(review, inference_path, step_replay)
-                if str(generation) in review.get("candidates", {}):
-                    generation += 1
-                    review["generation"] = generation
+                # Publishing moves no generation, so this is what a tab that has not seen the run
+                # is refused on. Without it, that tab's next save would cancel the run or replace
+                # its result. Accept cannot move one, because its candidate must stay current.
+                generation += 1
+                review["generation"] = generation
             else:
                 candidate = review.get("candidate")
                 if not candidate or candidate["generation"] != generation:

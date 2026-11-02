@@ -124,7 +124,7 @@ def test_prediction_is_a_draft_and_accept_changes_only_selected_structure(exampl
     original = json.loads(json.dumps(base))
     original_bytes = {s["id"]: Path(s["mask_file"]).read_bytes() for s in base["structures"]}
     draft = candidate(example)
-    assert draft["status"] == "ready" and draft["generation"] == 1
+    assert draft["status"] == "ready" and draft["generation"] == 2
     assert service.store.get("cases", case["id"])["active_revision_id"] == base["id"]
     assert len(service.store.list("revisions", case["id"])) == 1
     summary = draft["candidate"]["summary"]
@@ -137,7 +137,7 @@ def test_prediction_is_a_draft_and_accept_changes_only_selected_structure(exampl
     published = public_review(draft)
     assert "candidates" not in published and "mask_file" not in json.dumps(published)
     assert str(service.settings.data_dir) not in json.dumps(published)
-    accepted_job = execute_next(service, service.reviews.accept(case["id"], draft["id"], 1))
+    accepted_job = execute_next(service, service.reviews.accept(case["id"], draft["id"], draft["generation"]))
     assert accepted_job["status"] == "completed", accepted_job
     corrected = service.store.revision(case["id"], accepted_job["revision_id"])
     assert corrected["source"] == "nninteractive_correction"
@@ -158,7 +158,7 @@ def test_prediction_is_a_draft_and_accept_changes_only_selected_structure(exampl
     restored = service.store.revision(case["id"], service.store.get("cases", case["id"])["active_revision_id"])
     assert restored == original
     with pytest.raises(ValueError, match="closed"):
-        service.reviews.update(case["id"], draft["id"], 1, [])
+        service.reviews.update(case["id"], draft["id"], draft["generation"], [])
 
 
 def test_prompt_undo_invalidates_current_candidate_but_retains_immutable_preview(example):
@@ -166,16 +166,16 @@ def test_prompt_undo_invalidates_current_candidate_but_retains_immutable_preview
     draft = candidate(example)
     alias = draft["candidate"]["revision_id"]
     previous_path = service.reviews.candidate_revision(case["id"], alias)["structures"][0]["mask_file"]
-    updated = service.reviews.update(case["id"], draft["id"], 1, [])
-    assert updated["generation"] == 2 and updated["candidate"] is None and updated["prompts"] == []
+    updated = service.reviews.update(case["id"], draft["id"], 2, [])
+    assert updated["generation"] == 3 and updated["candidate"] is None and updated["prompts"] == []
     assert service.reviews.candidate_revision(case["id"], alias)["structures"][0]["mask_file"] == previous_path
     with pytest.raises(ValueError, match="changed"):
-        service.reviews.update(case["id"], draft["id"], 1, [])
+        service.reviews.update(case["id"], draft["id"], 2, [])
     with pytest.raises(ValueError, match="changed"):
-        service.reviews.accept(case["id"], draft["id"], 1)
+        service.reviews.accept(case["id"], draft["id"], 2)
     with pytest.raises(ValueError, match="prompt"):
-        service.reviews.predict(case["id"], draft["id"], 2)
-    service.reviews.discard(case["id"], draft["id"], 2)
+        service.reviews.predict(case["id"], draft["id"], 3)
+    service.reviews.discard(case["id"], draft["id"], 3)
     with pytest.raises(KeyError, match="discarded"):
         service.reviews.candidate_revision(case["id"], alias)
     assert len(service.store.list("revisions", case["id"])) == 1
@@ -188,7 +188,7 @@ def test_no_change_and_empty_candidates_can_be_seen_but_not_accepted(example, mo
     draft = candidate(example)
     assert draft["candidate"] is not None
     with pytest.raises(ValueError, match=reason):
-        service.reviews.accept(case["id"], draft["id"], 1)
+        service.reviews.accept(case["id"], draft["id"], draft["generation"])
     assert service.store.get("cases", case["id"])["active_revision_id"] == base["id"]
 
 
@@ -216,11 +216,11 @@ def test_new_prompts_cancel_and_supersede_an_inflight_prediction(example):
     service, case, base, prompt = example
     draft = service.reviews.create(case["id"], base["id"], "total:liver")
     service.reviews.update(case["id"], draft["id"], 0, [prompt])
-    service.interactive_runtime = FakeRuntime(during=lambda: service.reviews.update(case["id"], draft["id"], 1, []))
+    service.interactive_runtime = FakeRuntime(during=lambda: service.reviews.update(case["id"], draft["id"], 2, []))
     job = execute_next(service, service.reviews.predict(case["id"], draft["id"], 1))
     assert job["status"] == "cancelled"
     current = service.reviews.get(case["id"], draft["id"])
-    assert current["generation"] == 2 and current["status"] == "draft" and current["candidate"] is None
+    assert current["generation"] == 3 and current["status"] == "draft" and current["candidate"] is None
     assert current["candidates"] == {}
     assert service.store.get("cases", case["id"])["active_revision_id"] == base["id"]
 
@@ -228,7 +228,7 @@ def test_new_prompts_cancel_and_supersede_an_inflight_prediction(example):
 def test_cancelled_acceptance_cannot_activate_or_close_draft(example, monkeypatch):
     service, case, base, _ = example
     draft = candidate(example)
-    job = service.reviews.accept(case["id"], draft["id"], 1)
+    job = service.reviews.accept(case["id"], draft["id"], draft["generation"])
     commit = service.store.commit_revision
 
     def cancelled_commit(revision, queued, **kwargs):
@@ -249,7 +249,7 @@ def test_active_revision_cas_protects_acceptance_after_surface_preparation(examp
     alternative = {**base, "id": identifier()}
     service.store.save("revisions", alternative)
     draft = candidate(example)
-    job = service.reviews.accept(case["id"], draft["id"], 1)
+    job = service.reviews.accept(case["id"], draft["id"], draft["generation"])
     build = service.build_revision
 
     def concurrent_activation(*args, **kwargs):
@@ -277,10 +277,10 @@ def test_restart_preserves_prompts_and_completed_candidates(example):
     assert recovered["status"] == "draft" and recovered["prompts"] == [prompt]
     assert "restarted" in recovered["error"]
     assert reopened.get("jobs", queued["id"])["status"] == "failed"
-    retry = execute_next(service, service.reviews.predict(case["id"], draft["id"], 1))
+    retry = execute_next(service, service.reviews.predict(case["id"], draft["id"], recovered["generation"]))
     assert retry["status"] == "completed"
     ready = service.reviews.get(case["id"], draft["id"])
-    service.reviews.accept(case["id"], draft["id"], 1)
+    service.reviews.accept(case["id"], draft["id"], ready["generation"])
     service.store.claim()
     reopened.recover()
     recovered = service.reviews.get(case["id"], draft["id"])
@@ -328,7 +328,7 @@ def test_review_http_candidates_reuse_ct_and_authorize_masks_frames_and_history(
             time.sleep(0.02)
         assert job["status"] == "completed", job
         current = client.get(review_url).json()
-        assert current["status"] == "ready" and current["candidate"]["generation"] == 1
+        assert current["status"] == "ready" and current["candidate"]["generation"] == 2
         assert str(service.settings.data_dir) not in json.dumps(current)
         alias = current["candidate"]["revision_id"]
         original_url, candidate_url = f"{prefix}/revisions/{base['id']}", f"{prefix}/revisions/{alias}"
@@ -371,7 +371,7 @@ def test_review_http_candidates_reuse_ct_and_authorize_masks_frames_and_history(
         assert client.get(denied + "/ct-volume").status_code == 404
         assert client.get(denied + "/mask-volume", params=query).status_code == 404
         assert client.get(f"/api/cases/{other['id']}/reviews/{draft['id']}").status_code == 404
-        assert client.post(review_url + "/discard", json={"expected_generation": 1}).status_code == 200
+        assert client.post(review_url + "/discard", json={"expected_generation": 2}).status_code == 200
         assert client.get(candidate_url).status_code == 404
         assert client.get(candidate_url + "/ct-volume").status_code == 404
 
@@ -381,20 +381,20 @@ def test_apply_boundaries_persist_only_after_publication_and_pending_undo_is_exa
     draft = candidate(example)
     assert draft["batches"] == [{"end": 1, "autozoom": True, "full_refine": False}]
     extra = dict(prompt, id="pending-2", include=True)
-    edited = service.reviews.update(case["id"], draft["id"], 1, [prompt, extra])
+    edited = service.reviews.update(case["id"], draft["id"], 2, [prompt, extra])
     assert edited["candidate"]["revision_id"] == draft["candidate"]["revision_id"]
     public = public_review(edited)
     assert public["dirty"] and public["pending_count"] == 1 and public["applied_prompt_count"] == 1
     with pytest.raises(ValueError, match="candidate"):
-        service.reviews.accept(case["id"], draft["id"], 2)
-    restored = service.reviews.update(case["id"], draft["id"], 2, [prompt])
+        service.reviews.accept(case["id"], draft["id"], 3)
+    restored = service.reviews.update(case["id"], draft["id"], 3, [prompt])
     assert not public_review(restored)["dirty"] and restored["status"] == "ready"
-    assert restored["candidate"]["generation"] == 3
+    assert restored["candidate"]["generation"] == 4
     assert restored["candidate"]["mask_file"] == draft["candidate"]["mask_file"]
     assert restored["candidate"]["revision_id"] != draft["candidate"]["revision_id"]
     assert len(service.interactive_runtime.calls) == 1
-    service.reviews.update(case["id"], draft["id"], 3, [prompt, extra])
-    job = service.reviews.predict(case["id"], draft["id"], 4)
+    service.reviews.update(case["id"], draft["id"], 4, [prompt, extra])
+    job = service.reviews.predict(case["id"], draft["id"], 5)
     assert len(service.reviews.get(case["id"], draft["id"])["batches"]) == 1
     assert job["payload"]["batches"][-1]["end"] == 2
     assert execute_next(service, job)["status"] == "completed"
@@ -405,15 +405,15 @@ def test_apply_boundaries_persist_only_after_publication_and_pending_undo_is_exa
 def test_whole_refine_gets_fresh_alias_and_options_changes_reset_replay(example):
     service, case, base, prompt = example
     draft = candidate(example)
-    full = service.reviews.predict(case["id"], draft["id"], 1, full_refine=True)
-    assert full["payload"]["generation"] == 2
+    full = service.reviews.predict(case["id"], draft["id"], 2, full_refine=True)
+    assert full["payload"]["generation"] == 3
     assert full["payload"]["batches"][-1] == {"end": 1, "autozoom": True, "full_refine": True}
     assert execute_next(service, full)["status"] == "completed"
     state = service.reviews.get(case["id"], draft["id"])
     assert state["candidate"]["revision_id"] != draft["candidate"]["revision_id"]
-    changed = service.reviews.update(case["id"], draft["id"], 2, [prompt], options={"autozoom": False, "start_empty": True})
+    changed = service.reviews.update(case["id"], draft["id"], 3, [prompt], options={"autozoom": False, "start_empty": True})
     assert changed["candidate"] is None and changed["batches"] == []
-    apply = service.reviews.predict(case["id"], draft["id"], 3)
+    apply = service.reviews.predict(case["id"], draft["id"], 4)
     assert apply["payload"]["batches"] == [{"end": 1, "autozoom": False, "full_refine": False}]
 
 
@@ -472,13 +472,13 @@ def test_http_mixed_tools_apply_once_full_refine_and_stale_generation(example):
         assert runtime.calls[0][-1]["batches"] == [{"end": 4, "autozoom": False, "full_refine": False}]
         ready = http.get(url).json()
         assert not ready["dirty"] and ready["applied_prompt_count"] == 4
-        whole = http.post(url + "/predict", json={"generation": 1, "full_refine": True})
+        whole = http.post(url + "/predict", json={"generation": 2, "full_refine": True})
         assert whole.status_code == 200, whole.text
-        stale = http.post(url + "/predict", json={"generation": 1, "full_refine": True})
+        stale = http.post(url + "/predict", json={"generation": 2, "full_refine": True})
         assert stale.status_code == 409, stale.text
         wait(http, whole.json())
         final = http.get(url).json()
-        assert final["generation"] == 2 and final["candidate"]["generation"] == 2
+        assert final["generation"] == 3 and final["candidate"]["generation"] == 3
         assert final["batches"][-1] == {"end": 4, "autozoom": False, "full_refine": True}
         assert http.get(prefix).json()["active_revision_id"] == base["id"]
         assert len(http.get(prefix + "/revisions").json()) == 1
@@ -514,7 +514,7 @@ def test_new_named_structure_stays_empty_draft_until_explicit_acceptance(example
     candidate = service.reviews.candidate_revision(case["id"], ready["candidate"]["revision_id"])
     assert candidate["parent_id"] == alias0 and len(candidate["structures"]) == len(base["structures"]) + 1
     assert service.store.get("cases", case["id"])["active_revision_id"] == base["id"]
-    accepted_job = execute_next(service, service.reviews.accept(case["id"], draft["id"], 1))
+    accepted_job = execute_next(service, service.reviews.accept(case["id"], draft["id"], ready["generation"]))
     assert accepted_job["status"] == "completed", accepted_job
     accepted = service.store.revision(case["id"], accepted_job["revision_id"])
     assert accepted["source"] == "nninteractive_new_structure" and accepted["parent_id"] == base["id"]
@@ -559,7 +559,7 @@ def test_new_structure_discard_and_empty_result_never_add_anatomy(example):
     service.reviews.update(case["id"], empty["id"], 0, [prompt])
     assert execute_next(service, service.reviews.predict(case["id"], empty["id"], 1))["status"] == "completed"
     with pytest.raises(ValueError, match="empty"):
-        service.reviews.accept(case["id"], empty["id"], 1)
+        service.reviews.accept(case["id"], empty["id"], 2)
     assert len(service.store.list("revisions", case["id"])) == 1
     assert service.store.revision(case["id"], base["id"])["structures"] == base["structures"]
 
@@ -618,7 +618,7 @@ def test_http_new_structure_empty_transport_candidate_comparison_and_atomic_save
         assert frame.status_code == 200, frame.text
         assert json.loads(frame.headers["X-CT-Frame"])["parent_offset"] is not None
         assert len(http.get(prefix + "/revisions").json()) == 1
-        save = http.post(review_url + "/accept", json={"generation": 1}).json()
+        save = http.post(review_url + "/accept", json={"generation": ready["generation"]}).json()
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             job = http.get("/api/jobs/" + save["id"]).json()
@@ -745,6 +745,38 @@ def test_a_start_leaves_a_running_job_alone_and_settles_one_that_ended(example):
     service.store.update_job(queued["id"], status="failed", error="Synthetic failure")
     settled = start(example)
     assert settled["id"] == draft["id"] and settled["status"] == "draft" and settled["error"] == "Synthetic failure"
+
+
+def test_a_tab_that_has_not_seen_a_run_can_neither_cancel_it_nor_clear_its_result(example):
+    service, case, _, prompt = example
+    draft = start(example)
+    behind = [
+        lambda: service.reviews.update(case["id"], draft["id"], 0, [prompt]),
+        lambda: service.reviews.update(case["id"], draft["id"], 0, [], options={"autozoom": False, "start_empty": False}),
+        lambda: service.reviews.discard(case["id"], draft["id"], 0),
+    ]
+    queued = service.reviews.predict(case["id"], draft["id"], 0, full_refine=True)
+    for change in behind:
+        with pytest.raises(ReviewConflict, match="draft changed"):
+            change()
+    assert not service.store.get("jobs", queued["id"])["cancel_requested"]
+    assert execute_next(service, queued)["status"] == "completed"
+    published = current(example, draft)
+    assert published["candidate"]["generation"] == published["generation"] == 1
+    for change in behind:
+        with pytest.raises(ReviewConflict, match="draft changed"):
+            change()
+    assert current(example, draft) == published
+
+
+def test_a_tab_that_has_not_seen_a_save_cannot_discard_the_draft_under_it(example):
+    service, case, _, _ = example
+    draft = candidate(example)
+    saving = service.reviews.accept(case["id"], draft["id"], draft["generation"])
+    with pytest.raises(ReviewConflict, match="Wait for acceptance"):
+        service.reviews.discard(case["id"], draft["id"], draft["generation"])
+    assert execute_next(service, saving)["status"] == "completed"
+    assert current(example, draft)["status"] == "accepted"
 
 
 def test_a_discarded_draft_is_never_returned(example):
