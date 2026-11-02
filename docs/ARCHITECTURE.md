@@ -136,9 +136,10 @@ and adds milliseconds to every write.
 
 `users`, `sessions`, `case_access` and `audit_events` are ordinary tables beside those records.
 `cases` has no owner column and there are no foreign keys. A backup keeps users and audit and
-removes sessions, so a restore revives no sign-in. `case_opened` holds when each account last opened
-each case, which orders that account's list. A `trash` row hides its case and nothing on disk moves,
-so a restored case is exactly as it was.
+removes sessions, so a restore revives no sign-in.
+
+`case_opened` holds when each account last opened each case, which orders that account's list. A
+`trash` row hides its case and nothing on disk moves, so a restored case is exactly as it was.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
