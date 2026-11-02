@@ -274,7 +274,10 @@ class SessionGate:
             case_id = self.accounts.job_case(job_id) if _well_formed(job_id) else None
             return None if case_id and self._may_open(case_id, principal) else (404, "Job not found")
         if kind == "upload":
-            found, owner, _ = upload_owner(self.uploads, params["upload_id"])
+            found, owner, case_id = upload_owner(self.uploads, params["upload_id"])
+            # Finishing again returns the case record, so once there is a case, its access decides.
+            if case_id:
+                return None if self._may_open(case_id, principal) else (404, "Upload not found")
             # Uploads from before sign-in, or from sign-in off, belong to no one, so admins may finish them.
             allowed = found and (owner == principal.id or (owner in (None, identity.LOCAL.id) and principal.is_admin))
             return None if allowed else (404, "Upload not found")

@@ -119,8 +119,8 @@ with no session gets the 401, and a signed-in one the other.
   `Job not found` or `Upload not found`.
 - A malformed case, job or upload ID is also 404 here, so a refusal never shows whether an ID
   exists.
-- A job follows its case. An upload belongs to whoever started it, and one with no owner, or
-  started with sign-in off, to any admin.
+- A job follows its case, and so does a finished upload. An unfinished upload belongs to whoever
+  started it, and one with no owner, or started with sign-in off, to any admin.
 - A session cookie on a request other than GET, HEAD or OPTIONS with no `Origin` gets 403
   `Cross-origin mutations are not allowed`.
 - A route with no rule gets 403 `This route has no access rule`, in either mode.

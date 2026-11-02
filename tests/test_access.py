@@ -151,6 +151,16 @@ def test_an_upload_with_no_real_owner_is_for_admins_only(rig, owner):
     assert rig.other.delete(f"/api/imports/{upload_id}").status_code == 200
 
 
+@pytest.mark.parametrize("owner", [None, "local"])
+def test_a_finished_upload_follows_its_case(rig, owner):
+    upload_id = start_upload(rig.owner)
+    path = rig.service.settings.data_dir / "import-uploads" / upload_id / "state.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "owner_id": owner, "case_id": rig.case["id"]}))
+    refused = rig.other.post(f"/api/imports/{upload_id}/finish")
+    assert refused.status_code == 404 and refused.json() == {"detail": "Upload not found"}
+    assert rig.owner.post(f"/api/imports/{upload_id}/finish").status_code == 200
+
+
 @pytest.mark.parametrize(
     "path, detail",
     [("/api/cases/not-a-record", "Case not found"), (f"/api/cases/{'A' * 32}", "Case not found"), ("/api/jobs/1%20OR%201%3D1", "Job not found")],
