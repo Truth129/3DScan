@@ -197,6 +197,16 @@ def test_only_two_hashes_run_at_once(rig):
     assert response.status_code == 429 and response.headers["retry-after"] == "1"
 
 
+def test_a_flood_of_attempts_can_hold_only_so_many_threads(rig):
+    for _ in range(20):
+        rig.accounts.waiting.acquire()
+    response = sign_in(rig)
+    assert response.status_code == 429 and response.headers["retry-after"] == "1"
+    # One free place admits a correct password, and each attempt gives its place back.
+    rig.accounts.waiting.release()
+    assert sign_in(rig).status_code == 200 and sign_in(rig).status_code == 200
+
+
 def test_an_expired_session_is_refused_and_removed_at_the_next_sign_in(rig):
     sign_in(rig)
     session_time(rig, expires_at=ago(seconds=1))

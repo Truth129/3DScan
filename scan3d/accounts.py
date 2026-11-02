@@ -89,6 +89,10 @@ class Accounts:
         self.throttle = _Throttle()
         # Each hash takes 128 MiB and a core, so a burst of attempts must not hold many.
         self.hashing = threading.BoundedSemaphore(2)
+        # An attempt waits for a slot on one of the 40 worker threads, so a flood could otherwise
+        # hold them all. Attempts must still wait: if a busy slot refused at once, ten attackers
+        # would keep both busy and every correct password would be refused.
+        self.waiting = threading.BoundedSemaphore(20)
 
     def add_user(self, username, password, display_name=None):
         """Every account is an administrator with the archive until members exist."""
@@ -162,7 +166,13 @@ class Accounts:
         """Return (token, principal), or raise WrongPassword or TooManyAttempts."""
         key = username.casefold()
         self._refuse_during_wait(key)
-        if not self.hashing.acquire(timeout=1):
+        if not self.waiting.acquire(blocking=False):
+            raise TooManyAttempts(1)
+        try:
+            admitted = self.hashing.acquire(timeout=1)
+        finally:
+            self.waiting.release()
+        if not admitted:
             raise TooManyAttempts(1)
         try:
             # Attempts queue for a slot, and one that failed while this one queued sets a wait.
