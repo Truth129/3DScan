@@ -81,7 +81,13 @@ describe('finding a case', () => {
     const when = new Date('2026-11-02T12:00:00Z').toLocaleDateString();
     const view = library({ cases: [scan('demo', 'Demo', { opened_at: '2026-11-02T12:00:00Z', synthetic: true })] });
     await settled();
-    expect(view.text()).toContain(`${when} · Ready · — · Synthetic`);
+    expect(view.text()).toContain(`Opened ${when} · Ready · — · Synthetic`);
+  });
+  it('says Added on a case nobody has opened', async () => {
+    const when = new Date(liver.created_at).toLocaleDateString();
+    const view = library({});
+    await settled();
+    expect(view.rows()[0].textContent).toContain(`Added ${when} · Ready`);
   });
 });
 
@@ -232,7 +238,7 @@ describe('Trash', () => {
     await settled();
     expect(view.text()).toContain('Cases in Trash still use disk space. Deleting them for good is not available yet.');
     const when = new Date(old.trashed_at!).toLocaleDateString();
-    expect(view.rows()[0].textContent).toContain(`Old${when} · Ready`);
+    expect(view.rows()[0].textContent).toContain(`OldIn Trash since ${when} · Ready`);
     expect(
       view
         .rows()[0]

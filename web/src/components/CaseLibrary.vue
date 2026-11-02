@@ -41,10 +41,13 @@ function sizeOf(id: string) {
   const bytes = sizes.value[id];
   return bytes === undefined ? '—' : formatSize(bytes);
 }
-const meta = (item: Case) =>
-  [caseDate(item.trashed_at ?? item.opened_at ?? item.created_at), statusLabel(item.status), sizeOf(item.id), item.synthetic ? 'Synthetic' : '']
-    .filter(Boolean)
-    .join(' · ');
+/** A bare date could mean any of the three. */
+function dateOf(item: Case) {
+  const [name, value] = item.trashed_at ? ['In Trash since', item.trashed_at] : item.opened_at ? ['Opened', item.opened_at] : ['Added', item.created_at],
+    date = caseDate(value);
+  return date && `${name} ${date}`;
+}
+const meta = (item: Case) => [dateOf(item), statusLabel(item.status), sizeOf(item.id), item.synthetic ? 'Synthetic' : ''].filter(Boolean).join(' · ');
 /** Only your own row has a label, so only your own row can say it is in Trash. */
 const storageName = (row: StorageRow) => `${row.label ?? 'Not your case'}${row.trashed_at ? ' · In Trash' : ''}`;
 
