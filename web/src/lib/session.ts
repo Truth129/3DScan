@@ -50,7 +50,10 @@ export const signOutOthers = () => request<{ signed_out: number }>('/api/session
 export const sessionFailure = (reason: unknown) =>
   reason instanceof ApiError ? reason.message : 'The workstation cannot be reached. Try again when it is back.';
 
-/** These name cases and jobs of the person leaving, which must not follow the next one. */
+/**
+ * These name cases and jobs of the person leaving, which must not follow the next one.
+ * `scan3d-structure-colors-v1:*` stays: IDs and colours only, of a case the next person cannot open, and held nowhere else.
+ */
 export function clearLocalKeys() {
   try {
     const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
