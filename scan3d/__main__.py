@@ -5,6 +5,41 @@ import os
 from pathlib import Path
 
 
+def new_password():
+    # From a prompt only: a flag or variable would leave it in shell history or the process list.
+    import getpass
+
+    password = getpass.getpass("New password: ")
+    if password != getpass.getpass("Repeat the password: "):
+        raise SystemExit("The passwords do not match")
+    return password
+
+
+def manage_users(args):
+    # Not through Service, so this runs beside a live server and loads no imaging or worker code.
+    from .accounts import Accounts
+    from .config import Settings
+    from .errors import NotFound
+    from .store import Store
+
+    store = Store(Settings.from_env().data_dir)
+    accounts = Accounts(store)
+    try:
+        if args.action == "add":
+            user_id = accounts.add_user(args.name, new_password(), args.display_name)
+            print(f"Added {args.name} ({user_id}). Cases given to the oldest admin: {accounts.adopt_orphans()}")
+        elif args.action == "passwd":
+            accounts.set_password(args.name, new_password())
+            print(f"Changed the password of {args.name} and signed it out everywhere")
+        else:
+            for user in accounts.users():
+                print(user["id"], user["username"], user["role"], "disabled" if user["disabled_at"] else "active", sep="\t")
+    except (NotFound, ValueError) as exc:
+        raise SystemExit(str(exc)) from None
+    finally:
+        store.close()
+
+
 def main():
     from .acquisition import CARDIAC_PHASE_IDS, PROFILE_IDS
     from .config import DEFAULT_HOST, DEFAULT_PORT, load_environment
@@ -20,6 +55,16 @@ def main():
     sub.add_parser("doctor")
     backup = sub.add_parser("backup", help="Snapshot the database and case files into DESTINATION/scan3d-<UTC time>")
     backup.add_argument("destination", type=Path)
+    users = sub.add_parser("users", help="Manage sign-in accounts")
+    actions = users.add_subparsers(dest="action", required=True)
+    add_user = actions.add_parser("add", help="Create an account, which also takes any case with no owner")
+    add_user.add_argument("name")
+    # Required for now, so that a plain add can mean a member later without changing what it does today.
+    add_user.add_argument("--admin", action="store_true", required=True, help="Every account is an administrator for now")
+    add_user.add_argument("--display-name")
+    passwd = actions.add_parser("passwd", help="Set a new password, which ends the account's sessions")
+    passwd.add_argument("name")
+    actions.add_parser("list", help="List accounts, without password hashes")
     sub.add_parser("demo")
     optimize = sub.add_parser("optimize", help="Prepare incremental viewer assets for an existing case without resegmenting")
     optimize.add_argument("case")
@@ -74,6 +119,9 @@ def main():
         from .config import Settings
 
         print(json.dumps(write_backup(Settings.from_env().data_dir, args.destination), indent=2))
+        return
+    if args.command == "users":
+        manage_users(args)
         return
     from .service import Service
     from .store import public_case, public_job
