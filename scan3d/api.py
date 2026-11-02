@@ -12,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, api_cases, api_imports, api_reviews, api_system, api_viewer
+from . import __version__, api_cases, api_imports, api_reviews, api_session, api_system, api_viewer
+from .access import SessionGate, check_policy
 from .config import Settings
 from .errors import NotFound
 from .orthanc import OrthancChanged, OrthancError
@@ -22,6 +23,7 @@ from .uploads import ImportConflict
 
 
 _MULTIPART_FRAMING = 1024**2
+_SIGN_IN_LIMIT = 4 * 1024
 
 
 class ViewerStaticFiles(StaticFiles):
@@ -73,8 +75,8 @@ def _error_response(status, headers=None):
     return handler
 
 
-def _view_upload_refusal(request, limit):
-    """Refuse an oversized capture before multipart parsing spools its whole body.
+def _length_refusal(request, limit, undeclared, oversized):
+    """Refuse a body too large to accept before anything reads it.
 
     A declared length is the only thing that can be checked first, so a chunked
     body is refused rather than counted. h11 also lets chunked framing override
@@ -82,11 +84,29 @@ def _view_upload_refusal(request, limit):
     """
     length = request.headers.get("content-length")
     if "transfer-encoding" in request.headers or length is None or not (length.isascii() and length.isdigit()):
-        return JSONResponse(status_code=411, content={"detail": "A captured view must declare its Content-Length."}, headers={"Cache-Control": "no-store"})
+        return JSONResponse(status_code=411, content={"detail": undeclared}, headers={"Cache-Control": "no-store"})
     # Digit strings past Python's int conversion limit would raise here.
-    if len(length) > 18 or int(length) > limit + _MULTIPART_FRAMING:
-        return JSONResponse(status_code=413, content={"detail": "The captured view exceeds the upload limit."}, headers={"Cache-Control": "no-store"})
+    if len(length) > 18 or int(length) > limit:
+        return JSONResponse(status_code=413, content={"detail": oversized}, headers={"Cache-Control": "no-store"})
     return None
+
+
+def _view_upload_refusal(request, limit):
+    # Multipart parsing would otherwise spool the whole capture.
+    return _length_refusal(
+        request, limit + _MULTIPART_FRAMING, "A captured view must declare its Content-Length.", "The captured view exceeds the upload limit."
+    )
+
+
+def _sign_in_refusal(request):
+    # This route is public, so it must not let anyone make the server hold a large body.
+    return _length_refusal(request, _SIGN_IN_LIMIT, "A sign-in request must declare its Content-Length.", "The sign-in request is too large.")
+
+
+def _is_session_path(request):
+    # A route's pattern ends in $, which also matches before a final newline, so an encoded one
+    # reaches the same handler. request.url.path is no help: a crafted Host header can move it.
+    return request.scope["path"].removesuffix("\n") == "/api/session"
 
 
 def create_app(settings: Settings | None = None):
@@ -94,13 +114,18 @@ def create_app(settings: Settings | None = None):
 
     @asynccontextmanager
     async def lifespan(app):
+        if service.settings.sign_in_required:
+            service.accounts.adopt_orphans()
         service.start()
         yield
         service.stop()
         service.store.close()
 
-    app = FastAPI(title="3DScan", version=__version__, lifespan=lifespan)
+    pages = dict(docs_url=None, redoc_url=None, openapi_url=None) if service.settings.sign_in_required else {}
+    app = FastAPI(title="3DScan", version=__version__, lifespan=lifespan, **pages)
     app.state.service = service
+    # First, so it sits innermost: the host and origin checks run before it reads a session.
+    app.add_middleware(SessionGate, service=service)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(service.settings.allowed_hosts))
     app.add_middleware(SelectiveGZip)
 
@@ -112,6 +137,8 @@ def create_app(settings: Settings | None = None):
             return JSONResponse(
                 status_code=422, content={"detail": "Invalid license request. Enter a license key only."}, headers={"Cache-Control": "no-store"}
             )
+        if _is_session_path(request):
+            return JSONResponse(status_code=422, content={"detail": "Invalid sign-in request."}, headers={"Cache-Control": "no-store"})
         return await request_validation_exception_handler(request, exc)
 
     # Only explicit NotFound means 404; any other KeyError is a defect (500).
@@ -132,8 +159,10 @@ def create_app(settings: Settings | None = None):
         # scope["path"] is what routing matches. request.url.path would stop at
         # an encoded "?" in an earlier segment, and miss the upload check below.
         view_export = request.scope["path"].endswith("/dicom-view")
+        session = _is_session_path(request)
         private = (
-            request.url.path == "/api/totalsegmentator/license"
+            session
+            or request.url.path == "/api/totalsegmentator/license"
             or request.url.path.startswith("/api/orthanc/")
             or request.url.path.endswith(("/dicom-seg", "/segment.dcm"))
             or view_export
@@ -147,13 +176,17 @@ def create_app(settings: Settings | None = None):
             refused = _view_upload_refusal(request, service.settings.view_upload_limit)
             if refused:
                 return refused
+        if session and request.method == "POST":
+            refused = _sign_in_refusal(request)
+            if refused:
+                return refused
         response = await call_next(request)
         if private:
             # Archive queries and validation failures can contain study identity.
             response.headers["Cache-Control"] = "no-store"
         return response
 
-    for module in (api_system, api_imports, api_cases, api_reviews, api_viewer):
+    for module in (api_system, api_session, api_imports, api_cases, api_reviews, api_viewer):
         module.add_routes(app, service)
 
     if service.settings.web_dir.is_dir():
@@ -164,4 +197,5 @@ def create_app(settings: Settings | None = None):
         def build_notice():
             return '<h1>3DScan API is running</h1><p>Build the interface with <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code>.</p><a href="/docs">API documentation</a>'
 
+    check_policy(app.routes)
     return app

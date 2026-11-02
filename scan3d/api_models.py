@@ -13,6 +13,13 @@ class Input(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+class SignIn(Input):
+    # Bounded by the 4 KiB body limit in `api.same_origin`, so a name of any length just fails.
+    username: str
+    password: SecretStr
+    shared_device: bool = Field(False, strict=True)
+
+
 class ImportLocal(Input):
     path: str
     label: str | None = Field(None, max_length=128)

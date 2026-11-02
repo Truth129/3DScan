@@ -79,12 +79,16 @@ def read_only(rig, monkeypatch):
     def unexpected(*args, **kwargs):
         pytest.fail("Launch attempted to create or save local state")
 
+    audited = []
     with monkeypatch.context() as patch:
+        # The gate's audit row says a launch was allowed to start, and is the one write it may cause.
+        patch.setattr(rig.service.accounts, "audit", lambda action, *args: audited.append(action))
         patch.setattr(rig.service.store, "connection", checked_connection)
         patch.setattr(rig.service.store, "case_dir", unexpected)
         patch.setattr(rig.service.store, "save", unexpected)
         patch.setattr(rig.service, "new_case", unexpected)
         yield
+    assert audited == ["archive.launch"]
     assert all(query.lstrip().startswith("SELECT") for query in queries), queries
     assert files_state(rig.settings.data_dir) == before
 
