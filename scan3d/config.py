@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = ROOT / "scan3d.env"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9010
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "[::1]", "localhost"})
 # auto prefers a discrete GPU and uses the CPU when PyTorch sees none; see segmentation._device_info.
 # It chooses within one PyTorch build, which sees only its vendor's GPUs. See inference_paths.
 DEFAULT_DEVICE = "auto"
@@ -66,6 +67,24 @@ def load_environment(environ=None) -> Path | None:
     return loaded
 
 
+def resolve_auth(value, hosts) -> str:
+    """The sign-in mode. Only loopback may run without sign-in, whatever anyone configures.
+
+    A wildcard or 0.0.0.0 is not loopback, and neither is an empty listen address, which binds
+    every interface. A proxy that rewrites Host hides a published address from this, so it must
+    set password itself.
+    """
+    published = any(host not in LOOPBACK_HOSTS for host in hosts)
+    mode = (value or "").strip().lower()
+    if not mode:
+        return "password" if published else "off"
+    if mode not in ("off", "password"):
+        raise ValueError("SCAN3D_AUTH must be off or password")
+    if mode == "off" and published:
+        raise ValueError("SCAN3D_AUTH=off is refused unless SCAN3D_HOST and SCAN3D_ALLOWED_HOSTS are all loopback")
+    return mode
+
+
 def device_request() -> str:
     return os.environ.get("SCAN3D_DEVICE", "").strip() or DEFAULT_DEVICE
 
@@ -87,6 +106,7 @@ class Settings:
     orthanc_username: str = field(default="", repr=False)
     orthanc_password: str = field(default="", repr=False)
     orthanc_export_destinations: tuple[str, ...] = ()
+    auth: str = "off"
 
     @classmethod
     def from_env(cls):
@@ -98,17 +118,25 @@ class Settings:
         destinations = tuple(dict.fromkeys(part.strip() for part in os.environ.get("SCAN3D_ORTHANC_EXPORT_DESTINATIONS", "").split(",") if part.strip()))
         if any(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", part) is None for part in destinations):
             raise ValueError("SCAN3D_ORTHANC_EXPORT_DESTINATIONS must list configured Orthanc modality identifiers")
+        allowed_hosts = tuple(p.strip() for p in os.environ.get("SCAN3D_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if p.strip())
+        host = os.environ.get("SCAN3D_HOST", DEFAULT_HOST).strip()
         return cls(
             Path(os.environ.get("SCAN3D_DATA_DIR", ROOT / "data")).resolve(),
             tuple(Path(p).expanduser().resolve() for p in os.environ.get("SCAN3D_IMPORT_ROOTS", str(ROOT)).split(os.pathsep) if p),
             web_dir=Path(os.environ.get("SCAN3D_WEB_DIR", ROOT / "web" / "dist")).expanduser().resolve(),
-            allowed_hosts=tuple(p.strip() for p in os.environ.get("SCAN3D_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if p.strip()),
+            allowed_hosts=allowed_hosts,
             modalities=modalities,
             orthanc_url=os.environ.get("SCAN3D_ORTHANC_URL", "").strip(),
             orthanc_username=os.environ.get("SCAN3D_ORTHANC_USERNAME", ""),
             orthanc_password=os.environ.get("SCAN3D_ORTHANC_PASSWORD", ""),
             orthanc_export_destinations=destinations,
+            auth=resolve_auth(os.environ.get("SCAN3D_AUTH"), (*allowed_hosts, host)),
         )
+
+    @property
+    def sign_in_required(self) -> bool:
+        # Anything but an explicit off asks for a session, so a mistyped value fails closed.
+        return self.auth != "off"
 
     @property
     def view_upload_limit(self) -> int:

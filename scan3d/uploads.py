@@ -17,6 +17,7 @@ import shutil
 import time
 import zipfile
 
+from . import identity
 from .errors import NotFound
 from .fileio import atomic_json, extract_zip, safe_relative
 from .store import identifier, now, safe_id
@@ -43,6 +44,15 @@ def _store_range(stream, length, path, offset, received):
             position += len(block)
     if position != offset + length:
         raise ValueError("An upload part ended before its declared length")
+
+
+def upload_owner(root, upload_id):
+    """Return (found, owner_id) for the access gate. A malformed ID is simply not found."""
+    try:
+        state = json.loads((root / safe_id(upload_id) / "state.json").read_text())
+    except (OSError, ValueError):
+        return False, None
+    return True, state.get("owner_id")
 
 
 def _progress(upload_id, state):
@@ -108,6 +118,7 @@ class Uploads:
             received_bytes=0,
             expanded_bytes=0,
             case_id=None,
+            owner_id=identity.actor_id(),
             created_at=now(),
             updated_at=now(),
         )

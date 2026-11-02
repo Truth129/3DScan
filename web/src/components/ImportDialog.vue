@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { uploadImport, type ImportProgress } from '../lib/import-upload';
+import { leavingPage } from '../lib/session';
 import type { Case } from '../types';
 import OrthancBrowser from './OrthancBrowser.vue';
 const props = defineProps<{ busy: boolean; mrEnabled?: boolean }>();
@@ -62,6 +63,7 @@ function cancel() {
 }
 // A reload would discard the staged upload, so ask before leaving mid-transfer.
 function keepPage(event: BeforeUnloadEvent) {
+  if (leavingPage()) return;
   event.preventDefault();
   event.returnValue = true;
 }

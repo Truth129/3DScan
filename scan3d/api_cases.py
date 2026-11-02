@@ -5,6 +5,7 @@ import uuid
 from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from . import identity
 from .api_models import Activate, DicomSegExport, Process, Refine, Review, Segment
 from .errors import NotFound
 from .store import public_case, public_job, public_revision
@@ -13,7 +14,8 @@ from .store import public_case, public_job, public_revision
 def add_routes(app, service):
     @app.get("/api/cases")
     def cases():
-        return [public_case(case, service.settings) for case in service.store.case_summaries()]
+        scope = identity.case_scope(identity.current())
+        return [public_case(case, service.settings) for case in service.store.case_summaries(scope)]
 
     @app.get("/api/cases/{case_id}")
     def case(case_id: str):
@@ -144,7 +146,7 @@ def add_routes(app, service):
     def agreement_summary():
         from .agreement import aggregate_agreement
 
-        return JSONResponse(aggregate_agreement(service), headers={"Cache-Control": "private, no-store"})
+        return JSONResponse(aggregate_agreement(service, identity.case_scope(identity.current())), headers={"Cache-Control": "private, no-store"})
 
     @app.post("/api/cases/{case_id}/refinements")
     def refine(case_id: str, body: Refine):

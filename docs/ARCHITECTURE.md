@@ -41,6 +41,7 @@ and complements a diagnostic viewer rather than replacing one.
 | Path                                                                    | Contents                                               |
 | ----------------------------------------------------------------------- | ------------------------------------------------------ |
 | `scan3d/api.py`, `api_*.py`, `api_models.py`                            | HTTP app, error mapping, routes, request bodies        |
+| `scan3d/access.py`, `accounts.py`, `identity.py`                        | Route rules, accounts, sessions, audit, password hash  |
 | `scan3d/service.py`, `store.py`, `config.py`, `__main__.py`             | Lanes, revision building, SQLite, settings, the CLI    |
 | `scan3d/dicom.py`, `enhanced_mr.py`, `modalities.py`, `image_assets.py` | Series validation, conversion, image identity          |
 | `scan3d/segmentation*.py`                                               | TotalSegmentator runs, task catalog, result merging    |
@@ -53,6 +54,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange       |
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX writer   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                |
+| `web/src/components/AuthGate.vue`, `web/src/lib/session.ts`             | Sign-in form, overlay and session state                |
 | `web/src/lib/ct-volume.ts`, `ct-worker.ts`                              | Source session and worker                              |
 | `web/src/lib/cornerstone-*.ts`, `vtk-*.ts`                              | Slice review, MPR and the native 3D view               |
 | `web/src/lib/scene.ts`, `ct-volume-renderer.ts`, `gpu-ct-plane.ts`      | The Three.js renderer                                  |
@@ -127,6 +129,10 @@ what the library shows. Any write to `cases` drops the copy, so a writer that sk
 older build after a rollback, makes the list read the full record and never a stale one. Each `Store`
 keeps one idle connection open, because closing the last connection to a WAL database checkpoints it
 and adds milliseconds to every write.
+
+`users`, `sessions`, `case_access` and `audit_events` are ordinary tables beside those records.
+`cases` has no owner column and there are no foreign keys. A backup keeps users and audit and
+removes sessions, so a restore revives no sign-in.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
@@ -383,7 +389,7 @@ and runs no DICOM listener. See [ORTHANC.md](ORTHANC.md).
 - An import binds an immutable snapshot of the series. A CPU job downloads it into staging and
   verifies hashes and DICOM identities before publishing the originals. Interrupted transfers never
   resume automatically.
-- The launch route finds a matching import but creates nothing.
+- The launch route finds this account's matching import but creates nothing.
 
 ## DICOM SEG and other exchange
 
@@ -423,9 +429,36 @@ holds the adapters. Other modalities have none.
 
 ## Security boundaries
 
-There is no sign-in, so the server binds to loopback and logs a warning for any other address.
 `SCAN3D_ALLOWED_HOSTS` restricts `Host` headers, and mutations from another browser origin are
 refused. Files are written with umask 077, and public records omit filesystem paths.
+
+**Sign-in mode.** `off` is allowed only on loopback, and the app refuses to start otherwise. See
+[CONFIGURATION.md](CONFIGURATION.md#sign-in).
+
+**The gate.** `SessionGate` in `scan3d/access.py` finds the route the router will pick and applies
+its rule before the route reads a body. Rules are default-deny, in both modes.
+[API.md](API.md#sign-in) lists them.
+
+- `check_policy` stops the app from starting if a route has no rule.
+- A `case_access` row is what opens a case. Admins get no exception.
+- A case scope is a user ID or `EVERY_CASE`, never `None`, and only the built-in local user holds
+  `EVERY_CASE`.
+- A new case belongs to its creator. Work with nobody signed in, such as the command line or sign-in
+  off, goes to the oldest active admin. A case with no owner goes to that admin when an account is
+  added, or at startup in password mode.
+
+**Sessions and passwords.** Only the SHA-256 of a session token is stored. Passwords use scrypt, with
+n=2^17, r=8 and p=1.
+
+**Audit.** `audit_events` is append-only, enforced by triggers. Rows hold IDs and counts, never a
+label, search term or typed username. A row means a request was allowed to start, and a failed write
+fails the request. The actions are:
+
+- `session.sign_in`, `session.sign_in_failed`, `session.sign_out`, `session.sign_out_others`
+- `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`
+- `case.open`, once per session and case
+- `archive.query`, `archive.launch`
+- `export.slicer`, `export.html`, `export.seg`, `export.seg_file`, `export.view`
 
 An inference path's proof names an interpreter that the app will run, so its folder needs the same
 protection as the checkout.
@@ -435,8 +468,12 @@ when a TotalSegmentator key is saved, and model downloads.
 
 ## Known limitations
 
-- There is no sign-in, user model or audit trail, so saved work records no reviewer identity.
-  Anything that can reach the port can read every case.
+- With sign-in off, anything that can reach the port can read every case. With it on, anyone with
+  a shell on the machine can still read every file.
+- Every account is an administrator, and a case cannot be shared between accounts.
+- Each account imports its own copy of an Orthanc series, so the same scan can be on disk twice.
+- Jobs and review sessions store who started them, but the app shows neither, and a revision records
+  no reviewer. The audit log has no viewer.
 - The service does not scale out, and it runs on Linux only.
 - A second GPU adds a choice, not capacity. Results from the two cards are not identical.
 - Installing NVIDIA as the only GPU with `--torch cuda` is a different route and is untested.

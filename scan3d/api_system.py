@@ -2,7 +2,7 @@
 
 from fastapi import HTTPException, Response
 
-from . import __version__
+from . import __version__, identity
 from .api_models import TotalSegmentatorLicense
 from .domain import Modality
 
@@ -13,12 +13,14 @@ def add_routes(app, service):
         from .doctor import diagnose
 
         lanes = {lane: thread.is_alive() for lane, thread in service.threads.items()}
+        # Anyone may ask whether the service is up, but this machine's hardware is not for them.
+        gpu = {"gpu": diagnose(live=False)} if identity.current() else {}
         return {
             "status": "ok",
             "worker": bool(lanes) and all(lanes.values()),
             "lanes": lanes,
             "modalities": list(service.settings.modalities),
-            "gpu": diagnose(live=False),
+            **gpu,
             "version": __version__,
         }
 

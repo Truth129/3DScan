@@ -8,7 +8,8 @@ import re
 import sqlite3
 import weakref
 
-from . import inference_paths
+from . import identity, inference_paths
+from .accounts import Accounts
 from .errors import NotFound
 from .fileio import atomic_json
 from .identifiers import identifier
@@ -75,6 +76,35 @@ class Store:
                 CREATE TRIGGER IF NOT EXISTS case_summary_insert AFTER INSERT ON cases BEGIN DELETE FROM case_summaries WHERE case_id=NEW.id; END;
                 CREATE TRIGGER IF NOT EXISTS case_summary_update AFTER UPDATE ON cases BEGIN DELETE FROM case_summaries WHERE case_id=NEW.id; END;
                 CREATE TRIGGER IF NOT EXISTS case_summary_delete AFTER DELETE ON cases BEGIN DELETE FROM case_summaries WHERE case_id=OLD.id; END;
+                -- Ownership stays beside the case records, with no column on `cases` and no foreign
+                -- keys, so that older code still runs against this file after a rollback.
+                CREATE TABLE IF NOT EXISTS users(
+                  id TEXT PRIMARY KEY,
+                  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                  display_name TEXT NOT NULL,
+                  password_hash TEXT,
+                  role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('admin','member')),
+                  archive_access INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL, disabled_at TEXT);
+                CREATE TABLE IF NOT EXISTS sessions(
+                  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                  shared_device INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS session_user ON sessions(user_id);
+                CREATE TABLE IF NOT EXISTS case_access(
+                  case_id TEXT NOT NULL, user_id TEXT NOT NULL,
+                  role TEXT NOT NULL DEFAULT 'owner' CHECK(role IN ('owner','editor','viewer')),
+                  granted_by TEXT, granted_at TEXT NOT NULL,
+                  PRIMARY KEY(case_id, user_id)) WITHOUT ROWID;
+                CREATE INDEX IF NOT EXISTS access_user ON case_access(user_id, case_id);
+                CREATE TABLE IF NOT EXISTS audit_events(
+                  seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
+                  actor_id TEXT, action TEXT NOT NULL, case_id TEXT, target TEXT,
+                  detail TEXT NOT NULL DEFAULT '{}');
+                CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_events
+                  BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_events
+                  BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
             """)
             if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
                 # Under the write lock, because a summary written from an older read would hide a newer record.
@@ -83,6 +113,8 @@ class Store:
                     for row in connection.execute("SELECT data FROM cases").fetchall():
                         self.summarize_case(connection, json.loads(row["data"]))
                     connection.execute("PRAGMA user_version=4")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 5:
+                connection.execute("PRAGMA user_version=5")
         # Closing the last connection to a WAL database checkpoints it and removes the log, which
         # would otherwise add milliseconds to every write. This one stays idle: its read joins
         # the database and finishes, so it holds no transaction and checkpoints still run.
@@ -142,7 +174,10 @@ class Store:
         return record
 
     def list(self, table, case_id=None):
-        if table not in ("cases", "revisions", "jobs", "review_sessions", "image_assets"):
+        # Cases are private to their owners, so a new global reader must fail loudly here.
+        if table == "cases":
+            raise ValueError("Read cases through visible_cases or case_summaries, with a scope")
+        if table not in ("revisions", "jobs", "review_sessions", "image_assets"):
             raise ValueError("Unknown record type")
         with self.connection() as con:
             if case_id:
@@ -156,13 +191,35 @@ class Store:
         """Call after writing a case, so the library need not parse every series' file paths."""
         con.execute("INSERT OR REPLACE INTO case_summaries VALUES (?,?)", (case["id"], json.dumps(public_case(case))))
 
-    def case_summaries(self):
-        """Every case, in the order of `list`, for `public_case`. One with no summary reads in full."""
+    def create_case(self, record):
+        """A case and its owner are one write, so a crash can never leave a new case with neither."""
+        safe_id(record["id"])
         with self.connection() as con:
-            rows = con.execute(
-                "SELECT COALESCE(s.data, c.data) AS data FROM cases c LEFT JOIN case_summaries s ON s.case_id=c.id ORDER BY c.rowid DESC"
-            ).fetchall()
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("INSERT INTO cases VALUES (?,?)", (record["id"], json.dumps(record, allow_nan=False)))
+            self.summarize_case(con, record)
+            grant_owner(con, record["id"])
+        return record
+
+    def _scoped_cases(self, columns, scope, joins=""):
+        """Newest first. A scope is EVERY_CASE or a user id; anything else is a defect, never an open filter."""
+        if scope is identity.EVERY_CASE:
+            query, values = f"SELECT {columns} FROM cases c{joins}", ()
+        elif isinstance(scope, str) and scope:
+            query, values = f"SELECT {columns} FROM cases c JOIN case_access a ON a.case_id=c.id AND a.user_id=?{joins}", (scope,)
+        else:
+            raise TypeError("A case scope is EVERY_CASE or a user id")
+        with self.connection() as con:
+            rows = con.execute(f"{query} ORDER BY c.rowid DESC", values).fetchall()
         return [json.loads(row["data"]) for row in rows]
+
+    def case_summaries(self, scope):
+        """The cases in a scope, for `public_case`. One with no summary reads in full."""
+        return self._scoped_cases("COALESCE(s.data, c.data) AS data", scope, " LEFT JOIN case_summaries s ON s.case_id=c.id")
+
+    def visible_cases(self, scope):
+        """Full records of the cases in a scope. Prefer `case_summaries` for a list."""
+        return self._scoped_cases("c.data AS data", scope)
 
     def case_dir(self, case_id):
         path = self.directory / "cases" / safe_id(case_id)
@@ -532,6 +589,7 @@ class Store:
                 payload=payload,
                 cancel_requested=False,
                 review_session_id=session_id,
+                requested_by=identity.actor_id(),
                 **({"inference_path": chosen} if chosen else {}),
             )
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case_id, job["status"], json.dumps(job, allow_nan=False)))
@@ -622,6 +680,7 @@ class Store:
             created_at=now(),
             payload=payload,
             cancel_requested=False,
+            requested_by=identity.actor_id(),
             **fields,
         )
         return self.save("jobs", job)
@@ -669,6 +728,24 @@ class Store:
             self.reconcile_review(review["case_id"], review["id"])
 
 
+def grant_owner(con, case_id):
+    """Own a case that has no owner yet, inside the transaction that writes it.
+
+    Nobody is signed in on the command line or with sign-in off, so that work goes to the oldest
+    active admin. With no admin there is no owner yet, and `adopt_orphans` settles it later. A
+    retried Orthanc import reuses its case and keeps the owner it has: the rule is in this
+    statement, so no caller can add a second one.
+    """
+    actor = identity.actor_id()
+    owner = Accounts.oldest_admin(con) if actor in (None, identity.LOCAL.id) else actor
+    if owner:
+        con.execute(
+            "INSERT OR IGNORE INTO case_access(case_id,user_id,role,granted_by,granted_at) "
+            "SELECT ?,?,'owner',?,? WHERE NOT EXISTS(SELECT 1 FROM case_access WHERE case_id=?)",
+            (case_id, owner, actor, now(), case_id),
+        )
+
+
 def public_case(record, settings=None):
     """Client view; with settings, series of a modality not offered here read as unavailable."""
     result = {k: v for k, v in record.items() if k not in ("source_dir", "references")}
@@ -707,7 +784,7 @@ def public_revision(record):
 
 
 def public_job(record):
-    public = {k: v for k, v in record.items() if k not in ("payload", "cancel_requested", "measurements")}
+    public = {k: v for k, v in record.items() if k not in ("payload", "cancel_requested", "measurements", "requested_by")}
     # A send Orthanc has started runs to its end, so a client must stop offering Cancel.
     if (record.get("payload") or {}).get("delivery_state"):
         public["delivery_started"] = True

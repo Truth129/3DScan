@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.fileio import extract_zip
+from scan3d.identity import EVERY_CASE
 from scan3d.service import Service
 
 
@@ -104,7 +105,7 @@ def test_invalid_operations_and_cross_origin_fail_before_job(client):
     data_dir = service.settings.data_dir
     for inside in (data_dir, data_dir / "cases" / case["id"], data_dir.parent):
         assert "outside the application's data directory" in http.post("/api/cases/import-local", json={"path": str(inside)}).json()["detail"]
-    assert len(service.store.list("cases")) == 1
+    assert len(service.store.visible_cases(EVERY_CASE)) == 1
     assert http.post("/api/cases/demo", headers={"origin": "https://unrelated.example"}).status_code == 403
     assert http.get("/api/cases", headers={"host": "unrelated.example"}).status_code == 400
     assert http.get("/api/health", headers={"host": "review.example:8443"}).status_code == 200
@@ -181,6 +182,21 @@ def test_lazy_detailed_export_and_revision_scoped_surface_assets(client):
     assert updated["mesh_statistics"]["detailed"]["cache"]["base_hits"] == 7
     assert updated["processing_timings"]["detailed_export_seconds"] > 0
     assert detailed.exists()
+
+
+def test_api_responses_are_not_kept_unless_their_route_says_how(client):
+    http, _service = client
+    case = http.post("/api/cases/demo").json()
+    prefix = f"/api/cases/{case['id']}"
+    revision = f"{prefix}/revisions/{case['active_revision_id']}"
+    for path in ("/api/cases", prefix, f"{prefix}/images", f"{prefix}/jobs", f"{prefix}/reviews", f"{prefix}/revisions", revision):
+        response = http.get(path)
+        assert response.status_code == 200 and response.headers["cache-control"] == "private, no-store", path
+    # A 304 updates the stored copy's headers, so it must not turn these into no-store either.
+    for url in (http.get(f"{revision}/ct-volume").json()["chunks"][0]["url"], f"{revision}/model.glb"):
+        stored = http.get(url)
+        again = http.get(url, headers={"If-None-Match": stored.headers["etag"]})
+        assert again.status_code == 304 and stored.headers["cache-control"] == again.headers["cache-control"] == "private, no-cache"
 
 
 def test_measurements_available_before_meshes_and_refinement_reuses_surfaces(client, monkeypatch):

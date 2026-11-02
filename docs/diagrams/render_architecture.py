@@ -110,7 +110,7 @@ card(
     390,
     120,
     "FastAPI service",
-    ["Imports, jobs, revisions and review", "Image / mask chunks, GLB and exports", "No built-in sign-in: keep it private"],
+    ["Imports, jobs, revisions and review", "Image / mask chunks, GLB and exports", "Route gate: sign-in beyond loopback"],
 )
 card(
     535,

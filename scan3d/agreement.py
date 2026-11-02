@@ -419,7 +419,7 @@ def revision_agreement(service, case_id, revision_id):
     return _agreement(service, case, service.store.revision(case_id, revision_id))
 
 
-def aggregate_agreement(service):
+def aggregate_agreement(service, scope):
     """Pool each case's decided active revision by task and structure.
 
     The active revision is what the reviewer currently accepts; one marked
@@ -429,7 +429,7 @@ def aggregate_agreement(service):
     skipped = Counter({reason: 0 for reason in _SKIPPED})
     pools = {name: {"cases": 0, "excluded": 0, "rows": defaultdict(list)} for name in ("real", "synthetic")}
     revisions = []
-    cases = service.store.list("cases")
+    cases = service.store.visible_cases(scope)
     for case in cases:
         revision_id = case.get("active_revision_id")
         if not revision_id:

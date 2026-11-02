@@ -34,9 +34,28 @@ SCAN3D_ORTHANC_PASSWORD="a value with spaces"
 | `SCAN3D_HOST`          | `127.0.0.1`           | Listen address. `scan3d serve --host` overrides it.           |
 | `SCAN3D_PORT`          | `9010`                | Listen port. `scan3d serve --port` overrides it.              |
 | `SCAN3D_ALLOWED_HOSTS` | `127.0.0.1,localhost` | Host names browsers may use, separated by commas.             |
+| `SCAN3D_AUTH`          | by address            | Sign-in mode: `off` or `password`. See [Sign-in](#sign-in).   |
 
-3DScan has no sign-in. The app warns when it listens beyond loopback, because anyone who
-can reach the port can read every case.
+### Sign-in
+
+The mode depends on `SCAN3D_AUTH` and the hosts in use: `SCAN3D_HOST` or `scan3d serve --host`, and
+every name in `SCAN3D_ALLOWED_HOSTS`. Loopback hosts are `127.0.0.1`, `::1`, `[::1]` and `localhost`.
+`0.0.0.0` and a wildcard are not loopback.
+
+| `SCAN3D_AUTH`  | All hosts loopback | Any other host   |
+| -------------- | ------------------ | ---------------- |
+| unset or empty | `off`              | `password`       |
+| `off`          | `off`              | Refuses to start |
+| `password`     | `password`         | `password`       |
+
+Any other value refuses to start.
+
+- `off`: one built-in user, and anything that can reach the port can read every case.
+- `password`: everyone needs an account. Create the first with `scan3d users add NAME --admin`. See
+  the [user guide](USER_GUIDE.md#sign-in).
+- Beyond loopback a sign-in needs HTTPS, so publish 3DScan through an HTTPS reverse proxy.
+- A proxy that rewrites `Host` to loopback hides the published name from this table, so it must set
+  `SCAN3D_AUTH=password` itself.
 
 ### Storage
 
@@ -131,7 +150,7 @@ SCAN3D_DATA_DIR=/mnt/cases/3dscan
 SCAN3D_IMPORT_ROOTS=/mnt/scans
 ```
 
-Serve behind an authenticating reverse proxy on the same machine:
+Serve behind an HTTPS reverse proxy on the same machine. The published name turns sign-in on:
 
 ```bash
 SCAN3D_ALLOWED_HOSTS=127.0.0.1,localhost,scan.example.test

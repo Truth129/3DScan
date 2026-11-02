@@ -76,8 +76,11 @@ def test_built_converter_precedes_the_system_one(tmp_path, monkeypatch):
 def test_serve_defaults_come_from_the_config_file(tmp_path, monkeypatch):
     path = write(tmp_path, "SCAN3D_HOST=127.0.0.2\nSCAN3D_PORT=9123\n")
     monkeypatch.setenv("SCAN3D_CONFIG", str(path))
-    monkeypatch.delenv("SCAN3D_HOST", raising=False)
-    monkeypatch.delenv("SCAN3D_PORT", raising=False)
+    # Set first, so teardown removes what loading the file and serve write: a leaked
+    # non-loopback host would turn sign-in on for every later Settings.from_env().
+    for name in ("SCAN3D_HOST", "SCAN3D_PORT"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     monkeypatch.setenv("TOTALSEG_HOME_DIR", str(tmp_path))
     monkeypatch.setattr("sys.argv", ["scan3d", "serve"])
     captured = {}
@@ -103,6 +106,7 @@ def test_the_example_is_all_defaults_and_documents_every_setting():
         "SCAN3D_HOST",
         "SCAN3D_PORT",
         "SCAN3D_ALLOWED_HOSTS",
+        "SCAN3D_AUTH",
         "SCAN3D_DATA_DIR",
         "SCAN3D_IMPORT_ROOTS",
         "SCAN3D_MODALITIES",

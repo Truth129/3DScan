@@ -35,6 +35,7 @@ import DicomSegExport from './components/DicomSegExport.vue';
 import DicomSegImport from './components/DicomSegImport.vue';
 import DicomViewExport from './components/DicomViewExport.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
+import UserMenu from './components/UserMenu.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
 import { api, revisionUrl } from './lib/api';
@@ -75,6 +76,7 @@ import {
 import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
+import { startDownload } from './lib/session';
 import { useFloatingDetails } from './lib/use-floating-details';
 import { useFoldingControls } from './lib/use-folding-controls';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
@@ -1199,6 +1201,7 @@ onBeforeUnmount(() => {
         <span class="live-dot"></span><span>{{ workerText }}</span>
       </div>
       <button class="button primary compact" @click="importOpen = true"><span>+</span> Import scan</button>
+      <UserMenu />
       <div v-if="error" class="error-banner" role="alert">
         <span>⚠ {{ error }}</span
         ><button aria-label="Dismiss error" @click="error = ''">×</button>
@@ -1854,7 +1857,8 @@ onBeforeUnmount(() => {
                 <details class="slicer-fallback">
                   <summary>External correction with Slicer</summary>
                   <div class="button-row">
-                    <a class="button secondary compact" :href="`${base}/slicer.zip`" download>Slicer bundle ↓</a
+                    <a class="button secondary compact" :href="`${base}/slicer.zip`" download @click.prevent="startDownload(`${base}/slicer.zip`).catch(fail)"
+                      >Slicer bundle ↓</a
                     ><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button>
                   </div>
                   <p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p>

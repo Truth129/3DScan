@@ -12,6 +12,43 @@ Start 3DScan with `.venv/bin/scan3d serve` and open **http://127.0.0.1:9010**. S
 [installation](INSTALL.md) and [configuration](CONFIGURATION.md). **Explore synthetic demo** opens
 a phantom with ready-made masks and no patient data.
 
+## Sign in
+
+On the default `127.0.0.1` address sign-in is off and the app opens directly. On any other address,
+or with `SCAN3D_AUTH=password`, everyone needs an account. See
+[configuration](CONFIGURATION.md#sign-in).
+
+**First account.** The app shows this command until an account exists. Run it on the workstation:
+
+```bash
+.venv/bin/scan3d users add NAME --admin
+```
+
+It asks for a password of 10 to 1,024 characters, twice. `--display-name` sets the name shown in the
+header. The first admin receives every case that has no owner.
+
+**Signing in.** Enter your username and password. Over a network, use the HTTPS address. Each
+account sees only its own cases. Cases created on the command line go to the oldest admin.
+
+**Shared computer.** Tick this on a computer other people use. You are signed out when the browser
+closes, and after 12 hours at most, and the browser stores no scan data for this session.
+
+**Signing out.** Choose your name in the header, then **Sign out**. **Sign out other devices** ends
+this account's other sessions and keeps this one.
+
+**When a session ends.** A session lasts 30 days from its last use. If yours ends while you work, a
+sign-in screen covers the page. Sign in as the same person and the page carries on with your marks
+intact. Signing in as someone else reloads the page.
+
+**Forgotten password.** Run this on the workstation. It also signs the account out everywhere:
+
+```bash
+.venv/bin/scan3d users passwd NAME
+```
+
+`.venv/bin/scan3d users list` shows the accounts. Anyone with a shell on the machine can still read
+every file, so protect the machine and the data directory as well.
+
 ## Import a study
 
 Choose **+ Import scan** in the header. Do not put patient identifiers in **Case label**.
@@ -471,7 +508,8 @@ records store absolute paths. A snapshot from before November 2026 has no `scan3
 first move any `scan3d.sqlite3-wal` and `scan3d.sqlite3-shm` out of the data directory.
 
 A backup holds patient images, so protect it like the library. It does not cover anything held in
-Orthanc.
+Orthanc. It keeps accounts and the audit log but no sessions, so everyone signs in again after a
+restore.
 
 ## Experimental MRI
 

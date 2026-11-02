@@ -65,6 +65,8 @@ Read each script's `--help` first:
 - Others need a Vulkan-capable GPU unless they offer `--software`.
 - `dicom_view_export_smoke.py` needs `--orthanc-binary`, a `--scratch` directory and `dcm2niix` on
   `PATH`.
+- `sign_in_smoke.py` needs a `--stage` under `/tmp`, and the repository and `web/tests` on
+  `PYTHONPATH`. It starts a real `scan3d serve` in password mode, on a port from 9031 to 9034.
 
 A gate that starts its own server exits if a port it needs is in use. After SIGKILL, a chromedriver
 or server it started can still hold that port. Gates that take `--base-url` test whatever server
@@ -79,8 +81,9 @@ build.
   `SCAN3D_GPU_PROOF` at a missing file, so every test and child sees one unproven row. A temporary
   data directory isolates neither. A test that wants added paths or a default proof sets its own.
 - **Browser gates** run outside pytest, so that fixture does not reach them.
-  - `web/tests/interactive_test_server.py`, `dicom_seg_import_smoke.py` and
-    `dicom_view_export_smoke.py` point `SCAN3D_INFERENCE_PATH_DIR` inside their temporary data.
+  - `web/tests/interactive_test_server.py`, `dicom_seg_import_smoke.py`,
+    `dicom_view_export_smoke.py` and `sign_in_smoke.py` point `SCAN3D_INFERENCE_PATH_DIR` inside
+    their temporary data.
   - Without `SCAN3D_DEVICE=cpu`, a gate still shows this checkout's default card.
   - A plain `scan3d serve` behind `--base-url` lists whatever the checkout has.
 - **`tests/inference_path_stub.py`** builds a real second interpreter with no second PyTorch.
@@ -119,6 +122,12 @@ build.
   - `web/vite-vtk-ray-guard.ts` patches the vtk.js ray division and ambient-occlusion kernel in every
     build. The build fails if either line moves or an unguarded copy ships. Keep each patch until
     vtk.js handles the case itself.
+- **Routes.** Every new route needs a rule in `RULES` in `scan3d/access.py`, and `check_policy`
+  stops the app from starting without one, in both modes.
+  - A route with `{case_id}` gets the case rule on its own, and needs an entry only for an audit
+    action. `{job_id}` and `{upload_id}` need those rule kinds.
+  - Read cases through `case_summaries(scope)` or `visible_cases(scope)`. `Store.list` refuses
+    `"cases"`.
 - **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `ReviewConflict` and
   `ImportConflict` to 409, and schema errors to 422. Any other exception is a logged 500, so do not
   raise a bare `KeyError` for "not found".
