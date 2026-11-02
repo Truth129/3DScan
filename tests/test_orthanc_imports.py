@@ -502,12 +502,12 @@ def imported_case(rig):
     return job["case_id"]
 
 
-def become_second_series(rig, study=STUDY_UID):
+def become_second_series(rig, study=STUDY_UID, study_id=STUDY):
     """The archive's one series turns into another series of the study, so one fixture covers both."""
     for index, entry in enumerate(rig.archive.snapshot_doc["instances"]):
         rig.archive.files[entry["id"]] = instance_bytes(index, study=study, series=SECOND_SERIES_UID)
         entry["size"] = len(rig.archive.files[entry["id"]])
-    rig.archive.snapshot_doc.update(series_uid=SECOND_SERIES_UID, study_uid=study)
+    rig.archive.snapshot_doc.update(series_uid=SECOND_SERIES_UID, study_uid=study, study_id=study_id)
     rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
 
 
@@ -553,6 +553,10 @@ def test_only_a_new_series_of_the_cases_own_orthanc_study_can_join(rig):
     case_id = imported_case(rig)
     assert "already in this case" in add_series(rig, case_id).json()["detail"]
     become_second_series(rig, study="1.2.826.0.1.3680043.10.543.998")
+    refused = add_series(rig, case_id)
+    assert refused.status_code == 400 and "different study" in refused.json()["detail"]
+    # Orthanc files one StudyInstanceUID under each PatientID as its own study, and this is the other patient's.
+    become_second_series(rig, study_id=oid(99))
     refused = add_series(rig, case_id)
     assert refused.status_code == 400 and "different study" in refused.json()["detail"]
     assert "Only a case imported from Orthanc" in add_series(rig, rig.service.new_case("Folder case")["id"]).json()["detail"]

@@ -156,9 +156,13 @@ class OrthancImports:
         return archive
 
     def _check_addition(self, case, snapshot):
-        """A series joins a case only from that case's own study, so no other patient's images can."""
+        """A series joins a case only from that case's own study, so no other patient's images can.
+
+        Orthanc files one StudyInstanceUID under each PatientID as its own study, so the UID proves nothing alone.
+        """
         archive = self._case_archive(case)
-        if archive.get("source_key") != snapshot.source_key or archive.get("study_uid") != snapshot.study_uid:
+        own_study = parse_source(case["references"]["orthanc"]).snapshot.study_id
+        if archive.get("source_key") != snapshot.source_key or archive.get("study_uid") != snapshot.study_uid or own_study != snapshot.study_id:
             raise ValueError("This series belongs to a different study, so it cannot be added to this case")
         if any(row["uid"] == snapshot.series_uid for row in case["series"]):
             raise ValueError("This series is already in this case")
