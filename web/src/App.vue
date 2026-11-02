@@ -805,6 +805,8 @@ async function openOrthancCase(id: string) {
 function seriesAdded(next: Case, uid: string) {
   activeCase.value = next;
   seriesUid.value = uid;
+  // The Library searches series, and it can be open over this panel.
+  void refreshCases().catch(() => {});
 }
 async function importedOrthancCase(next: Case) {
   closeOrthancLaunch();

@@ -483,6 +483,17 @@ describe('the Library', () => {
     await heartbeat();
     expect(api.cases).toHaveBeenCalledOnce();
   });
+  it('reads the list when a series is added under it, because search covers series', async () => {
+    workstation([amd]);
+    const imported = { ...scan, active_revision_id: null, import_source: { kind: 'orthanc' } };
+    vi.mocked(api.case).mockImplementation(async () => imported);
+    const root = await start();
+    await press(root.named('case-button'));
+    vi.mocked(api.cases).mockClear();
+    (root.named('add-series') as unknown as { __vueParentComponent: ComponentInternalInstance }).__vueParentComponent.emit('added', imported, 'added');
+    await settled();
+    expect(api.cases).toHaveBeenCalledOnce();
+  });
   it('records an open, and a failed record does not fail it', async () => {
     workstation([amd]);
     vi.mocked(api.markOpened).mockRejectedValue(new Error('Nothing recorded'));
