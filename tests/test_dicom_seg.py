@@ -42,7 +42,7 @@ def export(fixture, **kwargs):
         fixture["segments"],
         fixture["output"],
         revision_id="revision-test",
-        source_kind="totalsegmentator",
+        source_kind=kwargs.pop("source_kind", "totalsegmentator"),
         **kwargs,
     )
 
@@ -69,6 +69,17 @@ def independent_pixels(path, images, segment_number=1):
         if number == segment_number:
             result[index] = frame
     return seg, result
+
+
+def test_each_segment_names_its_own_model_in_a_shared_revision(fixture):
+    block, ring = fixture["segments"]
+    segments = (replace(block, id="mrsegmentator:liver"), replace(ring, id="total:liver"))
+    result = export({**fixture, "segments": segments}, source_kind="nnunet_model")
+    seg = pydicom.dcmread(result.files[0].path)
+    numbers = {entry.structure_id: entry.segment_number for entry in result.files[0].segments}
+    assert seg.SegmentSequence[numbers["mrsegmentator:liver"] - 1].SegmentAlgorithmName == "MRSegmentator"
+    assert seg.SegmentSequence[numbers["total:liver"] - 1].SegmentAlgorithmName == "TotalSegmentator"
+    assert {item.SegmentAlgorithmType for item in seg.SegmentSequence} == {"AUTOMATIC"}
 
 
 def test_exact_independent_masks_preserve_overlap_and_source_geometry(fixture):

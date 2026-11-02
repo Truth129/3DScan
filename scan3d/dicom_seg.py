@@ -26,6 +26,7 @@ from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, UID, generate_ui
 
 from . import __version__, imaging
 from .fileio import hash_file
+from .nnunet_models import MODELS
 
 
 _VOXEL_TOLERANCE = 1e-3
@@ -251,9 +252,13 @@ def _encode(stack, pixels, segment, *, series_uid, instance_number, source_kind,
     if hd.__version__ != "0.28.2":
         raise DicomSegError("DICOM SEG export requires qualification of this highdicom version")
     # Removing ranked voxels applies a person's choice to the model's output.
-    automatic = source_kind == "totalsegmentator" and not modified
+    automatic = source_kind in {"totalsegmentator", "nnunet_model"} and not modified and not segment.id.startswith("custom:")
     algorithm_name, algorithm_version = "3DScan correction", __version__
-    if automatic:
+    # Models share a revision, so the name comes from the segment, not the revision's source.
+    model = MODELS.get(segment.id.partition(":")[0])
+    if automatic and model:
+        algorithm_name, algorithm_version = model.name, model.version
+    elif automatic:
         algorithm_name = "TotalSegmentator"
         try:
             algorithm_version = metadata.version("TotalSegmentator")
