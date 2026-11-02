@@ -75,6 +75,35 @@ class Store:
                 CREATE TRIGGER IF NOT EXISTS case_summary_insert AFTER INSERT ON cases BEGIN DELETE FROM case_summaries WHERE case_id=NEW.id; END;
                 CREATE TRIGGER IF NOT EXISTS case_summary_update AFTER UPDATE ON cases BEGIN DELETE FROM case_summaries WHERE case_id=NEW.id; END;
                 CREATE TRIGGER IF NOT EXISTS case_summary_delete AFTER DELETE ON cases BEGIN DELETE FROM case_summaries WHERE case_id=OLD.id; END;
+                -- Ownership stays beside the case records, with no column on `cases` and no foreign
+                -- keys, so that older code still runs against this file after a rollback.
+                CREATE TABLE IF NOT EXISTS users(
+                  id TEXT PRIMARY KEY,
+                  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                  display_name TEXT NOT NULL,
+                  password_hash TEXT,
+                  role TEXT NOT NULL DEFAULT 'member' CHECK(role IN ('admin','member')),
+                  archive_access INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL, disabled_at TEXT);
+                CREATE TABLE IF NOT EXISTS sessions(
+                  token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+                  shared_device INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS session_user ON sessions(user_id);
+                CREATE TABLE IF NOT EXISTS case_access(
+                  case_id TEXT NOT NULL, user_id TEXT NOT NULL,
+                  role TEXT NOT NULL DEFAULT 'owner' CHECK(role IN ('owner','editor','viewer')),
+                  granted_by TEXT, granted_at TEXT NOT NULL,
+                  PRIMARY KEY(case_id, user_id)) WITHOUT ROWID;
+                CREATE INDEX IF NOT EXISTS access_user ON case_access(user_id, case_id);
+                CREATE TABLE IF NOT EXISTS audit_events(
+                  seq INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
+                  actor_id TEXT, action TEXT NOT NULL, case_id TEXT, target TEXT,
+                  detail TEXT NOT NULL DEFAULT '{}');
+                CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_events
+                  BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_events
+                  BEGIN SELECT RAISE(ABORT,'audit is append-only'); END;
             """)
             if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
                 # Under the write lock, because a summary written from an older read would hide a newer record.
@@ -83,6 +112,8 @@ class Store:
                     for row in connection.execute("SELECT data FROM cases").fetchall():
                         self.summarize_case(connection, json.loads(row["data"]))
                     connection.execute("PRAGMA user_version=4")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 5:
+                connection.execute("PRAGMA user_version=5")
         # Closing the last connection to a WAL database checkpoints it and removes the log, which
         # would otherwise add milliseconds to every write. This one stays idle: its read joins
         # the database and finishes, so it holds no transaction and checkpoints still run.

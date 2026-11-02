@@ -14,6 +14,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import __version__, inference_paths
+from .accounts import Accounts
 from .config import Settings
 from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
 from .store import LANES, Store, identifier, job_lane, now
@@ -25,6 +26,7 @@ class Service:
     def __init__(self, settings=None):
         self.settings = settings or Settings.from_env()
         self.store = Store(self.settings.data_dir)
+        self.accounts = Accounts(self.store)
         self.stop_event = threading.Event()
         self.threads = {}
         self.worker_lock = None
