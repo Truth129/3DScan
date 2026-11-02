@@ -31,8 +31,8 @@ def test_revision_activation_and_completed_job_are_atomic(tmp_path):
 def test_a_job_claimed_on_a_trashed_case_is_flagged_and_still_running(tmp_path):
     store = Store(tmp_path)
     record = case(store)
-    queued = store.enqueue(record["id"], "refine", {})
     store.trash_case(record["id"], None)
+    queued = store.enqueue(record["id"], "refine", {})
     job = store.claim()
     assert job["id"] == queued["id"] and job["status"] == "running" and job["cancel_requested"] is True
     assert store.get("jobs", queued["id"])["cancel_requested"] is True

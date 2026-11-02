@@ -170,8 +170,10 @@ def test_trash_stops_each_active_job_and_counts_a_send_apart(rig):
 
 
 def test_a_job_that_cannot_be_stopped_does_not_fail_trash(rig, monkeypatch):
+    store = rig.service.store
     case_id = rig.service.new_case("Synthetic")["id"]
-    rig.service.store.enqueue(case_id, "include_all", {})
+    running = store.enqueue(case_id, "include_all", {})["id"]
+    store.update_job(running, status="running")
 
     def refuse(_job_id):
         raise RuntimeError("Synthetic failure")
@@ -179,6 +181,7 @@ def test_a_job_that_cannot_be_stopped_does_not_fail_trash(rig, monkeypatch):
     monkeypatch.setattr(rig.service, "cancel_job", refuse)
     assert rig.owner.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 0, "sends_continuing": 0}
     assert case_id in [case["id"] for case in rig.owner.get("/api/trash").json()]
+    assert store.get("jobs", running)["cancel_requested"] is True
 
 
 def test_trashing_twice_leaves_one_row_and_one_audit_event(rig):

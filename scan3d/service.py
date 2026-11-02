@@ -288,7 +288,7 @@ class Service:
             try:
                 result = self.cancel_job(job["id"])
             except Exception:
-                # The case is already in Trash, so this must not become a 500. Claim flags what is missed here.
+                # The Trash transaction has already flagged this job, so a failed cancel only skips the tidy-up.
                 log.exception("Could not stop job %s", job["id"])
                 continue
             # A send Orthanc has started finishes, and a queued one with a live receipt may too.

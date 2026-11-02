@@ -306,6 +306,10 @@ class Store:
             ).rowcount
             if added:
                 Accounts._write_audit(con, "case.trash", actor_id, case_id)
+                # In this transaction, so no job can publish between hiding the case and stopping its work.
+                con.execute(
+                    "UPDATE jobs SET data=json_set(data,'$.cancel_requested',json('true')) WHERE case_id=? AND status IN ('queued','running')", (case_id,)
+                )
 
     def restore_case(self, case_id, actor_id):
         safe_id(case_id)
