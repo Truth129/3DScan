@@ -58,8 +58,8 @@ def main():
         import uvicorn
         from .api import create_app
 
-        if args.host not in {"127.0.0.1", "::1", "localhost"}:
-            logging.warning("Listening on %s. 3DScan has no sign-in: anyone who can reach this port can read every case.", args.host)
+        # The sign-in mode depends on the address this listens on, however that was chosen.
+        os.environ["SCAN3D_HOST"] = args.host
         uvicorn.run(create_app(), host=args.host, port=args.port, workers=1, proxy_headers=False, access_log=False)
         return
     if args.command == "doctor":
