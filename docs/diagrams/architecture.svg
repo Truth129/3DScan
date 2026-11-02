@@ -72,7 +72,7 @@
 <text x="89" y="546" class="card-title">FastAPI service</text>
 <text x="89" y="573" class="body">Imports, jobs, revisions and review</text>
 <text x="89" y="595" class="body">Image / mask chunks, GLB and exports</text>
-<text x="89" y="617" class="body">No built-in sign-in: keep it private</text>
+<text x="89" y="617" class="body">Route gate: sign-in beyond loopback</text>
 <rect x="535" y="515" width="390" height="120" rx="10" fill="#172131" stroke="#3b4a62"/>
 <rect x="535" y="527" width="4" height="96" rx="2" fill="#7194c4"/>
 <text x="554" y="546" class="card-title">Two worker lanes, one lock</text>

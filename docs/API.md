@@ -1,12 +1,13 @@
 # HTTP API and data model
 
 The contract between the 3DScan server and its clients. Routes live under `/api`, on
-`http://127.0.0.1:9010` by default, with generated OpenAPI docs at `/docs`.
+`http://127.0.0.1:9010` by default, with generated OpenAPI docs at `/docs` while sign-in is off.
 [ARCHITECTURE.md](ARCHITECTURE.md) explains the system behind them.
 
 ## Conventions
 
-- **Authentication.** None. See [Transport rules](#transport-rules).
+- **Authentication.** A session cookie while sign-in is on, none while it is off. See
+  [Sign-in](#sign-in).
 - **Identifiers.** Case, revision, job, session and upload IDs are 32 lowercase hex characters.
   Malformed is 400. Well-formed but unknown is 404.
 - **Coordinates.** Patient RAS millimetres. Voxel arrays use nibabel order (i, j, k) with the full
@@ -24,19 +25,22 @@ or an unexpected 500 is plain text.
 | Status | Meaning                                                 | Source                                    |
 | ------ | ------------------------------------------------------- | ----------------------------------------- |
 | 400    | Invalid input, or a `Host` outside the allowlist        | `ValueError`, `TrustedHostMiddleware`     |
-| 403    | Mutation from another browser origin                    | Same-origin middleware                    |
-| 404    | Record is absent or belongs to another case             | `errors.NotFound`                         |
+| 401    | No valid session, or a wrong password                   | `SessionGate`, `POST /api/session`        |
+| 403    | Mutation from another browser origin, or access this account lacks | Same-origin middleware, `SessionGate` |
+| 404    | Record is absent, belongs to another case, or this account cannot open it | `errors.NotFound`, `SessionGate` |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
 | 409    | Stale state; reload before retrying                     | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active |
-| 411    | Captured view without a plain `Content-Length`          | `dicom-view` upload check                 |
-| 413    | Offline HTML export or captured view over a size limit  | `ExportTooLarge`, `dicom-view` upload check |
+| 411    | Captured view or sign-in without a plain `Content-Length` | `dicom-view` upload and sign-in checks  |
+| 413    | Offline HTML export, captured view or sign-in over a size limit | `ExportTooLarge`, `dicom-view` upload and sign-in checks |
 | 422    | Schema validation failed                                | FastAPI                                   |
+| 429    | Too many sign-in attempts                               | `POST /api/session`                       |
 | 499    | Client left while a mask or label union was being built | `volume-mask`, `volume-labels`            |
 | 500    | Unexpected exception, logged without internal detail    | Anything else, including a bare `KeyError` |
 | 502    | The configured Orthanc failed                           | `OrthancError`                            |
 | 503    | A cached surface or viewer bundle is missing            | Surface and export routes                 |
 
-The license route's validation message is fixed, so the key is never echoed.
+The license and sign-in routes' validation messages are fixed, so a key or password is never
+echoed.
 [Inference path](#refusals-and-failures) refusals use fixed sentences, with no proof text or local
 paths.
 
@@ -44,9 +48,9 @@ paths.
 
 - **Origin.** A non-GET request whose `Origin` differs from `Host` gets 403. Hosts must appear in
   `SCAN3D_ALLOWED_HOSTS`.
-- **Private responses.** `/api/orthanc/*`, the license route, `.../dicom-seg`, a prepared
-  `segment.dcm` and `.../dicom-view` use `Cache-Control: no-store`, errors included. Candidate
-  records, descriptors, agreement reports and frames use `private, no-store`.
+- **Private responses.** `/api/session`, `/api/orthanc/*`, the license route, `.../dicom-seg`, a
+  prepared `segment.dcm` and `.../dicom-view` use `Cache-Control: no-store`, errors included.
+  Candidate records, descriptors, agreement reports and frames use `private, no-store`.
 - **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces and `model.glb` use
   `Cache-Control: private, no-cache` with an `ETag`, and a matching `If-None-Match` gets a 304, so a
   browser keeps them but checks with the server before each use. `slicer.zip` has the same policy
@@ -54,6 +58,76 @@ paths.
 - **Compression.** JSON and viewer assets of at least 1 KiB use dynamic gzip. GLB routes negotiate
   stored gzip files. `slicer.zip`, `export.html` and `segment.dcm` are left alone and keep
   `Content-Length`.
+
+## Sign-in
+
+With sign-in [off](CONFIGURATION.md#sign-in), every request acts as one built-in local user, and
+every rule below passes. In `password` mode `/docs`, `/redoc` and `/openapi.json` are gone, and a
+request is refused before its route reads a body.
+
+### Sign-in routes
+
+| Route                              | Result                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `GET /api/session`                 | Always 200 with the view below                                          |
+| `POST /api/session`                | Takes `{username, password, shared_device?}`. 200 with the view and `Set-Cookie` |
+| `DELETE /api/session`              | Ends any session, clears its cookie, sends `Clear-Site-Data: "cache"`, returns the view |
+| `POST /api/session/sign-out-others` | Ends this account's other sessions. Returns `{signed_out}`             |
+
+The view is `{mode, user, setup_required}`:
+
+- `mode` is `off` or `password`.
+- `user` is null or `{id, username, display_name, role}`. With sign-in off it is the local user.
+- `setup_required` is true in password mode with no accounts.
+
+`POST /api/session` refusals:
+
+| Status | `detail`                                             | When                                        |
+| ------ | ---------------------------------------------------- | ------------------------------------------- |
+| 400    | `Sign-in is off on this workstation`                 | The mode is `off`                           |
+| 401    | `Wrong username or password`                         | Every failed sign-in, known name or not     |
+| 403    | `Sign in through the HTTPS address`                  | `Origin` is not https and `Host` is not loopback |
+| 411    | `A sign-in request must declare its Content-Length.` | No plain declared length, or chunked framing |
+| 413    | `The sign-in request is too large.`                  | Over 4 KiB                                  |
+| 422    | `Invalid sign-in request.`                           | Schema failure, with no input echoed        |
+| 429    | `Too many attempts. Try again in N seconds.`         | Throttled, with `Retry-After`               |
+
+Each username gets three free failures, then waits of 1, 2, 4, 8 and 16 seconds, then 30 seconds. A
+wait refuses without checking the password and never locks the account. At most two sign-ins hash
+at once. A third that waits over a second also gets 429, with N of 1.
+
+### Access rules
+
+Every refusal is `{"detail": ...}` with `Cache-Control: no-store`. Where two are shown, a request
+with no session gets the 401, and a signed-in one the other.
+
+| Rule      | Routes                                                                  | Refusal                                        |
+| --------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
+| Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, the viewer files | None                                         |
+| Signed in | `GET /api/cases`, `GET /api/agreement`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/orthanc/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
+| Admin     | `POST /api/cases/import-local`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
+| Archive   | `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
+| Case      | Every route with a case ID in its path                                  | 401, 404 `Case not found`                      |
+| Job       | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`         | 401, 404 `Job not found`                       |
+| Upload    | `POST /api/imports/{id}/parts`, `.../finish`, `DELETE /api/imports/{id}` | 401, 404 `Upload not found`                   |
+
+- `GET /api/cases` and `GET /api/agreement` cover only this account's cases.
+- A malformed case, job or upload ID is also 404 here, so a refusal never shows whether an ID
+  exists.
+- A job follows its case. An upload belongs to whoever started it, and one with no owner, or
+  started with sign-in off, to any admin.
+- A session cookie on a request other than GET, HEAD or OPTIONS with no `Origin` gets 403
+  `Cross-origin mutations are not allowed`.
+- A route with no rule gets 403 `This route has no access rule`, in either mode.
+
+### Session cookie
+
+- The name is `scan3d_session`. On an https `Origin` it is `__Host-scan3d_session` with `Secure`.
+- Attributes are `HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`, with no `Domain`.
+- A session lasts 30 days and slides. Its expiry moves at most every 10 minutes, with a fresh
+  `Set-Cookie` under the same name.
+- With `shared_device`, the cookie has no `Max-Age`, the session never slides and it ends after 12
+  hours. Responses on non-public routes then use `Cache-Control: no-store`.
 
 ## Data model
 
@@ -185,6 +259,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 
 | Method and path                                      | Purpose                                 |
 | ---------------------------------------------------- | --------------------------------------- |
+| `GET`, `POST`, `DELETE /api/session`, `POST .../sign-out-others` | [Sign-in](#sign-in)         |
 | `GET /api/health`, `GET /api/imaging-capabilities`   | Liveness, installed modality adapters   |
 | `GET /api/segmentation-options`                      | Task catalog and inference paths        |
 | `GET`, `PUT`, `DELETE /api/totalsegmentator/license` | License status and changes              |
@@ -235,7 +310,7 @@ Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 ## System routes
 
 **`GET /api/health`** returns `{status, worker, lanes, modalities, gpu, version}` and never loads
-PyTorch.
+PyTorch. With sign-in on, `gpu` is left out for a request with no session.
 
 - `lanes` maps `gpu` and `cpu` to thread liveness, and `worker` is true only when all are alive.
   Without the worker lock, `lanes` is empty and `worker` false.
