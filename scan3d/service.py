@@ -539,7 +539,7 @@ class Service:
 
     def _segment(self, job):
         from . import segmentation
-        from .segmentation_options import normalize_options
+        from .segmentation_options import normalize_options, run_source
 
         parent = self.store.revision(job["case_id"], job["payload"]["revision_id"])
         if self.store.get("cases", job["case_id"]).get("active_revision_id") != parent["id"]:
@@ -609,7 +609,7 @@ class Service:
             job["case_id"],
             ct,
             merged,
-            source="totalsegmentator",
+            source=run_source(options),
             parent=parent["id"],
             acquisition=acquisition,
             job=job,
@@ -950,7 +950,14 @@ class Service:
                     raise ValueError(f"Saved output {task_name}:{name} is unavailable; no inference was rerun")
                 group, color = segmentation._appearance(name, task_name)
                 outputs.append(
-                    dict(id=f"{task_name}:{name}", name=name.replace("_", " ").capitalize(), task=task_name, group=group, color=color, mask_file=str(path))
+                    dict(
+                        id=f"{task_name}:{name}",
+                        name=segmentation._structure_name(name, task_name),
+                        task=task_name,
+                        group=group,
+                        color=color,
+                        mask_file=str(path),
+                    )
                 )
         # Keep every current mask, including Slicer edits and refinement results.
         # Only presentation metadata is refreshed for the expanded anatomy groups.

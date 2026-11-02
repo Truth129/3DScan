@@ -67,6 +67,7 @@ Enabling a modality later makes series already in the library available.
 | `TOTALSEG_WEIGHTS_PATH`              | under `TOTALSEG_HOME_DIR`   | Use weights stored elsewhere.                                |
 | `SCAN3D_NNINTERACTIVE_MODEL`         | `.runtime/nninteractive/…`  | The pinned nnInteractive model folder.                       |
 | `SCAN3D_NNINTERACTIVE_STALL_SECONDS` | built in                    | How long a correction may run without progress.              |
+| `SCAN3D_SEGMENTATION_MODELS`         | `.runtime/segmentation-…`   | Folder that holds the pinned nnU-Net models.                 |
 | `SCAN3D_MESH_THREADS`                | `16`                        | Threads for mesh generation.                                 |
 | `SCAN3D_POSTPROCESS_WORKERS`         | `4`                         | Structures processed at once after segmentation.             |
 | `SCAN3D_DCM2NIIX`                    | `.tools/bin`, then `PATH`   | The DICOM converter.                                         |

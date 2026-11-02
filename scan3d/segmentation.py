@@ -18,7 +18,7 @@ import uuid
 from .config import ROOT, device_request
 from .fileio import atomic_text, hash_file as _digest
 from .imaging import _binary_nonempty, _image
-from . import segmentation_options
+from . import nnunet_models, segmentation_options
 from .segmentation_options import normalize_options, resolved_task_config, task_capabilities
 
 
@@ -34,9 +34,22 @@ DEVICE_CHECK_SECONDS = 300.0
 # Upstream catches any RuntimeError there, so the QC line says 'usually'.
 _RESULTS_MOVED = b"Prediction on device was unsuccessful"
 _FAILURE_LOG_BYTES = 64 * 1024
+_NAME_COLORS = ["#d88a72", "#ad91d6", "#a6c682", "#e3bb78", "#7ebbb7", "#c092b8"]
+
+
+def _name_color(name):
+    return _NAME_COLORS[int.from_bytes(hashlib.sha256(name.encode()).digest()[:2], "little") % len(_NAME_COLORS)]
+
+
+def _structure_name(name, task):
+    label = name.replace("_", " ").capitalize()
+    # Two models can name an organ alike, and an exported SEG or ROI shows only this name.
+    return f"{label} ({nnunet_models.MODELS[task].name})" if task in nnunet_models.MODELS else label
 
 
 def _appearance(name, task=None):
+    if task in nnunet_models.MODELS:
+        return nnunet_models.MODELS[task].name, _name_color(name)
     if "vein" in name or "vena" in name:
         return "Veins", "#4d82e8"
     if "arter" in name or "aorta" in name or name == "brachiocephalic_trunk":
@@ -57,12 +70,10 @@ def _appearance(name, task=None):
         return "Bones", "#d8cdb1"
     if name in {"heart", "atrial_appendage_left", "spinal_cord", "esophagus", "thyroid_gland"}:
         return "Chest organs", "#ce94a7"
-    colors = ["#d88a72", "#ad91d6", "#a6c682", "#e3bb78", "#7ebbb7", "#c092b8"]
-    index = int.from_bytes(hashlib.sha256(name.encode()).digest()[:2], "little") % len(colors)
     if name == "brain":
-        return "Head organs", colors[index]
+        return "Head organs", _name_color(name)
     if name.startswith(("gluteus_", "autochthon_", "iliopsoas_")):
-        return "Muscles", colors[index]
+        return "Muscles", _name_color(name)
     if task not in (None, "total", "total_v3", "total_mr"):
         groups = {
             "body": "Body",
@@ -97,8 +108,8 @@ def _appearance(name, task=None):
             "hip_implant": "Implants",
             "face": "Head organs",
         }
-        return groups.get(task, task.replace("_", " ").capitalize()), colors[index]
-    return "Abdominal organs", colors[index]
+        return groups.get(task, task.replace("_", " ").capitalize()), _name_color(name)
+    return "Abdominal organs", _name_color(name)
 
 
 def _device_info(device):
@@ -157,6 +168,9 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
     configurations = []
 
     def collect(task, robust_crop=False, body_seg=False, label=None, ancestors=()):
+        if model := nnunet_models.MODELS.get(task):
+            configurations.append((task, {"nnunet_model": model.id, "version": model.version, "folds": model.folds, "files": model.files}))
+            return
         if task in ancestors:
             raise ValueError("Cyclic TotalSegmentator crop-model configuration")
         label = label or task
@@ -181,6 +195,31 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
     for task in options["tasks"]:
         collect(task, options["robust_crop"], options["body_seg"])
     return configurations
+
+
+def _nnunet_descriptor(model):
+    """Identity of one pinned model. Complete only when every file matches its pin."""
+    directory = nnunet_models.model_dir(model)
+    files = []
+    matches = True
+    for name, expected in model.files.items():
+        path = directory / name
+        if not path.is_file():
+            matches = False
+            continue
+        stat = path.stat()
+        digest = _checkpoint_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        matches = matches and digest == expected
+        files.append({"name": f"{directory.name}/{name}", "bytes": stat.st_size, "sha256": digest})
+    return {
+        "task": model.id,
+        "engine": model.name,
+        "version": model.version,
+        "folds": list(model.folds),
+        "worker_sha256": _digest(Path(__file__).with_name("nnunet_worker.py")),
+        "files": files,
+        "complete": matches,
+    }
 
 
 def model_fingerprint(profile: str, options: dict | None = None, *, modality: str = "CT", inference_path=None) -> dict:
@@ -213,6 +252,9 @@ def model_fingerprint(profile: str, options: dict | None = None, *, modality: st
     configurations = _model_configurations(options)
     models = []
     for task, config in configurations:
+        if "nnunet_model" in config:
+            models.append(_nnunet_descriptor(nnunet_models.MODELS[task]))
+            continue
         ids = config["task_id"] if isinstance(config["task_id"], list) else [config["task_id"]]
         for dataset_id in ids:
             descriptor = {
@@ -408,7 +450,7 @@ def _confirm_card(inference_path, runtime, tasks):
     inference_path.confirm(runtime["selected_device"], runtime.get("gpu_name"), runtime.get("cuda"))
     for task in tasks:
         # Upstream starts a crop model with only "gpu" from gpu:N, which is the first card.
-        if runtime.get("gpu_index") and resolved_task_config(task).get("crop_model"):
+        if task not in nnunet_models.MODELS and runtime.get("gpu_index") and resolved_task_config(task).get("crop_model"):
             raise ValueError(
                 f"TotalSegmentator would run part of {task} on the first GPU, so it cannot run on {inference_path.label}. Nothing ran and no other GPU was tried."
             )
@@ -436,18 +478,23 @@ def segment(
     output_dir.mkdir(parents=True, exist_ok=True)
     if cancelled():
         raise SegmentationCancelled("Segmentation cancelled")
+    tasks = options["tasks"]
+    model = nnunet_models.MODELS.get(tasks[0])
+    engine, engine_version = (model.name, model.version) if model else ("TotalSegmentator", metadata.version("TotalSegmentator"))
+    # Before any child starts, because loading a checkpoint runs its pickle.
+    if model and not _nnunet_descriptor(model)["complete"]:
+        raise RuntimeError(f"{model.name} weights do not match their pinned checksums; nothing ran. Move the folder aside and download them again.")
     device = inference_path.device if inference_path else device_request()
     runtime = _resolve_device(device, cancelled, inference_path)
     effective_device = runtime["selected_device"]
-    tasks = options["tasks"]
     if inference_path:
         _confirm_card(inference_path, runtime, tasks)
     run_dir = output_dir / ("run-" + uuid.uuid4().hex)
     run_dir.mkdir()
     manifest = {
         "schema_version": 1,
-        "engine": "TotalSegmentator",
-        "engine_version": metadata.version("TotalSegmentator"),
+        "engine": engine,
+        "engine_version": engine_version,
         "resolution": "standard_full",
         "profile": profile,
         "modality": modality,
@@ -475,11 +522,14 @@ def segment(
     structures = []
     # The default path's child keeps inheriting this process's environment, exactly as before.
     spawn_options = {"env": inference_path.environment()} if inference_path else {}
+    if model:
+        inherited = spawn_options.get("env", os.environ)
+        spawn_options = {"env": {**inherited, "PYTHONPATH": os.pathsep.join(filter(None, (str(ROOT), inherited.get("PYTHONPATH"))))}}
     try:
         for task in tasks:
             if cancelled():
                 raise SegmentationCancelled("Segmentation cancelled")
-            progress(f"Running full-resolution TotalSegmentator: {task} ({device})")
+            progress(f"Running full-resolution {engine}: {task} ({device})")
             task_dir = run_dir / task
             task_dir.mkdir(exist_ok=True)
             if list(task_dir.glob("*.nii*")):
@@ -491,8 +541,7 @@ def segment(
             command = [
                 inference_path.python if inference_path else sys.executable,
                 "-u",
-                "-m",
-                "totalsegmentator.bin.TotalSegmentator",
+                *(("-P", "-m", "scan3d.nnunet_worker") if model else ("-m", "totalsegmentator.bin.TotalSegmentator")),
                 "-i",
                 str(ct_path),
                 "-o",
@@ -504,10 +553,12 @@ def segment(
                 "--report",
                 str(run_dir / f"{task}-report.json"),
             ]
+            if model:
+                command += ["--model-folder", str(nnunet_models.model_dir(model))]
             for option in ("robust_crop", "body_seg", "remove_small_blobs"):
                 if options[option]:
                     command.append("--" + option)
-            if inference_path:
+            if inference_path and not model:
                 command.append("--verbose")  # Only prints more, and upstream hides nnU-Net's output without it.
             capabilities = task_capabilities(task)
             effective = {
@@ -554,19 +605,19 @@ def segment(
                 record["status"] = "failed"
                 if inference_path:
                     cause = _failure_cause(process.returncode, log_path)
-                    raise RuntimeError(f"TotalSegmentator {task} failed on {inference_path.label}: {cause}. No other GPU was tried.")
-                raise RuntimeError(f"TotalSegmentator {task} failed (exit {process.returncode}); inspect the local worker log")
+                    raise RuntimeError(f"{engine} {task} failed on {inference_path.label}: {cause}. No other GPU was tried.")
+                raise RuntimeError(f"{engine} {task} failed (exit {process.returncode}); inspect the local worker log")
             report_path = run_dir / f"{task}-report.json"
             if not report_path.is_file():
-                raise RuntimeError("TotalSegmentator did not write its required reproducibility report; verify the pinned worker version")
+                raise RuntimeError(f"{engine} did not write its required reproducibility report; verify the pinned worker version")
             native = json.loads(report_path.read_text())
             if effective_device.startswith("gpu") and native.get("device") != "gpu":
-                raise RuntimeError("TotalSegmentator did not complete on the requested GPU; CPU fallback results were rejected")
+                raise RuntimeError(f"{engine} did not complete on the requested GPU; CPU fallback results were rejected")
             if inference_path:
                 # The child's own measurement, so this shows the spawn used the chosen interpreter.
                 if native.get("torch_version") != runtime["torch"]:
                     raise RuntimeError(
-                        f"TotalSegmentator {task} ran on PyTorch {native.get('torch_version')}, not the {runtime['torch']} that {inference_path.label} was checked on. "
+                        f"{engine} {task} ran on PyTorch {native.get('torch_version')}, not the {runtime['torch']} that {inference_path.label} was checked on. "
                         "No result was kept and no other GPU was tried."
                     )
                 if _RESULTS_MOVED in log_path.read_bytes():
@@ -575,15 +626,15 @@ def segment(
                         f"Part of {task} re-ran with results in system memory on {inference_path.label}, usually because GPU memory ran out. The run took longer."
                     )
             if native.get("fast") or native.get("fastest") or native.get("save_lowres"):
-                raise RuntimeError("TotalSegmentator returned an unexpected reduced-resolution result")
+                raise RuntimeError(f"{engine} returned an unexpected reduced-resolution result")
             record["native_report"] = report_path.name
             record["runtime_seconds"] = native.get("runtime_seconds")
             record["nnunetv2_version"] = native.get("nnunetv2_version")
             masks = {path.name[:-7]: path for path in sorted(task_dir.glob("*.nii.gz"))}
             if not masks:
-                raise RuntimeError(f"TotalSegmentator {task} produced no masks")
+                raise RuntimeError(f"{engine} {task} produced no masks")
             if set(native.get("classes", {}).values()) - set(masks):
-                raise RuntimeError(f"TotalSegmentator {task} did not save every declared class mask")
+                raise RuntimeError(f"{engine} {task} did not save every declared class mask")
             if task == "lung_vessels" and not _LUNG.issubset(masks):
                 raise RuntimeError(
                     "This lung_vessels model does not provide the required split artery/vein/airway outputs; verify the pinned TotalSegmentator version"
@@ -603,7 +654,7 @@ def segment(
                     continue
                 group, color = _appearance(name, task)
                 structures.append(
-                    {"id": f"{task}:{name}", "name": name.replace("_", " ").capitalize(), "task": task, "group": group, "color": color, "mask_file": str(path)}
+                    {"id": f"{task}:{name}", "name": _structure_name(name, task), "task": task, "group": group, "color": color, "mask_file": str(path)}
                 )
             record["mask_validation_seconds"] = round(time.monotonic() - validation_started, 3)
             save_manifest()

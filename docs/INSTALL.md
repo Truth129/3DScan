@@ -252,9 +252,19 @@ TotalSegmentator license**.
 **nnInteractive** powers assisted corrections. `scripts/download_interactive_model.py` fetches the
 pinned `nnInteractive_v1.0` model into `.runtime/nninteractive/` and checks its SHA-256.
 
+**MRSegmentator** is an optional second model for comparison. It needs about 1.2 GB:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py mrsegmentator
+```
+
+The weights go to `.runtime/segmentation-models/`. Every file is checked against a pinned SHA-256
+when it is downloaded and before each run. Requests never download them.
+
 **Check the licenses before you use them.** The nnInteractive engine is Apache-2.0, but its
 [pretrained weights](https://huggingface.co/MIC-DKFZ/nnInteractive) are **CC BY-NC-SA 4.0, which is
-noncommercial**, as are some TotalSegmentator subtasks. You are responsible for accepting and
+noncommercial**, as are some TotalSegmentator subtasks. MRSegmentator's code is Apache-2.0, and its
+repository states no separate license for the weights. You are responsible for accepting and
 following these terms. 3DScan's own Apache-2.0 license does not change them.
 
 ## Run it as a service

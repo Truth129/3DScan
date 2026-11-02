@@ -124,9 +124,9 @@ build.
   raise a bare `KeyError` for "not found".
 - **Jobs.**
   - Work that never touches the GPU runs on the CPU lane.
-  - TotalSegmentator and nnInteractive share the serialized GPU lane.
-  - Both run their models outside the API process: TotalSegmentator as a subprocess, and
-    nnInteractive in the supervised child `scan3d/interactive_worker.py`.
+  - TotalSegmentator, pinned nnU-Net models and nnInteractive share the serialized GPU lane.
+  - All run outside the API process: TotalSegmentator and `scan3d/nnunet_worker.py` as
+    subprocesses, and nnInteractive in the supervised child `scan3d/interactive_worker.py`.
   - The API process never imports PyTorch, so a segmentation job resolves its device in a
     short-lived child, `segmentation._resolve_device`.
 - **Inference paths.** See [ARCHITECTURE.md](ARCHITECTURE.md#inference-paths).

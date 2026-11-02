@@ -84,7 +84,7 @@ def test_catalog_exposes_output_names_and_correct_vertebral_and_brain_labels():
         assert item["modality"] == "CT"
         assert item["class_count"] == len(item["classes"])
         assert len(item["classes"]) == len(set(item["classes"]))
-        assert set(get_task_classes(item["id"]).values()) <= set(item["classes"])
+        assert item.get("comparison") or set(get_task_classes(item["id"]).values()) <= set(item["classes"])
     assert "skull" in tasks["total"]["classes"]
     assert "skull" in tasks["craniofacial_structures"]["classes"]
     assert tasks["body"]["model_class_count"] == 2

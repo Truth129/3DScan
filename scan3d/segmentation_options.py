@@ -8,6 +8,7 @@ license over the network.
 from __future__ import annotations
 
 from importlib import metadata
+from . import nnunet_models
 from .totalsegmentator_license import license_configured
 
 
@@ -69,9 +70,12 @@ def task_ids(modality: str = "CT") -> list[str]:
     from totalsegmentator.map_tasks_config import TASK_CONFIGS
 
     return [
-        task
-        for task in TASKS
-        if task_modality(task) == adapter.modality and task in TASK_CONFIGS and task not in _EXCLUDED_TASKS and not task.endswith("_LEGACY")
+        *(
+            task
+            for task in TASKS
+            if task_modality(task) == adapter.modality and task in TASK_CONFIGS and task not in _EXCLUDED_TASKS and not task.endswith("_LEGACY")
+        ),
+        *(model.id for model in nnunet_models.models_for(adapter.modality)),
     ]
 
 
@@ -90,6 +94,14 @@ def resolved_task_config(task: str, robust_crop: bool = False, mode: str = "defa
 def task_capabilities(task: str) -> dict:
     from totalsegmentator.registry import task_modality
 
+    if task in nnunet_models.MODELS:
+        return {
+            "uses_organ_crop": False,
+            "robust_crop_default": False,
+            "robust_crop_supported": False,
+            "body_seg_supported": False,
+            "remove_small_blobs_supported": False,
+        }
     config = resolved_task_config(task)
     is_mr = task_modality(task) == "MR"
     cropped = bool(config.get("crop") or config.get("cascade"))
@@ -102,6 +114,32 @@ def task_capabilities(task: str) -> dict:
         and config.get("crop_model") is None
         and not any(label in {"body_trunc", "body_extremities"} for label in crop_labels),
         "body_seg_supported": not is_mr and not cropped,
+        "remove_small_blobs_supported": True,
+    }
+
+
+def run_source(options: dict) -> str:
+    """A revision's `source`. A nnU-Net model always runs alone, so its first task decides."""
+    return "nnunet_model" if options["tasks"][0] in nnunet_models.MODELS else "totalsegmentator"
+
+
+def _model_entry(model: nnunet_models.NnunetModel, modality: str) -> dict:
+    available = nnunet_models.installed(model)
+    return {
+        "id": model.id,
+        "label": model.label,
+        "engine": model.name,
+        "engine_version": model.version,
+        "comparison": True,
+        "license_required": False,
+        "license_available": True,
+        "available": available,
+        "modality": modality,
+        "classes": list(model.labels),
+        "class_count": len(model.labels),
+        "model_class_count": len(model.labels),
+        "description": model.description if available else nnunet_models.install_hint(model) + ".",
+        **task_capabilities(model.id),
     }
 
 
@@ -111,6 +149,9 @@ def segmentation_catalog(modality: str = "CT") -> dict:
     configured = license_configured()
     tasks = []
     for task in task_ids(modality):
+        if model := nnunet_models.MODELS.get(task):
+            tasks.append(_model_entry(model, modality))
+            continue
         required = requires_license(task)
         available = not required or configured
         classes = list(get_task_classes(task).values())
@@ -123,6 +164,7 @@ def segmentation_catalog(modality: str = "CT") -> dict:
             {
                 "id": task,
                 "label": _LABELS.get(task, task.replace("_", " ").capitalize()),
+                "engine": "TotalSegmentator",
                 "license_required": required,
                 "license_available": available,
                 "available": available,
@@ -172,7 +214,15 @@ def normalize_options(profile: str, options: dict | None = None, *, modality: st
         raise ValueError("Segmentation options must be true or false")
     if selected_default == "total_mr" and (settings["body_seg"] or settings["robust_crop"]):
         raise ValueError("Body cropping and the robust-crop switch are CT-only options; MRI organ tasks use their native MRI crop model")
-    if any(requires_license(task) for task in tasks) and not license_configured():
+    models = [nnunet_models.MODELS[task] for task in tasks if task in nnunet_models.MODELS]
+    if models:
+        if len(tasks) > 1:
+            raise ValueError(f"{models[0].name} runs on its own, not with other tasks")
+        if any(settings.values()):
+            raise ValueError(f"{models[0].name} has no crop or small-blob options")
+        if not nnunet_models.installed(models[0]):
+            raise ValueError(nnunet_models.install_hint(models[0]))
+    if any(requires_license(task) for task in tasks if task not in nnunet_models.MODELS) and not license_configured():
         raise ValueError("This task requires a TotalSegmentator license configured on the workstation")
     capabilities = [task_capabilities(task) for task in tasks]
     if settings["body_seg"] and any(not item["body_seg_supported"] for item in capabilities):
