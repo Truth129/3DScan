@@ -592,6 +592,26 @@ describe('the Library', () => {
       await undo(root);
       expect(api.case).not.toHaveBeenCalledWith('other');
     });
+    it('reopens on Undo when the list cannot be read', async () => {
+      const { stored } = workstation([amd]);
+      trashing();
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      vi.mocked(api.cases).mockRejectedValue(new Error('No list'));
+      await undo(root);
+      expect(stored.get('scan3d-case')).toBe('case');
+      expect(root.content).toContain('Case restored.');
+    });
+    it('offers Undo for a closed case when the list cannot be read', async () => {
+      workstation([amd]);
+      trashing();
+      vi.mocked(api.cases).mockImplementation(async () => [other, scan]);
+      const root = await openLibrary();
+      vi.mocked(api.cases).mockRejectedValue(new Error('No list'));
+      await press(root.button('Move to Trash'));
+      expect(api.trash).toHaveBeenCalledExactlyOnceWith('other');
+      expect(root.named('undo-toast')?.content).toContain(' moved to Trash.');
+    });
     it('keeps a case opened while the move waited, and Undo leaves it open', async () => {
       const { stored } = workstation([amd]);
       trashing();

@@ -758,7 +758,8 @@ async function moveToTrash(id: string) {
     const result = await api.trash(id);
     // A case opened while this waited must stay open.
     if (open && generation === caseGeneration) await closeCase(id, '');
-    else await refreshCases();
+    // The case has moved, so a failed list read must not take away its Undo.
+    else void refreshCases().catch(() => {});
     libraryStamp.value++;
     const message = trashMessage(result, label) + (saved ? '' : ' Your latest marks could not be saved.');
     trashOffer.value = { id, message, reopen: open, stopped: result.jobs_stopped };
@@ -775,7 +776,7 @@ async function restoreCase(id: string, reopen = false, stopped = 0) {
   if (trashOffer.value?.id === id) trashOffer.value = undefined;
   try {
     await api.restore(id);
-    await refreshCases();
+    void refreshCases().catch(() => {});
     libraryStamp.value++;
     // Loading means another case is on its way, and that one stays the person's choice.
     if (reopen && !activeCase.value && !loading.value) await openCase(id);
