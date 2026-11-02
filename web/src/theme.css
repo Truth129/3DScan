@@ -197,6 +197,7 @@ input[type='range'] {
 .button.primary:hover:not(:disabled) {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
+  color: var(--ink);
 }
 .button.secondary {
   background: var(--surface);
