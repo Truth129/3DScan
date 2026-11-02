@@ -202,30 +202,33 @@ def execute_cpu(rig, job_id):
     return rig.service.store.get("jobs", job_id)
 
 
-def start_as(rig, user_id):
+def start_as(rig, user_id, label=None):
     identity.activate(identity.Principal(user_id, "name", "Name", "admin", True))
     try:
-        return rig.service.orthanc.start(SERIES, rig.archive.snapshot_doc["snapshot"])
+        return rig.service.orthanc.start(SERIES, rig.archive.snapshot_doc["snapshot"], label)
     finally:
         identity.activate(None)
 
 
-def test_an_import_belongs_to_who_started_it_and_dedupe_grants_nobody_else(rig):
+@pytest.mark.parametrize("status", ["running", "completed", "failed", "cancelled"])
+def test_each_account_has_its_own_import_and_retries_only_its_own(rig, status):
     def owners(case_id):
         with rig.service.store.connection() as con:
-            return sorted(row["user_id"] for row in con.execute("SELECT user_id FROM case_access WHERE case_id=?", (case_id,)))
+            return [row["user_id"] for row in con.execute("SELECT user_id FROM case_access WHERE case_id=?", (case_id,))]
 
     first, second = "a" * 32, "b" * 32
-    job = start_as(rig, first)
-    assert job["requested_by"] == first and owners(job["case_id"]) == [first]
-    # The second person gets the running job back, and must gain nothing by asking.
-    assert start_as(rig, second)["id"] == job["id"] and owners(job["case_id"]) == [first]
-    # A retry reuses the failed case, which still holds no scan. Its new job needs its starter to read it.
-    rig.service.store.update_job(job["id"], status="failed")
-    retry = start_as(rig, first)
-    assert retry["case_id"] == job["case_id"] and owners(job["case_id"]) == [first]
-    rig.service.store.update_job(retry["id"], status="failed")
-    assert start_as(rig, second)["case_id"] == job["case_id"] and owners(job["case_id"]) == [first, second]
+    job = start_as(rig, first, "First label")
+    rig.service.store.update_job(job["id"], status=status)
+    other = start_as(rig, second, "Second label")
+    assert other["id"] != job["id"] and other["case_id"] != job["case_id"]
+    assert job["requested_by"] == first and other["requested_by"] == second
+    assert owners(job["case_id"]) == [first] and owners(other["case_id"]) == [second]
+    assert rig.service.store.get("cases", job["case_id"])["label"] == "First label"
+    assert rig.service.store.get("cases", other["case_id"])["label"] == "Second label"
+    # The newest job for this snapshot is now someone else's, and must not hide the first person's.
+    again = start_as(rig, first)
+    assert again["case_id"] == job["case_id"] and owners(job["case_id"]) == [first]
+    assert (again["id"] == job["id"]) == (status in {"running", "completed"})
 
 
 def test_queries_remain_private_and_modality_policy_applies_before_import(rig):

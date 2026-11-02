@@ -26,6 +26,15 @@ from .orthanc_models import (
 )
 from .store import Store, grant_owner, identifier, now, public_job, safe_id
 
+# Every lookup of an earlier import uses this, so launch and start agree on what exists.
+_READABLE = "AND (? IS NULL OR EXISTS(SELECT 1 FROM case_access a WHERE a.case_id=j.case_id AND a.user_id=?))"
+
+
+def _reader():
+    """Whose imports a lookup is limited to. The local user and work with no person see them all."""
+    actor = identity.actor_id()
+    return None if actor in (None, identity.LOCAL.id) else actor
+
 
 class OrthancImports:
     def __init__(self, service):
@@ -80,11 +89,12 @@ class OrthancImports:
         if reason or not snapshot.stable or snapshot.completeness not in {"complete", "unknown"}:
             return result
         key = hashlib.sha256((snapshot.source_key + snapshot.snapshot).encode()).hexdigest()
+        reader = _reader()
         with self.service.store.connection() as con:
             row = con.execute(
                 "SELECT j.data AS job_data,c.data AS case_data FROM jobs j LEFT JOIN cases c ON c.id=j.case_id "
-                "WHERE json_extract(j.data,'$.kind')='orthanc_import' AND json_extract(j.data,'$.payload.import_key')=? ORDER BY j.rowid DESC LIMIT 1",
-                (key,),
+                f"WHERE json_extract(j.data,'$.kind')='orthanc_import' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
+                (key, reader, reader),
             ).fetchone()
         if not row:
             return result
@@ -198,6 +208,7 @@ class OrthancImports:
         if sum(item.size for item in snapshot.instances) > self.service.settings.upload_limit:
             raise ValueError("Orthanc import exceeds size limit")
         key = hashlib.sha256((snapshot.source_key + snapshot.snapshot).encode()).hexdigest()
+        reader = _reader()
         store = self.service.store
         with store.connection() as con:
             con.execute("BEGIN IMMEDIATE")
@@ -205,8 +216,8 @@ class OrthancImports:
                 "CREATE INDEX IF NOT EXISTS orthanc_import_key ON jobs(json_extract(data,'$.payload.import_key')) WHERE json_extract(data,'$.kind')='orthanc_import'"
             )
             previous = con.execute(
-                "SELECT data FROM jobs WHERE json_extract(data,'$.kind')='orthanc_import' AND json_extract(data,'$.payload.import_key')=? ORDER BY rowid DESC LIMIT 1",
-                (key,),
+                f"SELECT j.data FROM jobs j WHERE json_extract(j.data,'$.kind')='orthanc_import' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
+                (key, reader, reader),
             ).fetchone()
             previous = json.loads(previous["data"]) if previous else None
             if previous and previous["status"] in {"queued", "running", "completed"}:

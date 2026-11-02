@@ -467,8 +467,7 @@ when a TotalSegmentator key is saved, and model downloads.
 - With sign-in off, anything that can reach the port can read every case. With it on, anyone with
   a shell on the machine can still read every file.
 - Every account is an administrator, and a case cannot be shared between accounts.
-- An Orthanc series imported by one account stays that account's case. Another account that opens
-  or imports it gets not found.
+- Each account imports its own copy of an Orthanc series, so the same scan can be on disk twice.
 - Jobs and review sessions store who started them, but the app shows neither, and a revision records
   no reviewer. The audit log has no viewer.
 - The service does not scale out, and it runs on Linux only.

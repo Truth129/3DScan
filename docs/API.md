@@ -1045,14 +1045,14 @@ supported, unsupported_reason}`. `completeness` is `receiving`, `incomplete`, `c
 - Receiving and incomplete series, and any change since selection, return 409.
 - A stable series with an unknown expected count imports with a warning.
 - A completed case holds the originals with no revision yet. `process` prepares it next.
-- Requests for the same snapshot return the same job. Failed or cancelled imports can be retried,
-  never overwriting earlier bytes.
+- Requests from one account for the same snapshot return the same job, and each account has its own
+  import. Failed or cancelled imports can be retried, never overwriting earlier bytes.
 
 **`POST /api/orthanc/launch`** takes `{series_id, source_key}` and returns `{study, series, case_id,
 job}`, creating nothing and transferring no DICOM.
 
-- `case_id` identifies a valid completed import, `job` an existing pending one, otherwise both are
-  null.
+- `case_id` identifies this account's valid completed import, `job` its pending one, otherwise both
+  are null.
 - `source_key` is the SHA-256 of the normalized archive URL: an identity check, not a credential.
 - A different archive is refused before any network access. An import failing verification is 409.
 

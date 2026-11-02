@@ -116,7 +116,7 @@ Import runs on the CPU and is bound to the snapshot you selected:
 - The modality must be enabled in `SCAN3D_MODALITIES`, and the 16 GiB import limit applies.
 - The snapshot is checked before and after transfer, with file hashes, DICOM identities and a single
   frame of reference. If the series changed, refresh and select it again.
-- Importing the same snapshot again reuses its case or job.
+- Importing the same snapshot again reuses your case or job.
 - Failed, cancelled and interrupted imports can be retried without touching earlier source files.
   They do not resume on their own after a restart.
 
@@ -191,7 +191,7 @@ The button opens `<3DScan root>#orthanc-series=<id>&orthanc-source=<key>` in a n
 
 In Explorer 2, click a study, click a series, then click the cube icon at the right of its toolbar.
 
-- If the same snapshot was already imported, 3DScan reopens it, and a pending import resumes its
+- If you already imported the same snapshot, 3DScan reopens it, and a pending import resumes its
   status check.
 - Otherwise confirm the patient shown and choose **Import selected series**.
 - The link never prepares a CT, runs segmentation or imports SEG.

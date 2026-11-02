@@ -5,12 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from scan3d import identity
 from scan3d.errors import NotFound
 from scan3d.identity import EVERY_CASE
 from scan3d.orthanc import OrthancClient, OrthancError, series_summary
 from scan3d.orthanc_models import snapshot_fingerprint
 from test_orthanc import Archive, STUDY as TRANSPORT_STUDY
-from test_orthanc_imports import SERIES, STUDY, STUDY_UID, execute_cpu, rig, start
+from test_orthanc_imports import SERIES, STUDY, STUDY_UID, execute_cpu, rig, start, start_as
 
 
 @pytest.fixture
@@ -107,6 +108,26 @@ def test_launch_returns_only_public_current_selection_without_creating_work(laun
     assert rig.service.store.visible_cases(EVERY_CASE) == rig.service.store.list("jobs") == []
     for private in ('"instances"', "file_uuid", "source_key", "synthetic-user", "private-test-password", "https://synthetic.example.test"):
         assert private not in response.text
+
+
+def test_launch_finds_only_the_imports_of_the_person_asking(launch_rig):
+    rig = launch_rig
+    first, second = "a" * 32, "b" * 32
+
+    def launch_as(user_id):
+        identity.activate(identity.Principal(user_id, "name", "Name", "admin", True))
+        try:
+            return rig.service.orthanc.launch(SERIES, rig.archive.source_key)
+        finally:
+            identity.activate(None)
+
+    job = start_as(rig, first)
+    assert launch_as(first)["job"]["id"] == job["id"]
+    assert launch_as(second)["job"] is None
+    assert execute_cpu(rig, job["id"])["status"] == "completed"
+    assert launch_as(first)["case_id"] == job["case_id"]
+    other = launch_as(second)
+    assert other["case_id"] is other["job"] is None
 
 
 def test_archive_mismatch_is_rejected_before_any_upstream_request(launch_rig, monkeypatch):
