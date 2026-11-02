@@ -120,6 +120,8 @@ Import runs on the CPU and is bound to the snapshot you selected:
 - Failed, cancelled and interrupted imports can be retried without touching earlier source files.
   They do not resume on their own after a restart.
 - A series the validator refuses fails its import with the validator's reason.
+- A case imported from Orthanc can add other series of the same study. A series of another study is
+  refused, and a refused addition leaves the case as it was.
 
 3DScan keeps its own copy of imported files. Its backups do not cover Orthanc's archive.
 

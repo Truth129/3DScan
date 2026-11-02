@@ -55,6 +55,11 @@ class OrthancImport(Input):
     label: str | None = Field(None, max_length=128)
 
 
+class OrthancAddSeries(Input):
+    series_id: str = Field(pattern=r"^[0-9a-f]{8}(?:-[0-9a-f]{8}){4}$")
+    snapshot: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class OrthancLaunch(Input):
     series_id: OrthancID
     source_key: Digest

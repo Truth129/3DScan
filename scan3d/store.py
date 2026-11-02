@@ -748,7 +748,7 @@ def grant_owner(con, case_id):
 
 def public_case(record, settings=None):
     """Client view; with settings, series of a modality not offered here read as unavailable."""
-    result = {k: v for k, v in record.items() if k not in ("source_dir", "references")}
+    result = {k: v for k, v in record.items() if k not in ("source_dir", "references", "added_sources")}
     result["series"] = []
     for series in record.get("series", []):
         view = {k: v for k, v in series.items() if k != "files"}

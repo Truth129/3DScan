@@ -24,7 +24,7 @@ from .fileio import atomic_json
 from .identity import actor_id
 from .image_assets import reference_image
 from .orthanc import OrthancError
-from .orthanc_models import DicomUID, Digest, OrthancID, Positive, SourceManifest, json_record, parse_source
+from .orthanc_models import DicomUID, Digest, OrthancID, Positive, SourceManifest, json_record, parse_source, series_source
 from .store import identifier, now, public_job
 
 log = logging.getLogger(__name__)
@@ -272,8 +272,9 @@ class OrthancExports:
         store = self.service.store
         source_metadata = reference["source"]
         try:
-            source = parse_source(case.get("references", {})["orthanc"])
-            directory = Path(case["source_dir"])
+            retained = series_source(case, source_metadata["series_uid"])
+            source = parse_source(retained["orthanc"])
+            directory = Path(retained["source_dir"])
             manifest_path = directory.parent / "source-import.json"
             if (
                 directory.is_symlink()

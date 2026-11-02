@@ -131,6 +131,33 @@ class OrthancImports:
             ) from None
         return result
 
+    def case_series(self, case_id):
+        """The series of a case's own Orthanc study, each marked if the case already holds it."""
+        case = self.service.store.get("cases", case_id)
+        archive = self._case_archive(case)
+        result = self.series(parse_source(case["references"]["orthanc"]).snapshot.study_id)
+        if result["study"]["study_uid"] != archive["study_uid"]:
+            raise OrthancChanged("The Orthanc study changed. Refresh its series before adding one.")
+        held = {row["uid"] for row in case["series"]}
+        for row in result["series"]:
+            row["in_case"] = row["series_uid"] in held
+        return result
+
+    @staticmethod
+    def _case_archive(case):
+        archive = case.get("import_source")
+        if not isinstance(archive, dict) or archive.get("kind") != "orthanc":
+            raise ValueError("Only a case imported from Orthanc can add an Orthanc series")
+        return archive
+
+    def _check_addition(self, case, snapshot):
+        """A series joins a case only from that case's own study, so no other patient's images can."""
+        archive = self._case_archive(case)
+        if archive.get("source_key") != snapshot.source_key or archive.get("study_uid") != snapshot.study_uid:
+            raise ValueError("This series belongs to a different study, so it cannot be added to this case")
+        if any(row["uid"] == snapshot.series_uid for row in case["series"]):
+            raise ValueError("This series is already in this case")
+
     def _launch_case(self, case, job, snapshot):
         source = parse_source(case["references"]["orthanc"])
         provenance = case["import_source"]
@@ -196,7 +223,8 @@ class OrthancImports:
                 con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case["id"]))
                 Store.summarize_case(con, case)
 
-    def start(self, series_id, fingerprint, label=None):
+    def start(self, series_id, fingerprint, label=None, *, case_id=None):
+        """Import a series into a new case, or into `case_id`, which only an authorized route passes."""
         with self.client() as client:
             snapshot = client.snapshot(series_id)
         if snapshot.snapshot != fingerprint:
@@ -207,7 +235,7 @@ class OrthancImports:
             raise ValueError(reason)
         if sum(item.size for item in snapshot.instances) > self.service.settings.upload_limit:
             raise ValueError("Orthanc import exceeds size limit")
-        key = hashlib.sha256((snapshot.source_key + snapshot.snapshot).encode()).hexdigest()
+        key = hashlib.sha256((snapshot.source_key + snapshot.snapshot + (case_id or "")).encode()).hexdigest()
         reader = _reader()
         store = self.service.store
         with store.connection() as con:
@@ -223,7 +251,13 @@ class OrthancImports:
             if previous and previous["status"] in {"queued", "running", "completed"}:
                 return previous
             case = None
-            if previous:
+            if case_id:
+                row = con.execute("SELECT data FROM cases WHERE id=?", (case_id,)).fetchone()
+                if not row:
+                    raise NotFound("Case not found")
+                case = json.loads(row["data"])
+                self._check_addition(case, snapshot)
+            elif previous:
                 row = con.execute("SELECT data FROM cases WHERE id=?", (previous["case_id"],)).fetchone()
                 case = json.loads(row["data"]) if row else None
                 if case and (case.get("active_revision_id") or case.get("source_dir")):
@@ -239,7 +273,8 @@ class OrthancImports:
                     series=[],
                     references={},
                 )
-            case.update(status="importing", error=None)
+            if not case_id:
+                case.update(status="importing", error=None)
             job = dict(
                 id=identifier(),
                 case_id=case["id"],
@@ -250,12 +285,13 @@ class OrthancImports:
                 revision_id=None,
                 created_at=now(),
                 cancel_requested=False,
-                payload={"import_key": key, "snapshot": json_record(snapshot)},
+                payload={"import_key": key, "snapshot": json_record(snapshot), **({"add_to_case": True} if case_id else {})},
                 requested_by=identity.actor_id(),
             )
-            con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (case["id"], json.dumps(case, allow_nan=False)))
-            Store.summarize_case(con, case)
-            grant_owner(con, case["id"])
+            if not case_id:
+                con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (case["id"], json.dumps(case, allow_nan=False)))
+                Store.summarize_case(con, case)
+                grant_owner(con, case["id"])
             con.execute("INSERT INTO jobs VALUES (?,?,?,?)", (job["id"], case["id"], job["status"], json.dumps(job, allow_nan=False)))
         return job
 
@@ -438,12 +474,24 @@ class OrthancImports:
                     if current.get("cancel_requested") or current["status"] != "running" or service.stop_event.is_set():
                         raise InterruptedError("Orthanc import cancelled")
                     case = json.loads(con.execute("SELECT data FROM cases WHERE id=?", (job["case_id"],)).fetchone()["data"])
-                    if case.get("active_revision_id") or case.get("source_dir"):
+                    addition = job["payload"].get("add_to_case")
+                    if addition:
+                        self._check_addition(case, snapshot)
+                    elif case.get("active_revision_id") or case.get("source_dir"):
                         raise OrthancChanged("The destination case changed while this archive import was running.")
                     directory.rename(destination)
                     atomic_json(destination.parent / "source-import.json", source_data)
-                    case.update(status="imported", error=None, series=series, source_dir=str(destination), import_source=provenance)
-                    case["references"]["orthanc"] = source_data
+                    if addition:
+                        # The case keeps its status and open result: this adds a choice, not a new scan.
+                        case["series"].extend(series)
+                        case.setdefault("added_sources", {})[snapshot.series_uid] = {
+                            "import_source": provenance,
+                            "orthanc": source_data,
+                            "source_dir": str(destination),
+                        }
+                    else:
+                        case.update(status="imported", error=None, series=series, source_dir=str(destination), import_source=provenance)
+                        case["references"]["orthanc"] = source_data
                     current.update(status="completed", stage="Imported; choose Open scan to prepare viewing", error=None, completed_at=now())
                     con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case["id"]))
                     Store.summarize_case(con, case)

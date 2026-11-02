@@ -11,6 +11,7 @@ from pydicom.errors import InvalidDicomError
 from .fileio import atomic_json, code_fingerprint, hash_file
 from .identity import actor_id
 from .image_assets import assert_reference_image
+from .orthanc_models import series_source
 from .store import ReviewConflict, identifier, now
 
 
@@ -58,7 +59,7 @@ def series_files(service, case_id, case, source):
     for key in ("study_uid", "frame_of_reference_uid"):
         if not source.get(key) or source[key] != series.get(key):
             raise ValueError("The prepared CT has no verified DICOM study and coordinate frame; prepare its original series again")
-    directory = Path(case.get("source_dir", ""))
+    directory = Path(series_source(case, source.get("series_uid")).get("source_dir") or "")
     if directory.is_symlink() or not directory.resolve().is_relative_to(service.store.case_dir(case_id).resolve()):
         raise ValueError("The original CT source is unavailable")
     paths = sorted((_owned_file(path, directory) for path in series["files"]), key=str)

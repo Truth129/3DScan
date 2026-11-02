@@ -88,6 +88,10 @@ These fields are labels only: they change no pixels, rendering or tasks. **Selec
 toolbar opens another series and keeps your result, and **Source image** switches between opened
 images.
 
+**Add series from Orthanc** appears under the series list of a case imported from Orthanc. It lists
+the rest of that study, so several series can share one case. Each series opens on its own and
+keeps its own segments.
+
 ## Run TotalSegmentator
 
 1. Choose **Segment CT…**.

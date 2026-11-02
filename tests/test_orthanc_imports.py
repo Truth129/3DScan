@@ -33,6 +33,7 @@ def oid(value):
 
 STUDY, SERIES = oid(1), oid(2)
 STUDY_UID, SERIES_UID, FRAME_UID = "1.2.826.0.1.3680043.10.543.1", "1.2.826.0.1.3680043.10.543.2", "1.2.826.0.1.3680043.10.543.3"
+SECOND_SERIES_UID = "1.2.826.0.1.3680043.10.543.4"
 
 
 def instance_bytes(index, *, study=STUDY_UID, series=SERIES_UID, frame=FRAME_UID):
@@ -482,6 +483,86 @@ def test_a_refused_series_reports_the_validators_own_reason(rig):
     assert result["status"] == "failed"
     assert result["error"] == "The selected DICOM series cannot form a supported reference image: Nonuniform slice spacing or missing slices"
     assert not rig.service.store.get("cases", job["case_id"]).get("source_dir")
+
+
+def imported_case(rig):
+    job = start(rig).json()
+    assert execute_cpu(rig, job["id"])["status"] == "completed"
+    return job["case_id"]
+
+
+def become_second_series(rig, study=STUDY_UID):
+    """The archive's one series turns into another series of the study, so one fixture covers both."""
+    for index, entry in enumerate(rig.archive.snapshot_doc["instances"]):
+        rig.archive.files[entry["id"]] = instance_bytes(index, study=study, series=SECOND_SERIES_UID)
+        entry["size"] = len(rig.archive.files[entry["id"]])
+    rig.archive.snapshot_doc.update(series_uid=SECOND_SERIES_UID, study_uid=study)
+    rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
+
+
+def add_series(rig, case_id):
+    return rig.http.post(f"/api/cases/{case_id}/orthanc-series", json={"series_id": SERIES, "snapshot": rig.archive.snapshot_doc["snapshot"]})
+
+
+def test_a_series_of_the_same_study_joins_the_case_with_its_own_source(rig, monkeypatch):
+    case_id = imported_case(rig)
+    first = rig.service.store.get("cases", case_id)
+    become_second_series(rig)
+    assert [row["in_case"] for row in rig.http.get(f"/api/cases/{case_id}/orthanc-series").json()["series"]] == [False]
+    job = add_series(rig, case_id)
+    assert job.status_code == 200, job.text
+    assert add_series(rig, case_id).json()["id"] == job.json()["id"]
+    assert execute_cpu(rig, job.json()["id"])["status"] == "completed"
+    case = rig.service.store.get("cases", case_id)
+    added = case["added_sources"][SECOND_SERIES_UID]
+    assert [row["uid"] for row in case["series"]] == [SERIES_UID, SECOND_SERIES_UID]
+    assert (case["status"], case["source_dir"], case["import_source"]) == ("imported", first["source_dir"], first["import_source"])
+    assert added["source_dir"] != case["source_dir"] and Path(case["series"][1]["files"][0]).is_relative_to(added["source_dir"])
+    assert [row["in_case"] for row in rig.http.get(f"/api/cases/{case_id}/orthanc-series").json()["series"]] == [True]
+    assert "added_sources" not in rig.http.get(f"/api/cases/{case_id}").json()
+
+    def convert(files, destination):
+        assert files == case["series"][1]["files"]
+        image = nib.Nifti1Image(np.arange(8 * 6 * 3, dtype=np.int16).reshape(8, 6, 3), np.diag([-0.7, -0.8, 1.2, 1]))
+        image.header.set_xyzt_units("mm")
+        nib.save(image, destination / "reference.nii.gz")
+        return destination / "reference.nii.gz"
+
+    monkeypatch.setattr(dicom, "convert_series", convert)
+    request = rig.http.post(f"/api/cases/{case_id}/process", json={"series_uid": SECOND_SERIES_UID, "profile": "chest_abdomen", "phase": "unknown"})
+    prepared = execute_cpu(rig, request.json()["id"])
+    assert prepared["status"] == "completed", prepared
+    asset = rig.service.store.resolve_reference(rig.service.store.revision(case_id, prepared["revision_id"]))
+    assert asset["source"]["source_manifest_sha256"] == added["import_source"]["manifest_sha256"] != first["import_source"]["manifest_sha256"]
+    source, directory = rig.service.orthanc_exports._source(case_id, rig.service.store.get("cases", case_id), asset, connect=False)
+    assert source.snapshot.series_uid == SECOND_SERIES_UID and str(directory) == added["source_dir"]
+
+
+def test_only_a_new_series_of_the_cases_own_orthanc_study_can_join(rig):
+    case_id = imported_case(rig)
+    assert "already in this case" in add_series(rig, case_id).json()["detail"]
+    become_second_series(rig, study="1.2.826.0.1.3680043.10.543.998")
+    refused = add_series(rig, case_id)
+    assert refused.status_code == 400 and "different study" in refused.json()["detail"]
+    assert "Only a case imported from Orthanc" in add_series(rig, rig.service.new_case("Folder case")["id"]).json()["detail"]
+    assert len(rig.service.store.get("cases", case_id)["series"]) == 1
+
+
+def test_a_refused_addition_leaves_the_working_case_unchanged(rig):
+    case_id = imported_case(rig)
+    before = rig.service.store.get("cases", case_id)
+    become_second_series(rig)
+    entry = rig.archive.snapshot_doc["instances"][-1]
+    dataset = pydicom.dcmread(io.BytesIO(rig.archive.files[entry["id"]]))
+    dataset.ImagePositionPatient = [0, 0, 500]
+    output = io.BytesIO()
+    dataset.save_as(output, enforce_file_format=True)
+    rig.archive.files[entry["id"]] = output.getvalue()
+    entry["size"] = len(output.getvalue())
+    rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
+    result = execute_cpu(rig, add_series(rig, case_id).json()["id"])
+    assert result["status"] == "failed" and "Nonuniform slice spacing" in result["error"]
+    assert rig.service.store.get("cases", case_id) == before
 
 
 def test_transfer_failure_keeps_original_source_unpublished_and_can_retry(rig):

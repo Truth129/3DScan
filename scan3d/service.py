@@ -17,6 +17,7 @@ from . import __version__, inference_paths
 from .accounts import Accounts
 from .config import Settings
 from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
+from .orthanc_models import series_source
 from .store import LANES, Store, identifier, job_lane, now
 
 log = logging.getLogger(__name__)
@@ -421,7 +422,7 @@ class Service:
         modality = series.get("modality", "CT")
         self.stage(job, f"Preparing {modality} for viewing; segmentation has not been requested")
         image_source = {key: series[key] for key in ("study_uid", "frame_of_reference_uid", "sop_class_uids") if key in series}
-        archive = case.get("import_source")
+        archive = series_source(case, series["uid"])["import_source"]
         if archive and archive.get("series_uid") == series["uid"]:
             image_source.update(
                 source_archive_key=archive["source_key"], source_content_sha256=archive["content_digest"], source_manifest_sha256=archive["manifest_sha256"]

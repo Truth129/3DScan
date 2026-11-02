@@ -272,6 +272,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `GET /api/orthanc/status`, `POST .../studies/query`  | Connector state, study search           |
 | `GET /api/orthanc/studies/{id}/series`               | List series with snapshots              |
 | `POST /api/orthanc/imports`, `POST .../launch`       | Import a snapshot, resolve a launch     |
+| `GET`, `POST /api/cases/{id}/orthanc-series`         | List or add series of the case's study  |
 | `POST /api/cases/{id}/process`                       | Prepare a series                        |
 | `POST /api/cases/{id}/segment`                       | Run TotalSegmentator                    |
 | `POST /api/cases/{id}/refinements`, `.../corrections` | Mask operation, Slicer correction      |
@@ -1052,6 +1053,11 @@ supported, unsupported_reason}`. `completeness` is `receiving`, `incomplete`, `c
 - A completed case holds the originals with no revision yet. `process` prepares it next.
 - Requests from one account for the same snapshot return the same job, and each account has its own
   import. Failed or cancelled imports can be retried, never overwriting earlier bytes.
+
+**`GET /api/cases/{id}/orthanc-series`** returns `{study, series}` for the case's own Orthanc study,
+each series with `in_case`. **`POST`** takes `{series_id, snapshot}` and returns an `orthanc_import`
+job that adds the series to the case. It is refused for a case not imported from Orthanc, a series
+of another study, or a series the case already holds. The case keeps its status and open result.
 
 **`POST /api/orthanc/launch`** takes `{series_id, source_key}` and returns `{study, series, case_id,
 job}`, creating nothing and transferring no DICOM.

@@ -136,6 +136,8 @@ removes sessions, so a restore revives no sign-in.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
+- **Added series.** A series added from Orthanc keeps its own source record in `added_sources`, so
+  an export binds to that series' files. It must come from the case's own study.
 - **Revisions** form a tree through `parent_id`.
 - **Structures** are a revision's segments, each with a stable ID and a private mask file. Masks are
   independent, so overlaps are preserved.

@@ -102,6 +102,22 @@ def parse_download(value: object) -> DownloadManifest:
     return _parse(DownloadManifest, value)
 
 
+def series_source(case: dict, series_uid) -> dict:
+    """The retained archive source of one series, as `import_source`, `orthanc` and `source_dir`.
+
+    The series that made a case keeps these on the case. A series added later has its own, so an
+    export can never bind one series' masks to another's source.
+    """
+    if added := case.get("added_sources", {}).get(series_uid):
+        return added
+    references = case.get("references", {})
+    return {
+        "import_source": case.get("import_source"),
+        "source_dir": case.get("source_dir"),
+        **({"orthanc": references["orthanc"]} if "orthanc" in references else {}),
+    }
+
+
 def parse_source(value: object) -> SourceManifest:
     return _parse(SourceManifest, value)
 
