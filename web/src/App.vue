@@ -34,6 +34,7 @@ import ExportViewerDialog from './components/ExportViewerDialog.vue';
 import DicomSegExport from './components/DicomSegExport.vue';
 import DicomSegImport from './components/DicomSegImport.vue';
 import DicomViewExport from './components/DicomViewExport.vue';
+import OrthancAddSeries from './components/OrthancAddSeries.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
 import UserMenu from './components/UserMenu.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
@@ -703,6 +704,10 @@ async function openOrthancCase(id: string) {
     loading.value = false;
   }
 }
+function seriesAdded(next: Case, uid: string) {
+  activeCase.value = next;
+  seriesUid.value = uid;
+}
 async function importedOrthancCase(next: Case) {
   closeOrthancLaunch();
   await imported(next);
@@ -1328,6 +1333,13 @@ onBeforeUnmount(() => {
           </p>
           <p v-if="revision" class="retained-result-note">Your current result remains available while another series is selected or opened.</p>
           <SeriesPicker :key="activeCase.id" v-model="seriesUid" :series="activeCase.series" :disabled="busy" />
+          <OrthancAddSeries
+            v-if="activeCase.import_source?.kind === 'orthanc'"
+            :key="`add-${activeCase.id}`"
+            :case-id="activeCase.id"
+            :disabled="busy"
+            @added="seriesAdded"
+          />
           <p v-if="!activeCase.series.length" class="warning">
             No supported image series found. Import a DICOM folder or ZIP containing {{ sourceKinds }} slices.
           </p>

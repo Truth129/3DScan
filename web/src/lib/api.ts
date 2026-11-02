@@ -21,6 +21,7 @@ import { presentRevision, presentStructures } from './appearance';
 import type { AgreementAggregate, RevisionAgreement } from './agreement';
 import type { ImageAsset } from './image-domain';
 import type {
+  OrthancCaseSeriesPage,
   OrthancImportRequest,
   OrthancLaunchRequest,
   OrthancLaunchResult,
@@ -77,6 +78,9 @@ export const api = {
     request<OrthancStudyPage>('/api/orthanc/studies/query', { ...json('POST', query), signal }),
   orthancSeries: (id: string, signal?: AbortSignal) => request<OrthancSeriesPage>(`/api/orthanc/studies/${encodeURIComponent(id)}/series`, { signal }),
   importOrthanc: (data: OrthancImportRequest, signal?: AbortSignal) => request<Job>('/api/orthanc/imports', { ...json('POST', data), signal }),
+  caseOrthancSeries: (id: string, signal?: AbortSignal) => request<OrthancCaseSeriesPage>(`${caseUrl(id)}/orthanc-series`, { signal }),
+  addOrthancSeries: (id: string, data: Omit<OrthancImportRequest, 'label'>, signal?: AbortSignal) =>
+    request<Job>(`${caseUrl(id)}/orthanc-series`, { ...json('POST', data), signal }),
   dicomSegAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomSegAvailability>(`${revisionUrl(id, rid)}/dicom-seg`, { signal }),
   exportDicomSeg: (id: string, rid: string, data: DicomSegExportRequest, signal?: AbortSignal) =>
     request<DicomSegExportJob>(`${revisionUrl(id, rid)}/dicom-seg`, { ...json('POST', data), signal }),

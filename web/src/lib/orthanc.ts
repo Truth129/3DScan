@@ -49,6 +49,14 @@ export interface OrthancSeriesPage {
   study: OrthancStudy;
   series: OrthancSeries[];
 }
+/** A series of a case's own study, marked if the case already holds it. */
+export interface OrthancCaseSeries extends OrthancSeries {
+  in_case: boolean;
+}
+export interface OrthancCaseSeriesPage {
+  study: OrthancStudy;
+  series: OrthancCaseSeries[];
+}
 export interface OrthancImportRequest {
   series_id: string;
   snapshot: string;

@@ -59,6 +59,7 @@ export interface Case {
   selected_series_uid?: string;
   phase?: string;
   synthetic?: boolean;
+  import_source?: { kind: string };
 }
 export interface Job {
   id: string;
