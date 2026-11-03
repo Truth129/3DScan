@@ -120,13 +120,24 @@ def test_an_expired_or_replaced_link_reads_as_used(rig):
 
 
 def test_a_link_dies_with_its_makers_admin_rights(rig):
-    for take_away in (lambda maker: rig.accounts.set_role(None, maker, "member"), lambda maker: rig.accounts.disable(None, maker)):
+    for take_away, give_back in (
+        (lambda maker: rig.accounts.set_role(None, maker, "member"), lambda maker: rig.accounts.set_role(None, maker, "admin")),
+        (lambda maker: rig.accounts.disable(None, maker), lambda maker: rig.accounts.enable(None, maker)),
+    ):
         maker, person = account(rig.app, name="Maker"), account(rig.app, role="member")
         made = maker.post(f"/api/people/{person.user_id}/link")
         assert made.status_code == 200 and link_of(rig, person.user_id) == made.json()["expires_at"]
         take_away(maker.user_id)
         assert redeem(browser(rig), made.json()["code"]).json() == LINK_USED
         assert link_of(rig, person.user_id) is None
+        # Rights given back revive nothing made before they went.
+        give_back(maker.user_id)
+        assert redeem(browser(rig), made.json()["code"]).status_code == 410 and link_of(rig, person.user_id) is None
+    # A reset link the maker uses ends what was made with that account, as a new password from the command line does.
+    maker, person = account(rig.app, name="Maker"), account(rig.app, role="member")
+    maker.post(f"/api/people/{person.user_id}/link")
+    assert redeem(browser(rig), rig.admin.post(f"/api/people/{maker.user_id}/link").json()["code"]).status_code == 200
+    assert link_of(rig, person.user_id) is None
 
 
 def test_a_new_password_from_the_command_line_ends_that_persons_links(rig):

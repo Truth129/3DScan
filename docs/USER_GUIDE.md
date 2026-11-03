@@ -54,7 +54,8 @@ the role, archive access, and when the person was last seen or until when their 
 **Reset link** makes a new link and ends any earlier one, for a forgotten password or a link sent to
 the wrong place. A reset link for yourself changes your own password. **Sign out everywhere** ends
 the person's sessions, and **Disable** also ends their links and stops them signing in until
-**Enable**. Jobs they started still finish.
+**Enable**. Jobs they started still finish. The links an admin made end for good when they are
+disabled, made a member or given a new password.
 
 Changes apply from the person's next request. Nobody changes their own role or disables themselves,
 and the last admin who can sign in cannot be made a member or disabled.
@@ -64,7 +65,7 @@ sign-in screen covers the page. Sign in as the same person and the page carries 
 intact. Signing in as someone else reloads the page.
 
 **Forgotten password.** Ask an admin for a reset link from **People**. An admin with nobody to ask
-runs this on the workstation. It also signs the account out everywhere and ends its links:
+runs this on the workstation. It also signs the account out everywhere and ends links for or by it:
 
 ```bash
 .venv/bin/scan3d users passwd NAME

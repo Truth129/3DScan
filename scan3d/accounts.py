@@ -32,6 +32,7 @@ _THROTTLE_KEYS = 4096
 _DISPLAY_NAME_LENGTH = 128
 LINK_LIFETIME = timedelta(hours=24)
 # A link is a People change finished later, so it works only while its maker is still an active admin.
+# Losing those rights deletes the maker's links, so regaining them revives none; this join is a second guard.
 _MAKER = "JOIN users a ON a.id=c.created_by AND a.role='admin' AND a.disabled_at IS NULL"
 # Never a password hash or a code: a person's state and their link's expiry are all People needs.
 _PEOPLE = (
@@ -279,6 +280,7 @@ class Accounts:
                 _not_yourself(actor_id, user_id)
                 if account["role"] == "admin":
                     self._keep_an_admin(con, user_id)
+                    con.execute("DELETE FROM one_time_codes WHERE created_by=?", (user_id,))
                 con.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
                 self._write_audit(con, f"user.make_{role}", actor_id, target=user_id)
             return self._person(con, user_id)
@@ -294,7 +296,7 @@ class Accounts:
             return self._person(con, user_id)
 
     def disable(self, actor_id, user_id):
-        """No sign-in, no session and no link. Enable brings back none of them."""
+        """No sign-in, no session, no link for them and none they made. Enable brings back none of them."""
         with self.store.connection() as con:
             con.execute("BEGIN IMMEDIATE")
             self._require_admin(con, actor_id)
@@ -305,7 +307,7 @@ class Accounts:
                     self._keep_an_admin(con, user_id)
                 con.execute("UPDATE users SET disabled_at=? WHERE id=?", (_stamp(_utcnow()), user_id))
                 ended = con.execute("DELETE FROM sessions WHERE user_id=?", (user_id,)).rowcount
-                con.execute("DELETE FROM one_time_codes WHERE user_id=?", (user_id,))
+                con.execute("DELETE FROM one_time_codes WHERE user_id=? OR created_by=?", (user_id, user_id))
                 self._write_audit(con, "user.disable", actor_id, target=user_id, detail={"count": ended})
             return self._person(con, user_id)
 
@@ -356,7 +358,8 @@ class Accounts:
             account = self._live_link(con, token_hash(code))
             if account is None:
                 raise LinkUsed
-            con.execute("DELETE FROM one_time_codes WHERE user_id=?", (account["id"],))
+            # As with set_password, so an exposed admin recovered by a reset link also ends what was made with that account.
+            con.execute("DELETE FROM one_time_codes WHERE user_id=? OR created_by=?", (account["id"], account["id"]))
             con.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, account["id"]))
             con.execute("DELETE FROM sessions WHERE user_id=? OR expires_at<=?", (account["id"], _stamp(moment)))
             con.execute(

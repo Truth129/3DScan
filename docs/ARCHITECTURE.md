@@ -502,9 +502,11 @@ because session rows go at sign-out.
 
 **One-time links.** A People link sets a password. `one_time_codes` keeps only the SHA-256 of its
 code, and each person has at most one. It works once, for 24 hours, while its maker is still an
-active admin and its person is not disabled. Redeeming hashes in the sign-in slots under a key of its
-own, and checks the link again under the write lock, so of two uses at once only the first wins.
-`scan3d users passwd` ends every link for or by that person. The server knows no public address, so
+active admin and its person is not disabled. Disabling or demoting the maker deletes it in the same
+transaction, so restoring their rights revives none; the read checks the maker as a second guard.
+Redeeming hashes in the sign-in slots under a key of its own, and checks the link again under the
+write lock, so of two uses at once only the first wins. A new password, from a link or
+`scan3d users passwd`, ends every link for or by that person. The server knows no public address, so
 the admin's page builds the link from its own, with the code in the fragment, which no request, log
 or Referer carries. The page that opens it takes the code out of the address before any request,
 and sends it only in the redeem body.

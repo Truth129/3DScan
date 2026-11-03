@@ -117,7 +117,8 @@ at once. One that waits over a second for a turn also gets 429, with N of 1.
 - A dead link is refused before any password hashing. A link works once: of two uses at once, the
   first to write wins.
 - A browser that held another person's session is signed out of it.
-- `scan3d users passwd` ends every link for or by that person, as well as their sessions.
+- A new password, from a link or `scan3d users passwd`, ends every link for or by that person, as
+  well as their sessions.
 
 ### Access rules
 
@@ -174,7 +175,8 @@ Asking for a role, archive access or state the person already has succeeds and w
   is when the person's link stops working, or null.
 - A link is `{code, purpose, expires_at}` and lasts 24 hours. Only the SHA-256 of `code` is stored,
   so this answer is the only place it appears. [Redeem](#sign-in-routes) takes the code. A link
-  works only while whoever made it is still an active admin.
+  works only while whoever made it is still an active admin. Disabling them or making them a member
+  ends the links they made, and enabling or promoting them again brings none back.
 - An active admin has the `admin` role, is not disabled and has a password.
 - Work already queued or running finishes when archive access goes off or a person is disabled.
 
