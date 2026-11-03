@@ -493,11 +493,11 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
 - `storage_rows` reads every case. Under a user ID scope another owner's row gives only owner, date
   and size. The janitor's `existing_case_ids` also reads every case, for IDs only.
 - An owner row records who added a case, and the lists show it as "Added by". Work with nobody
-  signed in, such as the command line or sign-in off, goes to the oldest active admin. A case with
-  no owner goes to that admin when an account is added, or at startup in password mode.
+  signed in, such as the command line or sign-in off, goes to the oldest admin not disabled. A case
+  with no owner goes to that admin when an account is added, or at startup in password mode.
 
 **Sessions and passwords.** Only the SHA-256 of a session token is stored. Passwords use scrypt, with
-n=2^17, r=8 and p=1. `last_seen` records each person's sign-in and each slide of their session,
+n=2^17, r=8 and p=1. `last_seen` records each person's sign-in, set-password and session slide,
 because session rows go at sign-out.
 
 **One-time links.** A People link sets a password. `one_time_codes` keeps only the SHA-256 of its

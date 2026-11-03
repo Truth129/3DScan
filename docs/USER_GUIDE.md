@@ -57,7 +57,7 @@ the person's sessions, and **Disable** also ends their links and stops them sign
 **Enable**. Jobs they started still finish.
 
 Changes apply from the person's next request. Nobody changes their own role or disables themselves,
-and the last admin who can sign in stays an admin.
+and the last admin who can sign in cannot be made a member or disabled.
 
 **When a session ends.** A session lasts 30 days from its last use. If yours ends while you work, a
 sign-in screen covers the page. Sign in as the same person and the page carries on with your marks
