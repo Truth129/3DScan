@@ -74,7 +74,8 @@ a case is in Trash, importing it from Orthanc again makes a new case.
 
 **Deleting forever.** On the **Trash** tab, choose **Delete forever** on a row, or **Empty Trash**
 for every case in Trash, whatever the search shows. With sign-in on, enter your password. This
-cannot be undone.
+cannot be undone. Nothing leaves Trash on its own, so the **Cases** tab says when a case has been
+there for over 30 days.
 
 The dialog lists what stays: studies in Orthanc and series already sent, earlier backups, your
 downloads and the source folder, images in browser caches, and the case ID in the activity log. A

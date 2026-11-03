@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { caseDate, filterCases, formatSize, statusLabel, trashMessage } from '../src/lib/library';
+import { caseDate, filterCases, formatSize, overdueInTrash, statusLabel, trashMessage } from '../src/lib/library';
 import type { Case, Series } from '../src/types';
 
 const series = (description: string, modality: string) =>
@@ -63,6 +63,22 @@ describe('caseDate', () => {
     expect(caseDate('2026-11-01T12:00:00Z')).toBe(new Date('2026-11-01T12:00:00Z').toLocaleDateString());
     expect(caseDate('')).toBe('');
     expect(caseDate(null)).toBe('');
+  });
+});
+
+describe('overdueInTrash', () => {
+  it('counts cases past 30 days and ignores a bad date', () => {
+    const now = Date.parse('2026-12-31T12:00:00Z'),
+      daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
+    const cases = [
+      scan('old', 'Old', { trashed_at: daysAgo(31) }),
+      scan('older', 'Older', { trashed_at: daysAgo(400) }),
+      scan('exactly', 'Exactly 30 days', { trashed_at: daysAgo(30) }),
+      scan('new', 'New', { trashed_at: daysAgo(1) }),
+      scan('bad', 'Bad date', { trashed_at: 'not a date' }),
+      scan('open', 'Not in Trash'),
+    ];
+    expect(overdueInTrash(cases, now)).toBe(2);
   });
 });
 

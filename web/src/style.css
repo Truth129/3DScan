@@ -422,7 +422,8 @@ h3 {
   font-size: 11px;
 }
 .case-library-trash-head,
-.case-library-clear {
+.case-library-clear,
+.case-library-overdue {
   display: flex;
   flex-wrap: wrap;
   align-items: center;

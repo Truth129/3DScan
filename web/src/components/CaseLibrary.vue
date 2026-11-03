@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
-import { caseDate, filterCases, formatSize, statusLabel } from '../lib/library';
+import { caseDate, filterCases, formatSize, overdueInTrash, statusLabel } from '../lib/library';
 import { session } from '../lib/session';
 import type { Case, StorageReport, StorageRow } from '../types';
 import DeleteForeverDialog from './DeleteForeverDialog.vue';
@@ -62,6 +62,8 @@ const shownCases = computed(() => filterCases(props.cases, query.value)),
       ['Free space', storage.value.disk.free],
     ] as const;
   }),
+  overdue = computed(() => overdueInTrash(trashed.value)),
+  overdueText = computed(() => `${overdue.value === 1 ? '1 case has' : `${overdue.value} cases have`} been in Trash for over 30 days.`),
   clearLine = computed(() => (storage.value ? `${formatSize(storage.value.totals.rebuildable)} rebuilds when needed. Saved surfaces and cases stay.` : ''));
 
 function sizeOf(id: string) {
@@ -265,6 +267,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
         @keydown.enter.prevent="openFirstMatch"
       />
       <template v-if="tab === 'cases'">
+        <div v-if="overdue" class="case-library-overdue">
+          <p class="help">{{ overdueText }}</p>
+          <button class="text-button" type="button" @click="tab = 'trash'">Open Trash</button>
+        </div>
         <p v-if="casesUnread" class="empty-search">Cases could not be read. Trying again.</p>
         <div v-else-if="!cases.length && !query && trashRead" class="case-library-empty">
           <h2>{{ trashed.length ? 'All your cases are in Trash' : 'No cases yet' }}</h2>

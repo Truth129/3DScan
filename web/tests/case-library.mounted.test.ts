@@ -488,6 +488,29 @@ describe('Delete forever', () => {
   });
 });
 
+describe('the 30-day reminder', () => {
+  // From the clock, never the suite's fixed dates, which pass 30 days on their own.
+  const inTrashFor = (id: string, days: number) => scan(id, id, { trashed_at: new Date(Date.now() - days * 86_400_000).toISOString() });
+
+  it('names the cases in Trash for over 30 days and opens Trash', async () => {
+    vi.mocked(api.trashed).mockResolvedValue([inTrashFor('old', 31), inTrashFor('older', 45), inTrashFor('new', 1)]);
+    const view = library({});
+    await settled();
+    expect(view.text()).toContain('2 cases have been in Trash for over 30 days.');
+    click(view.button('Open Trash'));
+    await settled();
+    expect(view.text()).toContain('Cases in Trash still use disk space.');
+    expect(view.rows()).toHaveLength(3);
+  });
+  it('says nothing while every case in Trash is newer', async () => {
+    vi.mocked(api.trashed).mockResolvedValue([inTrashFor('new', 1)]);
+    const view = library({});
+    await settled();
+    expect(view.text()).not.toContain('30 days');
+    expect(view.button('Open Trash')).toBeUndefined();
+  });
+});
+
 describe('sizes', () => {
   it('fills sizes in after the list', async () => {
     const answer = deferred<{ sizes: Record<string, number> }>();
