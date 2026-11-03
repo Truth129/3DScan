@@ -110,7 +110,7 @@ All state lives under `SCAN3D_DATA_DIR`:
 ```text
 scan3d.sqlite3           Records, in WAL mode
 worker.lock              Held by the process that runs jobs
-maintenance.lock         Shared by a backup, exclusive while files are deleted
+maintenance.lock         Shared by a backup and by demo, import and optimize; exclusive while files are deleted
 cases/<case>/
   dicom/                 Originals from uploads and local imports
   sources/<job>/         Originals from Orthanc, with source-import.json
@@ -209,7 +209,8 @@ be requested explicitly.
 case's jobs, and a job that starts afterwards stops at its first check.
 
 **Requests in flight.** The gate counts each admitted request, in all and per case, until its
-response is sent. A request that makes a case counts it from before its row exists, and a volume
+response is sent. Public routes and the API docs are not counted, and Restore and Delete forever
+count in all only. A request that makes a case counts it from before its row exists, and a volume
 build counts its case until its thread ends. The counts live in memory, so a restart resets them.
 
 ## Inference
@@ -524,7 +525,7 @@ when a TotalSegmentator key is saved, and model downloads.
 - Each account imports its own copy of an Orthanc series, so the same scan can be on disk twice.
 - A case in Trash keeps its disk space, and importing it again from Orthanc makes a second copy.
 - Delete forever is an ordinary file delete, not secure erasure. Backups, Orthanc and browser caches
-  keep their copies, and restoring a backup brings a deleted case back.
+  keep their copies, and restoring a backup taken before the deletion brings the case back.
 - Case sizes leave out shared caches, which several cases can use at once.
 - Jobs and review sessions store who started them, but the app shows neither, and a revision records
   no reviewer. The audit log has no viewer.

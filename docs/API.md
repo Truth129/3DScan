@@ -463,7 +463,7 @@ before any password is checked. Every response is `no-store`.
 | ------ | ------------------------------------------------------------------- | --------------------------------------------- |
 | 400    | `Enter your password to delete forever.`                            | Password mode, no password                    |
 | 400    | `Confirm to delete forever.`                                        | Sign-in off, no `confirm: true`               |
-| 403    | `Delete forever through the HTTPS address`                          | `Origin` is not https and `Host` is not loopback |
+| 403    | `Delete forever through the HTTPS address`                          | Password mode, `Origin` is not https and `Host` is not loopback |
 | 403    | `Wrong password.`                                                   | Never 401, which a browser reads as a lost session |
 | 404    | `Case not found`                                                    | Not yours, not in Trash, or already deleted   |
 | 409    | `A send to Orthanc is still finishing. Try again in a few minutes.` | A send of the case to Orthanc is running      |
