@@ -596,6 +596,33 @@ describe('Storage', () => {
     click(view.tab('Storage'));
     expect(view.read).toHaveBeenCalledTimes(3);
   });
+  it('clears caches and shows what was freed', async () => {
+    const view = await storageTab(),
+      fresh = { ...report, totals: { ...report.totals, shared_caches: 5 * 1024 ** 2, rebuildable: 0 } },
+      answer = deferred<{ freed: number; storage: StorageReport }>(),
+      clear = vi.spyOn(api, 'clearCaches').mockReturnValue(answer.promise);
+    expect(view.text()).toContain('15 MB rebuilds when needed. Saved surfaces and cases stay.');
+    click(view.button('Clear caches'));
+    await settled();
+    expect((view.button('Clearing…') as unknown as HTMLButtonElement).disabled).toBe(true);
+    answer.resolve({ freed: 15 * 1024 ** 2, storage: fresh });
+    await settled();
+    expect(clear).toHaveBeenCalledOnce();
+    expect(view.all(element => element.getAttribute('role') === 'status').map(element => element.textContent)).toEqual(['Freed 15 MB.']);
+    expect(view.all(element => element.tagName === 'DL')[0].children[2].textContent).toBe('Shared caches5 MB');
+    expect(view.text()).toContain('< 1 MB rebuilds when needed.');
+    expect(view.read, 'the answer carries the fresh report').toHaveBeenCalledOnce();
+  });
+  it('shows a refusal to clear caches', async () => {
+    const refusal = 'Jobs are running. Try again when they finish.';
+    vi.spyOn(api, 'clearCaches').mockRejectedValue(new ApiError(409, refusal));
+    const view = await storageTab();
+    click(view.button('Clear caches'));
+    await settled();
+    expect(view.all(element => element.getAttribute('role') === 'alert').map(element => element.textContent)).toEqual([refusal]);
+    expect(view.button('Clear caches')).toBeDefined();
+    expect(view.text()).not.toContain('Freed');
+  });
   it('shows a failure in the tab', async () => {
     vi.spyOn(api, 'storage').mockRejectedValue(new ApiError(403, 'Administrator access is required'));
     const view = library({});

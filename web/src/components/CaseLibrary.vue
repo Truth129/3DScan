@@ -43,7 +43,10 @@ const tab = ref<'cases' | 'trash' | 'storage'>('cases'),
 const purging = ref<Case[]>(),
   purgedCount = ref(0),
   goneCount = ref(0),
-  trashNotice = ref('');
+  trashNotice = ref(''),
+  clearing = ref(false),
+  clearNote = ref(''),
+  clearRefusal = ref('');
 const shownCases = computed(() => filterCases(props.cases, query.value)),
   shownTrash = computed(() => filterCases(trashed.value, query.value)),
   // `session` is unset in App's test suites, and with sign-in off the user is an admin.
@@ -58,7 +61,8 @@ const shownCases = computed(() => filterCases(props.cases, query.value)),
       ['Other', other],
       ['Free space', storage.value.disk.free],
     ] as const;
-  });
+  }),
+  clearLine = computed(() => (storage.value ? `${formatSize(storage.value.totals.rebuildable)} rebuilds when needed. Saved surfaces and cases stay.` : ''));
 
 function sizeOf(id: string) {
   if (!sizes.value) return '…';
@@ -204,6 +208,20 @@ function purgeClosed() {
   void readTrash();
   focusSearch();
 }
+async function clearCaches() {
+  if (clearing.value) return;
+  clearing.value = true;
+  clearNote.value = clearRefusal.value = '';
+  try {
+    const result = await api.clearCaches();
+    storage.value = result.storage;
+    clearNote.value = `Freed ${formatSize(result.freed)}.`;
+  } catch (reason) {
+    clearRefusal.value = reason instanceof Error ? reason.message : String(reason);
+  } finally {
+    clearing.value = false;
+  }
+}
 function escape() {
   if (renaming.value && tab.value === 'cases') void stopRename();
   else if (props.closable) emit('close');
@@ -313,6 +331,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
             </div>
           </dl>
           <p class="help">Case sizes leave out shared caches, which several cases can use at once.</p>
+          <div class="case-library-clear">
+            <button class="button secondary compact" type="button" :disabled="clearing" @click="clearCaches">
+              {{ clearing ? 'Clearing…' : 'Clear caches' }}
+            </button>
+            <p class="help">{{ clearLine }}</p>
+          </div>
+          <p v-if="clearRefusal" class="case-library-error" role="alert">{{ clearRefusal }}</p>
+          <p v-else-if="clearNote" class="help" role="status">{{ clearNote }}</p>
           <div class="case-storage" role="region" aria-label="Storage by case" tabindex="0">
             <table>
               <thead>

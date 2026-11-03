@@ -421,7 +421,8 @@ h3 {
   color: #d5a88d;
   font-size: 11px;
 }
-.case-library-trash-head {
+.case-library-trash-head,
+.case-library-clear {
   display: flex;
   flex-wrap: wrap;
   align-items: center;

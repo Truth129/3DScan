@@ -86,6 +86,10 @@ totals, the free space, and every case with its owner, date and size. A case tha
 **Not your case** in place of its name. Case sizes leave out shared caches, which several cases can
 use at once.
 
+**Clear caches**, on the **Storage** tab, empties the caches that rebuild when next needed, so it
+frees space for a while. Saved surfaces and cases stay. It does not run while jobs run, images load,
+a backup runs or another 3DScan command runs, and the tab says what to wait for.
+
 If a case goes away while you have it open, the page says so and returns to the Library, within a
 minute or when you return to the tab. If a case will not open, the page says why and you return to
 the case you had open.
