@@ -97,14 +97,14 @@ def test_case_list_leaves_out_file_paths_and_follows_a_writer_that_skips_summari
     record = store.save(
         "cases", dict(id=identifier(), status="imported", active_revision_id=None, source_dir="/x", references={}, series=[dict(uid="1", files=["/x/1.dcm"])])
     )
-    listed = store.case_summaries(EVERY_CASE)
+    listed = store.case_summaries(EVERY_CASE, None)
     assert [entry["id"] for entry in listed] == [record["id"], older["id"]]
     assert listed[0]["series"] == [dict(uid="1")] and "source_dir" not in listed[0]
     with store.connection() as con:
         con.execute("INSERT OR REPLACE INTO cases VALUES (?,?)", (record["id"], json.dumps(dict(record, status="ready"))))
-    listed = store.case_summaries(EVERY_CASE)
+    listed = store.case_summaries(EVERY_CASE, None)
     assert [entry["status"] for entry in listed if entry["id"] == record["id"]] == ["ready"]
-    assert public_case(listed[0]) == {**public_case(store.get("cases", record["id"])), "opened_at": None}
+    assert public_case(listed[0]) == {**public_case(store.get("cases", record["id"])), "opened_at": None, "added_by": None}
 
 
 def test_opening_an_older_database_summarizes_its_cases(tmp_path):

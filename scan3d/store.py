@@ -216,8 +216,8 @@ class Store:
         return record
 
     def list(self, table, case_id=None):
-        # Cases are private to their owners, so a new global reader must fail loudly here. `storage_rows` and
-        # `existing_case_ids` are the only global readers, and the second gives IDs only.
+        # Every case list goes through a scope, so private cases can return, and a new global reader must fail
+        # loudly here. `storage_rows` and `existing_case_ids` are the only global readers, and the second gives IDs only.
         if table == "cases":
             raise ValueError("Read cases through visible_cases or case_summaries, with a scope")
         if table not in ("revisions", "jobs", "review_sessions", "image_assets"):
@@ -253,10 +253,9 @@ class Store:
             return " JOIN case_access a ON a.case_id=c.id AND a.user_id=?", (scope,)
         raise TypeError("A case scope is EVERY_CASE or a user id")
 
-    def _scoped_cases(self, columns, scope, joins=""):
-        """Rows of a scope, last opened first, then newest. A case in Trash reads as absent."""
+    def _scoped_cases(self, columns, scope, opener, joins=""):
+        """Rows of a scope, the opener's last opened first, then newest. A case in Trash reads as absent."""
         access, values = self._scope_join(scope)
-        opener = identity.LOCAL.id if scope is identity.EVERY_CASE else scope
         with self.connection() as con:
             return con.execute(
                 f"SELECT {columns} FROM cases c{access}{joins} LEFT JOIN case_opened o ON o.user_id=? AND o.case_id=c.id "
@@ -265,14 +264,19 @@ class Store:
                 (*values, opener),
             ).fetchall()
 
-    def case_summaries(self, scope):
-        """The cases in a scope, for `public_case`. One with no summary reads in full."""
-        rows = self._scoped_cases("COALESCE(s.data, c.data) AS data, o.opened_at AS opened_at", scope, " LEFT JOIN case_summaries s ON s.case_id=c.id")
-        return [{**json.loads(row["data"]), "opened_at": row["opened_at"]} for row in rows]
+    def case_summaries(self, scope, opener):
+        """The cases in a scope, for `public_case`, in the opener's order. One with no summary reads in full."""
+        rows = self._scoped_cases(
+            "COALESCE(s.data, c.data) AS data, o.opened_at AS opened_at, w.user_id AS adder_id, u.display_name AS adder",
+            scope,
+            opener,
+            " LEFT JOIN case_summaries s ON s.case_id=c.id" + _ADDER,
+        )
+        return [{**json.loads(row["data"]), "opened_at": row["opened_at"], "added_by": _added_by(row, opener)} for row in rows]
 
     def visible_cases(self, scope):
-        """Full records of the cases in a scope. Prefer `case_summaries` for a list."""
-        return [json.loads(row["data"]) for row in self._scoped_cases("c.data AS data", scope)]
+        """Full records of the cases in a scope, in no one's order. Prefer `case_summaries` for a list."""
+        return [json.loads(row["data"]) for row in self._scoped_cases("c.data AS data", scope, None)]
 
     def case_ids(self, scope):
         """Every case in a scope, including any in Trash, for measuring."""
@@ -280,16 +284,17 @@ class Store:
         with self.connection() as con:
             return [row["id"] for row in con.execute(f"SELECT c.id AS id FROM cases c{access}", values).fetchall()]
 
-    def trashed_cases(self, scope):
+    def trashed_cases(self, scope, viewer):
         """The cases in a scope that are in Trash, last trashed first, for `public_case`."""
         access, values = self._scope_join(scope)
         with self.connection() as con:
             rows = con.execute(
-                f"SELECT COALESCE(s.data, c.data) AS data, t.trashed_at AS trashed_at FROM trash t JOIN cases c ON c.id=t.case_id{access} "
-                "LEFT JOIN case_summaries s ON s.case_id=c.id WHERE t.kind='case' AND t.state='trashed' ORDER BY t.trashed_at DESC",
+                "SELECT COALESCE(s.data, c.data) AS data, t.trashed_at AS trashed_at, w.user_id AS adder_id, u.display_name AS adder "
+                f"FROM trash t JOIN cases c ON c.id=t.case_id{access} LEFT JOIN case_summaries s ON s.case_id=c.id{_ADDER} "
+                "WHERE t.kind='case' AND t.state='trashed' ORDER BY t.trashed_at DESC",
                 values,
             ).fetchall()
-        return [{**json.loads(row["data"]), "trashed_at": row["trashed_at"]} for row in rows]
+        return [{**json.loads(row["data"]), "trashed_at": row["trashed_at"], "added_by": _added_by(row, viewer)} for row in rows]
 
     def storage_rows(self, scope):
         """Every case with its owner. A label reads only for its owner, because labels can hold patient text."""
@@ -970,6 +975,15 @@ def grant_owner(con, case_id):
             "SELECT ?,?,'owner',?,? WHERE NOT EXISTS(SELECT 1 FROM case_access WHERE case_id=?)",
             (case_id, owner, actor, now(), case_id),
         )
+
+
+# Who added a case: its owner row, which `grant_owner` writes once and nothing moves.
+_ADDER = " LEFT JOIN case_access w ON w.case_id=c.id AND w.role='owner' LEFT JOIN users u ON u.id=w.user_id"
+
+
+def _added_by(row, viewer):
+    """The adder's display name for someone else. Your own cases, ownerless ones and sign-in off name nobody."""
+    return None if viewer in (None, identity.LOCAL.id) or row["adder_id"] in (None, viewer) else row["adder"]
 
 
 def live_surface_keys(con):

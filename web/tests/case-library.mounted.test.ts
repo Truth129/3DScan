@@ -98,6 +98,15 @@ describe('finding a case', () => {
     await settled();
     expect(view.rows()[0].textContent).toContain(`Added ${when} · Ready`);
   });
+  it('says who added a case someone else added, and finds it by that name', async () => {
+    const view = library({ cases: [liver, scan('chest', 'Chest', { added_by: 'Meera P' })] });
+    await settled();
+    expect(view.rows()[0].textContent).not.toContain('Added by');
+    expect(view.rows()[1].textContent).toContain('Ready · — · Added by Meera P');
+    fill(view.search(), 'meera');
+    await settled();
+    expect(view.rows().map(row => row.getAttribute('data-case-id'))).toEqual(['chest']);
+  });
 });
 
 describe('where the cursor goes', () => {
@@ -637,13 +646,21 @@ describe('Storage', () => {
     expect(view.text()).toContain('Case sizes leave out shared caches, which several cases can use at once.');
     expect(view.text()).toContain(NOTICE);
   });
-  it('lists your own case with its name and owner', async () => {
-    const when = new Date('2026-11-01T12:00:00Z').toLocaleDateString();
-    expect((await storageTab()).cells(0)).toEqual(['Liver', 'Ada', when, '7 MB']);
+  it('lists a case with its name and who added it', async () => {
+    const view = await storageTab(),
+      when = new Date('2026-11-01T12:00:00Z').toLocaleDateString();
+    expect(
+      view
+        .all(element => element.tagName === 'THEAD')[0]
+        .descendants()
+        .filter(element => element.tagName === 'TH')
+        .map(cell => cell.textContent),
+    ).toEqual(['Case', 'Added by', 'Created', 'Size']);
+    expect(view.cells(0)).toEqual(['Liver', 'Ada', when, '7 MB']);
   });
-  it('says which of your cases are in Trash, and which have no owner', async () => {
+  it('says which cases are in Trash, and which nobody added', async () => {
     const [name, owner] = (await storageTab()).cells(1);
-    expect([name, owner]).toEqual(['Old · In Trash', 'No owner']);
+    expect([name, owner]).toEqual(['Old · In Trash', '—']);
   });
   it('shows no label for a case that is not yours', async () => {
     const view = await storageTab(),
@@ -731,7 +748,7 @@ describe('an empty library', () => {
     vi.mocked(api.trashed).mockResolvedValue([scan('old', 'Old')]);
     const view = library({ cases: [] });
     await settled();
-    expect(view.text()).toContain('All your cases are in Trash');
+    expect(view.text()).toContain('Every case is in Trash');
     expect(view.text()).not.toContain('No cases yet');
     expect(view.button('Import a scan →')).toBeDefined();
     expect(view.button('Import your first scan →')).toBeUndefined();

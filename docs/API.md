@@ -117,7 +117,8 @@ with no session gets the 401, and a signed-in one the other.
 | Job       | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`         | 401, 404 `Job not found`                       |
 | Upload    | `POST /api/imports/{id}/parts`, `.../finish`, `DELETE /api/imports/{id}` | 401, 404 `Upload not found`                   |
 
-- `GET /api/cases` and `GET /api/agreement` cover only this account's cases.
+- One shared library: every account opens every case that exists, and the case lists, sizes and
+  agreement cover every case.
 - A case in Trash reads as absent in both modes, in each route's own refusal: `Case not found`,
   `Job not found` or `Upload not found`.
 - A malformed case, job or upload ID is also 404 here, so a refusal never shows whether an ID
@@ -155,6 +156,8 @@ set `import_source`: `{kind, source_key, study_uid, series_uid, frame_of_referen
 instance_count, content_digest, manifest_sha256, completeness, warnings}`.
 
 Only `GET /api/cases` adds `opened_at`, the last time this account opened the case, or `null`.
+`GET /api/cases` and `GET /api/trash` add `added_by`: the display name of whoever added the case
+when that is someone else, else `null`. With sign-in off it is always `null`.
 
 ### Series
 
@@ -431,7 +434,7 @@ Image-only revisions are refused.
 
 ## Library
 
-**`GET /api/cases`** lists the account's cases, last opened first, then newest.
+**`GET /api/cases`** lists every case, the ones this account opened last first, then newest.
 
 **`PATCH /api/cases/{id}`** takes `{label}` and returns the Case. The label is trimmed, and a label
 over 128 characters is a 422.
@@ -449,12 +452,12 @@ sends_continuing}`, where `sends_continuing` counts sends Orthanc has started, w
 on disk moves. Trash is never refused for a job, a draft or a stuck import. With sign-in off, a case
 that does not exist answers 404 `Case not found`.
 
-**`GET /api/trash`** lists this account's cases in Trash, last trashed first. Each is a Case with
+**`GET /api/trash`** lists every case in Trash, last trashed first. Each is a Case with
 `trashed_at`.
 
-**`POST /api/trash/{id}/restore`** returns the Case. Stopped jobs stay cancelled, so an import in
-progress comes back as `import_cancelled`. A case that is not yours, or is not in Trash, answers 404
-`Case not found`.
+**`POST /api/trash/{id}/restore`** returns the Case, for any account. Stopped jobs stay cancelled, so
+an import in progress comes back as `import_cancelled`. A case not in Trash answers 404 `Case not
+found`.
 
 **`POST /api/trash/{id}/purge`** deletes a case in Trash forever and returns `{id}`. It is for an
 admin only. The body is `{password}`, your own, in password mode, and `{confirm: true}` with sign-in
@@ -471,21 +474,21 @@ before any password is checked. Every response is `no-store`.
 | 403    | `Delete forever through the HTTPS address`                          | Password mode, `Origin` is not https and `Host` is not loopback |
 | 403    | `Administrator access is required`                                  | A member, before any body is read, or an admin demoted or disabled while the password was checked |
 | 403    | `Wrong password.`                                                   | Never 401, which a browser reads as a lost session |
-| 404    | `Case not found`                                                    | Not yours, not in Trash, or already deleted   |
+| 404    | `Case not found`                                                    | Not in Trash, or already deleted              |
 | 409    | `A send to Orthanc is still finishing. Try again in a few minutes.` | A send of the case to Orthanc is running      |
 | 409    | `Work on this case is still stopping. Try again in a minute.`       | Another job of the case is running            |
 | 409    | `This case is still in use. Try again in a minute.`                 | A request on the case is in flight            |
 | 422    | `Invalid delete request.`                                           | Schema failure, with no input echoed          |
 | 429    | `Too many attempts. Try again in N seconds.`                        | Throttled, or no hashing slot in a second, with `Retry-After` |
 
-**`GET /api/sizes`** returns `{sizes}`, allocated bytes by case ID for this account's cases, including
-any in Trash. Sizes are measured on each request and leave out shared caches.
+**`GET /api/sizes`** returns `{sizes}`, allocated bytes by case ID for every case, including any in
+Trash. Sizes are measured on each request and leave out shared caches.
 
 **`GET /api/storage`** returns `{cases, totals, disk}` for an admin. A member gets 403
 `Administrator access is required`.
 
-- `cases` is every case as `{id, label, owner, created_at, trashed_at, size}`. Another owner's case
-  gives only `{label: null, owner, created_at, size}`. With sign-in off every row is complete.
+- `cases` is every case as `{id, label, owner, created_at, trashed_at, size}`, where `owner` is the
+  display name of whoever added it, or `null`.
 - `totals` is `{cases, trash, shared_caches, other, rebuildable}` in bytes, covering every account.
   `rebuildable` is what Clear caches would free.
 - `disk` is `{total, free}` for the data directory's volume.
@@ -1148,8 +1151,9 @@ supported, unsupported_reason}`. `completeness` is `receiving`, `incomplete`, `c
 - Receiving and incomplete series, and any change since selection, return 409.
 - A stable series with an unknown expected count imports with a warning.
 - A completed case holds the originals with no revision yet. `process` prepares it next.
-- Requests from one account for the same snapshot return the same job, and each account has its own
-  import. Failed or cancelled imports can be retried, never overwriting earlier bytes.
+- Requests from anyone for the same snapshot return the same job, so the library holds one import.
+  Anyone can retry a failed or cancelled import, which reuses its case, keeps who added it and never
+  overwrites earlier bytes.
 
 **`GET /api/cases/{id}/orthanc-series`** returns `{study, series}` for the case's own Orthanc study,
 each series with `in_case`. **`POST`** takes `{series_id, snapshot}` and returns an `orthanc_import`
@@ -1160,8 +1164,8 @@ Both need the case and archive access.
 **`POST /api/orthanc/launch`** takes `{series_id, source_key}` and returns `{study, series, case_id,
 job}`, creating nothing and transferring no DICOM.
 
-- `case_id` identifies this account's valid completed import, `job` its pending one, otherwise both
-  are null.
+- `case_id` identifies the library's valid completed import, whoever made it, `job` its pending one,
+  otherwise both are null.
 - `source_key` is the SHA-256 of the normalized archive URL: an identity check, not a credential.
 - A different archive is refused before any network access. An import failing verification is 409.
 

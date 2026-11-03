@@ -102,9 +102,9 @@ def test_password_and_username_limits():
     assert not any(identity.valid_username(name) for name in ("", "a" * 65, "two words", "new\n", "é"))
 
 
-def test_a_case_scope_is_everything_for_the_local_user_and_a_person_otherwise():
-    person = Principal("abc", "name", "Name", "admin", True)
-    assert identity.case_scope(LOCAL) is identity.EVERY_CASE and identity.case_scope(person) == "abc"
+def test_a_case_scope_is_the_whole_library_for_everyone():
+    for principal in (LOCAL, Principal("abc", "name", "Name", "admin", True), Principal("def", "name", "Name", "member", False)):
+        assert identity.case_scope(principal) is identity.EVERY_CASE
     with pytest.raises(RuntimeError):
         identity.case_scope(None)
 

@@ -22,14 +22,14 @@ BASE = "http://127.0.0.1"
 ORIGIN = {"Origin": BASE}
 
 
-def account(app, role="admin", archive_access=1):
+def account(app, role="admin", archive_access=1, name="Someone"):
     """A signed-in browser for a row written directly, so these tests run no scrypt."""
     user_id, token = identifier(), secrets.token_urlsafe(32)
     expires = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     with app.state.service.store.connection() as con:
         con.execute(
             "INSERT INTO users(id,username,display_name,role,archive_access,created_at) VALUES (?,?,?,?,?,?)",
-            (user_id, f"user-{user_id[-8:]}", "Someone", role, archive_access, now()),
+            (user_id, f"user-{user_id[-8:]}", name, role, archive_access, now()),
         )
         con.execute(
             "INSERT INTO sessions(token_hash,user_id,created_at,last_seen_at,expires_at) VALUES (?,?,?,?,?)",
@@ -47,7 +47,7 @@ def rig(tmp_path_factory):
     (root / "dist").mkdir()
     (root / "dist" / "index.html").write_text("<!doctype html><title>Viewer</title>")
     app = create_app(Settings(root / "data", (root,), web_dir=root / "dist", auth="password"))
-    owner = account(app)
+    owner = account(app, name="Owner")
     case = owner.post("/api/cases/demo").json()
     return SimpleNamespace(
         app=app,
@@ -83,32 +83,28 @@ def test_every_route_but_the_public_ones_refuses_an_anonymous_request(rig):
     assert walked > 60
 
 
-def test_another_users_case_reads_as_absent_on_every_case_route(rig):
-    case_id = rig.case["id"]
-    assert rig.owner.get(f"/api/cases/{case_id}").status_code == 200
+def test_every_account_opens_every_case(rig):
+    for client in (rig.owner, rig.other, rig.member):
+        assert client.get(f"/api/cases/{rig.case['id']}").status_code == 200
+
+
+def test_a_case_route_refuses_an_id_that_names_no_case(rig):
     for route, method, rule in ruled_routes(rig.app):
         if rule.kind not in ("case", "case_archive"):
             continue
-        path = route.path.replace("{case_id}", case_id)
+        path = route.path.replace("{case_id}", "0" * 32)
         response = rig.other.request(method, filled(path))
         assert response.status_code == 404, (method, path)
         assert response.json() == {"detail": "Case not found"} and response.headers["cache-control"] == "no-store"
+    assert not (rig.service.settings.data_dir / "cases" / ("0" * 32)).exists()
 
 
-def test_a_case_refusal_matches_one_that_does_not_exist(rig):
-    assert rig.other.get(f"/api/cases/{'0' * 32}").json() == rig.other.get(f"/api/cases/{rig.case['id']}").json()
-
-
-def test_another_users_job_reads_as_absent(rig):
+def test_any_account_follows_and_cancels_a_job_of_any_case(rig):
     job = rig.service.store.enqueue(rig.case["id"], "include_all", {})
-    for reader in (
-        rig.other.get(f"/api/jobs/{job['id']}"),
-        rig.other.get(f"/api/jobs/{job['id']}/measurements"),
-        rig.other.post(f"/api/jobs/{job['id']}/cancel"),
-    ):
-        assert reader.status_code == 404 and reader.json() == {"detail": "Job not found"}
-    assert rig.service.store.get("jobs", job["id"])["status"] == "queued"
-    assert rig.owner.get(f"/api/jobs/{job['id']}").status_code == 200
+    assert rig.other.get(f"/api/jobs/{job['id']}").status_code == 200
+    assert rig.other.get(f"/api/jobs/{job['id']}/measurements").status_code == 200
+    assert rig.member.post(f"/api/jobs/{job['id']}/cancel").status_code == 200
+    assert rig.service.store.get("jobs", job["id"])["status"] == "cancelled"
 
 
 def test_a_job_response_does_not_say_who_asked(rig):
@@ -153,13 +149,11 @@ def test_an_upload_with_no_real_owner_is_for_admins_only(rig, owner):
 
 
 @pytest.mark.parametrize("owner", [None, "local"])
-def test_a_finished_upload_follows_its_case(rig, owner):
+def test_a_finished_upload_follows_its_case_for_everyone(rig, owner):
     upload_id = start_upload(rig.owner)
     path = rig.service.settings.data_dir / "import-uploads" / upload_id / "state.json"
     path.write_text(json.dumps({**json.loads(path.read_text()), "owner_id": owner, "case_id": rig.case["id"]}))
-    refused = rig.other.post(f"/api/imports/{upload_id}/finish")
-    assert refused.status_code == 404 and refused.json() == {"detail": "Upload not found"}
-    assert rig.owner.post(f"/api/imports/{upload_id}/finish").status_code == 200
+    assert rig.other.post(f"/api/imports/{upload_id}/finish").status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -201,9 +195,9 @@ def test_archive_routes_refuse_an_account_without_the_archive(rig):
 def test_a_cases_archive_series_need_the_case_and_the_archive(rig):
     body = {"series_id": "00000000-00000000-00000000-00000000-00000000", "snapshot": "0" * 64}
     own = rig.member.post("/api/cases/demo").json()["id"]
-    for response in (rig.member.get(f"/api/cases/{own}/orthanc-series"), rig.member.post(f"/api/cases/{own}/orthanc-series", json=body)):
-        assert response.status_code == 403 and response.json() == {"detail": "This account cannot use the archive"}
-    assert rig.member.get(f"/api/cases/{rig.case['id']}/orthanc-series").status_code == 404
+    for case_id in (own, rig.case["id"]):
+        for response in (rig.member.get(f"/api/cases/{case_id}/orthanc-series"), rig.member.post(f"/api/cases/{case_id}/orthanc-series", json=body)):
+            assert response.status_code == 403 and response.json() == {"detail": "This account cannot use the archive"}
     assert rig.member.post(f"/api/cases/{own}/trash").status_code == 200
     assert rig.member.get(f"/api/cases/{own}/orthanc-series").status_code == 404
     rig.owner.post(f"/api/cases/{rig.case['id']}/orthanc-series", json=body)
@@ -225,19 +219,21 @@ def test_view_and_seg_sends_need_the_archive_and_a_seg_file_does_not(rig, monkey
     assert body["available"] is False and body["reason"] == ARCHIVE_OFF and body["destinations"] == [] and "file" in body
 
 
-def test_lists_hold_only_your_own_cases(rig):
-    assert rig.case["id"] in [case["id"] for case in rig.owner.get("/api/cases").json()]
-    assert rig.other.get("/api/cases").json() == []
-    assert rig.owner.get("/api/agreement").json()["cases"]["total"] >= 1
-    assert rig.other.get("/api/agreement").json()["cases"]["total"] == 0
+def test_every_account_lists_every_case_with_who_added_it(rig):
+    def row(client):
+        return next(case for case in client.get("/api/cases").json() if case["id"] == rig.case["id"])
+
+    assert row(rig.other)["added_by"] == "Owner" and row(rig.owner)["added_by"] is None
+    assert rig.owner.get("/api/agreement").json()["cases"]["total"] == rig.other.get("/api/agreement").json()["cases"]["total"] >= 1
     assert rig.case["id"] in [case["id"] for case in rig.service.store.visible_cases(EVERY_CASE)]
+    # A person scope still works, so private cases can return.
     assert rig.service.store.visible_cases(rig.other.user_id) == []
 
 
 def test_a_scope_that_is_neither_everything_nor_a_person_is_a_defect(rig):
     for scope in (None, ""):
         with pytest.raises(TypeError):
-            rig.service.store.case_summaries(scope)
+            rig.service.store.case_summaries(scope, "x")
         with pytest.raises(TypeError):
             rig.service.store.storage_rows(scope)
     with pytest.raises(ValueError, match="scope"):

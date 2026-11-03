@@ -292,9 +292,10 @@ class Accounts:
         with self.store.connection() as con:
             return con.execute("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (user_id, keep_token_hash)).rowcount
 
-    def can_open(self, case_id, user_id):
+    def case_exists(self, case_id):
+        """A case route needs a case, so a handler never makes a folder for an ID that names none."""
         with self.store.connection() as con:
-            return con.execute("SELECT 1 FROM case_access WHERE case_id=? AND user_id=?", (case_id, user_id)).fetchone() is not None
+            return con.execute("SELECT 1 FROM cases WHERE id=?", (case_id,)).fetchone() is not None
 
     def in_trash(self, case_id):
         with self.store.connection() as con:

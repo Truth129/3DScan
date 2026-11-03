@@ -481,17 +481,17 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
 [API.md](API.md#sign-in) lists them.
 
 - `check_policy` stops the app from starting if a route has no rule.
-- A `case_access` row is what opens a case, unless the case is in Trash, in both modes. Admins get
-  no exception.
+- One shared library: any account opens any case that exists, unless it is in Trash, in both modes.
+  A case route needs the case to exist, so no handler makes a folder for an ID that names none.
 - Delete forever is of kind `trashed_admin`: a member gets 403 before the body is read. The password
   check after the gate can wait, so `Store.purge_case` checks the role again under its write lock.
-- A case scope is a user ID or `EVERY_CASE`, never `None`, and only the built-in local user holds
-  `EVERY_CASE`.
-- `storage_rows` reads every case. A label reads only for its owner, and another owner's row gives
-  only owner, date and size. The janitor's `existing_case_ids` also reads every case, for IDs only.
-- A new case belongs to its creator. Work with nobody signed in, such as the command line or sign-in
-  off, goes to the oldest active admin. A case with no owner goes to that admin when an account is
-  added, or at startup in password mode.
+- Every account's case scope is `EVERY_CASE`. A user ID scope still works, so private cases can
+  return, and `None` is never a scope.
+- `storage_rows` reads every case. Under a user ID scope another owner's row gives only owner, date
+  and size. The janitor's `existing_case_ids` also reads every case, for IDs only.
+- An owner row records who added a case, and the lists show it as "Added by". Work with nobody
+  signed in, such as the command line or sign-in off, goes to the oldest active admin. A case with
+  no owner goes to that admin when an account is added, or at startup in password mode.
 
 **Sessions and passwords.** Only the SHA-256 of a session token is stored. Passwords use scrypt, with
 n=2^17, r=8 and p=1.
@@ -523,8 +523,8 @@ when a TotalSegmentator key is saved, and model downloads.
 
 - With sign-in off, anything that can reach the port can read every case. With it on, anyone with
   a shell on the machine can still read every file.
-- Every account is an administrator, and a case cannot be shared between accounts.
-- Each account imports its own copy of an Orthanc series, so the same scan can be on disk twice.
+- Every account is an administrator.
+- The library is shared, with no private cases and no per-case rights.
 - A case in Trash keeps its disk space, and importing it again from Orthanc makes a second copy.
 - Delete forever is an ordinary file delete, not secure erasure. Backups, Orthanc and browser caches
   keep their copies, and restoring a backup taken before the deletion brings the case back.

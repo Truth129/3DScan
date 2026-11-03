@@ -138,6 +138,8 @@ def test_purge_is_for_an_admin_on_a_case_in_trash(rig):
     with rig.service.store.connection() as con:
         username = con.execute("SELECT username FROM users WHERE id=?", (rig.member.user_id,)).fetchone()[0]
     assert username.casefold() not in rig.service.accounts.throttle.entries
+    # Another admin passes the gate on a case someone else added, so only the password stops it.
+    refused(purge(rig.other, case_id, wrong()), 403, "Wrong password.")
     refused(purge(rig.owner, rig.service.new_case("Synthetic")["id"]), 404, "Case not found")
     assert purge(rig.owner, case_id).status_code == 200
     refused(purge(rig.owner, case_id), 404, "Case not found")

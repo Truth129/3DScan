@@ -27,9 +27,9 @@ or with `SCAN3D_AUTH=password`, everyone needs an account. See
 It asks for a password of 10 to 1,024 characters, twice. `--display-name` sets the name shown in the
 header. The first admin receives every case that has no owner.
 
-**Signing in.** Enter your username and password. Over a network, use the HTTPS address. Each
-account sees only its own cases. Cases created on the command line go to the oldest admin. You land
-on the [Library](#library), and a reload stays on your case.
+**Signing in.** Enter your username and password. Over a network, use the HTTPS address. Everyone
+signed in sees and works on the same cases. You land on the [Library](#library), and a reload stays
+on your case.
 
 **Shared computer.** Tick this on a computer other people use. You are signed out when the browser
 closes, and after 12 hours at most, and the browser stores no scan data for this session.
@@ -52,13 +52,14 @@ every file, so protect the machine and the data directory as well.
 
 ## Library
 
-The Library lists your cases, the ones you opened last first. Choose the case name in the header to
-open it, over the case you are working on. **Esc** or **×** returns to that case exactly as you left
-it, and choosing the case's own row does the same.
+The Library lists every case, the ones you opened last first. A case someone else added says
+**Added by** and their name. Cases made on the command line name the oldest admin. Choose the case
+name in the header to open it, over the case you are working on. **Esc** or **×** returns to that
+case exactly as you left it, and choosing the case's own row does the same.
 
-**Finding a case.** Type in **Search cases**. Every word must appear in the case name, a series
-description or modality, or the status. **Enter** opens the first match. A search stays in your
-browser.
+**Finding a case.** Type in **Search cases**. Every word must appear in the case name, who added it,
+a series description or modality, or the status. **Enter** opens the first match. A search stays in
+your browser.
 
 **Renaming.** Choose **Rename** on a row, then **Save**. Do not put patient identifiers in a case
 name. A case that is still importing can be renamed when the import finishes.
@@ -68,9 +69,10 @@ confirmation. **Undo** shows for 10 seconds, and reopens the case if it was open
 opened another. After that, choose **Restore** on the **Trash** tab. Marks in progress are saved
 first, and the message says if any could not be.
 
-A case in Trash still uses disk space until you delete it forever. Trash is per account. Moving a
-case to Trash stops its jobs and they do not restart, but a send Orthanc has started finishes. While
-a case is in Trash, importing it from Orthanc again makes a new case.
+A case in Trash still uses disk space until an admin deletes it forever. Trash is shared, and anyone
+can restore a case from it. Moving a case to Trash stops its jobs and they do not restart, but a send
+Orthanc has started finishes. While a case is in Trash, importing it from Orthanc again makes a new
+case.
 
 **Deleting forever.** Only an admin can. On the **Trash** tab, choose **Delete forever** on a row,
 or **Empty Trash** for every case in Trash, whatever the search shows. With sign-in on, enter your
@@ -83,17 +85,16 @@ case whose job or send to Orthanc is still finishing is not deleted yet. The dia
 **Try again** tries it again.
 
 **Storage.** Each row shows the size of its case. An admin also has the **Storage** tab, with the
-totals, the free space, and every case with its owner, date and size. A case that is not yours shows
-**Not your case** in place of its name. Case sizes leave out shared caches, which several cases can
-use at once.
+totals, the free space, and every case with who added it, its date and its size. Case sizes leave
+out shared caches, which several cases can use at once.
 
 **Clear caches**, on the **Storage** tab, empties the caches that rebuild when next needed, so it
 frees space for a while. Saved surfaces and cases stay. It does not run while jobs run, images load,
 a backup runs or another 3DScan command runs, and the tab says what to wait for.
 
-If a case goes away while you have it open, the page says so and returns to the Library, within a
-minute or when you return to the tab. If a case will not open, the page says why and you return to
-the case you had open.
+If a case you have open is moved to Trash elsewhere, by someone else or in another tab, the page says
+so, points you to Trash and returns to the Library, within a minute or when you return to the tab. If a case will not open, the
+page says why and you return to the case you had open.
 
 ## Import a study
 

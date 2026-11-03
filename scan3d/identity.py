@@ -59,10 +59,11 @@ def actor_id():
 
 
 def case_scope(principal):
-    """A scope is EVERY_CASE or a user id, never None, so nobody can read as everything by default."""
+    """One shared library: everyone signed in sees every case. A scope is still EVERY_CASE or a user
+    id, never None, so private cases can return and nobody reads as everything by default."""
     if principal is None:
         raise RuntimeError("A case scope needs a principal")
-    return EVERY_CASE if principal is LOCAL else principal.id
+    return EVERY_CASE
 
 
 def valid_username(username):

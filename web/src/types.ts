@@ -62,6 +62,8 @@ export interface Case {
   import_source?: { kind: string };
   opened_at?: string | null;
   trashed_at?: string;
+  /** Someone else's display name, or null for your own case. */
+  added_by?: string | null;
 }
 export interface TrashResult {
   id: string;

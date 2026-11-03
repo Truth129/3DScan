@@ -34,6 +34,7 @@ const nvidia = row('nvidia', 'NVIDIA Test GPU');
 const broken = row('broken', 'Broken Test GPU', { available: false, reason: 'Its last GPU check failed.' });
 const bound = (card: InferencePathRow) => ({ id: card.id, label: card.label, identity: `${card.id}|gpu|${card.label}` });
 
+const GONE = 'That case was moved to Trash or deleted forever, which stops its runs. Look in Trash in the Library.';
 const scan: Case = { id: 'case', label: 'SYNTHETIC', created_at: '', status: 'ready', active_revision_id: 'prepared', series: [] };
 const prepared: Revision = {
   id: 'prepared',
@@ -543,7 +544,7 @@ describe('the Library', () => {
       expect(root.named('case-toolbar')).toBeUndefined();
       expect(root.named('case-library')).toBeDefined();
       expect(root.named('undo-toast')?.content).toContain(`“${scan.label}” moved to Trash.`);
-      expect(root.content).not.toContain('no longer available');
+      expect(root.content).not.toContain(GONE);
       await undo(root);
       expect(api.restore).toHaveBeenCalledExactlyOnceWith('case');
       expect(stored.get('scan3d-case')).toBe('case');
@@ -851,7 +852,7 @@ describe('the Library', () => {
       expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
       expect(root.named('case-toolbar')).toBeDefined();
       expect(stored.get('scan3d-case')).toBe('case');
-      expect(root.content).toContain('That case is no longer available.');
+      expect(root.content).toContain(GONE);
     });
     it('goes back to the open case on any other failure, and says why', async () => {
       const { root, stored } = await listed();
@@ -909,7 +910,7 @@ describe('the Library', () => {
     await heartbeat();
     expect(stored.has('scan3d-case')).toBe(false);
     expect(root.named('case-toolbar')).toBeUndefined();
-    expect(root.content).toContain('That case is no longer available.');
+    expect(root.content).toContain(GONE);
   });
   it.each([
     ['a lost connection', new TypeError('Failed to fetch')],
@@ -922,7 +923,7 @@ describe('the Library', () => {
     await heartbeat();
     expect(stored.get('scan3d-case')).toBe('case');
     expect(root.named('case-toolbar')).toBeDefined();
-    expect(root.content).not.toContain('That case is no longer available.');
+    expect(root.content).not.toContain(GONE);
   });
   it('takes only the label from a heartbeat', async () => {
     workstation([amd]);

@@ -13,7 +13,9 @@ export const statusLabel = (status: string) => STATUS_LABELS[status] ?? status;
 export function filterCases(cases: readonly Case[], query: string) {
   const words = query.toLowerCase().split(' ').filter(Boolean);
   return cases.filter(item => {
-    const text = [item.label, ...item.series.flatMap(series => [series.description, series.modality]), statusLabel(item.status)].join(' ').toLowerCase();
+    const text = [item.label, item.added_by ?? '', ...item.series.flatMap(series => [series.description, series.modality]), statusLabel(item.status)]
+      .join(' ')
+      .toLowerCase();
     return words.every(word => text.includes(word));
   });
 }

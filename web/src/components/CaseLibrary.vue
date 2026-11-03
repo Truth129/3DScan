@@ -75,8 +75,11 @@ function dateOf(item: Case) {
     date = caseDate(value);
   return date && `${name} ${date}`;
 }
-const meta = (item: Case) => [dateOf(item), statusLabel(item.status), sizeOf(item.id), item.synthetic ? 'Synthetic' : ''].filter(Boolean).join(' · ');
-/** Only your own row has a label, so only your own row can say it is in Trash. */
+const meta = (item: Case) =>
+  [dateOf(item), statusLabel(item.status), sizeOf(item.id), item.added_by ? `Added by ${item.added_by}` : '', item.synthetic ? 'Synthetic' : '']
+    .filter(Boolean)
+    .join(' · ');
+/** Under a person scope only your own row has a label, so only your own row can say it is in Trash. */
 const storageName = (row: StorageRow) => `${row.label ?? 'Not your case'}${row.trashed_at ? ' · In Trash' : ''}`;
 
 /** A long list stays where it is. */
@@ -276,7 +279,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
         </div>
         <p v-if="casesUnread" class="empty-search">Cases could not be read. Trying again.</p>
         <div v-else-if="!cases.length && !query && trashRead" class="case-library-empty">
-          <h2>{{ trashed.length ? 'All your cases are in Trash' : 'No cases yet' }}</h2>
+          <h2>{{ trashed.length ? 'Every case is in Trash' : 'No cases yet' }}</h2>
           <p>
             Explore {{ mrEnabled ? 'CT and static 3D MR' : 'CT' }} scans with linked slices and 3D views. Segment locally. Review the source images. Refine with
             confidence.
@@ -356,7 +359,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
               <thead>
                 <tr>
                   <th scope="col">Case</th>
-                  <th scope="col">Owner</th>
+                  <th scope="col">Added by</th>
                   <th scope="col">Created</th>
                   <th scope="col">Size</th>
                 </tr>
@@ -364,7 +367,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
               <tbody>
                 <tr v-for="(row, index) in storage.cases" :key="index">
                   <th scope="row">{{ storageName(row) }}</th>
-                  <td>{{ row.owner ?? 'No owner' }}</td>
+                  <td>{{ row.owner ?? '—' }}</td>
                   <td>{{ caseDate(row.created_at) }}</td>
                   <td>{{ formatSize(row.size) }}</td>
                 </tr>

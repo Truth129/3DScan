@@ -21,8 +21,8 @@ def add_routes(app, service):
 
     @app.get("/api/cases")
     def cases():
-        scope = identity.case_scope(identity.current())
-        return [public_case(case, service.settings) for case in service.store.case_summaries(scope)]
+        principal = identity.current()
+        return [public_case(case, service.settings) for case in service.store.case_summaries(identity.case_scope(principal), principal.id)]
 
     @app.get("/api/cases/{case_id}")
     def case(case_id: str):
@@ -69,8 +69,8 @@ def add_routes(app, service):
 
     @app.get("/api/trash")
     def trashed_cases():
-        scope = identity.case_scope(identity.current())
-        return [public_case(case, service.settings) for case in service.store.trashed_cases(scope)]
+        principal = identity.current()
+        return [public_case(case, service.settings) for case in service.store.trashed_cases(identity.case_scope(principal), principal.id)]
 
     @app.get("/api/sizes")
     def sizes():

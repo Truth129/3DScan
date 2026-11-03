@@ -698,8 +698,11 @@ async function openCase(id: string, returning = false) {
     if (generation === caseGeneration) loading.value = false;
   }
 }
-/** Nothing of a case that has gone stays on screen, and this browser stops reopening it. */
-async function closeCase(id: string, message = 'That case is no longer available.') {
+/**
+ * Nothing of a case that has gone stays on screen, and this browser stops reopening it. In a shared library a case
+ * leaves someone else's page only through Trash, and only the person who trashed it hears which runs stopped.
+ */
+async function closeCase(id: string, message = 'That case was moved to Trash or deleted forever, which stops its runs. Look in Trash in the Library.') {
   caseGeneration++;
   resetCaseView();
   activeCase.value = undefined;

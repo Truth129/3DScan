@@ -110,7 +110,7 @@ def test_launch_returns_only_public_current_selection_without_creating_work(laun
         assert private not in response.text
 
 
-def test_launch_finds_only_the_imports_of_the_person_asking(launch_rig):
+def test_launch_finds_an_import_whoever_made_it(launch_rig):
     rig = launch_rig
     first, second = "a" * 32, "b" * 32
 
@@ -122,12 +122,9 @@ def test_launch_finds_only_the_imports_of_the_person_asking(launch_rig):
             identity.activate(None)
 
     job = start_as(rig, first)
-    assert launch_as(first)["job"]["id"] == job["id"]
-    assert launch_as(second)["job"] is None
+    assert launch_as(first)["job"]["id"] == launch_as(second)["job"]["id"] == job["id"]
     assert execute_cpu(rig, job["id"])["status"] == "completed"
-    assert launch_as(first)["case_id"] == job["case_id"]
-    other = launch_as(second)
-    assert other["case_id"] is other["job"] is None
+    assert launch_as(first)["case_id"] == launch_as(second)["case_id"] == job["case_id"]
 
 
 def test_launch_treats_a_trashed_case_as_absent(launch_rig):

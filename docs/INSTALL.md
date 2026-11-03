@@ -311,8 +311,8 @@ The [user guide](USER_GUIDE.md#sign-in) covers everyday use.
 
 - **Clinical use.** Nothing here has regulatory clearance or clinical validation.
 - **macOS and Windows.** Only Linux is supported.
-- **Sharing a case between users.** Each account sees only its own cases, and every account is an
-  administrator. A single worker set owns each data directory.
+- **Private cases.** Every account sees every case, and every account is an administrator. A single
+  worker set owns each data directory.
 - **Plain HTTP beyond loopback.** A sign-in is refused there. Keep the default loopback address, or
   put an HTTPS reverse proxy in front of it and list its host name in `SCAN3D_ALLOWED_HOSTS`.
 - **MRI by default.** It is implemented but experimental, and is off unless you set

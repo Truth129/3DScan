@@ -212,7 +212,7 @@ def start_as(rig, user_id, label=None):
 
 
 @pytest.mark.parametrize("status", ["running", "completed", "failed", "cancelled"])
-def test_each_account_has_its_own_import_and_retries_only_its_own(rig, status):
+def test_one_import_serves_everyone_and_a_retry_keeps_who_added_it(rig, status):
     def owners(case_id):
         with rig.service.store.connection() as con:
             return [row["user_id"] for row in con.execute("SELECT user_id FROM case_access WHERE case_id=?", (case_id,))]
@@ -221,15 +221,10 @@ def test_each_account_has_its_own_import_and_retries_only_its_own(rig, status):
     job = start_as(rig, first, "First label")
     rig.service.store.update_job(job["id"], status=status)
     other = start_as(rig, second, "Second label")
-    assert other["id"] != job["id"] and other["case_id"] != job["case_id"]
-    assert job["requested_by"] == first and other["requested_by"] == second
-    assert owners(job["case_id"]) == [first] and owners(other["case_id"]) == [second]
+    assert other["case_id"] == job["case_id"]
+    assert (other["id"] == job["id"]) == (status in {"running", "completed"})
+    assert owners(job["case_id"]) == [first]
     assert rig.service.store.get("cases", job["case_id"])["label"] == "First label"
-    assert rig.service.store.get("cases", other["case_id"])["label"] == "Second label"
-    # The newest job for this snapshot is now someone else's, and must not hide the first person's.
-    again = start_as(rig, first)
-    assert again["case_id"] == job["case_id"] and owners(job["case_id"]) == [first]
-    assert (again["id"] == job["id"]) == (status in {"running", "completed"})
 
 
 def test_queries_remain_private_and_modality_policy_applies_before_import(rig):
@@ -302,7 +297,7 @@ def test_a_repeat_import_of_a_trashed_case_makes_a_new_case(rig):
     assert second["id"] != first["id"] and second["case_id"] != first["case_id"]
     assert execute_cpu(rig, second["id"])["status"] == "completed"
     assert [case["id"] for case in rig.service.store.visible_cases(EVERY_CASE)] == [second["case_id"]]
-    assert [case["id"] for case in rig.service.store.trashed_cases(EVERY_CASE)] == [first["case_id"]]
+    assert [case["id"] for case in rig.service.store.trashed_cases(EVERY_CASE, None)] == [first["case_id"]]
 
 
 @pytest.mark.parametrize("completeness", ["receiving", "incomplete"])

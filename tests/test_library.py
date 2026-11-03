@@ -10,7 +10,7 @@ import pytest
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.disk_usage import tree_bytes
-from scan3d.store import identifier, now
+from scan3d.store import identifier
 from test_access import BASE, account, filled, ruled_routes
 
 
@@ -19,7 +19,7 @@ def rig(tmp_path_factory):
     root = tmp_path_factory.mktemp("library")
     app = create_app(Settings(root / "data", (root,), web_dir=root / "dist", auth="password"))
     # First, so it is the oldest admin and owns what `service.new_case` makes.
-    owner = account(app)
+    owner = account(app, name="Owner")
     return SimpleNamespace(app=app, service=app.state.service, owner=owner, other=account(app), member=account(app, role="member", archive_access=0))
 
 
@@ -58,9 +58,6 @@ def absent(response, detail):
 
 def test_cases_list_last_opened_first_for_each_person(rig):
     older, newer = rig.service.new_case("Synthetic")["id"], rig.service.new_case("Synthetic")["id"]
-    with rig.service.store.connection() as con:
-        for case_id in (older, newer):
-            con.execute("INSERT INTO case_access(case_id,user_id,role,granted_at) VALUES (?,?,'viewer',?)", (case_id, rig.other.user_id, now()))
 
     def listed(client):
         return [case for case in client.get("/api/cases").json() if case["id"] in (older, newer)]
@@ -148,14 +145,17 @@ def test_restore_returns_the_case_unchanged_and_jobs_stay_cancelled(rig):
     assert rig.service.store.get("jobs", job_id)["status"] == "cancelled"
 
 
-def test_restore_is_for_the_owner_and_only_for_a_trashed_case(rig):
+def test_any_account_moves_a_case_to_trash_and_restores_it(rig):
     case_id = rig.service.new_case("Synthetic")["id"]
-    absent(rig.owner.post(f"/api/trash/{case_id}/restore"), "Case not found")
-    rig.owner.post(f"/api/cases/{case_id}/trash")
-    absent(rig.other.post(f"/api/trash/{case_id}/restore"), "Case not found")
-    assert case_id in [case["id"] for case in rig.owner.get("/api/trash").json()]
-    assert case_id not in [case["id"] for case in rig.other.get("/api/trash").json()]
-    assert rig.owner.post(f"/api/trash/{case_id}/restore").status_code == 200
+    absent(rig.member.post(f"/api/trash/{case_id}/restore"), "Case not found")
+    assert rig.member.post(f"/api/cases/{case_id}/trash").status_code == 200
+
+    def in_trash(client):
+        return next((case for case in client.get("/api/trash").json() if case["id"] == case_id), None)
+
+    assert in_trash(rig.owner)["added_by"] is None and in_trash(rig.member)["added_by"] == "Owner"
+    assert rig.member.post(f"/api/trash/{case_id}/restore").status_code == 200
+    assert in_trash(rig.owner) is None
 
 
 def test_trash_stops_each_active_job_and_counts_a_send_apart(rig):
@@ -255,27 +255,25 @@ def test_tree_bytes_counts_a_link_once_and_skips_what_is_missing(tmp_path):
     assert tree_bytes(tmp_path / "missing") == 0
 
 
-def test_sizes_cover_your_own_cases_including_trash(rig):
+def test_sizes_cover_every_case_including_trash(rig):
     kept, trashed = rig.service.new_case("Synthetic")["id"], rig.service.new_case("Synthetic")["id"]
     for case_id in (kept, trashed):
         fill(rig.service.store.case_dir(case_id) / "scan.bin", 8192)
     rig.owner.post(f"/api/cases/{trashed}/trash")
-    sizes = rig.owner.get("/api/sizes").json()["sizes"]
-    assert sizes[kept] >= 8192 and sizes[trashed] >= 8192
-    assert kept not in rig.other.get("/api/sizes").json()["sizes"]
+    for client in (rig.owner, rig.member):
+        sizes = client.get("/api/sizes").json()["sizes"]
+        assert sizes[kept] >= 8192 and sizes[trashed] >= 8192
 
 
-def test_storage_lists_every_case_and_labels_only_your_own(rig):
+def test_storage_lists_every_case_with_its_name_and_who_added_it(rig):
     case = rig.service.new_case("Synthetic")
     fill(rig.service.store.case_dir(case["id"]) / "scan.bin", 8192)
     before = rig.other.get("/api/storage").json()["totals"]["trash"]
     rig.owner.post(f"/api/cases/{case['id']}/trash")
-    mine = next(row for row in rig.owner.get("/api/storage").json()["cases"] if row.get("id") == case["id"])
-    assert mine["label"] == "Synthetic" and mine["trashed_at"] and mine["size"] >= 8192
     report = rig.other.get("/api/storage").json()
-    theirs = next(row for row in report["cases"] if row["created_at"] == case["created_at"])
-    assert theirs == {"label": None, "owner": "Someone", "created_at": case["created_at"], "size": mine["size"]}
-    assert report["totals"]["trash"] == before + mine["size"]
+    row = next(row for row in report["cases"] if row.get("id") == case["id"])
+    assert row["label"] == "Synthetic" and row["owner"] == "Owner" and row["trashed_at"] and row["size"] >= 8192
+    assert report["totals"]["trash"] == before + row["size"]
 
 
 def test_storage_refuses_a_member(rig):
