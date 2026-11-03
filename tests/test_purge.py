@@ -292,9 +292,12 @@ def test_one_stuck_case_does_not_hold_up_another(started):
     assert trash_state(service, stuck) == "purging"
 
 
-def test_janitor_waits_for_idle_before_the_shared_caches(started):
+def test_janitor_waits_for_idle_before_the_shared_caches(started, monkeypatch):
     service, http = started
     data = service.settings.data_dir
+    # The running GPU lane calls this once a purge sets `release_engine`.
+    released = threading.Event()
+    monkeypatch.setattr(service, "_release_interactive", released.set)
     case_id, other = service.new_case("Synthetic")["id"], service.new_case("Synthetic")["id"]
     fill(data / "cases" / case_id / "scan.bin", 1024)
     cache = data / "analysis-cache" / "aa" / "result.json"
@@ -304,10 +307,11 @@ def test_janitor_waits_for_idle_before_the_shared_caches(started):
     try:
         assert service.janitor.run_pass() is True
         assert not (data / "cases" / case_id).exists() and cache.exists() and trash_state(service, case_id) == "purging"
+        assert not service.release_engine.is_set() and not released.is_set()
     finally:
         service.activity.leave(other)
     assert service.janitor.run_pass() is False
-    assert not cache.exists() and trash_state(service, case_id) == "purged"
+    assert not cache.exists() and trash_state(service, case_id) == "purged" and released.wait(2)
 
 
 def test_janitor_sweeps_unmarked_and_orphaned_review_entries_only(started):
@@ -330,23 +334,23 @@ def test_janitor_sweeps_unmarked_and_orphaned_review_entries_only(started):
 def test_surface_sweep_keeps_live_assets_and_every_sibling_of_them(started):
     service, http = started
     data = service.settings.data_dir
-    live, dead = "a" * 64, "b" * 64
-    service.store.save(
-        "revisions",
-        dict(id=identifier(), case_id=service.new_case("Synthetic")["id"], structures=[], surface_assets=[{"id": "x", "key": live, "triangles": 1}]),
-    )
+    live, draft, dead = "a" * 64, "c" * 64, "b" * 64
+    case_id = service.new_case("Synthetic")["id"]
+    service.store.save("revisions", dict(id=identifier(), case_id=case_id, structures=[], surface_assets=[{"id": "x", "key": live, "triangles": 1}]))
+    with service.store.connection() as con:
+        con.execute("INSERT INTO review_sessions VALUES (?,?,?)", (identifier(), case_id, json.dumps({"candidate": {"surface_assets": [{"key": draft}]}})))
 
     def files(key):
         names = (f"{key}.glb", f"{key}.glb.json", f"{key}.glb.gz", f"{key}.glb.gz.json", f"{key}.glb.gz.lock", f".{key}.glb.abc.writing")
         return [data / "surface-cache" / "assets" / key[:2] / name for name in names]
 
-    for path in files(live) + files(dead):
+    for path in files(live) + files(draft) + files(dead):
         fill(path, 16)
     lock = data / "surface-cache" / "locks" / f"{dead}.lock"
     fill(lock, 0)
     deleted(http, service.new_case("Synthetic")["id"])
     assert service.janitor.run_pass() is False
-    assert all(path.exists() for path in files(live)) and lock.exists()
+    assert all(path.exists() for path in files(live) + files(draft)) and lock.exists()
     assert not any(path.exists() for path in files(dead))
 
 
