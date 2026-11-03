@@ -182,6 +182,7 @@ def test_administrator_routes_refuse_a_member(rig):
         rig.member.put("/api/totalsegmentator/license", json={"license_key": "aca_ABCDEFGHIJKLMNOP"}),
         rig.member.delete("/api/totalsegmentator/license"),
         rig.member.post("/api/storage/clear-caches"),
+        rig.member.get("/api/people"),
     ):
         assert response.status_code == 403 and response.json() == {"detail": "Administrator access is required"}
 

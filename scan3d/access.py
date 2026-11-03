@@ -68,6 +68,15 @@ RULES = {
     ("POST", "/api/storage/clear-caches"): Rule("admin"),
     ("PUT", _LICENSE): Rule("admin", "license.change"),
     ("DELETE", _LICENSE): Rule("admin", "license.change"),
+    # Each People change writes its own audit row, with its target, inside its transaction.
+    ("GET", "/api/people"): Rule("admin"),
+    ("POST", "/api/people"): Rule("admin"),
+    ("POST", "/api/people/{user_id}/link"): Rule("admin"),
+    ("POST", "/api/people/{user_id}/role"): Rule("admin"),
+    ("POST", "/api/people/{user_id}/archive"): Rule("admin"),
+    ("POST", "/api/people/{user_id}/disable"): Rule("admin"),
+    ("POST", "/api/people/{user_id}/enable"): Rule("admin"),
+    ("POST", "/api/people/{user_id}/sign-out"): Rule("admin"),
     ("POST", "/api/orthanc/studies/query"): Rule("archive", "archive.query"),
     ("GET", "/api/orthanc/studies/{study_id}/series"): Rule("archive"),
     ("POST", "/api/orthanc/imports"): Rule("archive", "case.import"),
@@ -92,8 +101,11 @@ RULES = {
     ("GET", f"{_REVISION}/dicom-view"): Rule("case_archive"),
     ("POST", f"{_REVISION}/dicom-view"): Rule("case_archive", "export.view"),
 }
-# These exist only in some configurations: FastAPI's pages with sign-in off, and the build notice with no viewer built.
-_CONDITIONAL = frozenset({("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("GET", "/redoc"), ("GET", "/openapi.json"), ("GET", "/")})
+# These exist only in some configurations: FastAPI's pages with sign-in off, the build notice with no viewer built,
+# and People only with sign-in on.
+_CONDITIONAL = frozenset({("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("GET", "/redoc"), ("GET", "/openapi.json"), ("GET", "/")}) | {
+    key for key in RULES if key[1].startswith("/api/people")
+}
 _CASE = Rule("case")
 _STATIC = Rule("public")
 # Each scoped kind reads one path parameter, and a route with that parameter must be of such a kind.

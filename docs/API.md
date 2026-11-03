@@ -29,7 +29,7 @@ or an unexpected 500 is plain text.
 | 403    | Mutation from another browser origin, access this account lacks, such as a member on an admin route, or a wrong password on Delete forever | Same-origin middleware, `SessionGate`, `errors.Forbidden`, `POST /api/trash/{id}/purge` |
 | 404    | Record is absent, belongs to another case, is in Trash, has been deleted forever, or this account cannot open it | `errors.NotFound`, `SessionGate`, a stay-purged trigger |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
-| 409    | Stale state; reload before retrying. Or work under way must finish first | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever and Clear caches |
+| 409    | Stale state; reload before retrying. Or work under way must finish first, or a People change would leave no admin | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever, Clear caches and People |
 | 411    | Captured view or sign-in without a plain `Content-Length` | `dicom-view` upload and sign-in checks  |
 | 413    | Offline HTML export, captured view or sign-in over a size limit | `ExportTooLarge`, `dicom-view` upload and sign-in checks |
 | 422    | Schema validation failed                                | FastAPI                                   |
@@ -48,8 +48,9 @@ paths.
 
 - **Origin.** A non-GET request whose `Origin` differs from `Host` gets 403. Hosts must appear in
   `SCAN3D_ALLOWED_HOSTS`.
-- **Private responses.** `/api/session`, `/api/orthanc/*`, the license route, `.../dicom-seg`, a
-  prepared `segment.dcm` and `.../dicom-view` use `Cache-Control: no-store`, errors included.
+- **Private responses.** `/api/session`, `/api/people`, `/api/orthanc/*`, the license route,
+  `.../dicom-seg`, a prepared `segment.dcm` and `.../dicom-view` use `Cache-Control: no-store`,
+  errors included.
   Candidate records, descriptors, agreement reports and frames use `private, no-store`. So does any
   other `/api/` response that sets no header of its own.
 - **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces and `model.glb` use
@@ -108,7 +109,7 @@ with no session gets the 401, and a signed-in one the other.
 | --------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
 | Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, the viewer files | None                                         |
 | Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `GET /api/sizes`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
-| Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
+| Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license`, the [People routes](#people-routes) | 401, 403 `Administrator access is required` |
 | Archive   | `GET /api/orthanc/status`, `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
 | Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
 | Case and archive | `GET`, `POST /api/cases/{id}/orthanc-series`, `GET`, `POST .../dicom-view` | 401, 404 `Case not found`, 403 `This account cannot use the archive` |
@@ -130,6 +131,44 @@ with no session gets the 401, and a signed-in one the other.
 - A session cookie on a request other than GET, HEAD or OPTIONS with no `Origin` gets 403
   `Cross-origin mutations are not allowed`.
 - A route with no rule gets 403 `This route has no access rule`, in either mode.
+
+### People routes
+
+These exist only in `password` mode, for an admin. Each change checks again, under its write lock,
+that the caller is still an active admin, and writes its audit row with the person as target.
+Asking for a role, archive access or state the person already has succeeds and writes nothing.
+
+| Route                              | Result                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `GET /api/people`                  | Every account, oldest first, as `Person[]`                              |
+| `POST /api/people`                 | Takes `{username, display_name?, role?}`, a member by default. Adds a person with no password and archive access on. Returns `{person, link}` |
+| `POST /api/people/{id}/link`       | A new link, `invite` before the person has a password and `reset` after. Ends any earlier one. Returns the link |
+| `POST /api/people/{id}/role`       | Takes `{role}`, `admin` or `member`. Returns the person                  |
+| `POST /api/people/{id}/archive`    | Takes `{archive_access}`. Returns the person                            |
+| `POST /api/people/{id}/disable`    | Stops sign-in and ends the person's sessions and links. Returns the person |
+| `POST /api/people/{id}/enable`     | Lets the person sign in again. No session or link comes back. Returns the person |
+| `POST /api/people/{id}/sign-out`   | Ends every session of the person. Returns `{signed_out}`                |
+
+- A `Person` is `{id, username, display_name, role, archive_access, state, created_at,
+  last_seen_at, link_expires_at}`. `state` is `active`, `invited` before a password is set, or
+  `disabled`. `last_seen_at` is the last sign-in or session slide. `link_expires_at` is when the
+  person's link stops working, or null.
+- A link is `{code, purpose, expires_at}` and lasts 24 hours. Only the SHA-256 of `code` is stored,
+  so this answer is the only place it appears. A link works only while whoever made it is still an
+  active admin.
+- An active admin has the `admin` role, is not disabled and has a password.
+- Work already queued or running finishes when archive access goes off or a person is disabled.
+
+| Status | `detail`                                                       | When                                      |
+| ------ | -------------------------------------------------------------- | ----------------------------------------- |
+| 400    | `A username needs 1 to 64 letters, digits or . _ @ -`          | Add, with a bad username                  |
+| 400    | `A display name needs 1 to 128 printable characters`           | Add, with a bad display name              |
+| 400    | `That username is already in use`                              | Add, with a name taken in any case        |
+| 400    | `You cannot change your own role or disable your own account`  | Role or disable on your own account       |
+| 403    | `Administrator access is required`                             | A member, or an admin demoted or disabled since the request started |
+| 404    | `Person not found`                                             | No account has that ID                    |
+| 409    | `Keep at least one administrator who can sign in`              | Demoting or disabling the last active admin |
+| 409    | `Enable this account before making a link`                     | A link for a disabled account             |
 
 ### Session cookie
 
@@ -280,6 +319,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | Method and path                                      | Purpose                                 |
 | ---------------------------------------------------- | --------------------------------------- |
 | `GET`, `POST`, `DELETE /api/session`, `POST .../sign-out-others` | [Sign-in](#sign-in)         |
+| `GET`, `POST /api/people`, `POST /api/people/{id}/...` | [People](#people-routes), for an admin |
 | `GET /api/health`, `GET /api/imaging-capabilities`   | Liveness, installed modality adapters   |
 | `GET /api/segmentation-options`                      | Task catalog and inference paths        |
 | `GET`, `PUT`, `DELETE /api/totalsegmentator/license` | License status and changes              |

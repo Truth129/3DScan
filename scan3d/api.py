@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, api_cases, api_imports, api_reviews, api_session, api_system, api_viewer
+from . import __version__, api_cases, api_imports, api_people, api_reviews, api_session, api_system, api_viewer
 from .access import SessionGate, check_policy
 from .config import Settings
 from .errors import Conflict, Forbidden, NotFound
@@ -187,6 +187,8 @@ def create_app(settings: Settings | None = None):
             or request.url.path.endswith(("/dicom-seg", "/segment.dcm"))
             or view_export
             or _is_purge_path(request)
+            # A People answer can carry a link's code.
+            or request.scope["path"].startswith("/api/people")
         )
         origin = request.headers.get("origin")
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin:
@@ -210,7 +212,7 @@ def create_app(settings: Settings | None = None):
             response.headers.setdefault("Cache-Control", "private, no-store")
         return response
 
-    for module in (api_system, api_session, api_imports, api_cases, api_reviews, api_viewer):
+    for module in (api_system, api_session, api_people, api_imports, api_cases, api_reviews, api_viewer):
         module.add_routes(app, service)
 
     if service.settings.web_dir.is_dir():

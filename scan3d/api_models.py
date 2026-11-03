@@ -20,6 +20,21 @@ class SignIn(Input):
     shared_device: bool = Field(False, strict=True)
 
 
+class NewPerson(Input):
+    # Checked in `Accounts.invite` by the rules `scan3d users add` uses.
+    username: str
+    display_name: str | None = None
+    role: Literal["admin", "member"] = "member"
+
+
+class PersonRole(Input):
+    role: Literal["admin", "member"]
+
+
+class PersonArchive(Input):
+    archive_access: bool = Field(strict=True)
+
+
 class ImportLocal(Input):
     path: str
     label: str | None = Field(None, max_length=128)

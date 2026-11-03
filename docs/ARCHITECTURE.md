@@ -485,6 +485,9 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
   A case route needs the case to exist, so no handler makes a folder for an ID that names none.
 - Delete forever is of kind `trashed_admin`: a member gets 403 before the body is read. The password
   check after the gate can wait, so `Store.purge_case` checks the role again under its write lock.
+- People routes exist only in `password` mode. Each change in `Accounts` checks again under its
+  write lock that the caller is still an active admin: `admin`, not disabled, with a password. The
+  last one cannot be demoted or disabled, and nobody changes their own role or disables themselves.
 - Every account's case scope is `EVERY_CASE`. A user ID scope still works, so private cases can
   return, and `None` is never a scope.
 - `storage_rows` reads every case. Under a user ID scope another owner's row gives only owner, date
@@ -513,6 +516,9 @@ fails the request. The actions are:
 
 - `session.sign_in`, `session.sign_in_failed`, `session.sign_out`, `session.sign_out_others`
 - `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`, `cache.clear`
+- `user.invite`, `user.invite_link`, `user.reset_link`, `user.make_admin`, `user.make_member`,
+  `user.archive_on`, `user.archive_off`, `user.disable`, `user.enable`, `user.sign_out_everywhere`,
+  each written with the change itself and the person as target
 - `case.open`, once per session and case
 - `case.rename`
 - `case.trash`, `case.restore`, `case.purge`, each written with the change itself
@@ -530,7 +536,6 @@ when a TotalSegmentator key is saved, and model downloads.
 
 - With sign-in off, anything that can reach the port can read every case. With it on, anyone with
   a shell on the machine can still read every file.
-- Every account is an administrator.
 - The library is shared, with no private cases and no per-case rights.
 - A case in Trash keeps its disk space, and importing it again from Orthanc makes a second copy.
 - Delete forever is an ordinary file delete, not secure erasure. Backups, Orthanc and browser caches

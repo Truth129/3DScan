@@ -129,6 +129,8 @@ build.
     needs an entry only for an audit action, or for the `trashed`, `trashed_admin` or
     `case_archive` kind.
     `{job_id}` and `{upload_id}` need those rule kinds.
+  - People routes exist only in `password` mode, so their rules sit in `_CONDITIONAL`. They audit
+    inside their own transactions, with a target, so their rules carry no audit action.
   - Read cases through `case_summaries(scope, opener)` or `visible_cases(scope)`. Every account's
     scope is `EVERY_CASE`, and a user ID scope still works. `Store.list` refuses `"cases"`.
     `storage_rows` reads every case. The only other reader of every case is the janitor's

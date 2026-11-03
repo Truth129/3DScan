@@ -18,7 +18,7 @@ import time
 from starlette.concurrency import run_in_threadpool
 
 from . import identity
-from .errors import Forbidden, NotFound
+from .errors import Conflict, Forbidden, NotFound
 from .identifiers import identifier
 
 SESSION_LIFETIME = timedelta(days=30)
@@ -30,6 +30,27 @@ _WAITS = (1, 2, 4, 8, 16)
 _LONGEST_WAIT = 30
 _THROTTLE_KEYS = 4096
 _DISPLAY_NAME_LENGTH = 128
+LINK_LIFETIME = timedelta(hours=24)
+# A link is a People change finished later, so it works only while its maker is still an active admin.
+_MAKER = "JOIN users a ON a.id=c.created_by AND a.role='admin' AND a.disabled_at IS NULL"
+# Never a password hash or a code: a person's state and their link's expiry are all People needs.
+_PEOPLE = (
+    "SELECT u.id,u.username,u.display_name,u.role,u.archive_access,u.created_at,u.disabled_at,u.password_hash IS NULL AS invited,"
+    f"s.seen_at AS last_seen_at,(SELECT MAX(c.expires_at) FROM one_time_codes c {_MAKER} WHERE c.user_id=u.id AND c.expires_at>?) AS link_expires_at "
+    "FROM users u LEFT JOIN last_seen s ON s.user_id=u.id"
+)
+
+
+def _display_name(username, display_name):
+    name = (username if display_name is None else display_name).strip()
+    if not name or len(name) > _DISPLAY_NAME_LENGTH or any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise ValueError(f"A display name needs 1 to {_DISPLAY_NAME_LENGTH} printable characters")
+    return name
+
+
+def _not_yourself(actor_id, user_id):
+    if actor_id == user_id:
+        raise ValueError("You cannot change your own role or disable your own account")
 
 
 class WrongPassword(Exception):
@@ -96,9 +117,7 @@ class Accounts:
     def add_user(self, username, password, display_name=None):
         """Every account is an administrator with the archive until members exist."""
         identity.check_username(username)
-        name = (username if display_name is None else display_name).strip()
-        if not name or len(name) > _DISPLAY_NAME_LENGTH or any(ord(char) < 32 or ord(char) == 127 for char in name):
-            raise ValueError(f"A display name needs 1 to {_DISPLAY_NAME_LENGTH} printable characters")
+        name = _display_name(username, display_name)
         encoded = identity.hash_password(password)
         user_id = identifier()
         try:
@@ -176,6 +195,135 @@ class Accounts:
             return
         if con.execute("SELECT 1 FROM users WHERE id=? AND role='admin' AND disabled_at IS NULL", (actor_id,)).fetchone() is None:
             raise Forbidden("Administrator access is required")
+
+    @staticmethod
+    def _keep_an_admin(con, user_id):
+        """Someone invited but not yet in cannot sign in, so they do not count."""
+        others = con.execute(
+            "SELECT COUNT(*) FROM users WHERE role='admin' AND disabled_at IS NULL AND password_hash IS NOT NULL AND id<>?", (user_id,)
+        ).fetchone()[0]
+        if not others:
+            raise Conflict("Keep at least one administrator who can sign in")
+
+    @staticmethod
+    def _account(con, user_id):
+        row = con.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if row is None:
+            raise NotFound("Person not found")
+        return row
+
+    @staticmethod
+    def _shown(row):
+        state = "disabled" if row["disabled_at"] else "invited" if row["invited"] else "active"
+        person = {key: row[key] for key in ("id", "username", "display_name", "role", "created_at", "last_seen_at", "link_expires_at")}
+        return {**person, "archive_access": bool(row["archive_access"]), "state": state}
+
+    @staticmethod
+    def _person(con, user_id):
+        return Accounts._shown(con.execute(_PEOPLE + " WHERE u.id=?", (_stamp(_utcnow()), user_id)).fetchone())
+
+    @staticmethod
+    def _new_code(con, actor_id, user_id, purpose, moment):
+        """A fresh link that ends the person's earlier ones, so a link sent to the wrong place can be replaced."""
+        code = secrets.token_urlsafe(32)
+        con.execute("DELETE FROM one_time_codes WHERE user_id=? OR expires_at<=?", (user_id, _stamp(moment)))
+        expires = _stamp(moment + LINK_LIFETIME)
+        con.execute(
+            "INSERT INTO one_time_codes(token_hash,purpose,user_id,created_by,expires_at) VALUES (?,?,?,?,?)",
+            (token_hash(code), purpose, user_id, actor_id, expires),
+        )
+        return {"code": code, "purpose": purpose, "expires_at": expires}
+
+    def people(self):
+        with self.store.connection() as con:
+            return [self._shown(row) for row in con.execute(_PEOPLE + " ORDER BY u.created_at,u.id", (_stamp(_utcnow()),))]
+
+    def invite(self, actor_id, username, display_name=None, role="member"):
+        """A person with no password yet, and a link to set one. Archive access starts on, as the owner chose."""
+        identity.check_username(username)
+        name, user_id, moment = _display_name(username, display_name), identifier(), _utcnow()
+        try:
+            with self.store.connection() as con:
+                con.execute("BEGIN IMMEDIATE")
+                self._require_admin(con, actor_id)
+                con.execute(
+                    "INSERT INTO users(id,username,display_name,role,archive_access,created_at) VALUES (?,?,?,?,1,?)",
+                    (user_id, username, name, role, _stamp(moment)),
+                )
+                link = self._new_code(con, actor_id, user_id, "invite", moment)
+                self._write_audit(con, "user.invite", actor_id, target=user_id)
+                return {"person": self._person(con, user_id), "link": link}
+        except sqlite3.IntegrityError:
+            raise ValueError("That username is already in use") from None
+
+    def new_link(self, actor_id, user_id):
+        with self.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._require_admin(con, actor_id)
+            account = self._account(con, user_id)
+            if account["disabled_at"]:
+                raise Conflict("Enable this account before making a link")
+            purpose = "invite" if account["password_hash"] is None else "reset"
+            link = self._new_code(con, actor_id, user_id, purpose, _utcnow())
+            self._write_audit(con, f"user.{purpose}_link", actor_id, target=user_id)
+        return link
+
+    def set_role(self, actor_id, user_id, role):
+        with self.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._require_admin(con, actor_id)
+            account = self._account(con, user_id)
+            if account["role"] != role:
+                _not_yourself(actor_id, user_id)
+                if account["role"] == "admin":
+                    self._keep_an_admin(con, user_id)
+                con.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
+                self._write_audit(con, f"user.make_{role}", actor_id, target=user_id)
+            return self._person(con, user_id)
+
+    def set_archive(self, actor_id, user_id, allowed):
+        """Work already queued or running finishes: like every rule here, this is decided when a request starts."""
+        with self.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._require_admin(con, actor_id)
+            if bool(self._account(con, user_id)["archive_access"]) != allowed:
+                con.execute("UPDATE users SET archive_access=? WHERE id=?", (int(allowed), user_id))
+                self._write_audit(con, "user.archive_on" if allowed else "user.archive_off", actor_id, target=user_id)
+            return self._person(con, user_id)
+
+    def disable(self, actor_id, user_id):
+        """No sign-in, no session and no link. Enable brings back none of them."""
+        with self.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._require_admin(con, actor_id)
+            account = self._account(con, user_id)
+            if account["disabled_at"] is None:
+                _not_yourself(actor_id, user_id)
+                if account["role"] == "admin":
+                    self._keep_an_admin(con, user_id)
+                con.execute("UPDATE users SET disabled_at=? WHERE id=?", (_stamp(_utcnow()), user_id))
+                ended = con.execute("DELETE FROM sessions WHERE user_id=?", (user_id,)).rowcount
+                con.execute("DELETE FROM one_time_codes WHERE user_id=?", (user_id,))
+                self._write_audit(con, "user.disable", actor_id, target=user_id, detail={"count": ended})
+            return self._person(con, user_id)
+
+    def enable(self, actor_id, user_id):
+        with self.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._require_admin(con, actor_id)
+            if self._account(con, user_id)["disabled_at"] is not None:
+                con.execute("UPDATE users SET disabled_at=NULL WHERE id=?", (user_id,))
+                self._write_audit(con, "user.enable", actor_id, target=user_id)
+            return self._person(con, user_id)
+
+    def sign_out_everywhere(self, actor_id, user_id):
+        with self.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._require_admin(con, actor_id)
+            self._account(con, user_id)
+            ended = con.execute("DELETE FROM sessions WHERE user_id=?", (user_id,)).rowcount
+            self._write_audit(con, "user.sign_out_everywhere", actor_id, target=user_id, detail={"count": ended})
+        return {"signed_out": ended}
 
     def _refuse_during_wait(self, key):
         if seconds := self.throttle.remaining(key):
