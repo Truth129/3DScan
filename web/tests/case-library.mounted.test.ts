@@ -435,6 +435,10 @@ describe('Delete forever', () => {
       view = await trashTab([old, scan('busy', 'Busy', { trashed_at: old.trashed_at }), scan('new', 'New', { trashed_at: old.trashed_at })], {
         onPurged: purged,
       });
+    // Empty Trash means every case in it, not only the rows a search shows.
+    fill(view.search(), 'Busy');
+    await settled();
+    expect(view.rows().map(row => row.getAttribute('data-case-id'))).toEqual(['busy']);
     click(view.button('Empty Trash'));
     await settled();
     expect(view.dialog().textContent).toContain('3 cases and everything made from them will leave this workstation.');
@@ -448,6 +452,8 @@ describe('Delete forever', () => {
     expect(purged.mock.calls).toEqual([['old'], ['new']]);
     expect(view.alerts()).toEqual([`Not deleted:Busy: ${busy}`]);
     expect(view.dialog().textContent).toContain('Busy and everything made from it will leave this workstation.');
+    fill(view.search(), '');
+    await settled();
     expect(view.rows().map(row => row.getAttribute('data-case-id'))).toEqual(['busy']);
     view.confirm();
     await settled();
@@ -501,8 +507,11 @@ describe('Delete forever', () => {
       view = await opened([old], { onClose: close });
     view.confirm();
     await settled();
-    press(view.dialog(), 'Escape');
+    // This DOM passes an event to no one else, so its own flags say where a browser would let it go.
+    const escape = Object.assign(new Event('keydown', { cancelable: true }), { key: 'Escape' });
+    view.dialog().dispatchEvent(escape);
     await settled();
+    expect(escape.defaultPrevented && escape.cancelBubble, "refused, and kept from the Library's own Escape").toBe(true);
     expect(view.dialog()).toBeDefined();
     expect((view.button('Cancel') as unknown as HTMLButtonElement).disabled).toBe(true);
     expect(close).not.toHaveBeenCalled();
