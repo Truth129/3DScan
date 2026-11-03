@@ -263,6 +263,14 @@ def refine(service, case):
     return service.store.enqueue(case["id"], "refine", {"revision_id": case["active_revision_id"], "structure_id": "synthetic:liver", "operation": operation})
 
 
+def correction(http, case):
+    """A Slicer correction of the revision a page showed when the demo loaded."""
+    prefix, shown = f"/api/cases/{case['id']}", case["active_revision_id"]
+    with zipfile.ZipFile(io.BytesIO(http.get(f"{prefix}/revisions/{shown}/slicer.zip").content)) as archive:
+        segmentation = archive.read(next(name for name in archive.namelist() if name.endswith(".seg.nrrd")))
+    return http.post(f"{prefix}/corrections", data={"revision_id": shown}, files={"segmentation": ("segmentation.seg.nrrd", segmentation)}).json()
+
+
 def run(service, queued):
     claimed = service.store.claim()
     assert claimed and claimed["id"] == queued["id"]
@@ -270,10 +278,12 @@ def run(service, queued):
     return service.store.get("jobs", queued["id"])
 
 
-def test_a_refine_from_a_revision_no_longer_active_fails_and_keeps_the_newer_one(tmp_path):
+@pytest.mark.parametrize("kind", ["refine", "correction"])
+def test_a_refine_from_a_revision_no_longer_active_fails_and_keeps_the_newer_one(tmp_path, kind):
     http, service = idle(tmp_path)
     case = http.post("/api/cases/demo").json()
-    first, second = refine(service, case), refine(service, case)
+    queue = (lambda: refine(service, case)) if kind == "refine" else (lambda: correction(http, case))
+    first, second = queue(), queue()
     first = run(service, first)
     assert first["status"] == "completed"
     second = run(service, second)

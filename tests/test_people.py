@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 import pytest
 
+from scan3d import identity
 from scan3d.accounts import Accounts, LinkUsed, token_hash
 from scan3d.api import create_app
 from scan3d.config import Settings
@@ -149,6 +150,15 @@ def test_a_new_password_from_the_command_line_ends_that_persons_links(rig):
     made = maker.post(f"/api/people/{account(rig.app, role='member').user_id}/link").json()["code"]
     rig.accounts.set_password(username(maker), secrets.token_urlsafe(16))
     assert redeem(browser(rig), made).json() == LINK_USED
+
+
+def test_an_unknown_link_is_refused_without_hashing(rig, monkeypatch):
+    def hashed(password):
+        raise AssertionError("A dead link was hashed")
+
+    monkeypatch.setattr(identity, "hash_password", hashed)
+    refused = redeem(browser(rig), secrets.token_urlsafe(32))
+    assert refused.status_code == 410 and refused.json() == LINK_USED
 
 
 def test_a_bad_password_does_not_spend_the_link(rig):
