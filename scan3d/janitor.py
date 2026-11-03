@@ -10,6 +10,7 @@ import errno
 import fcntl
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import shutil
@@ -37,6 +38,10 @@ def maintenance_lock(data_dir, *, exclusive):
     behind a long backup: it yields False instead.
     """
     with (Path(data_dir) / MAINTENANCE_LOCK).open("a+b") as stream:
+        if os.geteuid() == 0:
+            # As SQLite does for its -wal and -shm files: one a `sudo` run makes must still open for the service.
+            owner = Path(data_dir).stat()
+            os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
         try:
             fcntl.flock(stream, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
         except BlockingIOError:

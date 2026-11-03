@@ -1,6 +1,7 @@
 """Delete forever on synthetic cases: what a purge waits for and what it must find."""
 
 import json
+import os
 import secrets
 import threading
 import time
@@ -360,6 +361,16 @@ def test_janitor_leaves_files_alone_while_a_backup_holds_the_lock(started):
         assert service.janitor.run_pass() is True
         assert folder.exists()
     assert service.janitor.run_pass() is False and not folder.exists()
+
+
+def test_a_root_run_gives_maintenance_lock_to_the_data_folder_owner(tmp_path, monkeypatch):
+    given = []
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: given.append((uid, gid)))
+    with maintenance_lock(tmp_path, exclusive=False) as held:
+        assert held
+    owner = tmp_path.stat()
+    assert given == [(owner.st_uid, owner.st_gid)]
 
 
 def test_a_purge_resumes_after_a_restart_and_a_returning_folder_goes(tmp_path):
