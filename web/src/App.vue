@@ -80,7 +80,7 @@ import {
 import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
-import { setCaseCheck, startDownload } from './lib/session';
+import { forgetCase, setCaseCheck, startDownload } from './lib/session';
 import { useFloatingDetails } from './lib/use-floating-details';
 import { useFoldingControls } from './lib/use-folding-controls';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
@@ -791,6 +791,7 @@ async function restoreCase(id: string, reopen = false, stopped = 0) {
     void viewJobs.seed(id);
     toast(stopped ? 'Case restored. Stopped jobs did not restart.' : 'Case restored.');
   } catch (reason) {
+    if (caseIsGone(reason)) toast('That case is no longer in Trash.');
     fail(reason);
     libraryStamp.value++;
   }
@@ -800,6 +801,15 @@ function undoTrash() {
   trashOffer.value = undefined;
   clearTimeout(trashOfferTimer);
   if (offer) void restoreCase(offer.id, offer.reopen, offer.stopped);
+}
+/** A case deleted forever can never open again to tidy up after itself, so this tab does it now. */
+function forgetPurged(id: string) {
+  if (trashOffer.value?.id === id) {
+    trashOffer.value = undefined;
+    clearTimeout(trashOfferTimer);
+  }
+  viewJobs.drop(id);
+  forgetCase(id);
 }
 async function imported(next: Case) {
   importOpen.value = false;
@@ -2109,6 +2119,7 @@ onBeforeUnmount(() => {
         @renamed="renamed"
         @trash="moveToTrash"
         @restore="restoreCase"
+        @purged="forgetPurged"
       />
     </div>
     <ImportDialog v-if="importOpen" :busy="importing" :mr-enabled="mrEnabled" @close="importOpen = false" @imported="imported" @demo="demo" />

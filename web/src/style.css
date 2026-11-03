@@ -421,6 +421,12 @@ h3 {
   color: #d5a88d;
   font-size: 11px;
 }
+.case-library-trash-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
 .case-library-empty {
   display: flex;
   flex-direction: column;

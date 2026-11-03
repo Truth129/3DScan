@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { caseDate, filterCases, formatSize, statusLabel } from '../lib/library';
 import { session } from '../lib/session';
 import type { Case, StorageReport, StorageRow } from '../types';
+import DeleteForeverDialog from './DeleteForeverDialog.vue';
 
 const props = defineProps<{
   cases: Case[];
@@ -15,7 +16,16 @@ const props = defineProps<{
   mrEnabled: boolean;
   notice: string;
 }>();
-const emit = defineEmits<{ open: [id: string]; close: []; importScan: []; demo: []; renamed: [next: Case]; trash: [id: string]; restore: [id: string] }>();
+const emit = defineEmits<{
+  open: [id: string];
+  close: [];
+  importScan: [];
+  demo: [];
+  renamed: [next: Case];
+  trash: [id: string];
+  restore: [id: string];
+  purged: [id: string];
+}>();
 
 const root = ref<HTMLElement>(),
   searchField = ref<HTMLInputElement>();
@@ -30,6 +40,10 @@ const tab = ref<'cases' | 'trash' | 'storage'>('cases'),
   sizes = ref<Record<string, number>>(),
   storage = ref<StorageReport>(),
   storageError = ref('');
+const purging = ref<Case[]>(),
+  purgedCount = ref(0),
+  goneCount = ref(0),
+  trashNotice = ref('');
 const shownCases = computed(() => filterCases(props.cases, query.value)),
   shownTrash = computed(() => filterCases(trashed.value, query.value)),
   // `session` is unset in App's test suites, and with sign-in off the user is an admin.
@@ -160,13 +174,43 @@ function bringBack(id: string, event?: MouseEvent) {
   if ((event?.detail ?? 0) > 1) return;
   emit('restore', id);
 }
+/** As Move to Trash: the second press of a double-click must not open a second run. */
+function askPurge(items: Case[], event?: MouseEvent) {
+  if ((event?.detail ?? 0) > 1 || !items.length) return;
+  trashNotice.value = '';
+  purgedCount.value = goneCount.value = 0;
+  // A snapshot: a heartbeat can replace `trashed` while the dialog is open.
+  purging.value = [...items];
+}
+function dropFromTrash(id: string) {
+  trashed.value = trashed.value.filter(item => item.id !== id);
+}
+function purged(id: string) {
+  purgedCount.value++;
+  dropFromTrash(id);
+  emit('purged', id);
+}
+/** Restored or deleted in another tab or device. Said aloud, or a vanished row looks like success. */
+function gone(id: string) {
+  goneCount.value++;
+  dropFromTrash(id);
+}
+/** The rows the dialog acted on may have gone, so the cursor goes to search. */
+function purgeClosed() {
+  purging.value = undefined;
+  const deleted = purgedCount.value === 1 ? 'Deleted forever.' : purgedCount.value ? `${purgedCount.value} cases deleted forever.` : '',
+    left = goneCount.value === 1 ? '1 case had already left Trash.' : goneCount.value ? `${goneCount.value} cases had already left Trash.` : '';
+  trashNotice.value = [deleted, left].filter(Boolean).join(' ');
+  void readTrash();
+  focusSearch();
+}
 function escape() {
   if (renaming.value && tab.value === 'cases') void stopRename();
   else if (props.closable) emit('close');
 }
 /** A click on plain page, or a focused control that went away, leaves the key outside the section. */
 function strayEscape(event: KeyboardEvent) {
-  if (event.key === 'Escape' && event.target === document.body && !document.querySelector('.dialog-backdrop')) escape();
+  if (event.key === 'Escape' && event.target === document.body && !document.querySelector('.dialog-backdrop, dialog[open]')) escape();
 }
 watch(() => props.stamp, readTrash);
 onMounted(() => {
@@ -240,7 +284,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
         </ul>
       </template>
       <template v-else-if="tab === 'trash'">
-        <p class="help">Cases in Trash still use disk space. Deleting them for good is not available yet.</p>
+        <div class="case-library-trash-head">
+          <p class="help">Cases in Trash still use disk space. Delete forever frees it and cannot be undone.</p>
+          <button v-if="trashed.length" class="button secondary compact trash-empty" type="button" @click="askPurge(trashed, $event)">Empty Trash</button>
+        </div>
+        <p v-if="trashNotice" class="help" role="status">{{ trashNotice }}</p>
         <p v-if="!trashed.length" class="empty-search">Trash is empty.</p>
         <p v-else-if="!shownTrash.length" class="empty-search">No cases match.</p>
         <ul v-else class="case-rows">
@@ -250,6 +298,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
               ><small>{{ meta(item) }}</small>
             </div>
             <button class="text-button" type="button" @click="bringBack(item.id, $event)">Restore</button>
+            <button class="text-button case-row-delete" type="button" @click="askPurge([item], $event)">Delete forever</button>
           </li>
         </ul>
       </template>
@@ -288,5 +337,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
       </template>
       <p class="eyebrow case-library-notice">{{ notice }}</p>
     </div>
+    <DeleteForeverDialog v-if="purging" :cases="purging" @purged="purged" @gone="gone" @close="purgeClosed" />
   </section>
 </template>

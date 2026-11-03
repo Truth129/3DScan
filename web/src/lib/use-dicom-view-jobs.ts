@@ -126,10 +126,21 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       /* The next opening of the case looks again. */
     }
   }
+  /** A case deleted forever answers as one in Trash does, for good, so only this tab's own purge can end its parked sends. */
+  function drop(caseId: string) {
+    for (const [id, job] of jobs) {
+      if (job.case_id !== caseId) continue;
+      clearTimeout(timers.get(id));
+      timers.delete(id);
+      followed.delete(id);
+      parked.delete(id);
+      jobs.delete(id);
+    }
+  }
   onScopeDispose(() => {
     disposed = true;
     timers.forEach(clearTimeout);
     timers.clear();
   });
-  return { job: (id: string) => jobs.get(id), follow, seed };
+  return { job: (id: string) => jobs.get(id), follow, seed, drop };
 }

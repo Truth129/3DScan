@@ -68,9 +68,18 @@ confirmation. **Undo** shows for 10 seconds, and reopens the case if it was open
 opened another. After that, choose **Restore** on the **Trash** tab. Marks in progress are saved
 first, and the message says if any could not be.
 
-A case in Trash still uses disk space, and deleting it for good is not available yet. Trash is per
-account. Moving a case to Trash stops its jobs and they do not restart, but a send Orthanc has
-started finishes. While a case is in Trash, importing it from Orthanc again makes a new case.
+A case in Trash still uses disk space until you delete it forever. Trash is per account. Moving a
+case to Trash stops its jobs and they do not restart, but a send Orthanc has started finishes. While
+a case is in Trash, importing it from Orthanc again makes a new case.
+
+**Deleting forever.** On the **Trash** tab, choose **Delete forever** on a row, or **Empty Trash**
+for every case in Trash, whatever the search shows. With sign-in on, enter your password. This
+cannot be undone.
+
+The dialog lists what stays: studies in Orthanc and series already sent, earlier backups, your
+downloads and the source folder, images in browser caches, and the case ID in the activity log. A
+case whose job or send to Orthanc is still finishing is not deleted yet. The dialog says so, and
+**Try again** tries it again.
 
 **Storage.** Each row shows the size of its case. An admin also has the **Storage** tab, with the
 totals, the free space, and every case with its owner, date and size. A case that is not yours shows

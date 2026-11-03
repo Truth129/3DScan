@@ -1,4 +1,5 @@
 import type {
+  CacheClearResult,
   Case,
   Job,
   JobMeasurements,
@@ -146,6 +147,9 @@ export const api = {
   trashed: () => request<Case[]>('/api/trash'),
   sizes: () => request<{ sizes: Record<string, number> }>('/api/sizes'),
   storage: () => request<StorageReport>('/api/storage'),
+  purge: (id: string, body: { password: string } | { confirm: true }) =>
+    request<{ id: string }>(`/api/trash/${encodeURIComponent(id)}/purge`, json('POST', body)),
+  clearCaches: () => request<CacheClearResult>('/api/storage/clear-caches', { method: 'POST' }),
   review: async (id: string, rid: string, status: ReviewStatus) =>
     presentRevision(await request<Revision>(revisionUrl(id, rid), json('PATCH', { review_status: status }))),
   refine: (id: string, rid: string, structure: string, operation: Operation) =>

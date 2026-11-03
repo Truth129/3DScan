@@ -79,8 +79,12 @@ export interface StorageRow {
 }
 export interface StorageReport {
   cases: StorageRow[];
-  totals: { cases: number; trash: number; shared_caches: number; other: number };
+  totals: { cases: number; trash: number; shared_caches: number; other: number; rebuildable: number };
   disk: { total: number; free: number };
+}
+export interface CacheClearResult {
+  freed: number;
+  storage: StorageReport;
 }
 export interface Job {
   id: string;

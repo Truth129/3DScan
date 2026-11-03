@@ -296,6 +296,25 @@ describe('view export watcher', () => {
     vi.spyOn(api, 'jobs').mockRejectedValue(new TypeError('Failed to fetch'));
     await expect(fixture().watcher.seed('case-a')).resolves.toBeUndefined();
   });
+  it("drop stops following a case deleted forever and keeps other cases' sends", async () => {
+    const poll = vi.spyOn(api, 'job').mockImplementation(async id => {
+      if (id === 'view-1') throw new ApiError(404, 'Job not found');
+      return job('running', { id, case_id: 'case-b' });
+    });
+    vi.spyOn(api, 'jobs').mockRejectedValue(inTrash);
+    const { watcher, success, failure } = fixture();
+    watcher.follow(job('running'));
+    watcher.follow(job('running', { id: 'view-2', case_id: 'case-b' }));
+    await vi.advanceTimersByTimeAsync(1400);
+    watcher.drop('case-a');
+    poll.mockClear();
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(new Set(poll.mock.calls.map(([id]) => id))).toEqual(new Set(['view-2']));
+    expect(watcher.job('view-1')).toBeUndefined();
+    expect(watcher.job('view-2')?.status).toBe('running');
+    expect(success).not.toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
+  });
   it('stops with its scope', async () => {
     const poll = vi.spyOn(api, 'job').mockResolvedValue(job('running')),
       { scope, watcher } = fixture();

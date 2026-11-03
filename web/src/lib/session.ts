@@ -77,6 +77,18 @@ export function forgetOpenCase() {
   }
 }
 
+/** Every key naming a case deleted forever, colours too: it can never open again to use or clear them. */
+export function forgetCase(id: string) {
+  const prefixes = [`scan3d-job:${id}`, `scan3d-review-target:${id}:`, `scan3d-dicom-seg:["${id}",`, `scan3d-structure-colors-v1:["${id}",`];
+  try {
+    if (localStorage.getItem('scan3d-case') === id) localStorage.removeItem('scan3d-case');
+    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    for (const key of keys) if (key && prefixes.some(prefix => key.startsWith(prefix))) localStorage.removeItem(key);
+  } catch {
+    /* With storage unavailable there is nothing to forget. */
+  }
+}
+
 /**
  * A session can end with no tab open, so a different account opening the app is the first sign of a
  * new person. Nothing stored means an upgrade, which must not lose a running job's key.

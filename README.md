@@ -22,7 +22,7 @@ other service.
   [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
 - **Corrections:** nnInteractive prompts, direct mask edits, scissors and recipes, with
   exact undo.
-- **Library:** search, rename, and Trash with undo.
+- **Library:** search, rename, Trash with undo, and Delete forever.
 - **Viewer:** linked slices and 3D volume rendering.
 - **Measurements:** mask volumes and AI-agreement metrics.
 - **Exchange:** DICOM SEG import and export, 3D views as new DICOM series, 3D Slicer, PNG

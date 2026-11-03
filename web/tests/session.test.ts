@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setReauthentication } from '../src/lib/api-fetch';
-import { clearLocalKeys, rememberUser, startDownload } from '../src/lib/session';
+import { clearLocalKeys, forgetCase, rememberUser, startDownload } from '../src/lib/session';
 
 function browserStorage(entries: Record<string, string>) {
   const stored = new Map(Object.entries(entries));
@@ -44,6 +44,36 @@ describe('clearing what one person leaves behind', () => {
       },
     });
     expect(clearLocalKeys).not.toThrow();
+  });
+});
+
+describe('forgetCase', () => {
+  const deleted = 'a'.repeat(32),
+    other = 'b'.repeat(32);
+  it('removes every key of a case deleted forever, colours too, and nothing else', () => {
+    const storage = browserStorage({
+      'scan3d-case': deleted,
+      [`scan3d-job:${deleted}`]: 'job',
+      [`scan3d-review-target:${deleted}:revision`]: 'heart',
+      [`scan3d-dicom-seg:["${deleted}","revision"]`]: 'export',
+      [`scan3d-structure-colors-v1:["${deleted}","image"]`]: '{}',
+      [`scan3d-job:${other}`]: 'job',
+      [`scan3d-review-target:${other}:revision`]: 'heart',
+      [`scan3d-structure-colors-v1:["${other}","image"]`]: '{}',
+      'scan3d-orthanc-import-job': 'job',
+      'scan3d-workspace-panels-v1': '{}',
+      'scan3d-last-user': 'one',
+    });
+    vi.stubGlobal('localStorage', storage);
+    forgetCase(deleted);
+    expect([...storage.stored.keys()]).toEqual([
+      `scan3d-job:${other}`,
+      `scan3d-review-target:${other}:revision`,
+      `scan3d-structure-colors-v1:["${other}","image"]`,
+      'scan3d-orthanc-import-job',
+      'scan3d-workspace-panels-v1',
+      'scan3d-last-user',
+    ]);
   });
 });
 

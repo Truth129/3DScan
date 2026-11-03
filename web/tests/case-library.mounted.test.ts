@@ -228,7 +228,7 @@ describe('moving a case to Trash', () => {
 describe('Trash', () => {
   const old = scan('old', 'Old', { trashed_at: '2026-11-02T12:00:00Z' });
 
-  it('says Trash still uses disk space and offers only Restore', async () => {
+  it('says what Delete forever does, with Restore first', async () => {
     vi.mocked(api.trashed).mockResolvedValue([old]);
     const restore = vi.fn(),
       view = library({ onRestore: restore });
@@ -236,7 +236,7 @@ describe('Trash', () => {
     expect(view.tab('Trash').textContent.trim()).toBe('Trash1');
     click(view.tab('Trash'));
     await settled();
-    expect(view.text()).toContain('Cases in Trash still use disk space. Deleting them for good is not available yet.');
+    expect(view.text()).toContain('Cases in Trash still use disk space. Delete forever frees it and cannot be undone.');
     const when = new Date(old.trashed_at!).toLocaleDateString();
     expect(view.rows()[0].textContent).toContain(`OldIn Trash since ${when} · Ready`);
     expect(
@@ -245,8 +245,8 @@ describe('Trash', () => {
         .descendants()
         .filter(element => element.tagName === 'BUTTON')
         .map(button => button.textContent),
-    ).toEqual(['Restore']);
-    expect(view.text()).not.toMatch(/delete forever|empty trash/i);
+    ).toEqual(['Restore', 'Delete forever']);
+    expect(view.button('Empty Trash')).toBeDefined();
     click(view.button('Restore'));
     expect(restore).toHaveBeenCalledExactlyOnceWith('old');
     expect(document.activeElement).toBe(view.search());
@@ -312,6 +312,182 @@ describe('Trash', () => {
   });
 });
 
+describe('Delete forever', () => {
+  const old = scan('old', 'Old', { trashed_at: '2026-11-02T12:00:00Z' }),
+    PASSWORD = `test-${crypto.randomUUID()}`;
+  const signedIn = () => (session.value = { mode: 'password', setup_required: false, user: { id: 'u', username: 'ada', display_name: 'Ada', role: 'admin' } });
+  /** The first read only, so the read after the dialog closes finds Trash as the server would leave it. */
+  async function trashTab(cases: Case[], values: Record<string, unknown> = {}) {
+    vi.mocked(api.trashed).mockResolvedValueOnce(cases);
+    const view = library(values);
+    await settled();
+    click(view.tab('Trash'));
+    await settled();
+    return Object.assign(view, {
+      dialog: () => view.all(element => element.tagName === 'DIALOG')[0],
+      rowDelete: (index = 0) => view.all(element => element.className.includes('case-row-delete'))[index],
+      password: () => view.labelled('Your password'),
+      alerts: () => view.all(element => element.getAttribute('role') === 'alert').map(element => element.textContent),
+      confirm: () =>
+        submit(
+          view
+            .all(element => element.tagName === 'DIALOG')[0]
+            .descendants()
+            .find(element => element.tagName === 'FORM')!,
+        ),
+      submitButton: () =>
+        view
+          .all(element => element.tagName === 'DIALOG')[0]
+          .descendants()
+          .find(element => element.getAttribute('type') === 'submit'),
+    });
+  }
+  async function opened(cases: Case[], values: Record<string, unknown> = {}) {
+    const view = await trashTab(cases, values);
+    click(view.rowDelete());
+    await settled();
+    return view;
+  }
+  const stays = (view: Awaited<ReturnType<typeof trashTab>>) =>
+    view
+      .dialog()
+      .descendants()
+      .filter(element => element.tagName === 'LI')
+      .map(element => element.textContent);
+
+  it('asks for your password and deletes the case', async () => {
+    signedIn();
+    const purge = vi.spyOn(api, 'purge').mockResolvedValue({ id: 'old' }),
+      purged = vi.fn(),
+      view = await opened([old], { onPurged: purged });
+    expect(view.dialog().open).toBe(true);
+    expect(view.dialog().textContent).toContain('Old and everything made from it will leave this workstation. This cannot be undone.');
+    expect(stays(view)).toContain('Images held in web browser caches, until the browser clears them or you sign out');
+    expect(document.activeElement).toBe(view.password());
+    fill(view.password()!, PASSWORD);
+    await settled();
+    view.confirm();
+    await settled();
+    expect(purge).toHaveBeenCalledExactlyOnceWith('old', { password: PASSWORD });
+    expect(purged).toHaveBeenCalledExactlyOnceWith('old');
+    expect(view.rows()).toHaveLength(0);
+    expect(view.dialog()).toBeUndefined();
+    expect(view.text()).toContain('Deleted forever.');
+    expect(document.activeElement).toBe(view.search());
+  });
+  it('asks only for a confirmation with sign-in off', async () => {
+    const purge = vi.spyOn(api, 'purge').mockResolvedValue({ id: 'old' }),
+      view = await opened([old]);
+    expect(view.password()).toBeUndefined();
+    expect(view.dialog().textContent).toContain('Images held in web browser caches, until the browser clears them');
+    expect(view.dialog().textContent).not.toContain('sign out');
+    expect(document.activeElement?.textContent).toBe('Cancel');
+    view.confirm();
+    await settled();
+    expect(purge).toHaveBeenCalledExactlyOnceWith('old', { confirm: true });
+  });
+  it('keeps the dialog open after a wrong password, with the field empty', async () => {
+    signedIn();
+    const purge = vi.spyOn(api, 'purge').mockRejectedValue(new ApiError(403, 'Wrong password.')),
+      purged = vi.fn(),
+      view = await opened([old], { onPurged: purged });
+    fill(view.password()!, PASSWORD);
+    await settled();
+    view.confirm();
+    await settled();
+    expect(purge, 'sent once, and never again on its own').toHaveBeenCalledOnce();
+    expect(view.alerts()).toEqual(['Wrong password.']);
+    expect((view.password() as unknown as HTMLInputElement).value).toBe('');
+    expect(document.activeElement).toBe(view.password());
+    expect(view.dialog()).toBeDefined();
+    expect(view.rows()).toHaveLength(1);
+    expect(purged).not.toHaveBeenCalled();
+  });
+  it('empties Trash one case at a time and lists the cases it could not delete', async () => {
+    const first = deferred<{ id: string }>(),
+      busy = 'This case is still in use. Try again in a minute.';
+    const purge = vi.spyOn(api, 'purge').mockReturnValueOnce(first.promise).mockRejectedValueOnce(new ApiError(409, busy)).mockResolvedValue({ id: '' });
+    const purged = vi.fn(),
+      view = await trashTab([old, scan('busy', 'Busy', { trashed_at: old.trashed_at }), scan('new', 'New', { trashed_at: old.trashed_at })], {
+        onPurged: purged,
+      });
+    click(view.button('Empty Trash'));
+    await settled();
+    expect(view.dialog().textContent).toContain('3 cases and everything made from them will leave this workstation.');
+    view.confirm();
+    await settled();
+    expect(view.dialog().textContent).toContain('Deleting 1 of 3…');
+    expect(purge).toHaveBeenCalledOnce();
+    first.resolve({ id: 'old' });
+    await settled();
+    expect(purge.mock.calls.map(([id]) => id)).toEqual(['old', 'busy', 'new']);
+    expect(purged.mock.calls).toEqual([['old'], ['new']]);
+    expect(view.alerts()).toEqual([`Not deleted:Busy: ${busy}`]);
+    expect(view.dialog().textContent).toContain('Busy and everything made from it will leave this workstation.');
+    expect(view.rows().map(row => row.getAttribute('data-case-id'))).toEqual(['busy']);
+    view.confirm();
+    await settled();
+    expect(purge.mock.calls.map(([id]) => id)).toEqual(['old', 'busy', 'new', 'busy']);
+    expect(view.dialog()).toBeUndefined();
+    expect(view.text()).toContain('3 cases deleted forever.');
+  });
+  it('takes a case already deleted elsewhere off the list', async () => {
+    vi.spyOn(api, 'purge').mockRejectedValue(new ApiError(404, 'Case not found'));
+    const purged = vi.fn(),
+      view = await opened([old], { onPurged: purged });
+    view.confirm();
+    await settled();
+    expect(purged).not.toHaveBeenCalled();
+    expect(view.rows()).toHaveLength(0);
+    expect(view.dialog()).toBeUndefined();
+    expect(view.text()).toContain('1 case had already left Trash.');
+  });
+  it('ignores the second press of a double-click', async () => {
+    const purge = vi.spyOn(api, 'purge').mockResolvedValue({ id: 'old' }),
+      view = await trashTab([old]);
+    pressNumber(view.rowDelete(), 2);
+    await settled();
+    expect(view.dialog()).toBeUndefined();
+    pressNumber(view.rowDelete(), 1);
+    await settled();
+    /** As a browser does: a press on a submit button submits its form unless a handler stopped it. */
+    const pressSubmit = (detail: number) => {
+      const event = Object.assign(new Event('click', { cancelable: true }), { detail });
+      view.submitButton()!.dispatchEvent(event);
+      if (!event.defaultPrevented) view.confirm();
+    };
+    pressSubmit(2);
+    await settled();
+    expect(purge).not.toHaveBeenCalled();
+    pressSubmit(1);
+    await settled();
+    expect(purge).toHaveBeenCalledOnce();
+  });
+  it('focuses the title, not the password, on a touch screen', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }));
+    signedIn();
+    const view = await opened([old]);
+    expect(document.activeElement).toBe(view.all(element => element.tagName === 'H2')[0]);
+    expect(document.activeElement?.textContent).toBe('Delete forever?');
+  });
+  it('stays open while deleting', async () => {
+    const answer = deferred<{ id: string }>();
+    vi.spyOn(api, 'purge').mockReturnValue(answer.promise);
+    const close = vi.fn(),
+      view = await opened([old], { onClose: close });
+    view.confirm();
+    await settled();
+    press(view.dialog(), 'Escape');
+    await settled();
+    expect(view.dialog()).toBeDefined();
+    expect((view.button('Cancel') as unknown as HTMLButtonElement).disabled).toBe(true);
+    expect(close).not.toHaveBeenCalled();
+    answer.resolve({ id: 'old' });
+    await settled();
+    expect(view.dialog()).toBeUndefined();
+  });
+});
+
 describe('sizes', () => {
   it('fills sizes in after the list', async () => {
     const answer = deferred<{ sizes: Record<string, number> }>();
@@ -362,7 +538,7 @@ describe('Storage', () => {
       { id: 'old', label: 'Old', owner: null, created_at: '2026-11-01T12:00:00Z', trashed_at: '2026-11-02T12:00:00Z', size: 1024 },
       { label: null, owner: 'Grace', created_at: '2026-10-01T12:00:00Z', size: 3 * 1024 ** 2 },
     ],
-    totals: { cases: 10 * 1024 ** 2, trash: 1024, shared_caches: 20 * 1024 ** 2, other: 30 * 1024 ** 2 },
+    totals: { cases: 10 * 1024 ** 2, trash: 1024, shared_caches: 20 * 1024 ** 2, other: 30 * 1024 ** 2, rebuildable: 15 * 1024 ** 2 },
     disk: { total: 100 * 1024 ** 2, free: 40 * 1024 ** 2 },
   };
   async function storageTab() {

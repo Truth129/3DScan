@@ -21,6 +21,7 @@ export class FakeElement {
   querySelector() {
     return null;
   }
+  showModal() {}
   close() {}
   getRootNode() {
     return this;

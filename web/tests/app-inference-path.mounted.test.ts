@@ -97,6 +97,10 @@ function workstation(paths: InferencePathRow[], { remembered = '', revisions = [
   const stored = new Map([['scan3d-case', 'case']]);
   if (remembered) stored.set(SEGMENT_PATH_KEY, remembered);
   vi.stubGlobal('localStorage', {
+    get length() {
+      return stored.size;
+    },
+    key: (index: number) => [...stored.keys()][index] ?? null,
     getItem: (key: string) => stored.get(key) ?? null,
     setItem: (key: string, value: string) => stored.set(key, value),
     removeItem: (key: string) => stored.delete(key),
@@ -723,6 +727,34 @@ describe('the Library', () => {
       await press(root.named('case-library')!.button('Trash'));
       await press(root.button('Restore'));
       expect(root.named('undo-toast')).toBeUndefined();
+    });
+    it('drops the Undo and the keys of a case deleted forever', async () => {
+      const { stored } = workstation([amd]);
+      trashing();
+      vi.mocked(api.trashed).mockImplementation(async () => [{ ...scan, trashed_at: '2026-11-02T12:00:00Z' }]);
+      const purge = vi.spyOn(api, 'purge').mockImplementation(async id => ({ id }));
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      // Set after the move, because closing the case already removed its job key.
+      const keys = ['scan3d-job:case', 'scan3d-review-target:case:prepared', 'scan3d-structure-colors-v1:["case","image"]'];
+      for (const key of [...keys, 'scan3d-job:other']) stored.set(key, 'stored');
+      await press(root.named('case-library')!.button('Trash'));
+      await press(root.named('case-row-delete'));
+      (root.named('delete-forever')!.all.find(node => node.tag === 'form')!.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+      await settled();
+      expect(purge).toHaveBeenCalledExactlyOnceWith('case', { confirm: true });
+      expect(root.named('undo-toast')).toBeUndefined();
+      expect(keys.filter(key => stored.has(key))).toEqual([]);
+      expect(stored.get('scan3d-job:other')).toBe('stored');
+    });
+    it('says so when a case has already left Trash', async () => {
+      workstation([amd]);
+      trashing();
+      vi.mocked(api.restore).mockRejectedValue(new ApiError(404, 'Case not found'));
+      const root = await openLibrary();
+      await press(root.button('Move to Trash'));
+      await undo(root);
+      expect(root.content).toContain('That case is no longer in Trash.');
     });
     it('keeps the case open when the move fails, and says why', async () => {
       const { stored } = workstation([amd]);
