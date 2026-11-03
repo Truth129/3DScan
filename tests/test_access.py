@@ -107,7 +107,7 @@ def test_any_account_follows_and_cancels_a_job_of_any_case(rig):
     assert rig.service.store.get("jobs", job["id"])["status"] == "cancelled"
 
 
-def test_a_job_response_does_not_say_who_asked(rig):
+def test_a_job_names_who_started_it_only_to_someone_else(rig):
     job = rig.owner.post(
         f"/api/cases/{rig.case['id']}/refinements",
         json={
@@ -116,8 +116,13 @@ def test_a_job_response_does_not_say_who_asked(rig):
             "operation": {"type": "erase_region", "bounds_ras": [[0, 0, 0], [1, 1, 1]]},
         },
     ).json()
-    assert "requested_by" not in job
     assert rig.service.store.get("jobs", job["id"])["requested_by"] == rig.owner.user_id
+    for client, starter in ((rig.other, "Owner"), (rig.owner, None)):
+        read = client.get(f"/api/jobs/{job['id']}").json()
+        listed = next(item for item in client.get(f"/api/cases/{rig.case['id']}/jobs").json() if item["id"] == job["id"])
+        for answer in (job, read, listed):
+            assert "requested_by" not in answer
+        assert read["started_by"] == listed["started_by"] == starter
 
 
 def start_upload(client):
@@ -203,6 +208,23 @@ def test_a_cases_archive_series_need_the_case_and_the_archive(rig):
     rig.owner.post(f"/api/cases/{rig.case['id']}/orthanc-series", json=body)
     with rig.service.store.connection() as con:
         assert con.execute("SELECT 1 FROM audit_events WHERE action='case.import' AND case_id=?", (rig.case["id"],)).fetchone()
+
+
+def test_two_people_on_one_draft_get_a_conflict_not_a_lost_draft(rig):
+    prefix = f"/api/cases/{rig.case['id']}/reviews"
+    target = {"revision_id": rig.case["active_revision_id"], "structure_id": "synthetic:liver"}
+    mine, theirs = rig.owner.post(prefix, json=target).json(), rig.member.post(prefix, json=target).json()
+    assert mine["id"] == theirs["id"] and mine["generation"] == 0
+    assert mine["started_by"] is None and theirs["started_by"] == "Owner"
+    mark = {"id": "owner-mark", "kind": "point", "ras": [0, 0, 0], "include": True}
+    assert rig.owner.patch(f"{prefix}/{mine['id']}", json={"expected_generation": 0, "prompts": [mark]}).json()["generation"] == 1
+    for refused in (
+        rig.member.patch(f"{prefix}/{mine['id']}", json={"expected_generation": 0, "prompts": []}),
+        rig.member.post(f"{prefix}/{mine['id']}/discard", json={"expected_generation": 0}),
+    ):
+        assert refused.status_code == 409 and refused.json() == {"detail": "The correction draft changed; reload its current prompts"}
+    listed = next(item for item in rig.member.get(prefix).json() if item["id"] == mine["id"])
+    assert listed["started_by"] == "Owner" and [prompt["id"] for prompt in listed["prompts"]] == ["owner-mark"]
 
 
 def test_view_and_seg_sends_need_the_archive_and_a_seg_file_does_not(rig, monkeypatch):

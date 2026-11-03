@@ -430,7 +430,7 @@ and runs no DICOM listener. See [ORTHANC.md](ORTHANC.md).
 - An import binds an immutable snapshot of the series. A CPU job downloads it into staging and
   verifies hashes and DICOM identities before publishing the originals. Interrupted transfers never
   resume automatically.
-- The launch route finds this account's matching import but creates nothing.
+- The launch route finds the library's matching import, whoever made it, but creates nothing.
 
 ## DICOM SEG and other exchange
 
@@ -535,8 +535,8 @@ when a TotalSegmentator key is saved, and model downloads.
 - Delete forever is an ordinary file delete, not secure erasure. Backups, Orthanc and browser caches
   keep their copies, and restoring a backup taken before the deletion brings the case back.
 - Case sizes leave out shared caches, which several cases can use at once.
-- Jobs and review sessions store who started them, but the app shows neither, and a revision records
-  no reviewer. The audit log has no viewer.
+- The app shows who started another person's job or draft, but a revision records no reviewer and a
+  review status no author. The audit log has no viewer.
 - The service does not scale out, and it runs on Linux only.
 - A second GPU adds a choice, not capacity. Results from the two cards are not identical.
 - Installing NVIDIA as the only GPU with `--torch cuda` is a different route and is untested.

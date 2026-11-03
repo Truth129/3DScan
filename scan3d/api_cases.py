@@ -19,6 +19,11 @@ from .store import public_case, public_job, public_revision
 def add_routes(app, service):
     password_mode = service.settings.sign_in_required
 
+    def with_starters(records):
+        """Jobs as the client sees them, each naming who started it when that was someone else."""
+        names = service.accounts.others(record.get("requested_by") for record in records)
+        return [{**public_job(record), "started_by": names.get(record.get("requested_by"))} for record in records]
+
     @app.get("/api/cases")
     def cases():
         principal = identity.current()
@@ -109,7 +114,7 @@ def add_routes(app, service):
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str):
-        return public_job(service.store.get("jobs", job_id))
+        return with_starters([service.store.get("jobs", job_id)])[0]
 
     @app.get("/api/jobs/{job_id}/measurements")
     def measurements(job_id: str):
@@ -120,7 +125,7 @@ def add_routes(app, service):
     @app.get("/api/cases/{case_id}/jobs")
     def case_jobs(case_id: str):
         service.store.get("cases", case_id)
-        return [public_job(record) for record in service.store.list("jobs", case_id)]
+        return with_starters(service.store.list("jobs", case_id))
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel(job_id: str):

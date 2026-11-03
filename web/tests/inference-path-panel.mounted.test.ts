@@ -864,7 +864,7 @@ describe('a 409 from predict', () => {
     panel.value.addPrompt(point);
     await settled();
     await press(root.button('Run AI'));
-    expect(root.named('review-messages')?.content).toContain('Another tab has a draft for this structure');
+    expect(root.named('review-messages')?.content).toContain('Someone else or another tab has a draft for this structure');
     expect(root.content).toContain('not saved');
     expect(root.content).not.toContain('saving draft');
     expect(root.named('review-apply')?.content.trim()).toBe('Run AI · 1');
@@ -905,6 +905,15 @@ describe('a draft with a result', () => {
     await settled();
     await press(root.button('Run AI'));
     expect(server.predict).toHaveBeenCalledExactlyOnceWith('case', 'draft', 2, false, { inference_path: 'nvidia' });
+  });
+  it('says who started a draft someone else started, and whose draft Discard ends', async () => {
+    workstation([amd], resultOn(amd, { started_by: 'Meera P' }));
+    const discard = vi.spyOn(api, 'discardInteractive').mockImplementation(async () => resultOn(amd, { status: 'discarded' }));
+    const { root } = await openAI();
+    expect(root.content).toContain('Started by Meera P');
+    expect(root.button('Discard draft')).toBeUndefined();
+    await press(root.button("Discard Meera P's draft"));
+    expect(discard).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1);
   });
   it('describes the row in the select, which is the one a re-run would use', async () => {
     workstation([amd, row('nvidia', 'NVIDIA Test GPU', { shares_display: true })], resultOn(amd), 'nvidia');

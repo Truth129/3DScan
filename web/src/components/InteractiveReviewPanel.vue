@@ -752,6 +752,7 @@ defineExpose({
                   : `mark the ${modalityLabel}, then Apply once`
           }}<template v-if="pending"> · {{ pending }} unapplied</template></span
         >
+        <span v-if="view?.started_by">Started by {{ view.started_by }}</span>
         <span v-if="method === 'direct' && tool === 'scissors'"
           >3D cut · {{ scissorsOperation === 'erase_inside' ? 'erase inside' : 'erase outside' }} through the full depth of the selected segment.
           {{ scissorsShape === 'circle' ? 'Drag from centre to edge.' : 'Draw on the 3D view.' }} Apply edits to preview.</span
@@ -796,7 +797,7 @@ defineExpose({
             </button>
           </div>
           <button v-if="current?.hasDraftChanges" class="text-button review-discard" :disabled="current.working || discarding || busy" @click="discardCurrent">
-            Discard draft
+            {{ view?.started_by ? `Discard ${view.started_by}'s draft` : 'Discard draft' }}
           </button>
           <button class="text-button review-more" :aria-expanded="advanced" @click="advanced = !advanced">Options {{ advanced ? '−' : '+' }}</button>
         </div>

@@ -278,6 +278,15 @@ describe('view export watcher', () => {
     expect(poll.mock.calls.map(call => call[0]).sort()).toEqual(['queued', 'running']);
     expect(watcher.job('done')).toBeUndefined();
   });
+  it("seed follows only this person's own sends", async () => {
+    vi.spyOn(api, 'jobs').mockResolvedValue([job('running', { id: 'mine', started_by: null }), job('running', { id: 'theirs', started_by: 'Meera P' })]);
+    const poll = vi.spyOn(api, 'job').mockImplementation(async id => job('running', { id }));
+    const { watcher } = fixture();
+    await watcher.seed('case-a');
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(poll.mock.calls.map(call => call[0])).toEqual(['mine']);
+    expect(watcher.job('theirs')).toBeUndefined();
+  });
   it('reports a seeded job when it ends, and does not start a second poller on the next opening', async () => {
     vi.spyOn(api, 'jobs').mockResolvedValue([job('running')]);
     const poll = vi

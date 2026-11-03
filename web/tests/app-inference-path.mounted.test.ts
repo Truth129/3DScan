@@ -397,6 +397,12 @@ describe('the header while a job runs', () => {
     await submit(root);
     expect(banner(root)).toBe('Waiting for the processing worker');
   });
+  it('says who started a job someone else started on the open case', async () => {
+    workstation([amd]);
+    vi.mocked(api.jobs).mockResolvedValue([{ ...queued, inference_path: bound(nvidia), started_by: 'Meera P' }]);
+    const root = await start();
+    expect(banner(root)).toBe('Waiting for the processing worker · NVIDIA Test GPU · started by Meera P');
+  });
 });
 
 describe('the revision history', () => {

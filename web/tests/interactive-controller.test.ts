@@ -1948,7 +1948,8 @@ describe('direct paint and erase drafts', () => {
 });
 
 describe('a draft another tab started', () => {
-  const refusal = "Another tab has a draft for this structure, so this page's changes were not saved. Reloading shows that draft and clears them.";
+  const refusal =
+    "Someone else or another tab has a draft for this structure, so this page's changes were not saved. Reloading shows that draft and clears them.";
   const summary = { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5 };
   const nvidia = { id: 'nvidia', label: 'NVIDIA', identity: 'nvidia|gpu|NVIDIA' };
   const theirs = (generation = 1): InteractiveReview => ({ ...base(), generation, prompts: [point('theirs')] });

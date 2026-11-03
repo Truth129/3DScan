@@ -1335,7 +1335,7 @@ onBeforeUnmount(() => {
         <div>
           <strong
             >{{ job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
-            }}{{ job.inference_path ? ` · ${job.inference_path.label}` : '' }}</strong
+            }}{{ job.inference_path ? ` · ${job.inference_path.label}` : '' }}{{ job.started_by ? ` · started by ${job.started_by}` : '' }}</strong
           ><span :title="job.error || job.stage"
             >{{ job.error || job.stage
             }}<template v-if="job.progress">

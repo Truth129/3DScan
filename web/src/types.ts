@@ -100,6 +100,8 @@ export interface Job {
   created_at: string;
   progress?: { phase: string; completed: number; total: number; timings_seconds?: Record<string, number> };
   inference_path?: InferencePathBinding;
+  /** Someone else's display name, or null for your own job. Only job reads carry it. */
+  started_by?: string | null;
 }
 export interface JobMeasurements {
   structures: Structure[];
@@ -330,6 +332,8 @@ export interface InteractiveReview {
   new_structure?: boolean;
   target?: Structure;
   preview_revision_id?: string;
+  /** Someone else's display name, or null for your own draft. */
+  started_by?: string | null;
   candidate?: {
     generation: number;
     revision_id: string;

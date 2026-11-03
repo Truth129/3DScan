@@ -306,6 +306,16 @@ class Accounts:
             row = con.execute("SELECT case_id FROM jobs WHERE id=?", (job_id,)).fetchone()
         return row["case_id"] if row else None
 
+    def others(self, user_ids):
+        """Display names of the people behind these IDs, leaving out the one asking. With sign-in off it names nobody."""
+        viewer = identity.actor_id()
+        wanted = sorted({user_id for user_id in user_ids if user_id} - {viewer, identity.LOCAL.id})
+        if viewer in (None, identity.LOCAL.id) or not wanted:
+            return {}
+        with self.store.connection() as con:
+            rows = con.execute(f"SELECT id,display_name FROM users WHERE id IN ({','.join('?' * len(wanted))})", wanted).fetchall()
+        return {row["id"]: row["display_name"] for row in rows}
+
     def audit(self, action, actor_id=None, case_id=None, target=None, detail=None):
         """Record an action. IDs and counts only, never a label, search term or typed username.
 

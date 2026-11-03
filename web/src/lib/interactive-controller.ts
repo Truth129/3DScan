@@ -282,13 +282,15 @@ export class InteractiveController {
       explicit = signature(requested) !== signature(this.initialRelationship);
     const value = await this.reader.startInteractive(this.caseId, this.revisionId, this.structureId, explicit ? requested : undefined, this.method);
     if (reviewMethod(value) !== this.method) throw new Error('The workstation returned a different editing method. Reload before editing.');
-    // The server hands back a draft that is already open, and it can be another tab's. A save
+    // The server hands back a draft that is already open, and it can be someone else's or another tab's. A save
     // replaces every mark at the generation it holds, and cancels a running job, so as in takeOn()
     // this page may not hold that record while it has changes of its own to send. It stays draftless.
     if (inUse(value)) {
       if (this.unsaved) {
         this.conflict = true;
-        throw new Error("Another tab has a draft for this structure, so this page's changes were not saved. Reloading shows that draft and clears them.");
+        throw new Error(
+          "Someone else or another tab has a draft for this structure, so this page's changes were not saved. Reloading shows that draft and clears them.",
+        );
       }
       this.adopt(value);
       return value;
@@ -374,9 +376,9 @@ export class InteractiveController {
     try {
       await this.flush();
       if (fullRefine && !this.review) await this.createReview();
-      // Either can have opened another tab's draft here, whose marks a run would apply unseen.
+      // Either can have opened someone else's or another tab's draft here, whose marks a run would apply unseen.
       if (follow !== this.follow) {
-        this.error = 'Another tab has already started this draft, so nothing was run. Check it here, then run again.';
+        this.error = 'Someone else or another tab has already started this draft, so nothing was run. Check it here, then run again.';
         this.notify();
         return;
       }

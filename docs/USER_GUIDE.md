@@ -105,6 +105,11 @@ open, the header says so within a minute, or when you return to the tab. **Show 
 opens it. Until then a refine, a correction or **Activate** from your page is refused instead of
 replacing the newer work, and a correction made on the old version cannot be saved.
 
+**Someone else's job or draft.** A job someone else started says **started by** and their name in
+the header, and a draft they started says so in the review toolbar. **Discard** on their draft names
+them, because it ends their work. If they changed a draft you have open, your page says "Someone
+else or another tab…", offers **Reload saved work** and saves nothing over theirs.
+
 ## Import a study
 
 Choose **+ Import scan** in the header. Do not put patient identifiers in **Case label**.
@@ -362,10 +367,10 @@ or re-run or discard a draft that has a result. Work that needs no GPU continues
 that GPU keeps **Re-run on this GPU**, even with one GPU left. If the GPU comes back, **Check again**
 clears the message.
 
-**With a draft in two tabs**, if the other tab changed or ran the draft, this page offers **Reload
-saved work** and saves nothing over it. If the other tab started the draft first, a mark made here
-is not saved. **Reload saved work** or **Discard draft** opens that draft and clears the mark, so
-place it again there.
+**With a draft in two tabs or for two people**, if the other changed or ran the draft, this page
+offers **Reload saved work** and saves nothing over it. If the other started the draft first, a mark
+made here is not saved. **Reload saved work** or **Discard draft** opens that draft and clears the
+mark, so place it again there.
 
 ### Add a missing structure
 

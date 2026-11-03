@@ -121,7 +121,9 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
         clearTimeout(timers.get(id));
         void poll(id);
       }
-      for (const job of listed) if (job.kind === DICOM_VIEW_KIND && job.case_id === caseId && pendingDicomViewExport(job) && !disposed) follow(job);
+      // A person hears how their own sends ended.
+      for (const job of listed)
+        if (job.kind === DICOM_VIEW_KIND && job.case_id === caseId && pendingDicomViewExport(job) && !job.started_by && !disposed) follow(job);
     } catch {
       /* The next opening of the case looks again. */
     }

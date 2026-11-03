@@ -12,6 +12,11 @@ def public_review(record):
 
 
 def add_routes(app, service):
+    def shown(*records):
+        """Drafts as the client sees them, each naming who started it when that was someone else."""
+        names = service.accounts.others(record.get("created_by") for record in records)
+        return [{**public_review(record), "started_by": names.get(record.get("created_by"))} for record in records]
+
     @app.get("/api/interactive/status")
     def interactive_status():
         from .inference_paths import rows
@@ -22,11 +27,11 @@ def add_routes(app, service):
 
     @app.get("/api/cases/{case_id}/reviews")
     def interactive_reviews(case_id: str):
-        return [public_review(record) for record in service.reviews.list(case_id)]
+        return shown(*service.reviews.list(case_id))
 
     @app.post("/api/cases/{case_id}/reviews")
     def interactive_create(case_id: str, body: InteractiveCreate):
-        return public_review(
+        return shown(
             service.reviews.create(
                 case_id,
                 body.revision_id,
@@ -34,11 +39,11 @@ def add_routes(app, service):
                 relationship=body.relationship.model_dump(exclude_none=True) if body.relationship else None,
                 method=body.method,
             )
-        )
+        )[0]
 
     @app.post("/api/cases/{case_id}/reviews/new-structure")
     def interactive_new_structure(case_id: str, body: InteractiveNewStructure):
-        return public_review(
+        return shown(
             service.reviews.create_structure(
                 case_id,
                 body.revision_id,
@@ -48,15 +53,15 @@ def add_routes(app, service):
                 relationship=body.relationship.model_dump(exclude_none=True) if body.relationship else None,
                 method=body.method,
             )
-        )
+        )[0]
 
     @app.get("/api/cases/{case_id}/reviews/{session_id}")
     def interactive_review(case_id: str, session_id: str):
-        return public_review(service.reviews.get(case_id, session_id))
+        return shown(service.reviews.get(case_id, session_id))[0]
 
     @app.patch("/api/cases/{case_id}/reviews/{session_id}")
     def interactive_update(case_id: str, session_id: str, body: InteractiveUpdate):
-        return public_review(
+        return shown(
             service.reviews.update(
                 case_id,
                 session_id,
@@ -65,7 +70,7 @@ def add_routes(app, service):
                 options=body.options.model_dump() if body.options else None,
                 relationship=body.relationship.model_dump(exclude_none=True) if body.relationship else None,
             )
-        )
+        )[0]
 
     @app.post("/api/cases/{case_id}/reviews/{session_id}/predict")
     def interactive_predict(case_id: str, session_id: str, body: InteractivePredict):
@@ -79,4 +84,4 @@ def add_routes(app, service):
 
     @app.post("/api/cases/{case_id}/reviews/{session_id}/discard")
     def interactive_discard(case_id: str, session_id: str, body: InteractiveDiscard):
-        return public_review(service.reviews.discard(case_id, session_id, body.expected_generation))
+        return shown(service.reviews.discard(case_id, session_id, body.expected_generation))[0]

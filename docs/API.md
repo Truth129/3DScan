@@ -232,6 +232,9 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
   then stop it.
 - `inference_path`: the [inference path](#inference-paths) frozen at queue time. `identity` is
   `default` or `<id>|<device>|<gpu_name>`; compare it whole, never parse it.
+- `started_by`: on `GET /api/jobs/{id}` and `GET /api/cases/{id}/jobs` only, the display name of
+  whoever started the job when that is someone else, else `null`. With sign-in off it is always
+  `null`.
 
 `inference_path` appears on a `segment` job that named a path, `default` included, and on a
 `review_predict` that runs the model and named a path or belongs to a draft bound to one. Other
@@ -243,13 +246,15 @@ jobs omit it, including direct and relationship-only `review_predict`.
 {id, case_id, revision_id, structure_id, method, status, generation, prompts, options, batches,
  relationship, relationship_suggestions, relationship_dirty, dirty, pending_count,
  applied_prompt_count, job_id, candidate: Candidate | null, error, accepted_revision_id,
- created_at, updated_at, new_structure, inference_path, target?, preview_revision_id?}
+ created_at, updated_at, new_structure, inference_path, started_by, target?, preview_revision_id?}
 ```
 
 - `status`: `draft`, `predicting`, `ready`, `accepting`, `accepted` or `discarded`. `accepted` and
   `discarded` are closed. A failed or cancelled job returns to `draft`, or `ready` if a candidate
   remains, with `error` set and prompts kept.
 - `target` and `preview_revision_id` appear when `new_structure` is true.
+- `started_by`: the display name of whoever started the draft when that is someone else, else
+  `null`. With sign-in off it is always `null`.
 - `inference_path`: the path that made the current result, as `{id, label, identity}`. Null while
   `batches` is empty, or if the publishing job named no path. Only a published model result changes
   it.
