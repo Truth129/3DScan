@@ -110,6 +110,7 @@ All state lives under `SCAN3D_DATA_DIR`:
 ```text
 scan3d.sqlite3           Records, in WAL mode
 worker.lock              Held by the process that runs jobs
+maintenance.lock         Shared by a backup, exclusive while files are deleted
 cases/<case>/
   dicom/                 Originals from uploads and local imports
   sources/<job>/         Originals from Orthanc, with source-import.json

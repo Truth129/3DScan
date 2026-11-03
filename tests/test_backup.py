@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -14,6 +15,7 @@ import pytest
 from scan3d.backup import backup
 from scan3d.config import Settings
 from scan3d.demo import create_demo
+from scan3d.janitor import maintenance_lock
 from scan3d.service import Service
 
 
@@ -100,3 +102,16 @@ def test_backup_command_uses_the_configured_data_directory(library, tmp_path):
     result = subprocess.run([sys.executable, "-m", "scan3d", "backup", str(tmp_path / "copies")], env=environment, check=True, capture_output=True, text=True)
     manifest = json.loads(result.stdout)
     assert manifest["data_dir"] == str(data) and (tmp_path / "copies" / manifest["snapshot"] / "cases" / case["id"]).is_dir()
+
+
+def test_backup_waits_for_maintenance(library, tmp_path):
+    _, _, data = library
+    finished = []
+    worker = threading.Thread(target=lambda: finished.append(backup(data, tmp_path / "backups", log=lambda message: None)))
+    with maintenance_lock(data, exclusive=True) as held:
+        assert held
+        worker.start()
+        worker.join(0.5)
+        assert worker.is_alive()
+    worker.join(30)
+    assert not worker.is_alive() and finished

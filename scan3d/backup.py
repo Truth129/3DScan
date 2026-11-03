@@ -19,6 +19,7 @@ import sqlite3
 import sys
 
 from . import __version__
+from .janitor import maintenance_lock
 
 DATABASE = "scan3d.sqlite3"
 REBUILT_ON_DEMAND = ("review-cache", "analysis-cache", "cinematic-cache", "import-uploads", "orthanc-staging")
@@ -78,43 +79,45 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
     except FileExistsError:
         raise ValueError("A backup started in this second already exists; retry") from None
     try:
-        log("Snapshotting the database")
-        # Read-only: never checkpoints or otherwise writes the live database.
-        connection = sqlite3.connect(f"{(data_dir / DATABASE).as_uri()}?mode=ro", uri=True, timeout=30)
-        try:
-            connection.execute("VACUUM INTO ?", (str(partial / DATABASE),))
-        finally:
-            connection.close()
-        check = sqlite3.connect(partial / DATABASE)
-        try:
-            # A restore must not revive a sign-in, and the tokens' hashes must not linger in free
-            # pages. This writes only the snapshot; users and audit stay in it.
-            check.execute("PRAGMA secure_delete=ON").fetchall()
-            if check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone():
-                check.execute("DELETE FROM sessions")
-                check.commit()
-            integrity = check.execute("PRAGMA integrity_check").fetchone()[0]
-        finally:
-            check.close()
-        if integrity != "ok":
-            raise RuntimeError(f"The database snapshot failed its integrity check: {integrity}")
-        # SQLite cannot tell that a log belongs to another database, so a restore must overwrite any log left behind.
-        (partial / f"{DATABASE}-wal").write_bytes(b"")
-        counts = dict(copied_files=0, copied_bytes=0, linked_files=0, linked_bytes=0, skipped_symlinks=0)
-        included, skipped = [DATABASE], []
-        for entry in sorted(data_dir.iterdir()):
-            if entry.name.startswith(DATABASE):
-                continue  # Snapshotted above, including any write-ahead log.
-            if entry.name in REBUILT_ON_DEMAND or entry.name.endswith(".lock") or entry.is_symlink() or not (entry.is_dir() or entry.is_file()):
-                skipped.append(entry.name)
-                continue
-            log(f"Copying {entry.name}")
-            prior = previous / entry.name if previous else None
-            if entry.is_dir():
-                _copy_tree(entry, partial / entry.name, prior, counts)
-            else:
-                _copy(entry, partial / entry.name, prior, counts)
-            included.append(entry.name)
+        # Shared, so a deletion in progress finishes first and none starts while this copies.
+        with maintenance_lock(data_dir, exclusive=False):
+            log("Snapshotting the database")
+            # Read-only: never checkpoints or otherwise writes the live database.
+            connection = sqlite3.connect(f"{(data_dir / DATABASE).as_uri()}?mode=ro", uri=True, timeout=30)
+            try:
+                connection.execute("VACUUM INTO ?", (str(partial / DATABASE),))
+            finally:
+                connection.close()
+            check = sqlite3.connect(partial / DATABASE)
+            try:
+                # A restore must not revive a sign-in, and the tokens' hashes must not linger in free
+                # pages. This writes only the snapshot; users and audit stay in it.
+                check.execute("PRAGMA secure_delete=ON").fetchall()
+                if check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone():
+                    check.execute("DELETE FROM sessions")
+                    check.commit()
+                integrity = check.execute("PRAGMA integrity_check").fetchone()[0]
+            finally:
+                check.close()
+            if integrity != "ok":
+                raise RuntimeError(f"The database snapshot failed its integrity check: {integrity}")
+            # SQLite cannot tell that a log belongs to another database, so a restore must overwrite any log left behind.
+            (partial / f"{DATABASE}-wal").write_bytes(b"")
+            counts = dict(copied_files=0, copied_bytes=0, linked_files=0, linked_bytes=0, skipped_symlinks=0)
+            included, skipped = [DATABASE], []
+            for entry in sorted(data_dir.iterdir()):
+                if entry.name.startswith(DATABASE):
+                    continue  # Snapshotted above, including any write-ahead log.
+                if entry.name in REBUILT_ON_DEMAND or entry.name.endswith(".lock") or entry.is_symlink() or not (entry.is_dir() or entry.is_file()):
+                    skipped.append(entry.name)
+                    continue
+                log(f"Copying {entry.name}")
+                prior = previous / entry.name if previous else None
+                if entry.is_dir():
+                    _copy_tree(entry, partial / entry.name, prior, counts)
+                else:
+                    _copy(entry, partial / entry.name, prior, counts)
+                included.append(entry.name)
         digest = hashlib.sha256((partial / DATABASE).read_bytes()).hexdigest()
         manifest = {
             "schema_version": 1,

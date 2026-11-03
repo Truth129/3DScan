@@ -148,16 +148,21 @@ def main():
     from .store import public_case, public_job
 
     service = Service()
-    if args.command == "demo":
-        from .demo import create_demo
+    if args.command in ("demo", "import", "optimize"):
+        from .janitor import maintenance_lock
 
-        print(json.dumps(public_case(create_demo(service), service.settings), indent=2))
-    elif args.command == "import":
-        print(json.dumps(public_case(service.import_local(args.path, args.label), service.settings), indent=2))
+        # These write a case folder or shared caches with no job or request, so no purge may remove files meanwhile.
+        with maintenance_lock(service.settings.data_dir, exclusive=False):
+            if args.command == "demo":
+                from .demo import create_demo
+
+                print(json.dumps(public_case(create_demo(service), service.settings), indent=2))
+            elif args.command == "import":
+                print(json.dumps(public_case(service.import_local(args.path, args.label), service.settings), indent=2))
+            else:
+                print(json.dumps(service.optimize_assets(args.case), indent=2))
     elif args.command == "job":
         print(json.dumps(public_job(service.store.get("jobs", args.id)), indent=2))
-    elif args.command == "optimize":
-        print(json.dumps(service.optimize_assets(args.case), indent=2))
     else:
         if args.command == "process":
             job = service.process(args.case, args.series, args.profile, args.phase, cardiac_phase=args.cardiac_phase, rr_percent=args.rr_percent)
