@@ -119,7 +119,9 @@ onBeforeUnmount(() => {
     @cancel.prevent
     @close="stayOpen"
     @keydown.stop="key"
+    @mousedown.self.prevent
   >
+    <!-- A press on the backdrop or the box's padding, such as a double-click's second, would move the focus to the dialog itself, where keys reach nothing. -->
     <form @submit.prevent="confirm">
       <h2 id="delete-forever-title" ref="heading" tabindex="-1">Delete forever?</h2>
       <p id="delete-forever-summary">{{ summary }}</p>
