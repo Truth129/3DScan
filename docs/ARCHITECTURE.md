@@ -155,10 +155,11 @@ case `purging`, and is tried again each minute.
 
 The shared steps wait until no job runs, no request is in flight and no review volume is being
 written, so while any job runs they and `purged` wait. They remove review entries naming no current
-case, the caches rebuilt on a miss and every surface asset no record names, then empty the log again
-and set `purged`; the idle GPU lane then releases the warm engine. Every step can run again, so a
-purge resumes at the next start, which also removes Orthanc staging leftovers and any folder of a
-purged case that came back.
+case, the caches rebuilt on a miss and every surface asset no record names. Then the janitor empties
+the log again and sets `purged`, and the idle GPU lane releases the warm engine.
+
+Every step can run again, so a purge resumes at the next start. Each start also removes Orthanc
+staging leftovers, and once a run the janitor removes any folder of a purged case that came back.
 
 Each review-cache entry's record names its case, outside its key, so Delete forever can find the
 entry. A backup leaves out the folder of a deleted case, any surface asset its snapshot does not
