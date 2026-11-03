@@ -692,6 +692,6 @@ def test_an_old_database_gains_the_new_tables_without_touching_a_case(tmp_path):
         con.execute("PRAGMA user_version=4")
     Store(tmp_path)
     with store.connection() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
         assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
         assert json.loads(con.execute("SELECT data FROM cases").fetchone()[0]) == record

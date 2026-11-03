@@ -27,7 +27,7 @@ or an unexpected 500 is plain text.
 | 400    | Invalid input, or a `Host` outside the allowlist        | `ValueError`, `TrustedHostMiddleware`     |
 | 401    | No valid session, or a wrong password                   | `SessionGate`, `POST /api/session`        |
 | 403    | Mutation from another browser origin, or access this account lacks | Same-origin middleware, `SessionGate` |
-| 404    | Record is absent, belongs to another case, is in Trash, or this account cannot open it | `errors.NotFound`, `SessionGate` |
+| 404    | Record is absent, belongs to another case, is in Trash, has been deleted forever, or this account cannot open it | `errors.NotFound`, `SessionGate`, a stay-purged trigger |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
 | 409    | Stale state; reload before retrying                     | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active |
 | 411    | Captured view or sign-in without a plain `Content-Length` | `dicom-view` upload and sign-in checks  |

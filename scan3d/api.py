@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 import re
+import sqlite3
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
@@ -152,6 +153,13 @@ def create_app(settings: Settings | None = None):
         (OrthancError, 502, no_store),
     ):
         app.add_exception_handler(error, _error_response(status, headers))
+
+    @app.exception_handler(sqlite3.IntegrityError)
+    async def purged_case(request, exc):
+        # Only the stay-purged triggers raise this message. Any other integrity error is a defect, a logged 500.
+        if str(exc) != "purged":
+            raise exc
+        return JSONResponse(status_code=404, content={"detail": "Case not found"})
 
     @app.middleware("http")
     async def same_origin(request: Request, call_next):

@@ -118,6 +118,31 @@ class Store:
                 CREATE TABLE IF NOT EXISTS case_opened(
                   user_id TEXT NOT NULL, case_id TEXT NOT NULL, opened_at TEXT NOT NULL,
                   PRIMARY KEY(user_id, case_id)) WITHOUT ROWID;
+                -- A purged case stays gone: any insert for its ID is refused, at every call site and in older builds.
+                CREATE TRIGGER IF NOT EXISTS cases_stay_purged BEFORE INSERT ON cases
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
+                CREATE TRIGGER IF NOT EXISTS case_summaries_stay_purged BEFORE INSERT ON case_summaries
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.case_id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
+                CREATE TRIGGER IF NOT EXISTS revisions_stay_purged BEFORE INSERT ON revisions
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.case_id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
+                CREATE TRIGGER IF NOT EXISTS jobs_stay_purged BEFORE INSERT ON jobs
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.case_id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
+                CREATE TRIGGER IF NOT EXISTS review_sessions_stay_purged BEFORE INSERT ON review_sessions
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.case_id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
+                CREATE TRIGGER IF NOT EXISTS image_assets_stay_purged BEFORE INSERT ON image_assets
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.case_id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
+                CREATE TRIGGER IF NOT EXISTS case_access_stay_purged BEFORE INSERT ON case_access
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.case_id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
+                CREATE TRIGGER IF NOT EXISTS case_opened_stay_purged BEFORE INSERT ON case_opened
+                  WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.case_id AND kind='case' AND state IN ('purging','purged'))
+                  BEGIN SELECT RAISE(ABORT,'purged'); END;
             """)
             if connection.execute("PRAGMA user_version").fetchone()[0] < 4:
                 # Under the write lock, because a summary written from an older read would hide a newer record.
@@ -130,6 +155,8 @@ class Store:
                 connection.execute("PRAGMA user_version=5")
             if connection.execute("PRAGMA user_version").fetchone()[0] < 6:
                 connection.execute("PRAGMA user_version=6")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 7:
+                connection.execute("PRAGMA user_version=7")
         # Closing the last connection to a WAL database checkpoints it and removes the log, which
         # would otherwise add milliseconds to every write. This one stays idle: its read joins
         # the database and finishes, so it holds no transaction and checkpoints still run.

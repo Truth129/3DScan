@@ -131,8 +131,9 @@ build.
   - Read cases through `case_summaries(scope)` or `visible_cases(scope)`. `Store.list` refuses
     `"cases"`. `storage_rows` is the one reader of every case, and a label reads only for its owner.
 - **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `ReviewConflict` and
-  `ImportConflict` to 409, and schema errors to 422. Any other exception is a logged 500, so do not
-  raise a bare `KeyError` for "not found".
+  `ImportConflict` to 409, and schema errors to 422. An `IntegrityError` reading `purged` is 404
+  `Case not found`. Any other exception, another `IntegrityError` included, is a logged 500, so do
+  not raise a bare `KeyError` for "not found".
 - **Jobs.**
   - Work that never touches the GPU runs on the CPU lane.
   - TotalSegmentator, pinned nnU-Net models and nnInteractive share the serialized GPU lane.

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import pytest
 
@@ -115,7 +116,7 @@ def test_opening_an_older_database_summarizes_its_cases(tmp_path):
     Store(tmp_path)
     with store.connection() as con:
         assert [row["case_id"] for row in con.execute("SELECT case_id FROM case_summaries")] == [record["id"]]
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
 
 
 def test_the_write_log_stays_open_and_can_still_be_checkpointed(tmp_path):
@@ -124,3 +125,37 @@ def test_the_write_log_stays_open_and_can_still_be_checkpointed(tmp_path):
     assert store.db.with_name(f"{store.db.name}-wal").exists()
     with store.connection() as con:
         assert con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+
+
+def test_a_purged_case_refuses_every_insert(tmp_path):
+    store = Store(tmp_path)
+    record = case(store)
+    case_id = record["id"]
+
+    def run(sql, *values):
+        with store.connection() as con:
+            con.execute(sql, values)
+
+    def summary():
+        with store.connection() as con:
+            con.execute("DELETE FROM case_summaries WHERE case_id=?", (case_id,))
+            con.execute("INSERT INTO case_summaries VALUES (?,?)", (case_id, "{}"))
+
+    inserts = (
+        lambda: store.save("cases", record),
+        lambda: store.save("revisions", dict(id=identifier(), case_id=case_id, structures=[])),
+        lambda: store.save("jobs", dict(id=identifier(), case_id=case_id, status="completed")),
+        lambda: store.save("review_sessions", dict(id=identifier(), case_id=case_id)),
+        lambda: run("INSERT INTO image_assets VALUES (?,?,?)", identifier(), case_id, "{}"),
+        summary,
+        lambda: run("INSERT OR IGNORE INTO case_access(case_id,user_id,granted_at) VALUES (?,?,?)", case_id, identifier(), now()),
+        lambda: run("INSERT INTO case_opened VALUES (?,?,?)", identifier(), case_id, now()),
+    )
+    store.trash_case(case_id, None)
+    for insert in inserts:
+        insert()
+    for state in ("purging", "purged"):
+        run("UPDATE trash SET state=? WHERE case_id=?", state, case_id)
+        for insert in inserts:
+            with pytest.raises(sqlite3.IntegrityError, match="^purged$"):
+                insert()
