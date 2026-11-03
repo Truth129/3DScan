@@ -79,7 +79,8 @@ body.
 The view is `{mode, user, setup_required}`:
 
 - `mode` is `off` or `password`.
-- `user` is null or `{id, username, display_name, role}`. With sign-in off it is the local user.
+- `user` is null or `{id, username, display_name, role, archive_access}`. With sign-in off it is the
+  local user, an admin with archive access.
 - `setup_required` is true in password mode with no accounts.
 
 `POST /api/session` refusals:

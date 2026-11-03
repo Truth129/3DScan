@@ -320,7 +320,7 @@ def test_with_sign_in_off_everything_stays_open_and_audited_rules_still_write(tm
     http = TestClient(app, base_url=BASE)
     assert http.get("/api/session").json() == {
         "mode": "off",
-        "user": {"id": "local", "username": "local", "display_name": "Local user", "role": "admin"},
+        "user": {"id": "local", "username": "local", "display_name": "Local user", "role": "admin", "archive_access": True},
         "setup_required": False,
     }
     assert http.post("/api/session", json={"username": "someone", "password": "x" * 12}).status_code == 400

@@ -4,6 +4,7 @@ import App from '../src/App.vue';
 import { api, revisionUrl } from '../src/lib/api';
 import type { DicomViewAvailability, DicomViewExportJob, ViewportCapture } from '../src/lib/dicom-view';
 import { LEGACY_CT_PRESENTATION } from '../src/lib/image-domain';
+import { session } from '../src/lib/session';
 import type { Case, InteractiveReview, Job, Revision } from '../src/types';
 import { click, deferred, mount, settled, type Deferred, type MountedElement } from './mounted';
 
@@ -24,12 +25,15 @@ vi.mock('../src/components/ModelViewport.vue', () => ({
           return fake.expanded;
         },
       });
+      // As in the real viewport, no reason at all means no button.
       return () =>
-        h(
-          'button',
-          { class: 'dicom', disabled: !!props.dicomViewBlockReason, title: props.dicomViewBlockReason, onClick: () => emit('exportView') },
-          'DICOM ↗',
-        );
+        props.dicomViewBlockReason === undefined
+          ? null
+          : h(
+              'button',
+              { class: 'dicom', disabled: !!props.dicomViewBlockReason, title: props.dicomViewBlockReason, onClick: () => emit('exportView') },
+              'DICOM ↗',
+            );
     },
   },
 }));
@@ -239,6 +243,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  session.value = undefined;
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -368,6 +373,12 @@ describe('capturing from the workspace', () => {
     await settled();
     expect(capture).toHaveBeenCalledOnce();
     expect(view.dialog()?.open).toBe(true);
+  });
+  it('offers no DICOM view send to an account without the archive', async () => {
+    session.value = { mode: 'password', setup_required: false, user: { id: 'u', username: 'u', display_name: 'U', role: 'member', archive_access: false } };
+    const view = await app();
+    expect(fake.viewports).not.toHaveLength(0);
+    expect(view.dicom()).toBeUndefined();
   });
   it('passes the disabled reason to the button', async () => {
     const view = await app();

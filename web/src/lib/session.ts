@@ -7,6 +7,8 @@ export interface SessionUser {
   username: string;
   display_name: string;
   role: 'admin' | 'member';
+  /** Absent from an older server, which let every account use the archive. */
+  archive_access?: boolean;
 }
 export interface SessionView {
   mode: 'off' | 'password';
@@ -21,8 +23,10 @@ const LAST_USER_KEY = 'scan3d-last-user';
 
 /** The session as last read. AuthGate keeps it current, so a component can follow it without a prop. */
 export const session = shallowRef<SessionView>();
-/** `session` is unset in App's test suites, which run as sign-in off does: one administrator. */
+/** `session` is unset in App's test suites, which run as sign-in off does: one administrator with the archive. */
 export const canAdminister = computed(() => session.value?.user?.role !== 'member');
+export const canUseArchive = computed(() => session.value?.user?.archive_access !== false);
+export const ARCHIVE_OFF = 'Your account cannot use the archive. An administrator can turn it on in People.';
 let tabs: BroadcastChannel | undefined,
   leaving = false;
 const announce = (change: TabChange) => tabs?.postMessage(change);

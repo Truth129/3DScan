@@ -114,7 +114,7 @@ def test_sign_in_sets_a_session_and_stores_only_a_hash(rig):
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
     assert response.json() == {
         "mode": "password",
-        "user": {"id": rig.user_id, "username": "Reader", "display_name": "A Reader", "role": "admin"},
+        "user": {"id": rig.user_id, "username": "Reader", "display_name": "A Reader", "role": "admin", "archive_access": True},
         "setup_required": False,
     }
     cookie = response.headers["set-cookie"]

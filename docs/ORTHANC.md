@@ -31,6 +31,10 @@ SCAN3D_ORTHANC_EXPORT_DESTINATIONS=workstation
 - Its SHA-256 identifies the archive. If it changes, earlier cases can no longer be archived or
   sent, and Open in 3DScan links must be regenerated.
 
+With sign-in on, an account also needs archive access. Without it, the page shows no **Orthanc
+archive** tab, **Add series from Orthanc** or **DICOM ↗**, and **Export SEG…** offers a local file
+only.
+
 **`SCAN3D_ORTHANC_USERNAME`** and **`SCAN3D_ORTHANC_PASSWORD`** are sent with HTTP Basic
 authentication. They never reach the browser or case and job records.
 

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import { orthancDate, useOrthancLaunch, waitForOrthancPoll, type OrthancLaunch } from '../lib/orthanc';
+import { ARCHIVE_OFF, canUseArchive } from '../lib/session';
 import type { Case } from '../types';
 
 const props = defineProps<{ launch: Exclude<OrthancLaunch, { kind: 'none' }> }>();
@@ -40,7 +41,8 @@ function keyboard(event: KeyboardEvent) {
 onMounted(async () => {
   await nextTick();
   dialog.value?.querySelector<HTMLButtonElement>('button')?.focus();
-  await resolve();
+  // Without the archive the server would refuse, so the dialog says why and asks Orthanc nothing.
+  if (canUseArchive.value) await resolve();
 });
 onBeforeUnmount(() => {
   if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
@@ -54,6 +56,7 @@ onBeforeUnmount(() => {
         <span class="eyebrow">ORTHANC SERIES</span><button type="button" class="icon-button" aria-label="Close Orthanc launch" @click="emit('close')">×</button>
       </header>
       <h2 id="orthanc-launch-title">Open in 3DScan</h2>
+      <p v-if="!canUseArchive" class="launch-message error" role="status">{{ ARCHIVE_OFF }}</p>
       <p v-if="busy" class="launch-status" role="status">
         <span class="spinner"></span>{{ job ? job.stage || 'Importing series…' : 'Checking the selected series…' }}
       </p>
@@ -102,7 +105,13 @@ onBeforeUnmount(() => {
       <p v-if="job" class="launch-message">Closing this panel stops status checks. An import already started continues on the workstation.</p>
       <footer>
         <button type="button" class="text-button" @click="emit('close')">Close</button>
-        <button v-if="launch.kind === 'series' && (error || blockReason)" type="button" class="button secondary" :disabled="busy" @click="resolve">
+        <button
+          v-if="canUseArchive && launch.kind === 'series' && (error || blockReason)"
+          type="button"
+          class="button secondary"
+          :disabled="busy"
+          @click="resolve"
+        >
           Check series again
         </button>
         <button v-else-if="result && !result.job && !result.case_id" type="button" class="button primary" :disabled="!canImport" @click="start">

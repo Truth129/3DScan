@@ -29,7 +29,7 @@ def add_routes(app, service):
     password_mode = service.settings.sign_in_required
 
     def view(principal):
-        user = None if principal is None else {key: getattr(principal, key) for key in ("id", "username", "display_name", "role")}
+        user = None if principal is None else {key: getattr(principal, key) for key in ("id", "username", "display_name", "role", "archive_access")}
         return {"mode": "password" if password_mode else "off", "user": user, "setup_required": password_mode and not accounts.has_users()}
 
     @app.get("/api/session")

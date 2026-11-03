@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { uploadImport, type ImportProgress } from '../lib/import-upload';
-import { leavingPage } from '../lib/session';
+import { ARCHIVE_OFF, canUseArchive, leavingPage } from '../lib/session';
 import type { Case } from '../types';
 import OrthancBrowser from './OrthancBrowser.vue';
 const props = defineProps<{ busy: boolean; mrEnabled?: boolean }>();
@@ -101,6 +101,13 @@ async function start() {
     controller = undefined;
   }
 }
+// A heartbeat can take the archive away while its tab is open. An import already started finishes on the
+// server, which decides each rule when a request starts, and appears in the Library.
+watch(canUseArchive, allowed => {
+  if (allowed || source.value !== 'orthanc') return;
+  source.value = 'files';
+  message.value = { error: true, text: `${ARCHIVE_OFF} An import already started still finishes and appears in the Library.` };
+});
 onBeforeUnmount(() => {
   controller?.abort();
   window.removeEventListener('beforeunload', keepPage);
@@ -115,7 +122,8 @@ onBeforeUnmount(() => {
       </header>
       <h2 id="import-title">Start with an imaging study.</h2>
       <p class="muted">
-        Import DICOM files or choose a series from Orthanc. Select a CT reconstruction{{ mrEnabled ? ' or static 3D MR sequence' : '' }} before processing.
+        {{ canUseArchive ? 'Import DICOM files or choose a series from Orthanc.' : 'Import DICOM files.' }}
+        Select a CT reconstruction{{ mrEnabled ? ' or static 3D MR sequence' : '' }} before processing.
       </p>
       <div class="import-source-tabs" role="group" aria-label="Import source">
         <button
@@ -129,6 +137,7 @@ onBeforeUnmount(() => {
           Folder / ZIP
         </button>
         <button
+          v-if="canUseArchive"
           class="button secondary"
           type="button"
           :class="{ selected: source === 'orthanc' }"

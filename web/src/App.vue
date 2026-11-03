@@ -80,7 +80,7 @@ import {
 import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
-import { forgetCase, setCaseCheck, startDownload } from './lib/session';
+import { canUseArchive, forgetCase, setCaseCheck, startDownload } from './lib/session';
 import { useFloatingDetails } from './lib/use-floating-details';
 import { useFoldingControls } from './lib/use-folding-controls';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
@@ -1475,7 +1475,7 @@ onBeforeUnmount(() => {
             <p v-if="revision" class="retained-result-note">Your current result remains available while another series is selected or opened.</p>
             <SeriesPicker :key="activeCase.id" v-model="seriesUid" :series="activeCase.series" :disabled="busy" />
             <OrthancAddSeries
-              v-if="activeCase.import_source?.kind === 'orthanc'"
+              v-if="activeCase.import_source?.kind === 'orthanc' && canUseArchive"
               :key="`add-${activeCase.id}`"
               :case-id="activeCase.id"
               :disabled="busy"
@@ -1817,7 +1817,7 @@ onBeforeUnmount(() => {
                 :compare="compare"
                 :window="displayWindow"
                 :level="displayLevel"
-                :dicom-view-block-reason="viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
+                :dicom-view-block-reason="!canUseArchive ? undefined : viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
                 @export-view="exportView"
                 @unread-refusal="alertViewExport"
                 @pick="picked"
