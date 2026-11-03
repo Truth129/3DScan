@@ -4,8 +4,9 @@ The SQLite snapshot comes first. Records are committed only after their files
 are complete, so every file the snapshot references already exists when the
 folders are copied afterwards; newer extra files are harmless. Files unchanged
 since the previous backup in the same destination are hard-linked to it, never
-to live data. Caches the service rebuilds on demand are skipped. Records store
-absolute paths, so restore into the same SCAN3D_DATA_DIR.
+to live data. Caches the service rebuilds on demand are skipped, and so is
+anything of a case deleted forever. Records store absolute paths, so restore
+into the same SCAN3D_DATA_DIR.
 """
 
 from datetime import datetime, timezone
@@ -20,9 +21,10 @@ import sys
 
 from . import __version__
 from .janitor import maintenance_lock
+from .store import live_surface_keys
 
 DATABASE = "scan3d.sqlite3"
-REBUILT_ON_DEMAND = ("review-cache", "analysis-cache", "cinematic-cache", "import-uploads", "orthanc-staging")
+REBUILT_ON_DEMAND = ("review-cache", "analysis-cache", "agreement-cache", "cinematic-cache", "import-uploads", "orthanc-staging")
 _SNAPSHOT = re.compile(r"scan3d-\d{8}T\d{6}Z")
 
 
@@ -50,15 +52,34 @@ def _copy(source, target, previous, counts):
     counts["copied_bytes"] += stat.st_size
 
 
-def _copy_tree(source, target, previous, counts):
+def _left_out(top, relative, purged, live):
+    """Below the top level: a case deleted forever, even while the janitor still removes its files, the
+    contours that rebuild on a miss, and any surface asset no record in the snapshot names."""
+    first = relative.parts[0]
+    if top == "cases":
+        return first in purged
+    if top != "surface-cache":
+        return False
+    # assets/<shard>/<key>.glb and its siblings, or .<key>....writing while one is written.
+    return first == "contours" or (first == "assets" and live is not None and len(relative.parts) == 3 and relative.name.removeprefix(".")[:64] not in live)
+
+
+def _copy_tree(source, target, previous, counts, skipped, left_out):
+    """`left_out` names paths below `source` to leave out: a folder joins `skipped`, and a file is counted."""
     for directory, folders, files in os.walk(source):
         relative = Path(directory).relative_to(source)
         (target / relative).mkdir(parents=True, exist_ok=True)
         folders[:] = [name for name in folders if not (Path(directory) / name).is_symlink()]
+        for name in [name for name in folders if left_out(relative / name)]:
+            folders.remove(name)
+            skipped.append(str(Path(source.name) / relative / name))
         for name in files:
             item = Path(directory) / name
             if item.is_symlink():
                 counts["skipped_symlinks"] += 1
+                continue
+            if left_out(relative / name):
+                counts["skipped_files"] += 1
                 continue
             _copy(item, target / relative / name, previous / relative / name if previous else None, counts)
 
@@ -97,13 +118,18 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
                     check.execute("DELETE FROM sessions")
                     check.commit()
                 integrity = check.execute("PRAGMA integrity_check").fetchone()[0]
+                purged, live = set(), None
+                # A database from before Trash has deleted nothing, so only the contours are left out below.
+                if check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trash'").fetchone():
+                    purged = {row[0] for row in check.execute("SELECT case_id FROM trash WHERE kind='case' AND state IN ('purging','purged')")}
+                    live = live_surface_keys(check)
             finally:
                 check.close()
             if integrity != "ok":
                 raise RuntimeError(f"The database snapshot failed its integrity check: {integrity}")
             # SQLite cannot tell that a log belongs to another database, so a restore must overwrite any log left behind.
             (partial / f"{DATABASE}-wal").write_bytes(b"")
-            counts = dict(copied_files=0, copied_bytes=0, linked_files=0, linked_bytes=0, skipped_symlinks=0)
+            counts = dict(copied_files=0, copied_bytes=0, linked_files=0, linked_bytes=0, skipped_symlinks=0, skipped_files=0)
             included, skipped = [DATABASE], []
             for entry in sorted(data_dir.iterdir()):
                 if entry.name.startswith(DATABASE):
@@ -114,7 +140,7 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
                 log(f"Copying {entry.name}")
                 prior = previous / entry.name if previous else None
                 if entry.is_dir():
-                    _copy_tree(entry, partial / entry.name, prior, counts)
+                    _copy_tree(entry, partial / entry.name, prior, counts, skipped, lambda relative: _left_out(entry.name, relative, purged, live))
                 else:
                     _copy(entry, partial / entry.name, prior, counts)
                 included.append(entry.name)

@@ -546,8 +546,8 @@ different source. SEG stored in Orthanc is not attached automatically: select th
 .venv/bin/scan3d backup /path/on/another/disk/scan3d-backups
 ```
 
-Each run writes `scan3d-<UTC time>/` with a database snapshot, the case folders, the surface cache
-and a `manifest.json`. The server can keep running.
+Each run writes `scan3d-<UTC time>/` with a database snapshot, the case folders, the saved surfaces
+and a `manifest.json`, and nothing of a case deleted forever. The server can keep running.
 
 To restore, stop the server and copy a snapshot's contents over the same data directory, since
 records store absolute paths. A snapshot from before November 2026 has no `scan3d.sqlite3-wal`, so
@@ -556,6 +556,9 @@ first move any `scan3d.sqlite3-wal` and `scan3d.sqlite3-shm` out of the data dir
 A backup holds patient images, so protect it like the library. It does not cover anything held in
 Orthanc. It keeps cases in Trash, accounts and the audit log but no sessions, so everyone signs in
 again after a restore.
+
+A backup taken before a case is deleted forever still holds it, and restoring that backup brings the
+case back. Delete forever is an ordinary file delete, not secure erasure.
 
 ## Experimental MRI
 

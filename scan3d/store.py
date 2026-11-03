@@ -904,6 +904,27 @@ def grant_owner(con, case_id):
         )
 
 
+def live_surface_keys(con):
+    """Every surface asset key a revision or a review draft names, wherever its record keeps the list."""
+    keys = set()
+
+    def walk(value):
+        if isinstance(value, dict):
+            for name, item in value.items():
+                if name == "surface_assets" and isinstance(item, list):
+                    keys.update(asset["key"] for asset in item if isinstance(asset, dict) and isinstance(asset.get("key"), str))
+                else:
+                    walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    for table in ("revisions", "review_sessions"):
+        for row in con.execute(f"SELECT data FROM {table}"):
+            walk(json.loads(row[0]))
+    return keys
+
+
 def public_case(record, settings=None):
     """Client view; with settings, series of a modality not offered here read as unavailable."""
     result = {k: v for k, v in record.items() if k not in ("source_dir", "references", "added_sources")}

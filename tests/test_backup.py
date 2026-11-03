@@ -17,6 +17,7 @@ from scan3d.config import Settings
 from scan3d.demo import create_demo
 from scan3d.janitor import maintenance_lock
 from scan3d.service import Service
+from scan3d.store import identifier, now
 
 
 @pytest.fixture
@@ -61,7 +62,8 @@ def test_backup_snapshots_database_and_case_files_and_skips_rebuildable_caches(l
     originals, copies = files(data / "cases"), files(snapshot / "cases")
     assert originals and copies.keys() == originals.keys()
     assert all(copies[name].read_bytes() == originals[name].read_bytes() for name in originals)
-    assert (data / "surface-cache").is_dir() and files(snapshot / "surface-cache").keys() == files(data / "surface-cache").keys()
+    surfaces = {name for name in files(data / "surface-cache") if name.parts[0] != "contours"}
+    assert (data / "surface-cache").is_dir() and files(snapshot / "surface-cache").keys() == surfaces
     assert {"review-cache", "orthanc-staging", "worker.lock"} <= set(manifest["skipped"])
     assert not (snapshot / "review-cache").exists() and not (snapshot / "orthanc-staging").exists()
     assert json.loads((snapshot / "manifest.json").read_text()) == manifest
@@ -115,3 +117,22 @@ def test_backup_waits_for_maintenance(library, tmp_path):
         assert worker.is_alive()
     worker.join(30)
     assert not worker.is_alive() and finished
+
+
+def test_backup_leaves_out_what_a_deletion_is_removing(library, tmp_path):
+    service, case, data = library
+    deleted, live, dead = identifier(), "a" * 64, "b" * 64
+    with service.store.connection() as con:
+        con.execute("INSERT INTO trash(id,kind,case_id,state,trashed_at) VALUES (?,'case',?,'purging',?)", (identifier(), deleted, now()))
+    (data / "cases" / deleted).mkdir()
+    (data / "cases" / deleted / "x").write_bytes(b"deleted forever")
+    service.store.save("revisions", dict(id=identifier(), case_id=case["id"], structures=[], surface_assets=[{"id": "x", "key": live, "triangles": 1}]))
+    for name in (f"assets/aa/{live}.glb", f"assets/bb/{dead}.glb", f"assets/bb/{dead}.glb.gz", "contours/cc/contour.npz"):
+        (data / "surface-cache" / name).parent.mkdir(parents=True, exist_ok=True)
+        (data / "surface-cache" / name).write_bytes(b"surface")
+    manifest = backup(data, tmp_path / "backups", log=lambda message: None)
+    snapshot = tmp_path / "backups" / manifest["snapshot"]
+    assert (snapshot / "surface-cache" / "assets" / "aa" / f"{live}.glb").is_file()
+    assert not (snapshot / "cases" / deleted).exists() and not (snapshot / "surface-cache" / "contours").exists()
+    assert not list(snapshot.rglob(f"*{dead}*"))
+    assert {f"cases/{deleted}", "surface-cache/contours"} <= set(manifest["skipped"])

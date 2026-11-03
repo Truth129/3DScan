@@ -145,7 +145,9 @@ revisions.
 
 While a case's `trash` row is `purging` or `purged`, triggers refuse any insert for its ID, in this
 build or an older one, so a deleted case never comes back. Each review-cache entry's record names
-its case, outside its key, so Delete forever can find the entry.
+its case, outside its key, so Delete forever can find the entry. A backup leaves out the folder of
+a deleted case, any surface asset its snapshot does not name, and the contour and agreement caches,
+which rebuild on a miss.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
