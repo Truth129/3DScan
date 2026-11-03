@@ -61,7 +61,7 @@ RULES = {
     ("GET", "/api/segmentation-options"): Rule("signed_in"),
     ("GET", "/api/imaging-capabilities"): Rule("signed_in"),
     ("GET", "/api/interactive/status"): Rule("signed_in"),
-    ("GET", "/api/orthanc/status"): Rule("signed_in"),
+    ("GET", "/api/orthanc/status"): Rule("archive"),
     ("GET", _LICENSE): Rule("signed_in"),
     ("POST", "/api/cases/import-local"): Rule("admin", "case.import"),
     ("GET", "/api/storage"): Rule("admin"),
@@ -89,7 +89,8 @@ RULES = {
     ("POST", f"{_REVISION}/export.html"): Rule("case", "export.html"),
     ("POST", f"{_REVISION}/dicom-seg"): Rule("case", "export.seg"),
     ("GET", f"{_REVISION}/dicom-seg/{{export_id}}/segment.dcm"): Rule("case", "export.seg_file"),
-    ("POST", f"{_REVISION}/dicom-view"): Rule("case", "export.view"),
+    ("GET", f"{_REVISION}/dicom-view"): Rule("case_archive"),
+    ("POST", f"{_REVISION}/dicom-view"): Rule("case_archive", "export.view"),
 }
 # These exist only in some configurations: FastAPI's pages with sign-in off, and the build notice with no viewer built.
 _CONDITIONAL = frozenset({("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("GET", "/redoc"), ("GET", "/openapi.json"), ("GET", "/")})
@@ -100,8 +101,9 @@ _SCOPED = {"case_id": ("case", "case_archive", "trashed", "trashed_admin"), "job
 
 _SIGN_IN = (401, "Sign in to continue")
 _NO_RULE = (403, "This route has no access rule")
+ARCHIVE_REFUSED = "This account cannot use the archive"
 _NOT_ADMIN = (403, "Administrator access is required")
-_NO_ARCHIVE = (403, "This account cannot use the archive")
+_NO_ARCHIVE = (403, ARCHIVE_REFUSED)
 # Health, sign-in and viewer files touch no case and no cache, so nothing waits for them.
 _UNCOUNTED_KINDS = ("public", "off_only")
 _UNCOUNTED = object()

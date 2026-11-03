@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import identity
+from .access import ARCHIVE_REFUSED
 from .accounts import TooManyAttempts, WrongPassword
 from .api_models import Activate, CaseRename, DicomSegExport, Process, Purge, Refine, Review, Segment
 from .api_session import secure_enough
@@ -137,10 +138,14 @@ def add_routes(app, service):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
     def dicom_seg_availability(case_id: str, revision_id: str):
-        return service.orthanc_exports.availability(case_id, revision_id)
+        # A file stays on this machine, so this still answers. Without the archive it stops short of Orthanc.
+        return service.orthanc_exports.availability(case_id, revision_id, archive=identity.current().archive_access)
 
     @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
     def dicom_seg_export(case_id: str, revision_id: str, body: DicomSegExport):
+        # The gate never reads a body, and a file stays on this machine, so only a send needs the archive.
+        if body.delivery == "orthanc" and not identity.current().archive_access:
+            raise HTTPException(403, ARCHIVE_REFUSED)
         return public_job(
             service.orthanc_exports.start(
                 case_id, revision_id, body.structure_ids, body.destination, resend=body.resend, overlap_priority=body.overlap_priority, delivery=body.delivery

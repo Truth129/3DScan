@@ -15,6 +15,7 @@ from scan3d.accounts import token_hash
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.identity import EVERY_CASE
+from scan3d.orthanc_exports import ARCHIVE_OFF
 from scan3d.store import identifier, now
 
 BASE = "http://127.0.0.1"
@@ -188,6 +189,7 @@ def test_administrator_routes_refuse_a_member(rig):
 
 def test_archive_routes_refuse_an_account_without_the_archive(rig):
     for response in (
+        rig.member.get("/api/orthanc/status"),
         rig.member.post("/api/orthanc/studies/query", json={}),
         rig.member.get(f"/api/orthanc/studies/{'0' * 32}/series"),
         rig.member.post("/api/orthanc/imports", json={"series_id": "00000000-00000000-00000000-00000000-00000000", "snapshot": "0" * 64}),
@@ -207,6 +209,20 @@ def test_a_cases_archive_series_need_the_case_and_the_archive(rig):
     rig.owner.post(f"/api/cases/{rig.case['id']}/orthanc-series", json=body)
     with rig.service.store.connection() as con:
         assert con.execute("SELECT 1 FROM audit_events WHERE action='case.import' AND case_id=?", (rig.case["id"],)).fetchone()
+
+
+def test_view_and_seg_sends_need_the_archive_and_a_seg_file_does_not(rig, monkeypatch):
+    own = rig.member.post("/api/cases/demo").json()
+    prefix = f"/api/cases/{own['id']}/revisions/{own['active_revision_id']}"
+    for response in (rig.member.get(f"{prefix}/dicom-view"), rig.member.post(f"{prefix}/dicom-view"), rig.member.post(f"{prefix}/dicom-seg", json={})):
+        assert response.status_code == 403 and response.json() == {"detail": "This account cannot use the archive"}
+    # A demo has no DICOM source, so a file is refused for that, and not for the archive.
+    assert rig.member.post(f"{prefix}/dicom-seg", json={"delivery": "file"}).status_code == 400
+    monkeypatch.setattr(rig.service.orthanc, "client", lambda: pytest.fail("Without the archive nothing contacts Orthanc"))
+    answer = rig.member.get(f"{prefix}/dicom-seg")
+    assert answer.status_code == 200
+    body = answer.json()
+    assert body["available"] is False and body["reason"] == ARCHIVE_OFF and body["destinations"] == [] and "file" in body
 
 
 def test_lists_hold_only_your_own_cases(rig):

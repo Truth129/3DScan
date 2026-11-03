@@ -106,10 +106,11 @@ with no session gets the 401, and a signed-in one the other.
 | Rule      | Routes                                                                  | Refusal                                        |
 | --------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
 | Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, the viewer files | None                                         |
-| Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `GET /api/sizes`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/orthanc/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
+| Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `GET /api/sizes`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
 | Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
-| Archive   | `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
+| Archive   | `GET /api/orthanc/status`, `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
 | Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
+| Case and archive | `GET`, `POST /api/cases/{id}/orthanc-series`, `GET`, `POST .../dicom-view` | 401, 404 `Case not found`, 403 `This account cannot use the archive` |
 | Trashed   | `POST /api/trash/{id}/restore`                                          | 401, 404 `Case not found`                      |
 | Admin, in Trash | `POST /api/trash/{id}/purge`                                      | 401, 403 `Administrator access is required`, 404 `Case not found` |
 | Job       | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`         | 401, 404 `Job not found`                       |
@@ -120,6 +121,8 @@ with no session gets the 401, and a signed-in one the other.
   `Job not found` or `Upload not found`.
 - A malformed case, job or upload ID is also 404 here, so a refusal never shows whether an ID
   exists.
+- `POST .../dicom-seg` with `delivery: "orthanc"`, the default, also needs archive access. A file
+  does not.
 - A job follows its case, and so does a finished upload. An unfinished upload belongs to whoever
   started it, and one with no owner, or started with sign-in off, to any admin.
 - A session cookie on a request other than GET, HEAD or OPTIONS with no `Origin` gets 403
@@ -992,7 +995,9 @@ archive-only export.
 
 **`GET .../dicom-seg`** returns `{available, reason?, destinations: [{id, name, aet}], exports:
 Job[], encoding_version, file: {available, reason?}}`. `available` and `reason` describe archive and
-send, and `file` the file route. `exports` lists this revision's SEG jobs, newest first.
+send, and `file` the file route. `exports` lists this revision's SEG jobs, newest first. Without
+archive access it contacts no Orthanc: `available` is false, `destinations` empty and `reason` is
+`Your account cannot use the archive. An administrator can turn it on in People.`
 
 **`POST .../dicom-seg`** takes `{structure_ids?, destination?, resend?, overlap_priority?,
 delivery?}` and returns an `orthanc_export` job. Export never changes review status, adds a revision
@@ -1001,6 +1006,8 @@ or activates one.
 - Omitted IDs select all nonempty masks. A null destination archives only.
 - `delivery` defaults to `orthanc`. `file` prepares the SEG here, takes no `destination` or
   `resend`, and never contacts an archive.
+- Without archive access, `orthanc` is 403 `This account cannot use the archive`, and `file` still
+  works.
 
 **`GET .../dicom-seg/{export_id}/segment.dcm`** returns the prepared `application/dicom` attachment
 `scan3d-seg-<revision>-<export>.dcm`. The name holds no patient text, but the file carries the
@@ -1057,7 +1064,7 @@ with no patient fields. `sent` is true only after an exact successful C-STORE co
 
 This turns one capture of the 3D view into a new series in the original study, archives it in
 Orthanc, and can send it to a configured destination. It needs the archive and send source of
-[DICOM SEG export](#dicom-seg-export), and no masks.
+[DICOM SEG export](#dicom-seg-export), and no masks. Both routes need the case and archive access.
 
 **`GET .../dicom-view`** returns `{available, reason?, destinations, exports: Job[],
 encoding_version}`. `exports` lists view jobs only.

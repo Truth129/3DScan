@@ -30,6 +30,7 @@ from .store import identifier, now, public_job
 log = logging.getLogger(__name__)
 DELIVERY_WAIT_SECONDS = 120
 EXPORT_ENCODING_VERSION = 3
+ARCHIVE_OFF = "Your account cannot use the archive. An administrator can turn it on in People."
 
 
 class ExportUnavailable(ValueError):
@@ -301,12 +302,14 @@ class OrthancExports:
             ) from None
         return source, directory
 
-    def availability(self, case_id, revision_id):
+    def availability(self, case_id, revision_id, *, archive=True):
         # Resolve saved identity first: candidates and revisions from another
         # case are never treated as exportable snapshots.
         self.service.store.revision(case_id, revision_id)
         exports = [public_job(job) for job in self.service.store.list("jobs", case_id) if job["kind"] == self.kind and job.get("revision_id") == revision_id]
         try:
+            if not archive:
+                raise ExportUnavailable(ARCHIVE_OFF)
             self._inputs(case_id, revision_id)
             with self.service.orthanc.client() as client:
                 destinations = client.destinations(self.service.settings.orthanc_export_destinations)
