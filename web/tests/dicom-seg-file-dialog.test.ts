@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import DicomSegExport from '../src/components/DicomSegExport.vue';
 import { api } from '../src/lib/api';
 import type { DicomSegAvailability, DicomSegExportJob } from '../src/lib/dicom-seg';
+import { ARCHIVE_OFF } from '../src/lib/session';
 import type { Revision, Structure } from '../src/types';
 import { click, mount, settled, type MountedElement } from './mounted';
 
@@ -197,8 +198,18 @@ describe('a case that cannot produce a file', () => {
     const view = await dialog(availability({ file: { available: false, reason: 'This saved revision has no verified original DICOM CT series.' } }));
     expect(view.text()).toContain('no verified original DICOM CT series');
     expect(view.button('Prepare SEG file')).toBeUndefined();
-    expect(disabled(view.button('Archive in Orthanc'))).toBe(true);
+    expect(view.button('Archive in Orthanc'), 'the reason says why instead').toBeUndefined();
+    expect(view.text()).toContain('Archive and send are unavailable. Configure Orthanc before exporting DICOM SEG.');
     expect(disabled(view.all(element => element.tagName === 'FIELDSET')[0])).toBe(true);
+  });
+  it('tells a person without the archive why, not that they can still archive', async () => {
+    const view = await dialog(
+      availability({ reason: ARCHIVE_OFF, file: { available: false, reason: 'This saved revision has no verified original DICOM CT series.' } }),
+    );
+    expect(view.text()).toContain(`Archive and send are unavailable. ${ARCHIVE_OFF}`);
+    expect(view.text()).not.toContain('You can still archive in Orthanc');
+    expect(view.all(element => element.tagName === 'SELECT')).toEqual([]);
+    expect(view.button('Send to viewer')).toBeUndefined();
   });
 });
 

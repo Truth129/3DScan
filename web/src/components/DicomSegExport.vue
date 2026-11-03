@@ -47,8 +47,8 @@ const orthancReady = computed(() => !!availability.value?.available);
 const fileReady = computed(() => !!availability.value?.file?.available);
 const blocked = computed(() => !!disabled.value || locked.value || !!statusError.value || !selected.value.length);
 const actionDisabled = computed(() => blocked.value || !orthancReady.value);
-/** Hide what this case cannot use, unless the disabled buttons are all that is left to explain it. */
-const showOrthanc = computed(() => orthancReady.value || !fileReady.value);
+/** Hide what this case cannot use, unless the disabled buttons are all that is left to explain it, with no reason given. */
+const showOrthanc = computed(() => orthancReady.value || (!fileReady.value && !availability.value?.reason));
 const description = computed(() =>
   orthancReady.value
     ? 'Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.'
