@@ -99,6 +99,9 @@ _SCOPED = {"case_id": ("case", "case_archive", "trashed"), "job_id": ("job",), "
 _SIGN_IN = (401, "Sign in to continue")
 _NO_RULE = (403, "This route has no access rule")
 _NO_ARCHIVE = (403, "This account cannot use the archive")
+# Health, sign-in and viewer files touch no case and no cache, so nothing waits for them.
+_UNCOUNTED_KINDS = ("public", "off_only")
+_UNCOUNTED = object()
 
 
 def rule_for(route, method):
@@ -190,6 +193,7 @@ class SessionGate:
     def __init__(self, app, service):
         self.app = app
         self.accounts = service.accounts
+        self.activity = service.activity
         self.uploads = service.settings.data_dir / "import-uploads"
         self.password = service.settings.sign_in_required
         self.opened = OrderedDict()
@@ -210,55 +214,78 @@ class SessionGate:
             await self.app(scope, receive, send)
             return
         rule = rule_for(route, scope["method"])
-        principal, refusal = await run_in_threadpool(self._admit, rule, params, token)
+        principal, refusal, counted = await run_in_threadpool(self._admit, rule, params, token)
         identity.activate(principal)
         if refusal:
             await _refusal_response(*refusal)(scope, receive, send)
             return
-        no_store = principal is not None and principal.shared_device and rule.kind != "public"
-        if not no_store and not (principal and principal.slid):
-            await self.app(scope, receive, send)
-            return
+        # No await comes between the hop and this try, so a cancelled request still gives its count back.
+        try:
+            with self.activity.request():
+                no_store = principal is not None and principal.shared_device and rule.kind != "public"
+                if not no_store and not (principal and principal.slid):
+                    await self.app(scope, receive, send)
+                    return
 
-        async def send_with_session(message):
-            if message["type"] == "http.response.start":
-                headers = MutableHeaders(scope=message)
-                if no_store:
-                    # Patient data must not stay on a computer the next person will use.
-                    headers["Cache-Control"] = "no-store"
-                # Signing in or out sets its own cookie, which must not be overwritten here.
-                if principal.slid and "set-cookie" not in headers:
-                    headers.append("Set-Cookie", session_cookie(cookie, token))
-            await send(message)
+                async def send_with_session(message):
+                    if message["type"] == "http.response.start":
+                        headers = MutableHeaders(scope=message)
+                        if no_store:
+                            # Patient data must not stay on a computer the next person will use.
+                            headers["Cache-Control"] = "no-store"
+                        # Signing in or out sets its own cookie, which must not be overwritten here.
+                        if principal.slid and "set-cookie" not in headers:
+                            headers.append("Set-Cookie", session_cookie(cookie, token))
+                    await send(message)
 
-        await self.app(scope, receive, send_with_session)
+                await self.app(scope, receive, send_with_session)
+        finally:
+            if counted is not _UNCOUNTED:
+                self.activity.leave(counted)
 
     def _admit(self, rule, params, token):
-        """Session, rule and audit work together, on one thread hop."""
+        """Session, rule, count and audit work together, on one thread hop. A refused request is never counted."""
         if self.password:
             principal = self.accounts.principal(token) if token else None
             refusal = self._refusal(rule, principal, params)
         else:
             principal, refusal = identity.LOCAL, None if rule else _NO_RULE
-        refusal = refusal or self._hidden(rule, params)
-        # After the Trash check, so a case in Trash reads as absent here too.
-        if refusal is None and rule.kind == "case_archive" and not principal.archive_access:
-            refusal = _NO_ARCHIVE
-        if refusal is None and rule.audit:
-            self._audit(rule.audit, principal, params)
-        return principal, refusal
+        if refusal or rule.kind in _UNCOUNTED_KINDS:
+            return principal, refusal, _UNCOUNTED
+        case_id = self._case_of(rule, params)
+        # Restore and Delete forever count in the total only, or a purge would wait for itself.
+        counted = None if rule.kind == "trashed" else case_id
+        # Before the Trash check: a request counted here is refused there or seen by any purge, which always follows Trash.
+        self.activity.enter(counted)
+        try:
+            refusal = self._hidden(rule, case_id)
+            # After the Trash check, so a case in Trash reads as absent here too.
+            if refusal is None and rule.kind == "case_archive" and not principal.archive_access:
+                refusal = _NO_ARCHIVE
+            if refusal is None and rule.audit:
+                self._audit(rule.audit, principal, params)
+        except BaseException:
+            self.activity.leave(counted)
+            raise
+        if refusal:
+            self.activity.leave(counted)
+            return principal, refusal, _UNCOUNTED
+        return principal, None, counted
 
-    def _hidden(self, rule, params):
+    def _case_of(self, rule, params):
+        """The case a request acts on, or None. A job acts on its case, and so does a finished upload."""
+        if rule.kind in ("case", "case_archive", "trashed"):
+            return params["case_id"]
+        if rule.kind == "job":
+            return self.accounts.job_case(params["job_id"])
+        if rule.kind == "upload":
+            return upload_owner(self.uploads, params["upload_id"])[2]
+        return None
+
+    def _hidden(self, rule, case_id):
         """A case in Trash reads as missing in both modes, in the route's own words, so nothing shows it exists."""
-        if rule.kind in ("case", "case_archive"):
-            case_id, detail = params["case_id"], "Case not found"
-        elif rule.kind == "job":
-            case_id, detail = self.accounts.job_case(params["job_id"]), "Job not found"
-        elif rule.kind == "upload":
-            case_id, detail = upload_owner(self.uploads, params["upload_id"])[2], "Upload not found"
-        else:
-            return None
-        return (404, detail) if case_id and self.accounts.in_trash(case_id) else None
+        detail = {"case": "Case not found", "case_archive": "Case not found", "job": "Job not found", "upload": "Upload not found"}.get(rule.kind)
+        return (404, detail) if detail and case_id and self.accounts.in_trash(case_id) else None
 
     def _refusal(self, rule, principal, params):
         """Why this principal may not use this rule, or None. Falling off the end refuses."""

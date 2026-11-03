@@ -308,7 +308,11 @@ def add_routes(app, service):
         import asyncio
 
         cancelled = threading.Event()
+        # The build can outlive this request, so its case stays busy until the thread ends.
+        case_id = args[0]
+        service.activity.enter(case_id, wait=False)
         work = asyncio.create_task(asyncio.to_thread(build, *args, cancelled.is_set))
+        work.add_done_callback(lambda _: service.activity.leave(case_id))
         try:
             while not work.done():
                 await asyncio.wait({work}, timeout=0.1)

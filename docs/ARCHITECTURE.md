@@ -184,6 +184,10 @@ be requested explicitly.
 **Cancellation** stops a queued job at once and a running job at its next check. Trash cancels a
 case's jobs, and a job that starts afterwards stops at its first check.
 
+**Requests in flight.** The gate counts each admitted request, in all and per case, until its
+response is sent. A request that makes a case counts it from before its row exists, and a volume
+build counts its case until its thread ends. The counts live in memory, so a restart resets them.
+
 ## Inference
 
 `SCAN3D_DEVICE` selects the device on the default [inference path](#inference-paths), and
