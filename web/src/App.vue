@@ -850,7 +850,8 @@ async function openOrthancCase(id: string) {
   }
 }
 function seriesAdded(next: Case, uid: string) {
-  activeCase.value = next;
+  // The record's active revision can be someone else's newer save, which this page has not loaded.
+  activeCase.value = { ...next, active_revision_id: activeCase.value?.active_revision_id ?? null };
   seriesUid.value = uid;
   // The Library searches series, and it can be open over this panel.
   void refreshCases().catch(() => {});

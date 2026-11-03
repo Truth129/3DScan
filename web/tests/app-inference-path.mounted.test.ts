@@ -1038,6 +1038,24 @@ describe('the Library', () => {
       await press(root.button('Revision history'));
       expect(root.button('Reset to scan')).toBeUndefined();
     });
+    it('keeps the version it shows when a series is added after someone else saved', async () => {
+      const { activate } = segmentedCase();
+      const series = [{ uid: 'first', description: '', modality: 'CT', slice_count: 1, spacing: [1, 1, 1], warnings: [] }],
+        imported = { ...scan, active_revision_id: 'segmented', series, import_source: { kind: 'orthanc' } },
+        elsewhere = { ...imported, active_revision_id: 'elsewhere' };
+      vi.mocked(api.case).mockImplementation(async () => imported);
+      const root = await start();
+      await press(root.button('Select series'));
+      vi.mocked(api.case).mockImplementation(async () => elsewhere);
+      (root.named('add-series') as unknown as { __vueParentComponent: ComponentInternalInstance }).__vueParentComponent.emit('added', elsewhere, 'first');
+      await settled();
+      await press(root.button('← Back to current result'));
+      await heartbeat();
+      expect(root.content).toContain('Someone else or another tab saved a newer version of this case.');
+      await press(root.button('Revision history'));
+      await press(root.button('Reset to scan'));
+      expect(activate).toHaveBeenCalledExactlyOnceWith('case', 'prepared', 'segmented');
+    });
   });
 
   describe('a job that reads as gone', () => {
