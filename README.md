@@ -23,7 +23,7 @@ other service.
 - **Corrections:** nnInteractive prompts, direct mask edits, scissors and recipes, with
   exact undo.
 - **Library:** one library for everyone signed in, with search, rename, Trash with undo, and
-  Delete forever.
+  Delete forever. An administrator adds people with a link.
 - **Viewer:** linked slices and 3D volume rendering.
 - **Measurements:** mask volumes and AI-agreement metrics.
 - **Exchange:** DICOM SEG import and export, 3D views as new DICOM series, 3D Slicer, PNG

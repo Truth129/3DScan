@@ -88,6 +88,22 @@ export interface CacheClearResult {
   freed: number;
   storage: StorageReport;
 }
+export interface Person {
+  id: string;
+  username: string;
+  display_name: string;
+  role: 'admin' | 'member';
+  archive_access: boolean;
+  state: 'active' | 'invited' | 'disabled';
+  created_at: string;
+  last_seen_at: string | null;
+  link_expires_at: string | null;
+}
+export interface OneTimeLink {
+  code: string;
+  purpose: 'invite' | 'reset';
+  expires_at: string;
+}
 export interface Job {
   id: string;
   case_id: string;

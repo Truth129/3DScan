@@ -429,6 +429,28 @@ h3 {
   align-items: center;
   gap: 10px;
 }
+.people,
+.people-link {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.people-add,
+.people-add-fields,
+.people-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+.people-link-row input {
+  flex: 1;
+  min-width: 0;
+}
+/* A person's state, such as when their link stops working, matters more than one tidy line. */
+.people .case-row small {
+  white-space: normal;
+}
 .case-library-empty {
   display: flex;
   flex-direction: column;

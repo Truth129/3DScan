@@ -37,11 +37,29 @@ closes, and after 12 hours at most, and the browser stores no scan data for this
 **Signing out.** Choose your name in the header, then **Sign out**. **Sign out other devices** ends
 this account's other sessions and keeps this one.
 
+**People.** An admin adds people on the Library's **People** tab. Enter a username, an optional
+display name and a role, choose **Add and make link**, then **Copy link** and send it to the person.
+The link works once, within a day, and lets them set their password. Make it through the HTTPS
+address, because a link made on `127.0.0.1` works only on that computer.
+
+A member works on every case but has no People or Storage tab, cannot delete forever and cannot
+change the TotalSegmentator key. **Turn archive off** stops a person using Orthanc. Each row shows
+the role, archive access, and when the person was last seen or until when their link works.
+
+**Reset link** makes a new link and ends any earlier one, for a forgotten password or a link sent to
+the wrong place. A reset link for yourself changes your own password. **Sign out everywhere** ends
+the person's sessions, and **Disable** also ends their links and stops them signing in until
+**Enable**. Jobs they started still finish.
+
+Changes apply from the person's next request. Nobody changes their own role or disables themselves,
+and the last admin who can sign in stays an admin.
+
 **When a session ends.** A session lasts 30 days from its last use. If yours ends while you work, a
 sign-in screen covers the page. Sign in as the same person and the page carries on with your marks
 intact. Signing in as someone else reloads the page.
 
-**Forgotten password.** Run this on the workstation. It also signs the account out everywhere:
+**Forgotten password.** Ask an admin for a reset link from **People**. An admin with nobody to ask
+runs this on the workstation. It also signs the account out everywhere and ends its links:
 
 ```bash
 .venv/bin/scan3d users passwd NAME

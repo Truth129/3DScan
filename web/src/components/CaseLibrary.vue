@@ -2,9 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import { caseDate, filterCases, formatSize, overdueInTrash, statusLabel } from '../lib/library';
-import { canAdminister } from '../lib/session';
+import { canAdminister, session } from '../lib/session';
 import type { Case, StorageReport, StorageRow } from '../types';
 import DeleteForeverDialog from './DeleteForeverDialog.vue';
+import PeoplePanel from './PeoplePanel.vue';
 
 const props = defineProps<{
   cases: Case[];
@@ -29,7 +30,7 @@ const emit = defineEmits<{
 
 const root = ref<HTMLElement>(),
   searchField = ref<HTMLInputElement>();
-const tab = ref<'cases' | 'trash' | 'storage'>('cases'),
+const tab = ref<'cases' | 'trash' | 'storage' | 'people'>('cases'),
   query = ref(''),
   renaming = ref(''),
   draft = ref(''),
@@ -62,7 +63,8 @@ const shownCases = computed(() => filterCases(props.cases, query.value)),
   }),
   overdue = computed(() => overdueInTrash(trashed.value)),
   overdueText = computed(() => `${overdue.value === 1 ? '1 case has' : `${overdue.value} cases have`} been in Trash for over 30 days.`),
-  clearLine = computed(() => (storage.value ? `${formatSize(storage.value.totals.rebuildable)} rebuilds when needed. Saved surfaces and cases stay.` : ''));
+  clearLine = computed(() => (storage.value ? `${formatSize(storage.value.totals.rebuildable)} rebuilds when needed. Saved surfaces and cases stay.` : '')),
+  peopleOffered = computed(() => session.value?.mode === 'password' && canAdminister.value);
 
 function sizeOf(id: string) {
   if (!sizes.value) return '…';
@@ -239,6 +241,10 @@ function strayEscape(event: KeyboardEvent) {
   if (event.key === 'Escape' && event.target === document.body && !document.querySelector('.dialog-backdrop, dialog[open]')) escape();
 }
 watch(() => props.stamp, readTrash);
+// A heartbeat can take administrator rights away while their tab is showing.
+watch(canAdminister, allowed => {
+  if (!allowed && (tab.value === 'storage' || tab.value === 'people')) tab.value = 'cases';
+});
 onMounted(() => {
   // First, so the Orthanc launch dialog, which mounts in this render and focuses after a tick, has the last
   // word and Enter cannot open a case behind it.
@@ -258,11 +264,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
         Trash<span v-if="trashed.length" class="tab-count">{{ trashed.length }}</span>
       </button>
       <button v-if="canAdminister" :class="{ active: tab === 'storage' }" type="button" @click="showStorage">Storage</button>
+      <button v-if="peopleOffered" :class="{ active: tab === 'people' }" type="button" @click="tab = 'people'">People</button>
       <button v-if="closable" type="button" class="panel-hide inspector-hide" aria-label="Close Library" title="Close Library" @click="emit('close')">×</button>
     </header>
     <div class="case-library-body">
       <input
-        v-if="tab !== 'storage'"
+        v-if="tab === 'cases' || tab === 'trash'"
         ref="searchField"
         v-model="query"
         class="case-library-search"
@@ -335,7 +342,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
           </li>
         </ul>
       </template>
-      <template v-else>
+      <template v-else-if="tab === 'storage'">
         <p v-if="storageError" class="case-library-error" role="alert">{{ storageError }}</p>
         <p v-else-if="!storage" class="empty-search">Measuring storage…</p>
         <template v-if="storage">
@@ -376,6 +383,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
           </div>
         </template>
       </template>
+      <PeoplePanel v-else />
       <p class="eyebrow case-library-notice">{{ notice }}</p>
     </div>
     <DeleteForeverDialog v-if="purging" :cases="purging" @purged="purged" @gone="gone" @close="purgeClosed" />

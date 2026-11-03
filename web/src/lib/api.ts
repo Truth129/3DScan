@@ -12,6 +12,8 @@ import type {
   InteractiveRunChoice,
   InteractiveStatus,
   InteractiveStructureInput,
+  OneTimeLink,
+  Person,
   SegmentRelationship,
   SegmentationCatalog,
   SegmentationSettings,
@@ -59,6 +61,7 @@ export async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 const json = (method: string, value: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
 const caseUrl = (id: string) => `/api/cases/${encodeURIComponent(id)}`;
+const personUrl = (id: string) => `/api/people/${encodeURIComponent(id)}`;
 const reviewUrl = (id: string, session: string) => `${caseUrl(id)}/reviews/${encodeURIComponent(session)}`;
 export const revisionUrl = (id: string, rid: string) => `${caseUrl(id)}/revisions/${encodeURIComponent(rid)}`;
 export const dicomSegFileUrl = (id: string, rid: string, exportId: string) => `${revisionUrl(id, rid)}/dicom-seg/${encodeURIComponent(exportId)}/segment.dcm`;
@@ -152,6 +155,15 @@ export const api = {
   purge: (id: string, body: { password: string } | { confirm: true }) =>
     request<{ id: string }>(`/api/trash/${encodeURIComponent(id)}/purge`, json('POST', body)),
   clearCaches: () => request<CacheClearResult>('/api/storage/clear-caches', { method: 'POST' }),
+  people: () => request<Person[]>('/api/people'),
+  addPerson: (data: { username: string; display_name: string | null; role: Person['role'] }) =>
+    request<{ person: Person; link: OneTimeLink }>('/api/people', json('POST', data)),
+  personLink: (id: string) => request<OneTimeLink>(`${personUrl(id)}/link`, { method: 'POST' }),
+  setRole: (id: string, role: Person['role']) => request<Person>(`${personUrl(id)}/role`, json('POST', { role })),
+  setArchive: (id: string, archive_access: boolean) => request<Person>(`${personUrl(id)}/archive`, json('POST', { archive_access })),
+  disablePerson: (id: string) => request<Person>(`${personUrl(id)}/disable`, { method: 'POST' }),
+  enablePerson: (id: string) => request<Person>(`${personUrl(id)}/enable`, { method: 'POST' }),
+  signOutPerson: (id: string) => request<{ signed_out: number }>(`${personUrl(id)}/sign-out`, { method: 'POST' }),
   review: async (id: string, rid: string, status: ReviewStatus) =>
     presentRevision(await request<Revision>(revisionUrl(id, rid), json('PATCH', { review_status: status }))),
   refine: (id: string, rid: string, structure: string, operation: Operation) =>

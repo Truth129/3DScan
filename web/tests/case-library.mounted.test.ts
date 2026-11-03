@@ -730,6 +730,38 @@ describe('Storage', () => {
   });
 });
 
+describe('People', () => {
+  const signedIn = (role: 'admin' | 'member', mode: 'off' | 'password' = 'password') =>
+    (session.value = { mode, setup_required: false, user: { id: 'u', username: 'u', display_name: 'U', role } });
+
+  it('offers People to an admin with sign-in on, and to nobody else', () => {
+    signedIn('admin');
+    expect(library({}).button('People')).toBeDefined();
+    signedIn('member');
+    expect(library({}).button('People')).toBeUndefined();
+    signedIn('admin', 'off');
+    expect(library({}).button('People')).toBeUndefined();
+  });
+  it('moves a demoted admin off People and Storage', async () => {
+    vi.spyOn(api, 'people').mockResolvedValue([]);
+    vi.spyOn(api, 'storage').mockResolvedValue(report);
+    signedIn('admin');
+    const view = library({});
+    for (const name of ['People', 'Storage']) {
+      click(view.tab(name));
+      await settled();
+      expect(view.search()).toBeUndefined();
+      signedIn('member');
+      await settled();
+      expect(view.tab(name)).toBeUndefined();
+      expect(view.rows().map(row => row.getAttribute('data-case-id'))).toEqual(['liver', 'chest']);
+      signedIn('admin');
+      await settled();
+    }
+    expect(api.people).toHaveBeenCalledOnce();
+  });
+});
+
 describe('an empty library', () => {
   it('shows the import buttons and the research notice on an empty library', async () => {
     const importScan = vi.fn(),
