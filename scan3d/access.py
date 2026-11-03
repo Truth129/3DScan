@@ -44,6 +44,7 @@ RULES = {
     ("GET", "/api/session"): Rule("public"),
     ("POST", "/api/session"): Rule("public"),
     ("DELETE", "/api/session"): Rule("public"),
+    ("POST", "/api/session/redeem"): Rule("public"),
     ("GET", "/"): Rule("public"),
     # FastAPI's own pages exist only with sign-in off. Any other kind is refused in password mode.
     ("GET", "/docs"): Rule("off_only"),

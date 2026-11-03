@@ -41,6 +41,10 @@ _PEOPLE = (
 )
 
 
+class LinkUsed(Exception):
+    """One answer for a link that is unknown, expired, used, replaced, for a disabled account, or whose maker is no longer an admin."""
+
+
 def _display_name(username, display_name):
     name = (username if display_name is None else display_name).strip()
     if not name or len(name) > _DISPLAY_NAME_LENGTH or any(ord(char) < 32 or ord(char) == 127 for char in name):
@@ -133,7 +137,7 @@ class Accounts:
         return user_id
 
     def set_password(self, username, password):
-        """A new password ends every session, so it also recovers a lost or shared device."""
+        """A new password ends every session and every link for or by this person, so it also recovers a lost or shared device."""
         encoded = identity.hash_password(password)
         with self.store.connection() as con:
             con.execute("BEGIN IMMEDIATE")
@@ -142,6 +146,7 @@ class Accounts:
                 raise NotFound("User not found")
             con.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, row["id"]))
             con.execute("DELETE FROM sessions WHERE user_id=?", (row["id"],))
+            con.execute("DELETE FROM one_time_codes WHERE user_id=? OR created_by=?", (row["id"], row["id"]))
             self._write_audit(con, "user.password", target=row["id"])
         return row["id"]
 
@@ -324,6 +329,48 @@ class Accounts:
             ended = con.execute("DELETE FROM sessions WHERE user_id=?", (user_id,)).rowcount
             self._write_audit(con, "user.sign_out_everywhere", actor_id, target=user_id, detail={"count": ended})
         return {"signed_out": ended}
+
+    @staticmethod
+    def _live_link(con, hashed):
+        return con.execute(
+            f"SELECT u.* FROM one_time_codes c JOIN users u ON u.id=c.user_id {_MAKER} WHERE c.token_hash=? AND c.expires_at>? AND u.disabled_at IS NULL",
+            (hashed, _stamp(_utcnow())),
+        ).fetchone()
+
+    def check_link(self, code):
+        """Refuse a dead link before any hashing."""
+        with self.store.connection() as con:
+            if self._live_link(con, token_hash(code)) is None:
+                raise LinkUsed
+
+    async def queued_redeem(self, code, password, shared_device=False):
+        # Keyed by the link, so no guesses at the person's name delay it.
+        return await self._in_hashing_slot("link:" + token_hash(code), self.redeem, code, password, shared_device)
+
+    def redeem(self, code, password, shared_device=False):
+        """Set the password a link was made for, end the person's sessions and start one here. Return (token, principal)."""
+        encoded = identity.hash_password(password)
+        token, moment = secrets.token_urlsafe(32), _utcnow()
+        hashed = token_hash(token)
+        lifetime = SHARED_DEVICE_LIFETIME if shared_device else SESSION_LIFETIME
+        with self.store.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            # Under the write lock, so of two uses at once only the first finds the row.
+            account = self._live_link(con, token_hash(code))
+            if account is None:
+                raise LinkUsed
+            con.execute("DELETE FROM one_time_codes WHERE user_id=?", (account["id"],))
+            con.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, account["id"]))
+            con.execute("DELETE FROM sessions WHERE user_id=? OR expires_at<=?", (account["id"], _stamp(moment)))
+            con.execute(
+                "INSERT INTO sessions(token_hash,user_id,shared_device,created_at,last_seen_at,expires_at) VALUES (?,?,?,?,?,?)",
+                (hashed, account["id"], int(shared_device), _stamp(moment), _stamp(moment), _stamp(moment + lifetime)),
+            )
+            self._seen(con, account["id"], moment)
+            self._write_audit(con, "user.link_used", account["id"], target=account["id"])
+            self._write_audit(con, "session.sign_in", actor_id=account["id"])
+        self.throttle.clear(account["username"].casefold())
+        return token, self._principal(account, hashed, shared_device)
 
     def _refuse_during_wait(self, key):
         if seconds := self.throttle.remaining(key):

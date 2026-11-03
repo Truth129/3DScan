@@ -110,6 +110,11 @@ def _is_session_path(request):
     return request.scope["path"].removesuffix("\n") == "/api/session"
 
 
+def _is_redeem_path(request):
+    # As for sign-in: scope["path"], and a final newline reaches the same handler.
+    return request.scope["path"].removesuffix("\n") == "/api/session/redeem"
+
+
 _PURGE = re.compile(r"/api/trash/[^/]+/purge")
 
 
@@ -148,6 +153,9 @@ def create_app(settings: Settings | None = None):
             )
         if _is_session_path(request):
             return JSONResponse(status_code=422, content={"detail": "Invalid sign-in request."}, headers={"Cache-Control": "no-store"})
+        if _is_redeem_path(request):
+            # The body holds a link's code and a password.
+            return JSONResponse(status_code=422, content={"detail": "Invalid set-password request."}, headers={"Cache-Control": "no-store"})
         if _is_purge_path(request):
             return JSONResponse(status_code=422, content={"detail": "Invalid delete request."}, headers={"Cache-Control": "no-store"})
         return await request_validation_exception_handler(request, exc)
@@ -180,8 +188,10 @@ def create_app(settings: Settings | None = None):
         # an encoded "?" in an earlier segment, and miss the upload check below.
         view_export = request.scope["path"].endswith("/dicom-view")
         session = _is_session_path(request)
+        redeem = _is_redeem_path(request)
         private = (
             session
+            or redeem
             or request.url.path == "/api/totalsegmentator/license"
             or request.url.path.startswith("/api/orthanc/")
             or request.url.path.endswith(("/dicom-seg", "/segment.dcm"))
@@ -199,7 +209,8 @@ def create_app(settings: Settings | None = None):
             refused = _view_upload_refusal(request, service.settings.view_upload_limit)
             if refused:
                 return refused
-        if session and request.method == "POST":
+        # Redeem is public too.
+        if (session or redeem) and request.method == "POST":
             refused = _sign_in_refusal(request)
             if refused:
                 return refused

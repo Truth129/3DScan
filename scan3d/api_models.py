@@ -20,6 +20,13 @@ class SignIn(Input):
     shared_device: bool = Field(False, strict=True)
 
 
+class Redeem(Input):
+    # Never echoed: `api.safe_validation_error` answers a malformed body without either.
+    code: SecretStr
+    password: SecretStr
+    shared_device: bool = Field(False, strict=True)
+
+
 class NewPerson(Input):
     # Checked in `Accounts.invite` by the rules `scan3d users add` uses.
     username: str

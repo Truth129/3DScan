@@ -585,8 +585,8 @@ records store absolute paths. A snapshot from before November 2026 has no `scan3
 first move any `scan3d.sqlite3-wal` and `scan3d.sqlite3-shm` out of the data directory.
 
 A backup holds patient images, so protect it like the library. It does not cover anything held in
-Orthanc. It keeps cases in Trash, accounts and the audit log but no sessions, so everyone signs in
-again after a restore.
+Orthanc. It keeps cases in Trash, accounts and the audit log but no sessions or set-password links,
+so everyone signs in again after a restore.
 
 A backup taken before a case is deleted forever still holds it, and restoring that backup brings the
 case back. Delete forever is an ordinary file delete, not secure erasure.

@@ -30,17 +30,18 @@ or an unexpected 500 is plain text.
 | 404    | Record is absent, belongs to another case, is in Trash, has been deleted forever, or this account cannot open it | `errors.NotFound`, `SessionGate`, a stay-purged trigger |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
 | 409    | Stale state; reload before retrying. Or work under way must finish first, or a People change would leave no admin | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever, Clear caches and People |
-| 411    | Captured view or sign-in without a plain `Content-Length` | `dicom-view` upload and sign-in checks  |
-| 413    | Offline HTML export, captured view or sign-in over a size limit | `ExportTooLarge`, `dicom-view` upload and sign-in checks |
+| 410    | A set-password link no longer works                     | `POST /api/session/redeem`                |
+| 411    | Captured view, sign-in or set-password without a plain `Content-Length` | `dicom-view` upload, sign-in and set-password checks |
+| 413    | Offline HTML export, captured view, sign-in or set-password over a size limit | `ExportTooLarge`, `dicom-view` upload, sign-in and set-password checks |
 | 422    | Schema validation failed                                | FastAPI                                   |
-| 429    | Too many password attempts                              | `POST /api/session`, `POST /api/trash/{id}/purge` |
+| 429    | Too many password attempts, or no hashing slot in a second | `POST /api/session`, `POST /api/session/redeem`, `POST /api/trash/{id}/purge` |
 | 499    | Client left while a mask or label union was being built | `volume-mask`, `volume-labels`            |
 | 500    | Unexpected exception, logged without internal detail    | Anything else, including a bare `KeyError` |
 | 502    | The configured Orthanc failed                           | `OrthancError`                            |
 | 503    | A cached surface or viewer bundle is missing            | Surface and export routes                 |
 
-The license, sign-in and Delete forever routes' validation messages are fixed, so a key or password
-is never echoed.
+The license, sign-in, set-password and Delete forever routes' validation messages are fixed, so a
+key, password or link code is never echoed.
 [Inference path](#refusals-and-failures) refusals use fixed sentences, with no proof text or local
 paths.
 
@@ -48,9 +49,9 @@ paths.
 
 - **Origin.** A non-GET request whose `Origin` differs from `Host` gets 403. Hosts must appear in
   `SCAN3D_ALLOWED_HOSTS`.
-- **Private responses.** `/api/session`, `/api/people`, `/api/orthanc/*`, the license route,
-  `.../dicom-seg`, a prepared `segment.dcm` and `.../dicom-view` use `Cache-Control: no-store`,
-  errors included.
+- **Private responses.** `/api/session`, `/api/session/redeem`, `/api/people`, `/api/orthanc/*`, the
+  license route, `.../dicom-seg`, a prepared `segment.dcm` and `.../dicom-view` use
+  `Cache-Control: no-store`, errors included.
   Candidate records, descriptors, agreement reports and frames use `private, no-store`. So does any
   other `/api/` response that sets no header of its own.
 - **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces and `model.glb` use
@@ -76,6 +77,7 @@ body.
 | `POST /api/session`                | Takes `{username, password, shared_device?}`. 200 with the view and `Set-Cookie` |
 | `DELETE /api/session`              | Ends any session, clears its cookie, sends `Clear-Site-Data: "cache"`, returns the view |
 | `POST /api/session/sign-out-others` | Ends this account's other sessions. Returns `{signed_out}`             |
+| `POST /api/session/redeem`         | Takes `{code, password, shared_device?}` from a [People](#people-routes) link. Sets that person's password, ends their sessions and returns 200 with the view and `Set-Cookie` |
 
 The view is `{mode, user, setup_required}`:
 
@@ -100,6 +102,23 @@ Each username gets three free failures, then waits of 1, 2, 4, 8 and 16 seconds,
 wait refuses without checking the password and never locks the account. At most two sign-ins hash
 at once. One that waits over a second for a turn also gets 429, with N of 1.
 
+`POST /api/session/redeem` refusals:
+
+| Status | `detail`                                             | When                                        |
+| ------ | ---------------------------------------------------- | ------------------------------------------- |
+| 400    | `Sign-in is off on this workstation`                 | The mode is `off`                           |
+| 400    | `A password needs 10 to 1,024 characters`            | A live link, which still works afterwards   |
+| 403    | `Set your password through the HTTPS address`        | `Origin` is not https and `Host` is not loopback |
+| 410    | `This link has expired or was already used. Ask an administrator for a new one.` | Unknown, expired, used or replaced, for a disabled account, or made by someone no longer an active admin |
+| 411, 413 | The sign-in texts                                  | No plain declared length, or over 4 KiB     |
+| 422    | `Invalid set-password request.`                      | Schema failure, with no input echoed        |
+| 429    | `Too many attempts. Try again in 1 seconds.`         | No hashing slot within a second, with `Retry-After` |
+
+- A dead link is refused before any password hashing. A link works once: of two uses at once, the
+  first to write wins.
+- A browser that held another person's session is signed out of it.
+- `scan3d users passwd` ends every link for or by that person, as well as their sessions.
+
 ### Access rules
 
 Every refusal is `{"detail": ...}` with `Cache-Control: no-store`. Where two are shown, a request
@@ -107,7 +126,7 @@ with no session gets the 401, and a signed-in one the other.
 
 | Rule      | Routes                                                                  | Refusal                                        |
 | --------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
-| Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, the viewer files | None                                         |
+| Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, `POST /api/session/redeem`, the viewer files | None                  |
 | Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `GET /api/sizes`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
 | Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license`, the [People routes](#people-routes) | 401, 403 `Administrator access is required` |
 | Archive   | `GET /api/orthanc/status`, `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
@@ -151,11 +170,11 @@ Asking for a role, archive access or state the person already has succeeds and w
 
 - A `Person` is `{id, username, display_name, role, archive_access, state, created_at,
   last_seen_at, link_expires_at}`. `state` is `active`, `invited` before a password is set, or
-  `disabled`. `last_seen_at` is the last sign-in or session slide. `link_expires_at` is when the
-  person's link stops working, or null.
+  `disabled`. `last_seen_at` is the last sign-in, set-password or session slide. `link_expires_at`
+  is when the person's link stops working, or null.
 - A link is `{code, purpose, expires_at}` and lasts 24 hours. Only the SHA-256 of `code` is stored,
-  so this answer is the only place it appears. A link works only while whoever made it is still an
-  active admin.
+  so this answer is the only place it appears. [Redeem](#sign-in-routes) takes the code. A link
+  works only while whoever made it is still an active admin.
 - An active admin has the `admin` role, is not disabled and has a password.
 - Work already queued or running finishes when archive access goes off or a person is disabled.
 
@@ -318,7 +337,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 
 | Method and path                                      | Purpose                                 |
 | ---------------------------------------------------- | --------------------------------------- |
-| `GET`, `POST`, `DELETE /api/session`, `POST .../sign-out-others` | [Sign-in](#sign-in)         |
+| `GET`, `POST`, `DELETE /api/session`, `POST .../sign-out-others`, `POST .../redeem` | [Sign-in](#sign-in) |
 | `GET`, `POST /api/people`, `POST /api/people/{id}/...` | [People](#people-routes), for an admin |
 | `GET /api/health`, `GET /api/imaging-capabilities`   | Liveness, installed modality adapters   |
 | `GET /api/segmentation-options`                      | Task catalog and inference paths        |

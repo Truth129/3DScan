@@ -500,6 +500,12 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
 n=2^17, r=8 and p=1. `last_seen` records each person's sign-in and each slide of their session,
 because session rows go at sign-out.
 
+**One-time links.** A People link sets a password. `one_time_codes` keeps only the SHA-256 of its
+code, and each person has at most one. It works once, for 24 hours, while its maker is still an
+active admin and its person is not disabled. Redeeming hashes in the sign-in slots under a key of its
+own, and checks the link again under the write lock, so of two uses at once only the first wins.
+`scan3d users passwd` ends every link for or by that person.
+
 **An open tab.** Each session read, every 60 seconds and on focus, also reads the open case. A tab
 closes a case that answers `Case not found`, and takes only the label from any other answer. Lost
 connections and server errors never close a case. When the answer names another active revision and
@@ -515,6 +521,7 @@ label, search term or typed username. A row means a request was allowed to start
 fails the request. The actions are:
 
 - `session.sign_in`, `session.sign_in_failed`, `session.sign_out`, `session.sign_out_others`
+- `user.link_used`, with `session.sign_in`, when a link sets a password
 - `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`, `cache.clear`
 - `user.invite`, `user.invite_link`, `user.reset_link`, `user.make_admin`, `user.make_member`,
   `user.archive_on`, `user.archive_off`, `user.disable`, `user.enable`, `user.sign_out_everywhere`,

@@ -83,7 +83,7 @@ def main():
     # Required for now, so that a plain add can mean a member later without changing what it does today.
     add_user.add_argument("--admin", action="store_true", required=True, help="Every account is an administrator for now")
     add_user.add_argument("--display-name")
-    passwd = actions.add_parser("passwd", help="Set a new password, which ends the account's sessions")
+    passwd = actions.add_parser("passwd", help="Set a new password, which ends the account's sessions and links")
     passwd.add_argument("name")
     actions.add_parser("list", help="List accounts, without password hashes")
     sub.add_parser("demo")
