@@ -94,4 +94,11 @@ describe('new custom segment drafts', () => {
     expect(presentStructures([target])[0].color).toBe('#ab45cd');
     expect(presentStructures([{ ...target, group: 'Bones' }])[0].color).toBe('#ab45cd');
   });
+  it('shows model bones in yellow, not ivory that vanishes on bright CT bone', () => {
+    const bones = [
+      { ...target, id: 'total:rib_left_1', task: 'total', group: 'Bones', color: '#d8cdb1' },
+      { ...target, id: 'mrsegmentator:left_femur', task: 'mrsegmentator', group: 'MRSegmentator', color: '#ad91d6' },
+    ];
+    expect(presentStructures(bones).map(s => s.color)).toEqual(['#f5cc00', '#f5cc00']);
+  });
 });

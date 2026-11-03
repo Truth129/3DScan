@@ -39,6 +39,19 @@ def test_task_appearance_has_meaningful_fallback_and_keeps_anatomical_priorities
     assert segmentation._appearance(name, task)[0] == group
 
 
+@pytest.mark.parametrize(
+    "name,task",
+    [
+        *[(name, "total") for name in ("vertebrae_C1", "rib_left_12", "skull", "sternum", "hip_left", "femur_right", "humerus_left")],
+        *[(name, "total_mr") for name in ("vertebrae", "sacrum", "scapula_right", "clavicula_left")],
+        *[(name, "mrsegmentator") for name in ("spine", "sacrum", "left_hip", "right_femur")],
+        ("femur", "appendicular_bones"),
+    ],
+)
+def test_bones_default_to_a_yellow_that_shows_on_bright_ct_bone(name, task):
+    assert segmentation._appearance(name, task)[1] == "#f5cc00"
+
+
 def test_catalog_is_ct_only_stable_and_does_not_initialize_torch():
     result = subprocess.run(
         [

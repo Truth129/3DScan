@@ -223,6 +223,8 @@ Three linked planes share one position, with its patient RAS coordinates and HU 
   centre slice and pauses drawing. **Rotatable crosshairs** adds crosshairs you can rotate.
 - **Overlays:** **Segments** chooses what shows, **Use selected segment** follows the selection and
   **Clear overlays** shows CT alone. **Fill**, **Outline** and **2D overlay opacity** set the style.
+- **Colors:** bones are yellow so they show against bright bone. Change any color under
+  **Selected structure**. Your browser keeps it.
 
 Tilted-gantry (sheared) scans are straightened for display only. Your marks still map to the
 original voxels.
@@ -490,6 +492,9 @@ overlap-preserving export for 3D Slicer.
 **Export SEG…** works for classic CT from a folder, a ZIP or Orthanc. Selected masks go into one SEG
 object with overlaps preserved. All nonempty masks start selected. **Select visible** takes a
 snapshot of the masks switched on in the anatomy list.
+
+A SEG uses the colors saved with the segmentation, not ones changed in your browser, so older
+segmentations keep ivory bones.
 
 To save a file, with no Orthanc needed:
 

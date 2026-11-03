@@ -35,6 +35,10 @@ DEVICE_CHECK_SECONDS = 300.0
 _RESULTS_MOVED = b"Prediction on device was unsuccessful"
 _FAILURE_LOG_BYTES = 64 * 1024
 _NAME_COLORS = ["#d88a72", "#ad91d6", "#a6c682", "#e3bb78", "#7ebbb7", "#c092b8"]
+# Saturated yellow: ivory vanishes on bright CT bone in the slices, and a fill still tints white.
+BONE_COLOR = "#f5cc00"
+# A pinned model keeps its own group, so its bones are found by name.
+_MODEL_BONES = {"mrsegmentator": {"spine", "sacrum", "left_hip", "right_hip", "left_femur", "right_femur"}}
 
 
 def _name_color(name):
@@ -49,7 +53,7 @@ def _structure_name(name, task):
 
 def _appearance(name, task=None):
     if task in nnunet_models.MODELS:
-        return nnunet_models.MODELS[task].name, _name_color(name)
+        return nnunet_models.MODELS[task].name, BONE_COLOR if name in _MODEL_BONES.get(task, ()) else _name_color(name)
     if "vein" in name or "vena" in name:
         return "Veins", "#4d82e8"
     if "arter" in name or "aorta" in name or name == "brachiocephalic_trunk":
@@ -67,7 +71,7 @@ def _appearance(name, task=None):
         "vertebrae",
         "intervertebral_discs",
     }:
-        return "Bones", "#d8cdb1"
+        return "Bones", BONE_COLOR
     if name in {"heart", "atrial_appendage_left", "spinal_cord", "esophagus", "thyroid_gland"}:
         return "Chest organs", "#ce94a7"
     if name == "brain":
@@ -108,7 +112,8 @@ def _appearance(name, task=None):
             "hip_implant": "Implants",
             "face": "Head organs",
         }
-        return groups.get(task, task.replace("_", " ").capitalize()), _name_color(name)
+        group = groups.get(task, task.replace("_", " ").capitalize())
+        return group, BONE_COLOR if group == "Bones" else _name_color(name)
     return "Abdominal organs", _name_color(name)
 
 

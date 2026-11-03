@@ -5,6 +5,8 @@ def create_demo(service):
     import nibabel as nib
     import numpy as np
 
+    from .segmentation import BONE_COLOR
+
     case = service.new_case("Synthetic anatomy demo")
     folder = service.store.case_dir(case["id"]) / "synthetic"
     folder.mkdir(parents=True)
@@ -22,7 +24,7 @@ def create_demo(service):
         ("kidney_left", "Left kidney", "organs", "#bf8fc3", ((r + 49) / 17) ** 2 + ((a + 31) / 17) ** 2 + ((s + 97) / 27) ** 2 < 1, 140),
         ("kidney_right", "Right kidney", "organs", "#bf8fc3", ((r - 49) / 17) ** 2 + ((a + 31) / 17) ** 2 + ((s + 97) / 27) ** 2 < 1, 140),
         ("aorta", "Aorta", "vessels", "#e77676", (r + 7) ** 2 + (a + 28) ** 2 < 9**2, 280),
-        ("spine", "Spine", "bones", "#dacdaf", r**2 + (a + 53) ** 2 < 13**2, 650),
+        ("spine", "Spine", "bones", BONE_COLOR, r**2 + (a + 53) ** 2 < 13**2, 650),
     ]
     structures = []
     for name, label, group, color, mask, hu in definitions:

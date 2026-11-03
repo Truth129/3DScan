@@ -33,6 +33,10 @@ const tissueColors: Record<string, string> = {
   esophagus: '#c881aa',
   thyroid_gland: '#bd77bf',
 };
+// Saturated yellow: ivory vanishes on bright CT bone in the slices. Matches scan3d BONE_COLOR.
+const boneColor = '#f5cc00';
+// A pinned model keeps its own group, so its bones are found by name.
+const modelBones = new Map([['mrsegmentator', new Set(['spine', 'sacrum', 'left_hip', 'right_hip', 'left_femur', 'right_femur'])]]);
 const nameOf = (structure: Structure) => structure.id.split(':').at(-1)!.toLowerCase();
 
 export function presentStructures(structures: Structure[]): Structure[] {
@@ -44,7 +48,7 @@ export function presentStructures(structures: Structure[]): Structure[] {
     if (group === 'arteries') color = '#ed2222';
     else if (group === 'veins') color = '#224ce6';
     else if (group === 'airways') color = name.includes('wall') ? '#cccccc' : '#eeeeee';
-    else if (group === 'bones') color = '#d8d2c5';
+    else if (group === 'bones' || modelBones.get(structure.task)?.has(name)) color = boneColor;
     return color ? { ...structure, color } : structure;
   });
 }
