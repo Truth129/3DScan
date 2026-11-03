@@ -953,9 +953,11 @@ describe('the Library', () => {
     await heartbeat();
     expect(root.content).toContain('Someone else or another tab saved a newer version of this case.');
     vi.mocked(api.revision).mockClear();
+    const focus = vi.spyOn(root.named('case-button')!, 'focus');
     await press(root.button('Show the newer version'));
     expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'later');
     expect(root.content).not.toContain('saved a newer version');
+    expect(focus, 'the button pressed has gone').toHaveBeenCalled();
   });
   it('reads the series again for the series page, because one can be added while it is closed', async () => {
     workstation([amd]);

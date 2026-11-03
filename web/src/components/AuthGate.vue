@@ -56,6 +56,10 @@ let reads = 0,
   release = () => {},
   heartbeat = 0,
   stopWatchingTabs = () => {};
+// Closing a dialog returns the focus only from inside it, and the link form's buttons can leave with the form, so
+// App's focus is kept here. An App mounted by the uncover has its own first focus, such as the Library's search.
+let appCovered = false,
+  appFocus: HTMLElement | undefined;
 const stack = new MutationObserver(keepOnTop);
 
 /** The top layer stacks in opening order, so opening again puts this above every other modal. */
@@ -78,16 +82,21 @@ function stayOpen() {
 }
 function cover() {
   if (covered.value) return;
+  const active = document.activeElement;
+  appCovered = !!appUser.value;
+  appFocus = active instanceof HTMLElement && active !== document.body ? active : undefined;
   covered.value = true;
   raise();
 }
 function uncover() {
+  const returning = covered.value && appCovered;
   covered.value = false;
   message.value = '';
   password.value = '';
   panel.value?.close();
   release();
   held = undefined;
+  if (returning) void nextTick(() => (appFocus?.isConnected ? appFocus : document.querySelector<HTMLElement>('.case-button'))?.focus());
 }
 /** Nothing of the last person may reach the next, and a reload keeps a launch hash. */
 function leave() {

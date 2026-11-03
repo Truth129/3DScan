@@ -757,6 +757,11 @@ function closeLibrary() {
   libraryOpen.value = false;
   void nextTick(() => caseButton.value?.focus());
 }
+/** The banner leaves with its button, so the focus goes where closing the Library puts it. */
+function showNewerVersion(id: string) {
+  void openCase(id);
+  void nextTick(() => caseButton.value?.focus());
+}
 /** Reopening the open case would drop the review view, and this row only asks to see it again. */
 function openFromLibrary(id: string) {
   if (id === activeCase.value?.id) closeLibrary();
@@ -1381,7 +1386,7 @@ onBeforeUnmount(() => {
       </div>
       <div v-else-if="activeCase && newerVersion" class="job-banner" role="status">
         <div><strong>Someone else or another tab saved a newer version of this case.</strong><span>Work on the version shown here cannot be saved.</span></div>
-        <button class="button secondary compact" type="button" @click="openCase(activeCase.id)">Show the newer version</button>
+        <button class="button secondary compact" type="button" @click="showNewerVersion(activeCase.id)">Show the newer version</button>
       </div>
       <div class="worker-status">
         <span class="live-dot"></span><span>{{ workerText }}</span>

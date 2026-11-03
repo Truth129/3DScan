@@ -273,6 +273,19 @@ describe('a set-password link', () => {
     expect(app(view).className).not.toContain('session-covered');
     expect(reload).not.toHaveBeenCalled();
   });
+  it('gives the focus back to the app after Sign in instead, whose button has gone', async () => {
+    const view = await gate(seen(asha));
+    (view.root as unknown as { connected: boolean }).connected = true;
+    app(view).focus();
+    opened('asha');
+    tab.dispatchEvent(new Event('hashchange'));
+    await settled();
+    expect(document.activeElement).toBe(named(view, 'new-password'));
+    click(view.button('Sign in instead'));
+    await settled();
+    expect(overlay(view).open).toBe(false);
+    expect(document.activeElement).toBe(app(view));
+  });
 });
 
 describe('a session that ends in use', () => {
