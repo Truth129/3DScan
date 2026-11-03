@@ -147,7 +147,7 @@ def _read_cached(cache_dir, key):
         return None
 
 
-def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=0.0, source=None, validate=None):
+def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=0.0, source=None, validate=None, case_id=None):
     """Publish only a complete, verified generation; interrupted writes are inert."""
     destination = _entry(cache_dir, descriptor["key"])
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -183,7 +183,14 @@ def _write(cache_dir, descriptor, values, *, source_slope=1.0, source_intercept=
             raise ValueError("Review volume input changed while reading; retry the request")
         if validate is not None:
             validate()
-        record = {"implementation": _IMPLEMENTATION, "descriptor": descriptor, "descriptor_sha256": _identity(descriptor), "files": files}
+        # The case lets Delete forever find this entry. Keys and descriptors leave it out, so chunk URLs and ETags do not change.
+        record = {
+            "implementation": _IMPLEMENTATION,
+            "descriptor": descriptor,
+            "descriptor_sha256": _identity(descriptor),
+            "files": files,
+            **({"case_id": case_id} if case_id else {}),
+        }
         (temporary / "manifest.json").write_text(json.dumps(record, sort_keys=True, separators=(",", ":"), allow_nan=False))
         # A previously corrupted generation is disposable; original case files
         # are outside this content-addressed cache and are never touched.
@@ -201,7 +208,7 @@ def ct_volume(ct_path, cache_dir, quality="full"):
     return scalar_volume(ct_path, cache_dir, quality)
 
 
-def scalar_volume(ct_path, cache_dir, quality="full", *, presentation=None, reference_image_id=None):
+def scalar_volume(ct_path, cache_dir, quality="full", *, presentation=None, reference_image_id=None, case_id=None):
     """Transport a scalar image using an explicit intensity/display policy.
 
     The schema-1 ``ct`` kind is retained as a transport compatibility label;
@@ -288,7 +295,7 @@ def scalar_volume(ct_path, cache_dir, quality="full", *, presentation=None, refe
             "slope": slope if preserve_raw else 1.0,
             "intercept": intercept if preserve_raw else 0.0,
         }
-        return _write(cache_dir, descriptor, values, source_slope=slope, source_intercept=intercept, source=(ct_path, source_digest))
+        return _write(cache_dir, descriptor, values, source_slope=slope, source_intercept=intercept, source=(ct_path, source_digest), case_id=case_id)
 
 
 def display_margin(value):
@@ -355,7 +362,7 @@ def _margin_crop(values, affine, margin_mm):
     return origin, output
 
 
-def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, reference_image_id=None, validate=None):
+def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, reference_image_id=None, validate=None, case_id=None):
     """Return a binary crop in the chosen native or matched preview grid."""
     margin_mm = display_margin(margin_mm)
     if validate is not None:
@@ -431,7 +438,7 @@ def mask_volume(ct_path, mask_path, cache_dir, quality="full", margin_mm=0, *, r
             "empty": bounds is None,
             **({"display_margin_mm": margin_mm} if margin_mm else {}),
         }
-        return _write(cache_dir, descriptor, cropped, source=(mask_path, source_digest), validate=validate)
+        return _write(cache_dir, descriptor, cropped, source=(mask_path, source_digest), validate=validate, case_id=case_id)
 
 
 def chunk_path(cache_dir, descriptor, key, index):

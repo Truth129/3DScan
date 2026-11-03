@@ -141,6 +141,7 @@ build.
     subprocesses, and nnInteractive in the supervised child `scan3d/interactive_worker.py`.
   - The API process never imports PyTorch, so a segmentation job resolves its device in a
     short-lived child, `segmentation._resolve_device`.
+- **Shared caches.** A review-cache writer passes `case_id`, so Delete forever can find its entries.
 - **Inference paths.** See [ARCHITECTURE.md](ARCHITECTURE.md#inference-paths).
   - Spell the name `inference_path` everywhere. `path`, `runtime` and `target` collide with locals.
   - A child of an added path takes its environment only from `InferencePath.environment()`.

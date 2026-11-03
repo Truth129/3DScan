@@ -167,7 +167,9 @@ def add_routes(app, service):
 
         revision = service.ct_revision(case_id, revision_id)
         asset = service.store.resolve_reference(revision)
-        descriptor = scalar_volume(asset["file_path"], review_cache, quality, presentation=asset["presentation"], reference_image_id=asset["id"])
+        descriptor = scalar_volume(
+            asset["file_path"], review_cache, quality, presentation=asset["presentation"], reference_image_id=asset["id"], case_id=case_id
+        )
         return with_image_context(descriptor, asset)
 
     def review_mask(case_id, revision_id, structure_id, parent=False, quality="full", margin_mm=0):
@@ -188,7 +190,9 @@ def add_routes(app, service):
         selected_asset = service.store.resolve_reference(selected)
         if selected_asset["id"] != asset["id"]:
             raise ValueError("Comparison masks must belong to the same reference image")
-        descriptor = mask_volume(asset["file_path"], structure["mask_file"], review_cache, quality, margin_mm=margin_mm, reference_image_id=asset["id"])
+        descriptor = mask_volume(
+            asset["file_path"], structure["mask_file"], review_cache, quality, margin_mm=margin_mm, reference_image_id=asset["id"], case_id=case_id
+        )
         return with_image_context(descriptor, asset)
 
     def review_volume_mask(case_id, revision_id, structure_ids, margin_mm=0, cancelled=None):
@@ -209,6 +213,7 @@ def add_routes(app, service):
             margin_mm,
             reference_image_id=asset["id"],
             cancelled=cancelled,
+            case_id=case_id,
         )
         return with_image_context(descriptor, asset)
 
@@ -230,6 +235,7 @@ def add_routes(app, service):
             review_cache,
             reference_image_id=asset["id"],
             cancelled=cancelled,
+            case_id=case_id,
         )
         return with_image_context(descriptor, asset)
 

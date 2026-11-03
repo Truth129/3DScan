@@ -366,6 +366,7 @@ def _available_memory():
 def prepare_export(revision, case_id, settings, request: ExportRequest, *, legacy=False):
     """Validate budgets/references and return a ready-to-stream HTML plan."""
     from . import review_volume
+    from .image_assets import reference_image
     import numpy as np
 
     layers = request.layers
@@ -412,8 +413,15 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
         for identity in mask_ids:
             _source_preflight(structures[identity]["mask_file"])
         reference_image_id = image_context["reference_image_id"] if image_context else None
+        # Each entry is keyed by its image, so no other case can share it. A legacy revision resolves the image here.
+        cache_image_id = reference_image_id or reference_image(revision)["id"]
         ct = review_volume.scalar_volume(
-            revision["ct_file"], cache, "full", presentation=image_context["presentation"] if image_context else None, reference_image_id=reference_image_id
+            revision["ct_file"],
+            cache,
+            "full",
+            presentation=image_context["presentation"] if image_context else None,
+            reference_image_id=cache_image_id,
+            case_id=case_id,
         )
         if image_context is not None:
             ct = {**ct, **image_context}
@@ -422,7 +430,13 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
         mask_bytes = 0
         for identity, margin_mm in mask_requests:
             descriptor = review_volume.mask_volume(
-                revision["ct_file"], structures[identity]["mask_file"], cache, "full", margin_mm=margin_mm, reference_image_id=reference_image_id
+                revision["ct_file"],
+                structures[identity]["mask_file"],
+                cache,
+                "full",
+                margin_mm=margin_mm,
+                reference_image_id=cache_image_id,
+                case_id=case_id,
             )
             if reference_image_id is not None:
                 descriptor = {**descriptor, "reference_image_id": reference_image_id}
@@ -438,8 +452,12 @@ def prepare_export(revision, case_id, settings, request: ExportRequest, *, legac
                 [(identity, structures[identity]["mask_file"]) for identity in union_ids],
                 cache,
                 state.volume_mask.margin_mm,
-                reference_image_id=reference_image_id,
+                reference_image_id=cache_image_id,
+                case_id=case_id,
             )
+            if reference_image_id is None:
+                # The union stores its image in the descriptor, and a legacy bundle embeds none, as before.
+                descriptor = {**descriptor, "reference_image_id": None}
             if mask_bytes + descriptor["byte_length"] > MAX_MASK_BYTES:
                 raise ExportTooLarge("Selected mask crops exceed the 192 MiB portable viewer limit; select fewer plane overlays")
             masks.append((f"volume-mask-union:{descriptor['key']}", descriptor))

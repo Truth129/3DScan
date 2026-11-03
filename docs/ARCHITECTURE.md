@@ -140,8 +140,11 @@ removes sessions, so a restore revives no sign-in.
 
 `case_opened` holds when each account last opened each case, which orders that account's list. A
 `trash` row hides its case and nothing on disk moves, so a restored case keeps its files and
-revisions. While a case's `trash` row is `purging` or `purged`, triggers refuse any insert for its
-ID, in this build or an older one, so a deleted case never comes back.
+revisions.
+
+While a case's `trash` row is `purging` or `purged`, triggers refuse any insert for its ID, in this
+build or an older one, so a deleted case never comes back. Each review-cache entry's record names
+its case, outside its key, so Delete forever can find the entry.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.

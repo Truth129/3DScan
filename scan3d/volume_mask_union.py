@@ -110,7 +110,7 @@ def _pool_cached_mask(cache_dir, descriptor, output, crop_origin, native_shape, 
                 raise ValueError("Cached native mask has an incorrect chunk length")
 
 
-def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, reference_image_id=None, cancelled=None):
+def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, reference_image_id=None, cancelled=None, case_id=None):
     """Return a source-bound, content-addressed union presentation descriptor.
 
     ``masks`` is an iterable of (public structure ID, native binary mask path).
@@ -128,10 +128,10 @@ def volume_mask_union(reference_path, masks, cache_dir, margin_mm=0, *, referenc
         selected[structure_id] = path
     if not selected:
         raise ValueError("Select at least one structure for volume masking")
-    return _presentation_union(reference_path, sorted(selected.items()), cache_dir, margin_mm, reference_image_id, cancelled, labels=False)
+    return _presentation_union(reference_path, sorted(selected.items()), cache_dir, margin_mm, reference_image_id, cancelled, labels=False, case_id=case_id)
 
 
-def volume_label_union(reference_path, masks, cache_dir, *, reference_image_id=None, cancelled=None):
+def volume_label_union(reference_path, masks, cache_dir, *, reference_image_id=None, cancelled=None, case_id=None):
     """Return a source-bound label presentation descriptor for colouring the volume.
 
     ``masks`` is an ordered iterable of (public structure ID, native binary mask
@@ -150,10 +150,10 @@ def volume_label_union(reference_path, masks, cache_dir, *, reference_image_id=N
         raise ValueError("Select at least one structure to colour the volume")
     if len(ordered) > _MAX_LABELS:
         raise ValueError(f"Colour at most {_MAX_LABELS} structures in the volume")
-    return _presentation_union(reference_path, ordered, cache_dir, 0, reference_image_id, cancelled, labels=True)
+    return _presentation_union(reference_path, ordered, cache_dir, 0, reference_image_id, cancelled, labels=True, case_id=case_id)
 
 
-def _presentation_union(reference_path, selected, cache_dir, margin_mm, reference_image_id, cancelled, *, labels):
+def _presentation_union(reference_path, selected, cache_dir, margin_mm, reference_image_id, cancelled, *, labels, case_id=None):
     margin_mm = review_volume.display_margin(margin_mm)
     _cancelled(cancelled)
     reference_path = Path(reference_path)
@@ -198,7 +198,9 @@ def _presentation_union(reference_path, selected, cache_dir, margin_mm, referenc
             # pooling. Only one original mask is decoded at a time; its crop is
             # an immutable reusable cache, never an edited measurement mask.
             descriptors.append(
-                review_volume.mask_volume(reference_path, path, cache_dir, "full", margin_mm, reference_image_id=reference_image_id, validate=validate)
+                review_volume.mask_volume(
+                    reference_path, path, cache_dir, "full", margin_mm, reference_image_id=reference_image_id, validate=validate, case_id=case_id
+                )
             )
         validate()
         nonempty = [(label, entry) for label, entry in enumerate(descriptors, start=1) if not entry["empty"]]
@@ -252,4 +254,4 @@ def _presentation_union(reference_path, selected, cache_dir, margin_mm, referenc
         if labels:
             descriptor["volume_label_union"] = True
             descriptor["labels"] = [structure_id for structure_id, _, _ in inputs]
-        return review_volume._write(cache_dir, descriptor, output, validate=validate)
+        return review_volume._write(cache_dir, descriptor, output, validate=validate, case_id=case_id)
