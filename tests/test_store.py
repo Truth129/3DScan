@@ -116,7 +116,7 @@ def test_opening_an_older_database_summarizes_its_cases(tmp_path):
     Store(tmp_path)
     with store.connection() as con:
         assert [row["case_id"] for row in con.execute("SELECT case_id FROM case_summaries")] == [record["id"]]
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_the_write_log_stays_open_and_can_still_be_checkpointed(tmp_path):

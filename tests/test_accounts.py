@@ -246,6 +246,15 @@ def test_a_session_slides_at_most_every_ten_minutes_and_keeps_its_cookie_name(ri
     assert datetime.fromisoformat(rows(rig, "SELECT expires_at FROM sessions")[0][0]) > datetime.now(timezone.utc) + timedelta(days=29)
 
 
+def test_a_session_records_when_its_person_was_last_seen(rig):
+    sign_in(rig)
+    ((user_id, signed_in),) = rows(rig, "SELECT user_id,seen_at FROM last_seen")
+    assert user_id == rig.user_id
+    session_time(rig, last_seen_at=ago(minutes=11))
+    assert rig.http.get("/api/cases").status_code == 200
+    assert rows(rig, "SELECT seen_at FROM last_seen")[0][0] > signed_in
+
+
 def test_a_burst_of_reads_slides_a_session_once(rig, monkeypatch):
     token = sign_in(rig).headers["set-cookie"].split(";")[0].split("=", 1)[1]
     session_time(rig, last_seen_at=ago(minutes=11))
@@ -611,18 +620,26 @@ def test_a_failed_audit_write_fails_the_request_before_its_handler_runs(rig, mon
     assert http.post("/api/cases/demo").status_code == 500 and ran == []
 
 
-def test_a_backup_drops_sessions_but_keeps_accounts_and_audit(rig, tmp_path):
+def test_a_backup_drops_sessions_and_links_but_keeps_accounts_and_audit(rig, tmp_path):
     sign_in(rig)
     hashed = rows(rig, "SELECT token_hash FROM sessions")[0][0]
+    link = token_hash(secrets.token_urlsafe(32))
+    with rig.store.connection() as con:
+        con.execute(
+            "INSERT INTO one_time_codes(token_hash,purpose,user_id,created_by,expires_at) VALUES (?,?,?,?,?)",
+            (link, "reset", rig.user_id, rig.user_id, (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(timespec="microseconds")),
+        )
     manifest = backup(rig.service.settings.data_dir, tmp_path / "backups", log=lambda message: None)
     snapshot = tmp_path / "backups" / manifest["snapshot"] / "scan3d.sqlite3"
     copy = sqlite3.connect(snapshot)
     assert copy.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+    assert copy.execute("SELECT COUNT(*) FROM one_time_codes").fetchone()[0] == 0
     assert copy.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
     assert copy.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] >= 2
     copy.close()
-    assert hashed.encode() not in snapshot.read_bytes()
+    assert hashed.encode() not in snapshot.read_bytes() and link.encode() not in snapshot.read_bytes()
     assert rows(rig, "SELECT token_hash FROM sessions") == [(hashed,)]
+    assert rows(rig, "SELECT token_hash FROM one_time_codes") == [(link,)]
 
 
 def test_a_backup_of_a_database_with_no_sessions_table_still_works(tmp_path):
@@ -687,11 +704,12 @@ def test_an_old_database_gains_the_new_tables_without_touching_a_case(tmp_path):
     store = Store(tmp_path)
     record = store.save("cases", {"id": identifier(), "label": "Synthetic"})
     with store.connection() as con:
-        for table in ("users", "sessions", "case_access", "audit_events"):
+        for table in ("users", "sessions", "case_access", "audit_events", "one_time_codes", "last_seen"):
             con.execute(f"DROP TABLE {table}")
         con.execute("PRAGMA user_version=4")
     Store(tmp_path)
     with store.connection() as con:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert con.execute("PRAGMA user_version").fetchone()[0] == 8
         assert con.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+        assert con.execute("SELECT COUNT(*) FROM one_time_codes").fetchone()[0] == con.execute("SELECT COUNT(*) FROM last_seen").fetchone()[0] == 0
         assert json.loads(con.execute("SELECT data FROM cases").fetchone()[0]) == record

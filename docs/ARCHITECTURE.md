@@ -135,9 +135,9 @@ older build after a rollback, makes the list read the full record and never a st
 keeps one idle connection open, because closing the last connection to a WAL database checkpoints it
 and adds milliseconds to every write.
 
-`users`, `sessions`, `case_access` and `audit_events` are ordinary tables beside those records.
-`cases` has no owner column and there are no foreign keys. A backup keeps users and audit and
-removes sessions, so a restore revives no sign-in.
+`users`, `sessions`, `one_time_codes`, `last_seen`, `case_access` and `audit_events` are ordinary
+tables beside those records. `cases` has no owner column and there are no foreign keys. A backup
+keeps users and audit and removes sessions and links, so a restore revives no sign-in.
 
 `case_opened` holds when each account last opened each case, which orders that account's list. A
 `trash` row hides its case and nothing on disk moves, so a restored case keeps its files and
@@ -494,7 +494,8 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
   no owner goes to that admin when an account is added, or at startup in password mode.
 
 **Sessions and passwords.** Only the SHA-256 of a session token is stored. Passwords use scrypt, with
-n=2^17, r=8 and p=1.
+n=2^17, r=8 and p=1. `last_seen` records each person's sign-in and each slide of their session,
+because session rows go at sign-out.
 
 **An open tab.** Each session read, every 60 seconds and on focus, also reads the open case. A tab
 closes a case that answers `Case not found`, and takes only the label from any other answer. Lost

@@ -118,6 +118,14 @@ class Store:
                 CREATE TABLE IF NOT EXISTS case_opened(
                   user_id TEXT NOT NULL, case_id TEXT NOT NULL, opened_at TEXT NOT NULL,
                   PRIMARY KEY(user_id, case_id)) WITHOUT ROWID;
+                -- A link's code is kept only as its SHA-256. A link works once, for a day.
+                CREATE TABLE IF NOT EXISTS one_time_codes(
+                  token_hash TEXT PRIMARY KEY,
+                  purpose TEXT NOT NULL CHECK(purpose IN ('invite','reset')),
+                  user_id TEXT NOT NULL, created_by TEXT NOT NULL, expires_at TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS one_time_code_user ON one_time_codes(user_id);
+                -- When each person last used 3DScan. Sessions go at sign-out, so they cannot say.
+                CREATE TABLE IF NOT EXISTS last_seen(user_id TEXT PRIMARY KEY, seen_at TEXT NOT NULL) WITHOUT ROWID;
                 -- A purged case stays gone: any insert for its ID is refused, at every call site and in older builds.
                 CREATE TRIGGER IF NOT EXISTS cases_stay_purged BEFORE INSERT ON cases
                   WHEN EXISTS(SELECT 1 FROM trash WHERE case_id=NEW.id AND kind='case' AND state IN ('purging','purged'))
@@ -157,6 +165,8 @@ class Store:
                 connection.execute("PRAGMA user_version=6")
             if connection.execute("PRAGMA user_version").fetchone()[0] < 7:
                 connection.execute("PRAGMA user_version=7")
+            if connection.execute("PRAGMA user_version").fetchone()[0] < 8:
+                connection.execute("PRAGMA user_version=8")
         # Closing the last connection to a WAL database checkpoints it and removes the log, which
         # would otherwise add milliseconds to every write. This one stays idle: its read joins
         # the database and finishes, so it holds no transaction and checkpoints still run.

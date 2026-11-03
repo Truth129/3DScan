@@ -162,6 +162,13 @@ class Accounts:
         return adopted
 
     @staticmethod
+    def _seen(con, user_id, moment):
+        con.execute(
+            "INSERT INTO last_seen(user_id,seen_at) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET seen_at=excluded.seen_at",
+            (user_id, _stamp(moment)),
+        )
+
+    @staticmethod
     def _require_admin(con, actor_id):
         """The gate decided at admission. This decides again under the write lock, so a request admitted
         just before a demotion cannot finish. The command line and sign-in off have no one to check."""
@@ -241,6 +248,7 @@ class Accounts:
                 "INSERT INTO sessions(token_hash,user_id,shared_device,created_at,last_seen_at,expires_at) VALUES (?,?,?,?,?,?)",
                 (hashed, account["id"], int(shared_device), _stamp(moment), _stamp(moment), _stamp(moment + lifetime)),
             )
+            self._seen(con, account["id"], moment)
             self._write_audit(con, "session.sign_in", actor_id=account["id"])
         return token, self._principal(account, hashed, shared_device)
 
@@ -264,11 +272,11 @@ class Accounts:
             slid = False
             # A shared device has a hard cap, so it never moves.
             if not row["shared_device"] and moment - datetime.fromisoformat(row["last_seen_at"]) >= SLIDE_INTERVAL:
-                slid = self._slide(con, hashed, row["last_seen_at"], moment)
+                slid = self._slide(con, hashed, row["last_seen_at"], moment, row["id"])
         return self._principal(row, hashed, row["shared_device"], slid)
 
     @staticmethod
-    def _slide(con, hashed, seen, moment):
+    def _slide(con, hashed, seen, moment, user_id):
         """Move a session on, if nothing else did and the write lock is free.
 
         A plain read must never wait on the lock to keep a session fresh. Losing costs nothing,
@@ -280,6 +288,8 @@ class Accounts:
                 "UPDATE sessions SET last_seen_at=?,expires_at=? WHERE token_hash=? AND last_seen_at=?",
                 (_stamp(moment), _stamp(moment + SESSION_LIFETIME), hashed, seen),
             ).rowcount
+            if changed:
+                Accounts._seen(con, user_id, moment)
         except sqlite3.OperationalError:
             return False
         return bool(changed)

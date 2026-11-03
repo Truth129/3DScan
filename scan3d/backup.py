@@ -111,12 +111,13 @@ def backup(data_dir, destination, log=lambda message: print(message, file=sys.st
                 connection.close()
             check = sqlite3.connect(partial / DATABASE)
             try:
-                # A restore must not revive a sign-in, and the tokens' hashes must not linger in free
+                # A restore must not revive a sign-in or a link, and their hashes must not linger in free
                 # pages. This writes only the snapshot; users and audit stay in it.
                 check.execute("PRAGMA secure_delete=ON").fetchall()
-                if check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").fetchone():
-                    check.execute("DELETE FROM sessions")
-                    check.commit()
+                for table in ("sessions", "one_time_codes"):
+                    if check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                        check.execute(f"DELETE FROM {table}")
+                check.commit()
                 integrity = check.execute("PRAGMA integrity_check").fetchone()[0]
                 purged, live = set(), None
                 # A database from before Trash has deleted nothing, so only the contours are left out below.
