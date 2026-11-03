@@ -127,7 +127,8 @@ export const api = {
     try {
       return await request<Job[]>(`${caseUrl(id)}/jobs`);
     } catch (error) {
-      if (error instanceof ApiError && [400, 404].includes(error.status)) return [];
+      // An older server has no such route. A case that has gone is a different answer, and callers need it.
+      if (error instanceof ApiError && [400, 404].includes(error.status) && error.message !== 'Case not found') return [];
       throw error;
     }
   },

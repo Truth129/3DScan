@@ -90,6 +90,33 @@ describe('view export watcher', () => {
     expect(api.job).toHaveBeenCalledOnce();
     expect(failure).not.toHaveBeenCalled();
     expect(watcher.job('view-1')?.status).toBe('running');
+    await vi.advanceTimersByTimeAsync(18000);
+    expect(api.job, 'a slow look, since it can come back from anywhere').toHaveBeenCalledTimes(2);
+  });
+  it('sees a case in Trash through the real list read, with only the server faked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (url: string) => new Response(JSON.stringify({ detail: url.startsWith('/api/jobs/') ? 'Job not found' : 'Case not found' }), { status: 404 }),
+      ),
+    );
+    const { watcher, failure } = fixture();
+    watcher.follow(job('running'));
+    await vi.advanceTimersByTimeAsync(2800);
+    expect(failure).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+  it('hears of a case restored somewhere else', async () => {
+    vi.spyOn(api, 'job')
+      .mockRejectedValueOnce(new ApiError(404, 'Job not found'))
+      .mockResolvedValue(job('completed', { result: sent }));
+    vi.spyOn(api, 'jobs').mockRejectedValue(inTrash);
+    const { watcher, success } = fixture();
+    watcher.follow(job('running'));
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(success).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(success).toHaveBeenCalledOnce();
   });
   it.each([
     ['a send that finished', job('completed', { result: sent }), 'success'],

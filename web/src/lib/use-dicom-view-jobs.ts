@@ -12,6 +12,8 @@ interface DicomViewJobOptions {
   failure: (message: string) => void;
 }
 const POLL_MS = 1400;
+/** A case in Trash can come back from any tab or device, and nothing here would hear of it. */
+const PARKED_MS = 30_000;
 
 /**
  * Follows every view export to its end, whatever the workspace does meanwhile. A send can
@@ -45,14 +47,15 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       options.failure(named(`${reason} A capture of the same image reuses this export, and a different image makes a new series.`, job.case_id));
     }
   }
-  function schedule(id: string) {
+  function schedule(id: string, delay = POLL_MS) {
     timers.set(
       id,
-      setTimeout(() => void poll(id), POLL_MS),
+      setTimeout(() => void poll(id), delay),
     );
   }
   async function poll(id: string) {
     timers.delete(id);
+    parked.delete(id);
     try {
       const next = (await api.job(id)) as DicomViewExportJob;
       if (disposed || !followed.has(id)) return;
@@ -83,8 +86,10 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
         });
     } catch (reason) {
       if (disposed || !followed.has(id)) return;
-      if (caseIsGone(reason)) parked.add(id);
-      else schedule(id);
+      if (caseIsGone(reason)) {
+        parked.add(id);
+        schedule(id, PARKED_MS);
+      } else schedule(id);
     }
   }
   /** One poller per job. A job that has already settled stays settled, whatever an older listing says. */
@@ -113,7 +118,7 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       // The case answers, so it is back, whoever restored it. A person hears how its sends ended.
       for (const id of parked) {
         if (jobs.get(id)?.case_id !== caseId) continue;
-        parked.delete(id);
+        clearTimeout(timers.get(id));
         void poll(id);
       }
       for (const job of listed) if (job.kind === DICOM_VIEW_KIND && job.case_id === caseId && pendingDicomViewExport(job) && !disposed) follow(job);

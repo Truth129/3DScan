@@ -54,6 +54,8 @@ describe('case job recovery', () => {
       }
       globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: 'Storage unavailable' }), { status: 500 }));
       await expect(api.jobs('ct')).rejects.toThrow('Storage unavailable');
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: 'Case not found' }), { status: 404 })));
+      await expect(api.jobs('ct'), 'a case in Trash is not an older server').rejects.toThrow('Case not found');
     } finally {
       globalThis.fetch = original;
     }
