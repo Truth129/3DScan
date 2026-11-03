@@ -236,7 +236,7 @@ def test_http_relationship_preview_recovery_stale_save_and_affected_mask_transpo
     app = create_app(service.settings)
     # Claim the queued operation explicitly through the fixture's deterministic
     # worker. Both API and worker use the same persistent, synthetic store.
-    app.state.service.start = lambda: None
+    app.state.service.start = lambda **_: None
     app.state.service.stop = lambda: None
     with TestClient(app, base_url="http://127.0.0.1") as http:
         prefix = f"/api/cases/{case['id']}/reviews/{draft['id']}"
