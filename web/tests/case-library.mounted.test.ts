@@ -18,6 +18,15 @@ const scan = (id: string, label: string, values: Partial<Case> = {}): Case => ({
 });
 const liver = scan('liver', 'Liver'),
   chest = scan('chest', 'Chest');
+const report: StorageReport = {
+  cases: [
+    { id: 'liver', label: 'Liver', owner: 'Ada', created_at: '2026-11-01T12:00:00Z', trashed_at: null, size: 7 * 1024 ** 2 },
+    { id: 'old', label: 'Old', owner: null, created_at: '2026-11-01T12:00:00Z', trashed_at: '2026-11-02T12:00:00Z', size: 1024 },
+    { label: null, owner: 'Grace', created_at: '2026-10-01T12:00:00Z', size: 3 * 1024 ** 2 },
+  ],
+  totals: { cases: 10 * 1024 ** 2, trash: 1024, shared_caches: 20 * 1024 ** 2, other: 30 * 1024 ** 2, rebuildable: 15 * 1024 ** 2 },
+  disk: { total: 100 * 1024 ** 2, free: 40 * 1024 ** 2 },
+};
 
 function library(values: Record<string, unknown>) {
   const view = mount(CaseLibrary, () => ({ cases: [liver, chest], stamp: 0, closable: true, importing: false, mrEnabled: false, notice: NOTICE, ...values }));
@@ -357,9 +366,20 @@ describe('Delete forever', () => {
 
   it('asks for your password and deletes the case', async () => {
     signedIn();
+    // The read after the purge never answers, so the tab can show only what it kept.
+    vi.spyOn(api, 'storage')
+      .mockResolvedValueOnce(report)
+      .mockReturnValue(new Promise(() => {}));
     const purge = vi.spyOn(api, 'purge').mockResolvedValue({ id: 'old' }),
       purged = vi.fn(),
-      view = await opened([old], { onPurged: purged });
+      view = await trashTab([old], { onPurged: purged });
+    click(view.tab('Storage'));
+    await settled();
+    expect(view.text()).toContain('Old · In Trash');
+    click(view.tab('Trash'));
+    await settled();
+    click(view.rowDelete());
+    await settled();
     expect(view.dialog().open).toBe(true);
     expect(view.dialog().textContent).toContain('Old and everything made from it will leave this workstation. This cannot be undone.');
     expect(stays(view)).toContain('Images held in web browser caches, until the browser clears them or you sign out');
@@ -374,6 +394,10 @@ describe('Delete forever', () => {
     expect(view.dialog()).toBeUndefined();
     expect(view.text()).toContain('Deleted forever.');
     expect(document.activeElement).toBe(view.search());
+    click(view.tab('Storage'));
+    await settled();
+    expect(view.text()).toContain('Measuring storage…');
+    expect(view.text(), 'the deleted case').not.toContain('Old · In Trash');
   });
   it('asks only for a confirmation with sign-in off', async () => {
     const purge = vi.spyOn(api, 'purge').mockResolvedValue({ id: 'old' }),
@@ -555,15 +579,6 @@ describe('sizes', () => {
 });
 
 describe('Storage', () => {
-  const report: StorageReport = {
-    cases: [
-      { id: 'liver', label: 'Liver', owner: 'Ada', created_at: '2026-11-01T12:00:00Z', trashed_at: null, size: 7 * 1024 ** 2 },
-      { id: 'old', label: 'Old', owner: null, created_at: '2026-11-01T12:00:00Z', trashed_at: '2026-11-02T12:00:00Z', size: 1024 },
-      { label: null, owner: 'Grace', created_at: '2026-10-01T12:00:00Z', size: 3 * 1024 ** 2 },
-    ],
-    totals: { cases: 10 * 1024 ** 2, trash: 1024, shared_caches: 20 * 1024 ** 2, other: 30 * 1024 ** 2, rebuildable: 15 * 1024 ** 2 },
-    disk: { total: 100 * 1024 ** 2, free: 40 * 1024 ** 2 },
-  };
   async function storageTab() {
     const read = vi.spyOn(api, 'storage').mockResolvedValue(report),
       view = library({});

@@ -194,6 +194,9 @@ function dropFromTrash(id: string) {
 function purged(id: string) {
   purgedCount.value++;
   dropFromTrash(id);
+  // It still lists the case and counts its bytes, so Storage measures again rather than show it.
+  storage.value = undefined;
+  clearNote.value = '';
   emit('purged', id);
 }
 /** Restored or deleted in another tab or device. Said aloud, or a vanished row looks like success. */
