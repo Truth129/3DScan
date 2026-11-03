@@ -205,12 +205,14 @@ function gone(id: string) {
   dropFromTrash(id);
 }
 /** The rows the dialog acted on may have gone, so the cursor goes to search. */
-function purgeClosed() {
+async function purgeClosed() {
   purging.value = undefined;
   const deleted = purgedCount.value === 1 ? 'Deleted forever.' : purgedCount.value ? `${purgedCount.value} cases deleted forever.` : '',
     left = goneCount.value === 1 ? '1 case had already left Trash.' : goneCount.value ? `${goneCount.value} cases had already left Trash.` : '';
   trashNotice.value = [deleted, left].filter(Boolean).join(' ');
   void readTrash();
+  // Until the modal dialog has gone the page is inert and cannot take the focus.
+  await nextTick();
   focusSearch();
 }
 async function clearCaches() {
