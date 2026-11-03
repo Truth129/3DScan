@@ -626,9 +626,10 @@ describe('the Library', () => {
         await press(root.named('case-button'));
         return { root, job };
       }
-      it('waits while its case is in Trash, and asks again on Undo', async () => {
+      it('waits while its case is in Trash, and reports it on Undo', async () => {
         const { root, job } = await following();
         job.mockRejectedValue(new ApiError(404, 'Job not found'));
+        vi.mocked(api.jobs).mockRejectedValue(new ApiError(404, 'Case not found'));
         await press(root.button('Move to Trash'));
         await pause();
         expect(root.content).not.toContain('can no longer be followed');
@@ -636,15 +637,9 @@ describe('the Library', () => {
         await pause();
         expect(job, 'parked until the case is back').not.toHaveBeenCalled();
         job.mockImplementation(async () => ({ ...sending, status: 'failed', error: 'Delivery not confirmed.' }) as Job);
+        vi.mocked(api.jobs).mockImplementation(async () => []);
         await undo(root);
         await vi.waitFor(() => expect(root.content).toContain('Delivery not confirmed.'));
-      });
-      it('carries on when Trash is refused', async () => {
-        const { root, job } = await following();
-        vi.mocked(api.trash).mockRejectedValue(new TypeError('Failed to fetch'));
-        await press(root.button('Move to Trash'));
-        job.mockRejectedValue(new ApiError(404, 'Job not found'));
-        await vi.waitFor(() => expect(root.content).toContain('can no longer be followed'));
       });
     });
     it('reopens on Undo when the list cannot be read', async () => {
@@ -717,6 +712,7 @@ describe('the Library', () => {
       expect(api.case).not.toHaveBeenCalled();
       expect(api.trashed, 'the row goes').toHaveBeenCalledOnce();
       expect(root.content).toContain('Case restored.');
+      expect(api.jobs, 'a send still running is followed').toHaveBeenCalledWith('other');
     });
     it('takes Undo away once the Trash tab has restored the case', async () => {
       workstation([amd]);

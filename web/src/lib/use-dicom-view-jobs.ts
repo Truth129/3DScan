@@ -1,5 +1,6 @@
 import { onScopeDispose, shallowReactive } from 'vue';
 import { api, ApiError } from './api';
+import { caseIsGone } from './jobs';
 import { DICOM_VIEW_KIND, dicomViewDelivered, dicomViewExportSummary, pendingDicomViewExport, type DicomViewExportJob } from './dicom-view';
 
 interface DicomViewJobOptions {
@@ -21,7 +22,6 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
   const jobs = shallowReactive(new Map<string, DicomViewExportJob>()),
     timers = new Map<string, ReturnType<typeof setTimeout>>(),
     followed = new Set<string>(),
-    hidden = new Set<string>(),
     parked = new Set<string>();
   let disposed = false;
 
@@ -30,6 +30,7 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
   }
   function settle(job: DicomViewExportJob) {
     followed.delete(job.id);
+    parked.delete(job.id);
     jobs.set(job.id, job);
     if (options.showing(job.id)) return;
     if (dicomViewDelivered(job)) options.success(named(dicomViewExportSummary(job), job.case_id));
@@ -54,24 +55,36 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     timers.delete(id);
     try {
       const next = (await api.job(id)) as DicomViewExportJob;
-      if (disposed) return;
+      if (disposed || !followed.has(id)) return;
       if (pendingDicomViewExport(next)) {
         jobs.set(id, next);
         schedule(id);
       } else settle(next);
     } catch (reason) {
-      if (disposed) return;
-      // The server answered that it has no such job, so nothing will ever settle it.
-      // Anything else may be a restart, and the job can still finish or be interrupted.
-      if (!(reason instanceof ApiError && [400, 404].includes(reason.status))) schedule(id);
-      else if (hidden.has(jobs.get(id)!.case_id)) parked.add(id);
+      if (disposed || !followed.has(id)) return;
+      // Anything but a refusal may be a restart, and the job can still finish or be interrupted.
+      if (reason instanceof ApiError && [400, 404].includes(reason.status)) void askCase(id);
+      else schedule(id);
+    }
+  }
+  /** A case in Trash refuses its jobs too, and a send carries on unseen, so only the case can say a job is lost. */
+  async function askCase(id: string) {
+    const job = jobs.get(id)!;
+    try {
+      const listed = await api.jobs(job.case_id);
+      if (disposed || !followed.has(id)) return;
+      if (listed.some(item => item.id === id)) schedule(id);
       else
         settle({
-          ...jobs.get(id)!,
+          ...job,
           status: 'failed',
           stage: 'Unknown',
           error: 'This DICOM view export can no longer be followed. Check Orthanc before exporting it again.',
         });
+    } catch (reason) {
+      if (disposed || !followed.has(id)) return;
+      if (caseIsGone(reason)) parked.add(id);
+      else schedule(id);
     }
   }
   /** One poller per job. A job that has already settled stays settled, whatever an older listing says. */
@@ -96,23 +109,16 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
   /** Reconnect after a reload, when no dialog holds the job. Opening a case must not depend on this. */
   async function seed(caseId: string) {
     try {
-      for (const job of (await api.jobs(caseId)) as DicomViewExportJob[])
-        if (job.kind === DICOM_VIEW_KIND && job.case_id === caseId && pendingDicomViewExport(job) && !disposed) follow(job);
+      const listed = (await api.jobs(caseId)) as DicomViewExportJob[];
+      // The case answers, so it is back, whoever restored it. A person hears how its sends ended.
+      for (const id of parked) {
+        if (jobs.get(id)?.case_id !== caseId) continue;
+        parked.delete(id);
+        void poll(id);
+      }
+      for (const job of listed) if (job.kind === DICOM_VIEW_KIND && job.case_id === caseId && pendingDicomViewExport(job) && !disposed) follow(job);
     } catch {
       /* The next opening of the case looks again. */
-    }
-  }
-  /** Trash answers for a case's jobs with a 404, and its send carries on unseen. That must not read as a lost send. */
-  function hide(caseId: string) {
-    hidden.add(caseId);
-  }
-  /** Asks at once, so a person hears how a send ended while its case was hidden. */
-  function show(caseId: string) {
-    hidden.delete(caseId);
-    for (const id of parked) {
-      if (jobs.get(id)?.case_id !== caseId) continue;
-      parked.delete(id);
-      void poll(id);
     }
   }
   onScopeDispose(() => {
@@ -120,5 +126,5 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     timers.forEach(clearTimeout);
     timers.clear();
   });
-  return { job: (id: string) => jobs.get(id), follow, seed, hide, show };
+  return { job: (id: string) => jobs.get(id), follow, seed };
 }

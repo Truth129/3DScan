@@ -80,10 +80,11 @@ describe('view export watcher', () => {
     await vi.advanceTimersByTimeAsync(14000);
     expect(poll).toHaveBeenCalledTimes(4);
   });
-  it('waits quietly while the case is hidden, however late the job was followed', async () => {
+  const inTrash = new ApiError(404, 'Case not found');
+  it('waits quietly while the case is in Trash, however late the job was followed', async () => {
     vi.spyOn(api, 'job').mockRejectedValue(new ApiError(404, 'Job not found'));
+    vi.spyOn(api, 'jobs').mockRejectedValue(inTrash);
     const { watcher, failure } = fixture();
-    watcher.hide('case-a');
     watcher.follow(job('running'));
     await vi.advanceTimersByTimeAsync(14000);
     expect(api.job).toHaveBeenCalledOnce();
@@ -94,36 +95,31 @@ describe('view export watcher', () => {
     ['a send that finished', job('completed', { result: sent }), 'success'],
     ['a send that failed', job('failed', { error: 'Orthanc could not deliver this view.' }), 'failure'],
     ['a send that Trash cancelled', job('cancelled'), 'failure'],
-  ])('reports %s once the case is back', async (_name, ended, report) => {
+  ])('reports %s once the case answers again', async (_name, ended, report) => {
     const poll = vi.spyOn(api, 'job').mockRejectedValueOnce(new ApiError(404, 'Job not found')).mockResolvedValue(ended);
+    vi.spyOn(api, 'jobs').mockRejectedValueOnce(inTrash).mockResolvedValue([ended]);
     const fixed = fixture();
-    fixed.watcher.hide('case-a');
     fixed.watcher.follow(job('running'));
     await vi.advanceTimersByTimeAsync(1400);
-    fixed.watcher.show('case-a');
+    await fixed.watcher.seed('case-a');
     await vi.advanceTimersByTimeAsync(0);
     expect(poll).toHaveBeenCalledTimes(2);
     expect(fixed[report as 'success' | 'failure']).toHaveBeenCalledOnce();
     expect(fixed.watcher.job('view-1')?.status).toBe(ended.status);
   });
-  it('keeps polling through an outage, whether or not the case is hidden', async () => {
+  it('keeps polling a job its case still lists, or when the case cannot be asked', async () => {
     vi.spyOn(api, 'job')
-      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new ApiError(404, 'Job not found'))
+      .mockRejectedValueOnce(new ApiError(404, 'Job not found'))
       .mockResolvedValue(job('completed', { result: sent }));
-    const { watcher, success } = fixture();
+    vi.spyOn(api, 'jobs')
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue([job('running')]);
+    const { watcher, success, failure } = fixture();
     watcher.follow(job('running'));
-    watcher.hide('case-a');
-    watcher.show('case-a');
-    await vi.advanceTimersByTimeAsync(2800);
+    await vi.advanceTimersByTimeAsync(4200);
     expect(success).toHaveBeenCalledOnce();
-  });
-  it('leaves other cases alone', async () => {
-    vi.spyOn(api, 'job').mockRejectedValue(new ApiError(404, 'Job not found'));
-    const { watcher, failure } = fixture();
-    watcher.hide('case-b');
-    watcher.follow(job('running'));
-    await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledOnce();
+    expect(failure).not.toHaveBeenCalled();
   });
   it('reports success as a toast', async () => {
     vi.spyOn(api, 'job').mockResolvedValue(job('completed', { result: archived }));
@@ -226,6 +222,7 @@ describe('view export watcher', () => {
     expect(watcher.job('view-1')?.status).toBe('completed');
   });
   it.each([400, 404])('stops at %s, which no restart can change, and says so', async status => {
+    vi.spyOn(api, 'jobs').mockResolvedValue([]);
     const poll = vi.spyOn(api, 'job').mockRejectedValue(new ApiError(status, 'Not found')),
       { watcher, failure } = fixture();
     watcher.follow(job('running'));
