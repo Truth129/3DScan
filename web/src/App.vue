@@ -964,6 +964,7 @@ async function process() {
         selectedModality.value === 'MR'
           ? { series_uid: seriesUid.value, profile: 'unknown', phase: 'unknown' }
           : acquisitionRequest(seriesUid.value, acquisition.value),
+        activeCase.value.active_revision_id,
       ),
     );
     if (revision.value) prepareOpen.value = false;

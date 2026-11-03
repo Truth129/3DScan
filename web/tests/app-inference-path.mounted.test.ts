@@ -969,6 +969,16 @@ describe('the Library', () => {
     await press(root.button('Select series'));
     expect(root.content, 'a stale read').toContain('ADDED');
   });
+  it('names the version it shows when it opens a series, so a newer save elsewhere stays', async () => {
+    workstation([amd]);
+    const series = [{ uid: 'first', description: '', modality: 'CT', slice_count: 1, spacing: [1, 1, 1], warnings: [] }];
+    vi.mocked(api.case).mockResolvedValue({ ...scan, series, selected_series_uid: 'first', phase: 'arterial' });
+    const prepare = vi.spyOn(api, 'process').mockImplementation(async () => ({ ...queued, kind: 'process' }));
+    const root = await start();
+    await press(root.button('Select series'));
+    await press(root.button('Open CT'));
+    expect(prepare).toHaveBeenCalledExactlyOnceWith('case', { series_uid: 'first', profile: 'chest_abdomen', phase: 'arterial' }, 'prepared');
+  });
   it('keeps the newer list when an older read answers last', async () => {
     workstation([amd]);
     let older!: (rows: Case[]) => void;

@@ -129,9 +129,9 @@ unseen.
 
 **A newer version.** When your page is not running its own work and someone else or another tab
 saves a newer version of the case you have open, the header says so within a minute, or when you
-return to the tab. **Show the newer version** opens it. Until then a refine, a correction or
-**Activate** from your page is refused instead of replacing the newer work, and a correction made
-on the old version cannot be saved.
+return to the tab. **Show the newer version** opens it. Until then a refine, a correction, opening
+a series or **Activate** from your page is refused instead of replacing the newer work, and a
+correction made on the old version cannot be saved.
 
 **Someone else's job or draft.** A job someone else started says **started by** and their name in
 the header, and a draft they started says so in the review toolbar. **Discard** on their draft names

@@ -114,7 +114,9 @@ export const api = {
   image: (id: string, imageId: string) => request<ImageAsset>(`${caseUrl(id)}/images/${encodeURIComponent(imageId)}`),
   health: () => request<Record<string, unknown>>('/api/health'),
   demo: () => request<Case>('/api/cases/demo', { method: 'POST' }),
-  process: (id: string, data: ProcessRequest) => request<Job>(`${caseUrl(id)}/process`, json('POST', data)),
+  /** `expected` is the active revision the page shows, as for activate. A case with none sends the labels alone. */
+  process: (id: string, data: ProcessRequest, expected?: string | null) =>
+    request<Job>(`${caseUrl(id)}/process`, json('POST', expected ? { ...data, expected_active_revision_id: expected } : data)),
   segmentationOptions: (modality = 'CT', signal?: AbortSignal) =>
     request<SegmentationCatalog>(`/api/segmentation-options?modality=${encodeURIComponent(modality)}`, { signal }),
   totalSegmentatorLicense: (signal?: AbortSignal) => request<TotalSegmentatorLicenseStatus>('/api/totalsegmentator/license', { signal }),
