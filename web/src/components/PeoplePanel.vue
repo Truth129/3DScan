@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import { caseDate } from '../lib/library';
-import { session } from '../lib/session';
+import { linksRedeemed, session } from '../lib/session';
 import type { OneTimeLink, Person } from '../types';
 
 const linkField = ref<HTMLInputElement>(),
@@ -15,8 +15,9 @@ const people = ref<Person[]>(),
   busy = ref(''),
   refusal = ref(''),
   status = ref(''),
-  link = ref<{ name: string; url: string; expires_at: string }>(),
+  link = ref<{ id: string; name: string; url: string; expires_at: string }>(),
   copied = ref('');
+let reads = 0;
 const me = computed(() => session.value?.user?.id);
 // The server knows no public address, so a link from a loopback page reaches only this computer.
 const localOnly = computed(() => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname));
@@ -41,16 +42,25 @@ function about(person: Person) {
 /** The fragment never reaches a server or its log. The username lets a password manager save the right name. */
 function show(person: Person, made: OneTimeLink) {
   const fragment = new URLSearchParams({ 'set-password': made.code, username: person.username });
-  link.value = { name: person.display_name, url: `${location.origin}${location.pathname}#${fragment}`, expires_at: made.expires_at };
+  link.value = { id: person.id, name: person.display_name, url: `${location.origin}${location.pathname}#${fragment}`, expires_at: made.expires_at };
   copied.value = '';
 }
-/** A failed read keeps the last list. */
+/** A link that was used or has expired, or whose person is disabled, no longer works, so it is not offered. */
+function dropDeadLink() {
+  const holder = people.value?.find(item => item.id === link.value?.id);
+  if (!holder?.link_expires_at || holder.state === 'disabled') link.value = undefined;
+}
+/** A failed read keeps the last list. A change made meanwhile, or a later read, replaces this one. */
 async function read() {
+  const ticket = ++reads;
   readError.value = '';
   try {
-    people.value = await api.people();
+    const next = await api.people();
+    if (ticket !== reads) return;
+    people.value = next;
+    dropDeadLink();
   } catch (value) {
-    readError.value = reason(value);
+    if (ticket === reads) readError.value = reason(value);
   }
 }
 async function act(id: string, run: () => Promise<string>) {
@@ -58,6 +68,8 @@ async function act(id: string, run: () => Promise<string>) {
   // Every control is disabled while this waits, which drops the focus to the page.
   const pressed = document.activeElement as HTMLElement | null,
     shown = link.value;
+  // A read that started before this change must not undo it on screen.
+  reads++;
   busy.value = id;
   refusal.value = status.value = '';
   try {
@@ -69,10 +81,11 @@ async function act(id: string, run: () => Promise<string>) {
   }
   // Once enabled again. A new link takes the focus to Copy link, so Enter copies it; anything else returns it to the control pressed.
   await nextTick();
-  (link.value !== shown ? copyButton.value : pressed)?.focus();
+  (link.value && link.value !== shown ? copyButton.value : pressed)?.focus();
 }
 function replaced(next: Person) {
   people.value = people.value?.map(item => (item.id === next.id ? next : item));
+  dropDeadLink();
   return next;
 }
 const add = () =>
@@ -123,7 +136,16 @@ async function copy() {
   }
 }
 const selectLink = () => linkField.value?.select();
-onMounted(read);
+// A link is used in another browser, so a return to this one reads the list again. One used in this tab is gone at once.
+watch(linksRedeemed, () => {
+  link.value = undefined;
+  void read();
+});
+onMounted(() => {
+  void read();
+  window.addEventListener('focus', read);
+});
+onBeforeUnmount(() => window.removeEventListener('focus', read));
 </script>
 
 <template>

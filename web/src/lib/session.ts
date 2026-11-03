@@ -27,6 +27,8 @@ export const session = shallowRef<SessionView>();
 export const canAdminister = computed(() => session.value?.user?.role !== 'member');
 export const canUseArchive = computed(() => session.value?.user?.archive_access !== false);
 export const ARCHIVE_OFF = 'Your account cannot use the archive. An administrator can turn it on in People.';
+/** Links used in this tab. People reads again on each, because the link it shows may be the one just used. */
+export const linksRedeemed = shallowRef(0);
 let tabs: BroadcastChannel | undefined,
   leaving = false;
 const announce = (change: TabChange) => tabs?.postMessage(change);
@@ -54,6 +56,7 @@ export async function redeemLink(code: string, password: string, sharedDevice: b
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code, password, shared_device: sharedDevice }),
   });
+  linksRedeemed.value++;
   announce('signed-in');
   return view;
 }

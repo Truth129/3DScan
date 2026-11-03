@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PeoplePanel from '../src/components/PeoplePanel.vue';
 import { api, ApiError } from '../src/lib/api';
-import { session } from '../src/lib/session';
+import { redeemLink, session } from '../src/lib/session';
 import type { OneTimeLink, Person } from '../src/types';
 import { click, mount, settled, type MountedElement } from './mounted';
 
@@ -43,11 +43,21 @@ function fill(element: MountedElement, value: string) {
   (element as unknown as HTMLInputElement).value = value;
   element.dispatchEvent(new Event('input'));
 }
+/** Ravi's link, which the list then shows as the server does, until it is used. */
+function linkForRavi(link: OneTimeLink = made) {
+  vi.mocked(api.people).mockResolvedValue([asha, { ...ravi, link_expires_at: link.expires_at }]);
+  return vi.spyOn(api, 'personLink').mockResolvedValue(link);
+}
 
+let tab: EventTarget;
 beforeEach(() => {
   session.value = { mode: 'password', setup_required: false, user: { id: 'asha', username: 'asha', display_name: 'Asha', role: 'admin' } };
   vi.spyOn(api, 'people').mockResolvedValue([asha, ravi]);
   vi.stubGlobal('location', { ...location, hostname: 'review.example', origin: 'https://review.example' });
+  // A window of its own, so a test can dispatch focus.
+  tab = new EventTarget();
+  vi.stubGlobal('addEventListener', tab.addEventListener.bind(tab));
+  vi.stubGlobal('removeEventListener', tab.removeEventListener.bind(tab));
 });
 afterEach(() => {
   session.value = undefined;
@@ -87,7 +97,7 @@ describe('People', () => {
     expect(view.text()).toContain('Copied.');
   });
   it('selects the link when the clipboard refuses', async () => {
-    vi.spyOn(api, 'personLink').mockResolvedValue({ ...made, purpose: 'reset' });
+    linkForRavi({ ...made, purpose: 'reset' });
     vi.stubGlobal('navigator', {});
     const view = panel();
     await settled();
@@ -104,13 +114,52 @@ describe('People', () => {
   });
   it('says a link from a loopback address works only on this computer', async () => {
     vi.stubGlobal('location', { ...location, hostname: '127.0.0.1', origin: 'http://127.0.0.1:9010' });
-    vi.spyOn(api, 'personLink').mockResolvedValue(made);
+    linkForRavi();
     const view = panel();
     await settled();
     click(view.action('ravi', 'Reset link'));
     await settled();
     expect(view.linkField()!.value).toBe('http://127.0.0.1:9010/#set-password=made-up-code&username=ravi');
     expect(view.text()).toContain('This link works only on this computer. Open 3DScan through its HTTPS address to make one for someone else.');
+  });
+  it('reads again when a link is used in this tab or the window regains focus, and drops a link used up', async () => {
+    linkForRavi();
+    const view = panel();
+    await settled();
+    click(view.action('ravi', 'Reset link'));
+    await settled();
+    vi.mocked(api.people).mockClear();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ mode: 'password', user: null, setup_required: false })),
+    );
+    await redeemLink(made.code, 'made up for this test', false);
+    await settled();
+    expect(view.linkField(), 'used in this tab').toBeUndefined();
+    expect(api.people).toHaveBeenCalledOnce();
+    click(view.action('ravi', 'Reset link'));
+    await settled();
+    vi.mocked(api.people).mockResolvedValue([asha, { ...ravi, last_seen_at: '2026-11-04T12:00:00Z' }]);
+    tab.dispatchEvent(new Event('focus'));
+    await settled();
+    expect(view.linkField(), 'used in another browser').toBeUndefined();
+    expect(view.row('ravi').textContent).toContain('Last seen');
+  });
+  it('drops the link of someone it disables, and keeps the focus on the button', async () => {
+    linkForRavi();
+    vi.spyOn(api, 'disablePerson').mockResolvedValue({ ...ravi, state: 'disabled', link_expires_at: made.expires_at });
+    const view = panel();
+    await settled();
+    click(view.action('ravi', 'Reset link'));
+    await settled();
+    const disable = view.action('ravi', 'Disable')!;
+    disable.focus();
+    click(disable);
+    // As a browser does when the focused button is disabled.
+    document.body.focus();
+    await settled();
+    expect(view.linkField()).toBeUndefined();
+    expect(document.activeElement).toBe(disable);
   });
   it('offers no role change, sign-out or disable on your own row', async () => {
     const view = panel();

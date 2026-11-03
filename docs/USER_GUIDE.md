@@ -50,7 +50,8 @@ address, because a link made on `127.0.0.1` works only on that computer.
 
 A member works on every case but has no People or Storage tab, cannot delete forever and cannot
 change the TotalSegmentator key. **Turn archive off** stops a person using Orthanc. Each row shows
-the role, archive access, and when the person was last seen or until when their link works.
+the role, archive access, and when the person was last seen or until when their link works. The tab
+reads the list again when you return to it, and stops showing a link once it no longer works.
 
 **Reset link** makes a new link and ends any earlier one, for a forgotten password or a link sent to
 the wrong place. A reset link for yourself changes your own password. **Sign out everywhere** ends
