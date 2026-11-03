@@ -72,10 +72,10 @@ A case in Trash still uses disk space until you delete it forever. Trash is per 
 case to Trash stops its jobs and they do not restart, but a send Orthanc has started finishes. While
 a case is in Trash, importing it from Orthanc again makes a new case.
 
-**Deleting forever.** On the **Trash** tab, choose **Delete forever** on a row, or **Empty Trash**
-for every case in Trash, whatever the search shows. With sign-in on, enter your password. This
-cannot be undone. Nothing leaves Trash on its own, so the **Cases** tab says when a case has been
-there for over 30 days.
+**Deleting forever.** Only an admin can. On the **Trash** tab, choose **Delete forever** on a row,
+or **Empty Trash** for every case in Trash, whatever the search shows. With sign-in on, enter your
+password. This cannot be undone. Nothing leaves Trash on its own, so the **Cases** tab tells an
+admin when a case has been there for over 30 days. A member sees **Restore** only.
 
 The dialog lists what stays: studies in Orthanc and series already sent, earlier backups, your
 downloads and the source folder, images in browser caches, and the case ID in the activity log. A
@@ -170,7 +170,8 @@ and saves run on a separate queue, so they do not wait behind a segmentation.
 
 Tasks that need a license show **· license required**. Under **Segment CT…**, expand
 **TotalSegmentator license**, enter your key (it begins with `aca_`) and choose **Validate and
-save**. If validation fails, the previous key stays.
+save**. If validation fails, the previous key stays. Only an admin saves or removes the key; a
+member sees its status.
 
 The key is checked with TotalSegmentator's service and stored for all cases in `config.json` under
 `TOTALSEG_HOME_DIR`, never in case records. **Remove key** deletes it, and existing segmentations

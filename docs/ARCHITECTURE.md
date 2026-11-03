@@ -483,6 +483,8 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
 - `check_policy` stops the app from starting if a route has no rule.
 - A `case_access` row is what opens a case, unless the case is in Trash, in both modes. Admins get
   no exception.
+- Delete forever is of kind `trashed_admin`: a member gets 403 before the body is read. The password
+  check after the gate can wait, so `Store.purge_case` checks the role again under its write lock.
 - A case scope is a user ID or `EVERY_CASE`, never `None`, and only the built-in local user holds
   `EVERY_CASE`.
 - `storage_rows` reads every case. A label reads only for its owner, and another owner's row gives

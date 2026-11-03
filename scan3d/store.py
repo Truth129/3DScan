@@ -349,7 +349,7 @@ class Store:
 
     @staticmethod
     def _purge_refusal(con, case_id, busy):
-        """Why this case cannot be deleted forever now, raised. Not yours is the gate's 404, before this."""
+        """Why this case cannot be deleted forever now, raised. Not an admin is the gate's 403, before this."""
         if con.execute("SELECT 1 FROM trash WHERE case_id=? AND kind='case' AND state='trashed'", (case_id,)).fetchone() is None:
             raise NotFound("Case not found")
         # Trash flagged it to stop, and a job that never started holds no file, so only a running one waits.
@@ -373,6 +373,8 @@ class Store:
         safe_id(case_id)
         with self.connection() as con:
             con.execute("BEGIN IMMEDIATE")
+            # The gate decided before the password check, which can wait, and a demotion meanwhile must stop the purge.
+            Accounts._require_admin(con, actor_id)
             self._purge_refusal(con, case_id, busy)
             counts = {
                 table: con.execute(f"DELETE FROM {table} WHERE case_id=?", (case_id,)).rowcount

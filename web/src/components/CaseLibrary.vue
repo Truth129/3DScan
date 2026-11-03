@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import { caseDate, filterCases, formatSize, overdueInTrash, statusLabel } from '../lib/library';
-import { session } from '../lib/session';
+import { canAdminister } from '../lib/session';
 import type { Case, StorageReport, StorageRow } from '../types';
 import DeleteForeverDialog from './DeleteForeverDialog.vue';
 
@@ -49,8 +49,6 @@ const purging = ref<Case[]>(),
   clearRefusal = ref('');
 const shownCases = computed(() => filterCases(props.cases, query.value)),
   shownTrash = computed(() => filterCases(trashed.value, query.value)),
-  // `session` is unset in App's test suites, and with sign-in off the user is an admin.
-  storageOffered = computed(() => session.value?.user?.role !== 'member'),
   totals = computed(() => {
     if (!storage.value) return [];
     const { cases, trash, shared_caches, other } = storage.value.totals;
@@ -256,7 +254,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
       <button :class="{ active: tab === 'trash' }" type="button" @click="tab = 'trash'">
         Trash<span v-if="trashed.length" class="tab-count">{{ trashed.length }}</span>
       </button>
-      <button v-if="storageOffered" :class="{ active: tab === 'storage' }" type="button" @click="showStorage">Storage</button>
+      <button v-if="canAdminister" :class="{ active: tab === 'storage' }" type="button" @click="showStorage">Storage</button>
       <button v-if="closable" type="button" class="panel-hide inspector-hide" aria-label="Close Library" title="Close Library" @click="emit('close')">×</button>
     </header>
     <div class="case-library-body">
@@ -272,7 +270,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
         @keydown.enter.prevent="openFirstMatch"
       />
       <template v-if="tab === 'cases'">
-        <div v-if="overdue" class="case-library-overdue">
+        <div v-if="overdue && canAdminister" class="case-library-overdue">
           <p class="help">{{ overdueText }}</p>
           <button class="text-button" type="button" @click="tab = 'trash'">Open Trash</button>
         </div>
@@ -314,8 +312,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
       </template>
       <template v-else-if="tab === 'trash'">
         <div class="case-library-trash-head">
-          <p class="help">Cases in Trash still use disk space. Delete forever frees it and cannot be undone.</p>
-          <button v-if="trashed.length" class="button secondary compact trash-empty" type="button" @click="askPurge(trashed, $event)">Empty Trash</button>
+          <p v-if="canAdminister" class="help">Cases in Trash still use disk space. Delete forever frees it and cannot be undone.</p>
+          <p v-else class="help">Cases in Trash still use disk space. An administrator can delete them forever.</p>
+          <button v-if="canAdminister && trashed.length" class="button secondary compact trash-empty" type="button" @click="askPurge(trashed, $event)">
+            Empty Trash
+          </button>
         </div>
         <p v-if="trashNotice" class="help" role="status">{{ trashNotice }}</p>
         <p v-if="!trashed.length" class="empty-search">Trash is empty.</p>
@@ -327,7 +328,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
               ><small>{{ meta(item) }}</small>
             </div>
             <button class="text-button" type="button" @click="bringBack(item.id, $event)">Restore</button>
-            <button class="text-button case-row-delete" type="button" @click="askPurge([item], $event)">Delete forever</button>
+            <button v-if="canAdminister" class="text-button case-row-delete" type="button" @click="askPurge([item], $event)">Delete forever</button>
           </li>
         </ul>
       </template>

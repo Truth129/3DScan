@@ -16,7 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import __version__, api_cases, api_imports, api_reviews, api_session, api_system, api_viewer
 from .access import SessionGate, check_policy
 from .config import Settings
-from .errors import Conflict, NotFound
+from .errors import Conflict, Forbidden, NotFound
 from .orthanc import OrthancChanged, OrthancError
 from .service import Service
 from .store import ReviewConflict
@@ -156,6 +156,7 @@ def create_app(settings: Settings | None = None):
     no_store = {"Cache-Control": "no-store"}
     for error, status, headers in (
         (ValueError, 400, None),
+        (Forbidden, 403, None),
         (NotFound, 404, None),
         (ReviewConflict, 409, None),
         (ImportConflict, 409, None),

@@ -295,7 +295,7 @@ def test_the_policy_refuses_a_trashed_rule_on_a_route_with_no_case_id(tmp_path, 
 
 
 def test_every_kind_a_rule_names_is_one_the_gate_decides():
-    kinds = {"public", "off_only", "signed_in", "admin", "archive", "job", "upload", "case", "case_archive", "trashed"}
+    kinds = {"public", "off_only", "signed_in", "admin", "archive", "job", "upload", "case", "case_archive", "trashed", "trashed_admin"}
     assert {rule.kind for rule in RULES.values()} == kinds
 
 

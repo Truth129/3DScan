@@ -1,4 +1,4 @@
-import { shallowRef } from 'vue';
+import { computed, shallowRef } from 'vue';
 import { ApiError, request } from './api';
 import { waitForSession } from './api-fetch';
 
@@ -21,6 +21,8 @@ const LAST_USER_KEY = 'scan3d-last-user';
 
 /** The session as last read. AuthGate keeps it current, so a component can follow it without a prop. */
 export const session = shallowRef<SessionView>();
+/** `session` is unset in App's test suites, which run as sign-in off does: one administrator. */
+export const canAdminister = computed(() => session.value?.user?.role !== 'member');
 let tabs: BroadcastChannel | undefined,
   leaving = false;
 const announce = (change: TabChange) => tabs?.postMessage(change);

@@ -260,6 +260,24 @@ describe('Trash', () => {
     expect(restore).toHaveBeenCalledExactlyOnceWith('old');
     expect(document.activeElement).toBe(view.search());
   });
+  it('offers a member only Restore, and says who can delete forever', async () => {
+    session.value = { mode: 'password', setup_required: false, user: { id: 'u', username: 'u', display_name: 'U', role: 'member' } };
+    vi.mocked(api.trashed).mockResolvedValue([old]);
+    const view = library({});
+    await settled();
+    click(view.tab('Trash'));
+    await settled();
+    expect(view.text()).toContain('Cases in Trash still use disk space. An administrator can delete them forever.');
+    expect(view.text()).not.toContain('Delete forever frees it');
+    expect(
+      view
+        .rows()[0]
+        .descendants()
+        .filter(element => element.tagName === 'BUTTON')
+        .map(button => button.textContent),
+    ).toEqual(['Restore']);
+    expect(view.button('Empty Trash')).toBeUndefined();
+  });
   it('says so when it is empty, and still says what Trash does', async () => {
     const view = library({});
     await settled();
@@ -537,6 +555,14 @@ describe('the 30-day reminder', () => {
   });
   it('says nothing while every case in Trash is newer', async () => {
     vi.mocked(api.trashed).mockResolvedValue([inTrashFor('new', 1)]);
+    const view = library({});
+    await settled();
+    expect(view.text()).not.toContain('30 days');
+    expect(view.button('Open Trash')).toBeUndefined();
+  });
+  it('says nothing to a member', async () => {
+    session.value = { mode: 'password', setup_required: false, user: { id: 'u', username: 'u', display_name: 'U', role: 'member' } };
+    vi.mocked(api.trashed).mockResolvedValue([inTrashFor('old', 31)]);
     const view = library({});
     await settled();
     expect(view.text()).not.toContain('30 days');

@@ -79,7 +79,7 @@ RULES = {
     ("POST", "/api/imports/{upload_id}/finish"): Rule("upload"),
     ("DELETE", "/api/imports/{upload_id}"): Rule("upload"),
     ("POST", "/api/trash/{case_id}/restore"): Rule("trashed"),
-    ("POST", "/api/trash/{case_id}/purge"): Rule("trashed"),
+    ("POST", "/api/trash/{case_id}/purge"): Rule("trashed_admin"),
     ("GET", "/api/cases/{case_id}"): Rule("case", "case.open"),
     ("PATCH", "/api/cases/{case_id}"): Rule("case", "case.rename"),
     ("GET", "/api/cases/{case_id}/orthanc-series"): Rule("case_archive"),
@@ -96,10 +96,11 @@ _CONDITIONAL = frozenset({("GET", "/docs"), ("GET", "/docs/oauth2-redirect"), ("
 _CASE = Rule("case")
 _STATIC = Rule("public")
 # Each scoped kind reads one path parameter, and a route with that parameter must be of such a kind.
-_SCOPED = {"case_id": ("case", "case_archive", "trashed"), "job_id": ("job",), "upload_id": ("upload",)}
+_SCOPED = {"case_id": ("case", "case_archive", "trashed", "trashed_admin"), "job_id": ("job",), "upload_id": ("upload",)}
 
 _SIGN_IN = (401, "Sign in to continue")
 _NO_RULE = (403, "This route has no access rule")
+_NOT_ADMIN = (403, "Administrator access is required")
 _NO_ARCHIVE = (403, "This account cannot use the archive")
 # Health, sign-in and viewer files touch no case and no cache, so nothing waits for them.
 _UNCOUNTED_KINDS = ("public", "off_only")
@@ -256,7 +257,7 @@ class SessionGate:
             return principal, refusal, _UNCOUNTED
         case_id = self._case_of(rule, params)
         # Restore and Delete forever count in the total only, or a purge would wait for itself.
-        counted = None if rule.kind == "trashed" else case_id
+        counted = None if rule.kind in ("trashed", "trashed_admin") else case_id
         # Before the Trash check: a request counted here is refused there or seen by any purge, which always follows Trash.
         self.activity.enter(counted)
         try:
@@ -276,7 +277,7 @@ class SessionGate:
 
     def _case_of(self, rule, params):
         """The case a request acts on, or None. A job acts on its case, and so does a finished upload."""
-        if rule.kind in ("case", "case_archive", "trashed"):
+        if rule.kind in ("case", "case_archive", "trashed", "trashed_admin"):
             return params["case_id"]
         if rule.kind == "job":
             return self.accounts.job_case(params["job_id"])
@@ -299,10 +300,12 @@ class SessionGate:
         if kind == "signed_in":
             return None
         if kind == "admin":
-            return None if principal.is_admin else (403, "Administrator access is required")
+            return None if principal.is_admin else _NOT_ADMIN
         if kind == "archive":
             return None if principal.archive_access else _NO_ARCHIVE
-        if kind in ("case", "case_archive", "trashed"):
+        if kind == "trashed_admin" and not principal.is_admin:
+            return _NOT_ADMIN
+        if kind in ("case", "case_archive", "trashed", "trashed_admin"):
             return None if self._may_open(params["case_id"], principal) else (404, "Case not found")
         if kind == "job":
             job_id = params["job_id"]

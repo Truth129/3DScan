@@ -130,13 +130,33 @@ def test_purge_with_sign_in_off_needs_a_confirmation(tmp_path):
     assert trash_state(service, case_id) == "purging"
 
 
-def test_purge_is_only_for_the_owner_of_a_case_in_trash(rig):
+def test_purge_is_for_an_admin_on_a_case_in_trash(rig):
     case_id = trashed(rig)
-    for client in (rig.other, rig.member):
-        refused(purge(client, case_id, wrong()), 404, "Case not found")
+    # The gate refuses before the body is read, so a member's password reaches no hash and no wait.
+    for body in ({"password": wrong()}, {}):
+        refused(rig.member.post(f"/api/trash/{case_id}/purge", json=body), 403, "Administrator access is required")
+    with rig.service.store.connection() as con:
+        username = con.execute("SELECT username FROM users WHERE id=?", (rig.member.user_id,)).fetchone()[0]
+    assert username.casefold() not in rig.service.accounts.throttle.entries
     refused(purge(rig.owner, rig.service.new_case("Synthetic")["id"]), 404, "Case not found")
     assert purge(rig.owner, case_id).status_code == 200
     refused(purge(rig.owner, case_id), 404, "Case not found")
+
+
+def test_a_demotion_during_the_password_check_stops_the_purge(rig, monkeypatch):
+    case_id = trashed(rig)
+
+    async def demoted(*args):
+        with rig.service.store.connection() as con:
+            con.execute("UPDATE users SET role='member' WHERE id=?", (rig.owner.user_id,))
+
+    monkeypatch.setattr(rig.service.accounts, "queued_recheck", demoted)
+    try:
+        refused(purge(rig.owner, case_id), 403, "Administrator access is required")
+    finally:
+        with rig.service.store.connection() as con:
+            con.execute("UPDATE users SET role='admin' WHERE id=?", (rig.owner.user_id,))
+    assert trash_state(rig.service, case_id) == "trashed" and rows(rig.service, case_id)["cases"] == 1
 
 
 def test_purge_waits_for_a_running_job_and_drops_queued_ones(rig):

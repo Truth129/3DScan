@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 import { api, ApiError } from '../lib/api';
+import { canAdminister } from '../lib/session';
 import type { TotalSegmentatorLicenseStatus } from '../types';
 
 const props = defineProps<{ disabled: boolean }>();
@@ -108,7 +109,7 @@ onBeforeUnmount(() => {
         >
         <template v-else>Configured · not checked here. Task access is checked when its model is downloaded.</template>
       </p>
-      <form autocomplete="off" @submit.prevent="save">
+      <form v-if="canAdminister" autocomplete="off" @submit.prevent="save">
         <label
           >License key<input
             v-model="key"
@@ -124,7 +125,10 @@ onBeforeUnmount(() => {
         <button type="submit" class="button secondary compact" :disabled="blocked || !key.trim()">{{ pending ? 'Updating…' : 'Validate and save' }}</button>
         <button v-if="status?.configured" type="button" class="text-button" :disabled="blocked" @click="remove">Remove key</button>
       </form>
-      <p class="license-privacy">Saving checks your key with TotalSegmentator and stores it on the workstation. The key is not shown again.</p>
+      <p v-if="canAdminister" class="license-privacy">
+        Saving checks your key with TotalSegmentator and stores it on the workstation. The key is not shown again.
+      </p>
+      <p v-else class="help">An administrator saves or removes the key.</p>
       <p>
         <a href="https://backend.totalsegmentator.com/license-academic/" target="_blank" rel="noopener noreferrer">Get a TotalSegmentator license ↗</a
         ><span class="license-terms"> Free academic licenses are for noncommercial use; follow the provider’s terms.</span>

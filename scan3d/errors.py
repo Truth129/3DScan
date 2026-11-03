@@ -15,3 +15,7 @@ class NotFound(KeyError):
 
 class Conflict(ValueError):
     """The request is sound, but something under way must finish first. The API maps this to 409."""
+
+
+class Forbidden(Exception):
+    """Decided again where the change is made: the person may not do this. The API maps this to 403."""

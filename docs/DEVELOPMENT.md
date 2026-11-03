@@ -126,15 +126,16 @@ build.
 - **Routes.** Every new route needs a rule in `RULES` in `scan3d/access.py`, and `check_policy`
   stops the app from starting without one, in both modes.
   - A route with `{case_id}` gets the case rule on its own, which also hides a case in Trash, and
-    needs an entry only for an audit action, or for the `trashed` or `case_archive` kind.
+    needs an entry only for an audit action, or for the `trashed`, `trashed_admin` or
+    `case_archive` kind.
     `{job_id}` and `{upload_id}` need those rule kinds.
   - Read cases through `case_summaries(scope)` or `visible_cases(scope)`. `Store.list` refuses
     `"cases"`. `storage_rows` reads every case, and a label reads only for its owner. The only other
     reader of every case is the janitor's `existing_case_ids`, which gives IDs only.
-- **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `ReviewConflict`,
-  `ImportConflict` and `errors.Conflict` to 409, and schema errors to 422. An `IntegrityError`
-  reading `purged` is 404 `Case not found`. Any other exception, another `IntegrityError` included,
-  is a logged 500, so do not raise a bare `KeyError` for "not found".
+- **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `errors.Forbidden` to 403,
+  `ReviewConflict`, `ImportConflict` and `errors.Conflict` to 409, and schema errors to 422. An
+  `IntegrityError` reading `purged` is 404 `Case not found`. Any other exception, another
+  `IntegrityError` included, is a logged 500, so do not raise a bare `KeyError` for "not found".
 - **Jobs.**
   - Work that never touches the GPU runs on the CPU lane.
   - TotalSegmentator, pinned nnU-Net models and nnInteractive share the serialized GPU lane.

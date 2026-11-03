@@ -18,7 +18,7 @@ import time
 from starlette.concurrency import run_in_threadpool
 
 from . import identity
-from .errors import NotFound
+from .errors import Forbidden, NotFound
 from .identifiers import identifier
 
 SESSION_LIFETIME = timedelta(days=30)
@@ -160,6 +160,15 @@ class Accounts:
             if adopted:
                 self._write_audit(con, "case.adopt", detail={"count": adopted})
         return adopted
+
+    @staticmethod
+    def _require_admin(con, actor_id):
+        """The gate decided at admission. This decides again under the write lock, so a request admitted
+        just before a demotion cannot finish. The command line and sign-in off have no one to check."""
+        if actor_id in (None, identity.LOCAL.id):
+            return
+        if con.execute("SELECT 1 FROM users WHERE id=? AND role='admin' AND disabled_at IS NULL", (actor_id,)).fetchone() is None:
+            raise Forbidden("Administrator access is required")
 
     def _refuse_during_wait(self, key):
         if seconds := self.throttle.remaining(key):

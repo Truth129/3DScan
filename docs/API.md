@@ -26,7 +26,7 @@ or an unexpected 500 is plain text.
 | ------ | ------------------------------------------------------- | ----------------------------------------- |
 | 400    | Invalid input, or a `Host` outside the allowlist        | `ValueError`, `TrustedHostMiddleware`     |
 | 401    | No valid session, or a wrong password                   | `SessionGate`, `POST /api/session`        |
-| 403    | Mutation from another browser origin, access this account lacks, or a wrong password on Delete forever | Same-origin middleware, `SessionGate`, `POST /api/trash/{id}/purge` |
+| 403    | Mutation from another browser origin, access this account lacks, such as a member on an admin route, or a wrong password on Delete forever | Same-origin middleware, `SessionGate`, `errors.Forbidden`, `POST /api/trash/{id}/purge` |
 | 404    | Record is absent, belongs to another case, is in Trash, has been deleted forever, or this account cannot open it | `errors.NotFound`, `SessionGate`, a stay-purged trigger |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
 | 409    | Stale state; reload before retrying. Or work under way must finish first | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever and Clear caches |
@@ -110,7 +110,8 @@ with no session gets the 401, and a signed-in one the other.
 | Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
 | Archive   | `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
 | Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
-| Trashed   | `POST /api/trash/{id}/restore`, `POST /api/trash/{id}/purge`            | 401, 404 `Case not found`                      |
+| Trashed   | `POST /api/trash/{id}/restore`                                          | 401, 404 `Case not found`                      |
+| Admin, in Trash | `POST /api/trash/{id}/purge`                                      | 401, 403 `Administrator access is required`, 404 `Case not found` |
 | Job       | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`         | 401, 404 `Job not found`                       |
 | Upload    | `POST /api/imports/{id}/parts`, `.../finish`, `DELETE /api/imports/{id}` | 401, 404 `Upload not found`                   |
 
@@ -451,9 +452,9 @@ that does not exist answers 404 `Case not found`.
 progress comes back as `import_cancelled`. A case that is not yours, or is not in Trash, answers 404
 `Case not found`.
 
-**`POST /api/trash/{id}/purge`** deletes a case in Trash forever and returns `{id}`. The body is
-`{password}`, your own, in password mode, and `{confirm: true}` with sign-in off. The password shares
-sign-in's throttle and hashing slots, so guesses on either route add up.
+**`POST /api/trash/{id}/purge`** deletes a case in Trash forever and returns `{id}`. It is for an
+admin only. The body is `{password}`, your own, in password mode, and `{confirm: true}` with sign-in
+off. The password shares sign-in's throttle and hashing slots, so guesses on either route add up.
 
 Every row of the case goes at once, in one transaction; its `trash` row and the audit log keep only
 its ID. A background janitor removes its files moments later. A case that cannot go yet is refused
@@ -464,6 +465,7 @@ before any password is checked. Every response is `no-store`.
 | 400    | `Enter your password to delete forever.`                            | Password mode, no password                    |
 | 400    | `Confirm to delete forever.`                                        | Sign-in off, no `confirm: true`               |
 | 403    | `Delete forever through the HTTPS address`                          | Password mode, `Origin` is not https and `Host` is not loopback |
+| 403    | `Administrator access is required`                                  | A member, before any body is read, or an admin demoted or disabled while the password was checked |
 | 403    | `Wrong password.`                                                   | Never 401, which a browser reads as a lost session |
 | 404    | `Case not found`                                                    | Not yours, not in Trash, or already deleted   |
 | 409    | `A send to Orthanc is still finishing. Try again in a few minutes.` | A send of the case to Orthanc is running      |
