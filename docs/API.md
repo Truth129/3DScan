@@ -495,6 +495,7 @@ returns `{freed, storage}`, the bytes freed and a fresh storage report. A member
 | 409    | `Another 3DScan command was running when 3DScan started. Restart 3DScan, then try again.` | Another process held `worker.lock` at start |
 | 409    | `Jobs are running. Try again when they finish.`                                           | A job is running                            |
 | 409    | `Images are still loading. Try again in a minute.`                                        | Another request is in flight, or a review volume is being written |
+| 409    | `3DScan cannot remove <name> in its caches. Check its owner and permissions, then try again.` | A cache file or folder the service cannot remove, such as one `sudo` wrote |
 
 ## Jobs
 

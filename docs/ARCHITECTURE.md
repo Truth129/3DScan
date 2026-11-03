@@ -156,7 +156,9 @@ case `purging`, and is tried again each minute.
 The shared steps wait until no job runs, no request is in flight and no review volume is being
 written, so while any job runs they and `purged` wait. They remove review entries naming no current
 case, the caches rebuilt on a miss and every surface asset no record names. Then the janitor empties
-the log again and sets `purged`, and the idle GPU lane releases the warm engine.
+the log again and sets `purged`, and the idle GPU lane releases the warm engine. A shared file it
+cannot remove is logged and the other steps still run, but those cases stay `purging` and are tried
+again each minute.
 
 Every step can run again, so a purge resumes at the next start. Each start also removes Orthanc
 staging leftovers, and once a run the janitor removes any folder of a purged case that came back.

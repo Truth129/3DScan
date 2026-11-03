@@ -159,29 +159,43 @@ def _remove_upload(folder):
         remove_tree(folder)
 
 
+def _remove_shared(path):
+    """Remove one shared-cache item, or log why not and return False, so the items and steps after it still run."""
+    try:
+        remove_tree(path)
+    except OSError as exc:
+        # Its name is a key or a cache folder's, never a label.
+        log.warning("Could not remove %s from the shared caches (%s)", path.name, exc.strerror)
+        return False
+    return True
+
+
 def sweep_after_purge(data_dir, live_cases, live_keys):
-    """Steps 4 and 5, which can touch any case, so the caller holds every guard in `Service.idle`."""
+    """Steps 4 and 5, which can touch any case, so the caller holds every guard in `Service.idle`. True if everything went."""
     data_dir = Path(data_dir)
+    swept = True
     # An entry that names no current case was written before entries named one, by an older build, or by a crash.
     for entry, record in review_entries(data_dir):
         if _owner(record) not in live_cases:
-            remove_tree(entry)
+            swept &= _remove_shared(entry)
     for name in REBUILT_ON_A_MISS:
-        remove_tree(data_dir / name)
-    sweep_surface_assets(data_dir / "surface-cache" / "assets", live_keys)
+        swept &= _remove_shared(data_dir / name)
+    return sweep_surface_assets(data_dir / "surface-cache" / "assets", live_keys) and swept
 
 
 def sweep_surface_assets(directory, live_keys):
     """Remove every file of an asset no revision or draft names. A read answers 503 rather than rebuilding, so never more.
 
     Files are `<key>.glb` and its siblings, or `.<key>....writing` while written, so the key is the first 64
-    characters once one leading dot goes. Lock files live in `locks/` and stay.
+    characters once one leading dot goes. Lock files live in `locks/` and stay. True if every such file went.
     """
+    swept = True
     for shard in _folders(directory):
         for item in shard.iterdir():
             key = item.name.removeprefix(".")[:64]
             if _KEY.fullmatch(key) and key not in live_keys:
-                remove_tree(item)
+                swept &= _remove_shared(item)
+    return swept
 
 
 def empty_rebuildable(data_dir):
@@ -246,7 +260,10 @@ class Janitor:
             with service.idle() as refusal:
                 if refusal:
                     return True
-                sweep_after_purge(data_dir, store.existing_case_ids(), store.live_surface_keys())
+                swept = sweep_after_purge(data_dir, store.existing_case_ids(), store.live_surface_keys())
+            if not swept:
+                # A shared file the service cannot remove, logged above: these cases wait a minute, as a stuck case does.
+                return False
             if not store.checkpoint():
                 return True
             store.finish_purge(ready)

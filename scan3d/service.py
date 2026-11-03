@@ -375,7 +375,12 @@ class Service:
             with self.idle(own=1) as refusal:
                 if refusal:
                     raise Conflict(refusal)
-                freed = empty_rebuildable(self.settings.data_dir)
+                try:
+                    freed = empty_rebuildable(self.settings.data_dir)
+                except OSError as exc:
+                    # Such as a file a `sudo` run wrote. Only its name, a key or a cache folder's, never a label.
+                    name = Path(exc.filename).name if exc.filename else "a file"
+                    raise Conflict(f"3DScan cannot remove {name} in its caches. Check its owner and permissions, then try again.") from None
         self.accounts.audit("cache.clear", identity.actor_id(), detail={"bytes": freed})
         return freed
 

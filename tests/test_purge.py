@@ -465,3 +465,26 @@ def test_clear_caches_refuses_while_anything_is_active(tmp_path):
         assert http.post("/api/storage/clear-caches").status_code == 200
     finally:
         service.stop()
+
+
+def test_a_cache_file_the_service_cannot_remove_holds_up_nothing_else(started):
+    service, http = started
+    data = service.settings.data_dir
+    locked = data / "analysis-cache" / "aa"
+    fill(locked / "result.json", 16)
+    unnamed = data / "surface-cache" / "assets" / "bb" / f"{'b' * 64}.glb"
+    fill(unnamed, 16)
+    case_id = service.new_case("Synthetic")["id"]
+    deleted(http, case_id)
+    locked.chmod(0o500)
+    try:
+        # No exception, so no traceback every 5 seconds: the case waits a minute, and later steps still run.
+        assert service.janitor.run_pass() is False
+        assert trash_state(service, case_id) == "purging" and not unnamed.exists()
+        response = http.post("/api/storage/clear-caches")
+        assert response.status_code == 409, response.text
+        # Python names the folder it could not empty.
+        assert response.json()["detail"] == "3DScan cannot remove aa in its caches. Check its owner and permissions, then try again."
+    finally:
+        locked.chmod(0o700)
+    assert service.janitor.run_pass() is False and trash_state(service, case_id) == "purged"
