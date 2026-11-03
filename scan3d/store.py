@@ -216,7 +216,8 @@ class Store:
         return record
 
     def list(self, table, case_id=None):
-        # Cases are private to their owners, so a new global reader must fail loudly here.
+        # Cases are private to their owners, so a new global reader must fail loudly here. `storage_rows` and
+        # `existing_case_ids` are the only global readers, and the second gives IDs only.
         if table == "cases":
             raise ValueError("Read cases through visible_cases or case_summaries, with a scope")
         if table not in ("revisions", "jobs", "review_sessions", "image_assets"):
@@ -383,6 +384,33 @@ class Store:
             con.execute("DELETE FROM cases WHERE id=?", (case_id,))
             con.execute("UPDATE trash SET state='purging' WHERE case_id=? AND kind='case'", (case_id,))
             Accounts._write_audit(con, "case.purge", actor_id, case_id, detail=counts)
+
+    def trash_case_ids(self, state):
+        with self.connection() as con:
+            return [row["case_id"] for row in con.execute("SELECT case_id FROM trash WHERE kind='case' AND state=? ORDER BY trashed_at", (state,))]
+
+    def existing_case_ids(self):
+        """Every case ID, for the janitor's sweep only. IDs, never a list to show anyone."""
+        with self.connection() as con:
+            return {row["id"] for row in con.execute("SELECT id FROM cases")}
+
+    def running_job(self):
+        with self.connection() as con:
+            return con.execute("SELECT 1 FROM jobs WHERE status='running' LIMIT 1").fetchone() is not None
+
+    def live_surface_keys(self):
+        with self.connection() as con:
+            return live_surface_keys(con)
+
+    def checkpoint(self):
+        """Fold the write log into the database and empty it, so removed rows leave no copy there. False while a reader holds it."""
+        with self.connection() as con:
+            return con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+
+    def finish_purge(self, case_ids):
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            con.executemany("UPDATE trash SET state='purged' WHERE case_id=? AND kind='case' AND state='purging'", [(case_id,) for case_id in case_ids])
 
     def rename_case(self, case_id, label):
         from .uploads import ImportConflict

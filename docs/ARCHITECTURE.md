@@ -148,6 +148,18 @@ Delete forever moves a case's `trash` row from `trashed` to `purging`. Its first
 log keep its ID. While the row is `purging` or `purged`, triggers refuse any insert for its ID, in
 this build or an older one, so a deleted case never comes back.
 
+The janitor, a thread of the API server that holds `worker.lock`, does the rest under an exclusive
+`maintenance.lock`. It removes the case's folder, the uploads that became it and the review-cache
+entries naming it at once, then empties the write log. A file it cannot remove keeps only its own
+case `purging`, and is tried again each minute.
+
+The shared steps wait until no job runs, no request is in flight and no review volume is being
+written, so while any job runs they and `purged` wait. They remove review entries naming no current
+case, the caches rebuilt on a miss and every surface asset no record names, then empty the log again
+and set `purged`; the idle GPU lane then releases the warm engine. Every step can run again, so a
+purge resumes at the next start, which also removes Orthanc staging leftovers and any folder of a
+purged case that came back.
+
 Each review-cache entry's record names its case, outside its key, so Delete forever can find the
 entry. A backup leaves out the folder of a deleted case, any surface asset its snapshot does not
 name, and the contour and agreement caches, which rebuild on a miss.
@@ -469,8 +481,8 @@ its rule before the route reads a body. Rules are default-deny, in both modes.
   no exception.
 - A case scope is a user ID or `EVERY_CASE`, never `None`, and only the built-in local user holds
   `EVERY_CASE`.
-- `storage_rows` is the one reader of every case. A label reads only for its owner, and another
-  owner's row gives only owner, date and size.
+- `storage_rows` reads every case. A label reads only for its owner, and another owner's row gives
+  only owner, date and size. The janitor's `existing_case_ids` also reads every case, for IDs only.
 - A new case belongs to its creator. Work with nobody signed in, such as the command line or sign-in
   off, goes to the oldest active admin. A case with no owner goes to that admin when an account is
   added, or at startup in password mode.
@@ -508,6 +520,8 @@ when a TotalSegmentator key is saved, and model downloads.
 - Every account is an administrator, and a case cannot be shared between accounts.
 - Each account imports its own copy of an Orthanc series, so the same scan can be on disk twice.
 - A case in Trash keeps its disk space, and importing it again from Orthanc makes a second copy.
+- Delete forever is an ordinary file delete, not secure erasure. Backups, Orthanc and browser caches
+  keep their copies, and restoring a backup brings a deleted case back.
 - Case sizes leave out shared caches, which several cases can use at once.
 - Jobs and review sessions store who started them, but the app shows neither, and a revision records
   no reviewer. The audit log has no viewer.

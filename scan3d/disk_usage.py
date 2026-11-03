@@ -10,6 +10,8 @@ import shutil
 import stat
 
 SHARED_CACHES = ("review-cache", "surface-cache", "analysis-cache", "agreement-cache", "cinematic-cache")
+# Rebuilt when next needed, so Clear caches may empty them. surface-cache/assets is not: a read answers 503.
+REBUILT_ON_A_MISS = ("analysis-cache", "agreement-cache", "surface-cache/contours")
 
 
 def tree_bytes(path):

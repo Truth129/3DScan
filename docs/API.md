@@ -453,8 +453,9 @@ progress comes back as `import_cancelled`. A case that is not yours, or is not i
 **`POST /api/trash/{id}/purge`** deletes a case in Trash forever and returns `{id}`. The body is
 `{password}`, your own, in password mode, and `{confirm: true}` with sign-in off. The password shares
 sign-in's throttle and hashing slots, so guesses on either route add up. Every row of the case goes
-at once, in one transaction; its `trash` row and the audit log keep only its ID. A case that cannot
-go yet is refused before any password is checked. Every response is `no-store`.
+at once, in one transaction; its `trash` row and the audit log keep only its ID. A background
+janitor removes its files moments later. A case that cannot go yet is refused before any password
+is checked. Every response is `no-store`.
 
 | Status | `detail`                                                            | When                                          |
 | ------ | ------------------------------------------------------------------- | --------------------------------------------- |

@@ -2,6 +2,8 @@
 
 import json
 import secrets
+import threading
+import time
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -10,9 +12,10 @@ import pytest
 from scan3d import identity
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.janitor import maintenance_lock, review_entries
 from scan3d.store import identifier
 from test_access import BASE, account
-from test_library import off_mode
+from test_library import fill, finished_upload, off_mode
 
 ROW_TABLES = ("cases", "case_summaries", "revisions", "jobs", "review_sessions", "image_assets", "case_access", "case_opened")
 
@@ -213,3 +216,190 @@ def test_review_cache_entries_name_their_case(tmp_path):
     records = [json.loads(path.read_text()) for path in (service.settings.data_dir / "review-cache" / "volumes").glob("*/*/manifest.json")]
     assert records and all(record.get("case_id") == case["id"] for record in records)
     assert sum(record["descriptor"]["kind"] == "ct" and record["descriptor"]["quality"] == "full" for record in records) == 1
+
+
+@pytest.fixture
+def started(tmp_path):
+    """An off-mode app whose lanes hold `worker.lock`. No janitor thread runs: each test drives the passes."""
+    service, http = off_mode(tmp_path)
+    service.start()
+    yield service, http
+    service.stop()
+
+
+def demo(http):
+    """A demo case with a preview CT read, so the review cache holds an entry naming it."""
+    case = http.post("/api/cases/demo").json()
+    assert http.get(f"/api/cases/{case['id']}/revisions/{case['active_revision_id']}/ct-volume?quality=preview").status_code == 200
+    return case["id"]
+
+
+def deleted(http, case_id):
+    assert http.post(f"/api/cases/{case_id}/trash").status_code == 200
+    assert http.post(f"/api/trash/{case_id}/purge", json={"confirm": True}).status_code == 200
+
+
+def entries(service, case_id):
+    return sorted(entry for entry, record in review_entries(service.settings.data_dir) if record and record.get("case_id") == case_id)
+
+
+def test_janitor_removes_the_case_files_uploads_and_marked_review_cache(started):
+    service, http = started
+    data = service.settings.data_dir
+    first, second = demo(http), demo(http)
+    upload = finished_upload(service, first)
+    kept = entries(service, second)
+    assert entries(service, first) and kept
+    deleted(http, first)
+    assert service.janitor.run_pass() is False
+    assert not (data / "cases" / first).exists() and not (data / "import-uploads" / upload).exists()
+    assert entries(service, first) == [] and entries(service, second) == kept and (data / "cases" / second).is_dir()
+    assert trash_state(service, first) == "purged"
+
+
+def test_janitor_leaves_no_copy_of_a_purged_record_in_the_database_files(started):
+    service, http = started
+    marker = f"synthetic-{secrets.token_hex(16)}"
+    case_id, other = service.new_case(marker)["id"], service.new_case("Synthetic")["id"]
+    deleted(http, case_id)
+    # A request on another case, so the pass stops before the shared caches.
+    service.activity.enter(other)
+    try:
+        assert service.janitor.run_pass() is True
+    finally:
+        service.activity.leave(other)
+    assert trash_state(service, case_id) == "purging"
+    for name in ("scan3d.sqlite3", "scan3d.sqlite3-wal"):
+        path = service.settings.data_dir / name
+        assert marker.encode() not in (path.read_bytes() if path.exists() else b""), name
+
+
+def test_one_stuck_case_does_not_hold_up_another(started):
+    service, http = started
+    data = service.settings.data_dir
+    stuck, freed = demo(http), demo(http)
+    for case_id in (stuck, freed):
+        deleted(http, case_id)
+    locked = data / "cases" / stuck / "synthetic"
+    locked.chmod(0o500)
+    try:
+        assert service.janitor.run_pass() is False
+    finally:
+        locked.chmod(0o700)
+    assert trash_state(service, freed) == "purged" and not (data / "cases" / freed).exists()
+    assert trash_state(service, stuck) == "purging"
+
+
+def test_janitor_waits_for_idle_before_the_shared_caches(started):
+    service, http = started
+    data = service.settings.data_dir
+    case_id, other = service.new_case("Synthetic")["id"], service.new_case("Synthetic")["id"]
+    fill(data / "cases" / case_id / "scan.bin", 1024)
+    cache = data / "analysis-cache" / "aa" / "result.json"
+    fill(cache, 1024)
+    deleted(http, case_id)
+    service.activity.enter(other)
+    try:
+        assert service.janitor.run_pass() is True
+        assert not (data / "cases" / case_id).exists() and cache.exists() and trash_state(service, case_id) == "purging"
+    finally:
+        service.activity.leave(other)
+    assert service.janitor.run_pass() is False
+    assert not cache.exists() and trash_state(service, case_id) == "purged"
+
+
+def test_janitor_sweeps_unmarked_and_orphaned_review_entries_only(started):
+    service, http = started
+    review = service.settings.data_dir / "review-cache"
+    shard = review / "volumes" / "aa"
+    manifests = {"live": {"case_id": service.new_case("Synthetic")["id"]}, "unmarked": {}, "unknown": {"case_id": identifier()}}
+    for name, record in manifests.items():
+        (shard / f"aa-{name}").mkdir(parents=True)
+        (shard / f"aa-{name}" / "manifest.json").write_text(json.dumps(record))
+    fill(shard / "aa-unreadable" / "manifest.json", 16)
+    fill(shard / ".aa-left.x" / "chunk", 16)
+    fill(review / "generation-full.lock", 0)
+    deleted(http, service.new_case("Synthetic")["id"])
+    assert service.janitor.run_pass() is False
+    left = sorted(path.relative_to(review).as_posix() for path in review.rglob("*") if path.is_file())
+    assert left == ["generation-full.lock", "generation-preview.lock", "generation-volume-mask-union.lock", "volumes/aa/aa-live/manifest.json"]
+
+
+def test_surface_sweep_keeps_live_assets_and_every_sibling_of_them(started):
+    service, http = started
+    data = service.settings.data_dir
+    live, dead = "a" * 64, "b" * 64
+    service.store.save(
+        "revisions",
+        dict(id=identifier(), case_id=service.new_case("Synthetic")["id"], structures=[], surface_assets=[{"id": "x", "key": live, "triangles": 1}]),
+    )
+
+    def files(key):
+        names = (f"{key}.glb", f"{key}.glb.json", f"{key}.glb.gz", f"{key}.glb.gz.json", f"{key}.glb.gz.lock", f".{key}.glb.abc.writing")
+        return [data / "surface-cache" / "assets" / key[:2] / name for name in names]
+
+    for path in files(live) + files(dead):
+        fill(path, 16)
+    lock = data / "surface-cache" / "locks" / f"{dead}.lock"
+    fill(lock, 0)
+    deleted(http, service.new_case("Synthetic")["id"])
+    assert service.janitor.run_pass() is False
+    assert all(path.exists() for path in files(live)) and lock.exists()
+    assert not any(path.exists() for path in files(dead))
+
+
+def test_janitor_leaves_files_alone_while_a_backup_holds_the_lock(started):
+    service, http = started
+    case_id = service.new_case("Synthetic")["id"]
+    folder = service.settings.data_dir / "cases" / case_id
+    fill(folder / "scan.bin", 1024)
+    deleted(http, case_id)
+    with maintenance_lock(service.settings.data_dir, exclusive=False) as held:
+        assert held
+        assert service.janitor.run_pass() is True
+        assert folder.exists()
+    assert service.janitor.run_pass() is False and not folder.exists()
+
+
+def test_a_purge_resumes_after_a_restart_and_a_returning_folder_goes(tmp_path):
+    service, http = off_mode(tmp_path)
+    case_id = service.new_case("Synthetic")["id"]
+    folder = service.settings.data_dir / "cases" / case_id
+    fill(folder / "scan.bin", 1024)
+    deleted(http, case_id)
+
+    def soon(check):
+        deadline = time.monotonic() + 10
+        while not check():
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+
+    with TestClient(create_app(service.settings)) as restarted:
+        soon(lambda: trash_state(restarted.app.state.service, case_id) == "purged" and not folder.exists())
+    # A command-line write or a restored backup can make the folder again.
+    fill(folder / "x", 16)
+    with TestClient(create_app(service.settings)):
+        soon(lambda: not folder.exists())
+
+
+def test_start_removes_orthanc_staging_leftovers(tmp_path):
+    service, _ = off_mode(tmp_path)
+    leftover = service.settings.data_dir / "orthanc-staging" / "transfer-abc" / "f"
+    fill(leftover, 16)
+    service.start()
+    try:
+        assert not leftover.parent.exists()
+    finally:
+        service.stop()
+
+
+def test_an_idle_gpu_lane_releases_the_warm_engine_after_a_purge(tmp_path, monkeypatch):
+    service, _ = off_mode(tmp_path)
+    released = threading.Event()
+    monkeypatch.setattr(service, "_release_interactive", released.set)
+    service.release_engine.set()
+    service.start()
+    try:
+        assert released.wait(2) and not service.release_engine.is_set()
+    finally:
+        service.stop()

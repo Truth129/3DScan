@@ -129,7 +129,8 @@ build.
     needs an entry only for an audit action, or for the `trashed` or `case_archive` kind.
     `{job_id}` and `{upload_id}` need those rule kinds.
   - Read cases through `case_summaries(scope)` or `visible_cases(scope)`. `Store.list` refuses
-    `"cases"`. `storage_rows` is the one reader of every case, and a label reads only for its owner.
+    `"cases"`. `storage_rows` reads every case, and a label reads only for its owner. The only other
+    reader of every case is the janitor's `existing_case_ids`, which gives IDs only.
 - **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `ReviewConflict`,
   `ImportConflict` and `errors.Conflict` to 409, and schema errors to 422. An `IntegrityError`
   reading `purged` is 404 `Case not found`. Any other exception, another `IntegrityError` included,

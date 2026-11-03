@@ -125,7 +125,7 @@ def create_app(settings: Settings | None = None):
     async def lifespan(app):
         if service.settings.sign_in_required:
             service.accounts.adopt_orphans()
-        service.start()
+        service.start(janitor=True)
         yield
         service.stop()
         service.store.close()

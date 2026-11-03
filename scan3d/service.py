@@ -12,16 +12,20 @@ import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 
 from . import __version__, identity, inference_paths
 from .accounts import Accounts
 from .activity import Activity
 from .config import Settings
 from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
+from .janitor import Janitor, generation_locks, remove_tree
 from .orthanc_models import series_source
 from .store import LANES, Store, identifier, job_lane, now
 
 log = logging.getLogger(__name__)
+
+_LOADING = "Images are still loading. Try again in a minute."
 
 
 class Service:
@@ -30,6 +34,12 @@ class Service:
         self.store = Store(self.settings.data_dir)
         self.accounts = Accounts(self.store)
         self.activity = Activity()
+        self.janitor = Janitor(self)
+        self.janitor_thread = None
+        # The janitor holds this while it sweeps the shared caches, so no job can start under it.
+        self.claiming = threading.Lock()
+        # Set when a purge finishes. Only the GPU lane may stop the warm engine, so it does when idle.
+        self.release_engine = threading.Event()
         self.stop_event = threading.Event()
         self.threads = {}
         self.worker_lock = None
@@ -93,14 +103,15 @@ class Service:
         if runtime is not None:
             runtime.release()
 
-    def start(self, lanes=LANES):
+    def start(self, lanes=LANES, janitor=False):
         """Run one thread per lane while this process holds the data-dir lock.
 
         The GPU lane runs TotalSegmentator and nnInteractive one job at a time;
         the CPU lane runs work that never touches the GPU. A CLI command starts
         only the lane its job needs, so it never begins unrelated work there.
+        Only the API server runs the janitor, which finishes each purge.
         """
-        if any(thread.is_alive() for thread in self.threads.values()):
+        if any(thread.is_alive() for thread in (*self.threads.values(), self.janitor_thread) if thread):
             return
         lock = (self.settings.data_dir / "worker.lock").open("a")
         try:
@@ -113,27 +124,44 @@ class Service:
         self.orthanc.recover()
         self.orthanc_exports.recover()
         self.orthanc_view_exports.recover()
+        # Only a lane writes here, and none runs yet, so what is left came from a hard stop. It names no case.
+        for leftover in (self.settings.data_dir / "orthanc-staging").glob("transfer-*"):
+            try:
+                remove_tree(leftover)
+            except OSError as exc:
+                # One a `sudo` run left must not stop the service starting.
+                log.warning("Could not remove the Orthanc staging leftover %s (%s)", leftover.name, exc.strerror)
         self.stop_event.clear()
-        self._running_lanes = len(lanes)
+        self._running_lanes = len(lanes) + janitor
         self.threads = {lane: threading.Thread(target=self._loop, args=(lane,), daemon=True, name=f"scan3d-{lane}-worker") for lane in lanes}
         for thread in self.threads.values():
             thread.start()
+        if janitor:
+            # Kept apart from `threads`, which health reports as lanes.
+            self.janitor_thread = threading.Thread(target=self.janitor.run, daemon=True, name="scan3d-janitor")
+            self.janitor_thread.start()
 
     def stop(self):
         self.stop_event.set()
+        self.janitor.wake.set()
         # Running jobs observe the stop as a cancellation; one deadline bounds
         # the whole shutdown rather than each lane in turn.
         deadline = time.monotonic() + 15
-        for thread in self.threads.values():
-            thread.join(timeout=max(0, deadline - time.monotonic()))
+        for thread in (*self.threads.values(), self.janitor_thread):
+            if thread:
+                thread.join(timeout=max(0, deadline - time.monotonic()))
 
     def _loop(self, lane):
         try:
             while not self.stop_event.is_set():
                 try:
-                    job = self.store.claim(lane)
+                    job = self._claim(lane)
                     if job:
                         self.execute(job)
+                    elif lane == "gpu" and self.release_engine.is_set():
+                        # A deleted case's images may sit in the warm engine.
+                        self.release_engine.clear()
+                        self._release_interactive()
                     else:
                         self.stop_event.wait(0.25)
                 except Exception:
@@ -145,14 +173,39 @@ class Service:
                     self._release_interactive()
                 except Exception:
                     log.exception("Could not release the interactive inference runtime")
-            with self._lane_guard:
-                self._running_lanes -= 1
-                last = not self._running_lanes
-            # Hold the lock until every lane has finished its job, so no other
-            # process can start workers or recover a job still running here.
-            if last and self.worker_lock:
-                self.worker_lock.close()
-                self.worker_lock = None
+            self._lane_finished()
+
+    def _lane_finished(self):
+        with self._lane_guard:
+            self._running_lanes -= 1
+            last = not self._running_lanes
+        # Hold the lock until every lane and the janitor have finished, so no other process can
+        # start workers or a janitor, or recover a job, while one still runs here.
+        if last and self.worker_lock:
+            self.worker_lock.close()
+            self.worker_lock = None
+
+    def _claim(self, lane):
+        with self.claiming:
+            return self.store.claim(lane)
+
+    @contextmanager
+    def idle(self, own=0):
+        """Every guard the shared caches need, held while the body runs. Yields None, or why not.
+
+        Claims happen only in the process holding `worker.lock`, and stop while this holds `claiming`. Then no
+        job runs, no request is in flight or admitted, and no API process writes a review volume.
+        """
+        if self.worker_lock is None:
+            # The server takes the lock once, at start (`scan3d/api.py`), so waiting would not help.
+            yield "Another 3DScan command was running when 3DScan started. Restart 3DScan, then try again."
+            return
+        with self.claiming:
+            if self.store.running_job():
+                yield "Jobs are running. Try again when they finish."
+                return
+            with self.activity.quiet(own) as quiet, generation_locks(self.settings.data_dir) as generating:
+                yield None if quiet and generating else _LOADING
 
     def new_case(self, label=None):
         record = dict(
@@ -309,6 +362,7 @@ class Service:
     def purge_case(self, case_id):
         """Step 1 of Delete forever. The janitor removes the files once this has committed."""
         self.store.purge_case(case_id, identity.actor_id(), lambda: self.activity.busy(case_id))
+        self.janitor.wake.set()
         return {"id": case_id}
 
     def stage(self, job, name):
