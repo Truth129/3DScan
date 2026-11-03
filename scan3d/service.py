@@ -303,6 +303,14 @@ class Service:
             stopped += not sending
         return {"id": case_id, "jobs_stopped": stopped, "sends_continuing": continuing}
 
+    def check_purge(self, case_id):
+        self.store.check_purge(case_id, lambda: self.activity.busy(case_id))
+
+    def purge_case(self, case_id):
+        """Step 1 of Delete forever. The janitor removes the files once this has committed."""
+        self.store.purge_case(case_id, identity.actor_id(), lambda: self.activity.busy(case_id))
+        return {"id": case_id}
+
     def stage(self, job, name):
         self.check_cancel(job)
         self.store.update_job(job["id"], stage=name)

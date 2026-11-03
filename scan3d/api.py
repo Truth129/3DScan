@@ -16,7 +16,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import __version__, api_cases, api_imports, api_reviews, api_session, api_system, api_viewer
 from .access import SessionGate, check_policy
 from .config import Settings
-from .errors import NotFound
+from .errors import Conflict, NotFound
 from .orthanc import OrthancChanged, OrthancError
 from .service import Service
 from .store import ReviewConflict
@@ -110,6 +110,14 @@ def _is_session_path(request):
     return request.scope["path"].removesuffix("\n") == "/api/session"
 
 
+_PURGE = re.compile(r"/api/trash/[^/]+/purge")
+
+
+def _is_purge_path(request):
+    # As for sign-in: scope["path"], and a final newline reaches the same handler.
+    return _PURGE.fullmatch(request.scope["path"].removesuffix("\n")) is not None
+
+
 def create_app(settings: Settings | None = None):
     service = Service(settings)
 
@@ -140,6 +148,8 @@ def create_app(settings: Settings | None = None):
             )
         if _is_session_path(request):
             return JSONResponse(status_code=422, content={"detail": "Invalid sign-in request."}, headers={"Cache-Control": "no-store"})
+        if _is_purge_path(request):
+            return JSONResponse(status_code=422, content={"detail": "Invalid delete request."}, headers={"Cache-Control": "no-store"})
         return await request_validation_exception_handler(request, exc)
 
     # Only explicit NotFound means 404; any other KeyError is a defect (500).
@@ -149,6 +159,7 @@ def create_app(settings: Settings | None = None):
         (NotFound, 404, None),
         (ReviewConflict, 409, None),
         (ImportConflict, 409, None),
+        (Conflict, 409, None),
         (OrthancChanged, 409, no_store),
         (OrthancError, 502, no_store),
     ):
@@ -174,6 +185,7 @@ def create_app(settings: Settings | None = None):
             or request.url.path.startswith("/api/orthanc/")
             or request.url.path.endswith(("/dicom-seg", "/segment.dcm"))
             or view_export
+            or _is_purge_path(request)
         )
         origin = request.headers.get("origin")
         if request.method not in ("GET", "HEAD", "OPTIONS") and origin:

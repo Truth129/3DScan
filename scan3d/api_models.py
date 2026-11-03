@@ -123,6 +123,12 @@ class CaseRename(Input):
     label: str = Field(max_length=128)
 
 
+class Purge(Input):
+    # Never echoed: `api.safe_validation_error` answers a malformed body without it.
+    password: SecretStr | None = None
+    confirm: bool = Field(False, strict=True)
+
+
 class Review(Input):
     review_status: Literal["unreviewed", "reviewed", "corrected"]
 

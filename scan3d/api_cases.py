@@ -2,17 +2,22 @@
 
 import uuid
 
-from fastapi import File, Form, UploadFile
+from fastapi import File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import identity
-from .api_models import Activate, CaseRename, DicomSegExport, Process, Refine, Review, Segment
+from .accounts import TooManyAttempts, WrongPassword
+from .api_models import Activate, CaseRename, DicomSegExport, Process, Purge, Refine, Review, Segment
+from .api_session import secure_enough
 from .disk_usage import case_sizes, storage_report
 from .errors import NotFound
 from .store import public_case, public_job, public_revision
 
 
 def add_routes(app, service):
+    password_mode = service.settings.sign_in_required
+
     @app.get("/api/cases")
     def cases():
         scope = identity.case_scope(identity.current())
@@ -39,6 +44,27 @@ def add_routes(app, service):
     def restore_case(case_id: str):
         service.store.restore_case(case_id, identity.actor_id())
         return public_case(service.store.get("cases", case_id), service.settings)
+
+    @app.post("/api/trash/{case_id}/purge")
+    async def purge_case(case_id: str, body: Purge, request: Request):
+        if password_mode:
+            password = body.password.get_secret_value() if body.password else ""
+            if not password:
+                raise ValueError("Enter your password to delete forever.")
+            if not secure_enough(request):
+                raise HTTPException(403, "Delete forever through the HTTPS address")
+        elif not body.confirm:
+            raise ValueError("Confirm to delete forever.")
+        # A case that cannot go yet costs no password hash.
+        await run_in_threadpool(service.check_purge, case_id)
+        if password_mode:
+            try:
+                await service.accounts.queued_recheck(identity.current(), password, case_id)
+            except TooManyAttempts as exc:
+                raise HTTPException(429, f"Too many attempts. Try again in {exc.seconds} seconds.", headers={"Retry-After": str(exc.seconds)}) from None
+            except WrongPassword:
+                raise HTTPException(403, "Wrong password.") from None
+        return await run_in_threadpool(service.purge_case, case_id)
 
     @app.get("/api/trash")
     def trashed_cases():

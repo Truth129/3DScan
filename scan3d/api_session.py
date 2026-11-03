@@ -18,6 +18,12 @@ def _host_name(host):
     return re.match(r"\[[^\]]*\]|[^:]*", host).group()
 
 
+def secure_enough(request):
+    """A password must not cross a network in clear text: HTTPS, or this machine itself."""
+    https = urlsplit(request.headers.get("origin", "")).scheme == "https"
+    return https or _host_name(request.headers.get("host", "")) in LOOPBACK_HOSTS
+
+
 def add_routes(app, service):
     accounts = service.accounts
     password_mode = service.settings.sign_in_required
@@ -35,8 +41,7 @@ def add_routes(app, service):
         if not password_mode:
             raise ValueError("Sign-in is off on this workstation")
         https = urlsplit(request.headers.get("origin", "")).scheme == "https"
-        # A password must not cross a network in clear text.
-        if not https and _host_name(request.headers.get("host", "")) not in LOOPBACK_HOSTS:
+        if not secure_enough(request):
             raise HTTPException(403, "Sign in through the HTTPS address")
         try:
             token, principal = await accounts.queued_sign_in(body.username, body.password.get_secret_value(), body.shared_device)

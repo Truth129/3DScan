@@ -143,11 +143,14 @@ removes sessions, so a restore revives no sign-in.
 `trash` row hides its case and nothing on disk moves, so a restored case keeps its files and
 revisions.
 
-While a case's `trash` row is `purging` or `purged`, triggers refuse any insert for its ID, in this
-build or an older one, so a deleted case never comes back. Each review-cache entry's record names
-its case, outside its key, so Delete forever can find the entry. A backup leaves out the folder of
-a deleted case, any surface asset its snapshot does not name, and the contour and agreement caches,
-which rebuild on a miss.
+Delete forever moves a case's `trash` row from `trashed` to `purging`. Its first step,
+`Store.purge_case`, deletes every row of the case in one transaction, so only that row and the audit
+log keep its ID. While the row is `purging` or `purged`, triggers refuse any insert for its ID, in
+this build or an older one, so a deleted case never comes back.
+
+Each review-cache entry's record names its case, outside its key, so Delete forever can find the
+entry. A backup leaves out the folder of a deleted case, any surface asset its snapshot does not
+name, and the contour and agreement caches, which rebuild on a miss.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
@@ -487,7 +490,8 @@ fails the request. The actions are:
 - `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`
 - `case.open`, once per session and case
 - `case.rename`
-- `case.trash`, `case.restore`, each written with the change itself
+- `case.trash`, `case.restore`, `case.purge`, each written with the change itself
+- `case.purge_password_failed`
 - `archive.query`, `archive.launch`
 - `export.slicer`, `export.html`, `export.seg`, `export.seg_file`, `export.view`
 

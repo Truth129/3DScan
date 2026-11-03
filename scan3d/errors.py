@@ -11,3 +11,7 @@ class NotFound(KeyError):
 
     def __str__(self):
         return str(self.args[0]) if self.args else "Not found"
+
+
+class Conflict(ValueError):
+    """The request is sound, but something under way must finish first. The API maps this to 409."""

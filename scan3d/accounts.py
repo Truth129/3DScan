@@ -165,22 +165,43 @@ class Accounts:
         if seconds := self.throttle.remaining(key):
             raise TooManyAttempts(seconds)
 
-    async def queued_sign_in(self, username, password, shared_device=False):
-        """Run `sign_in` in a hashing slot, waiting up to a second for one.
+    async def _in_hashing_slot(self, key, work, *args):
+        """Run `work` in a thread once a hashing slot is free, waiting up to a second on the event loop.
 
         The wait is on the event loop, so a flood holds no worker thread. It has to be a wait: if a
         busy slot refused at once, a refused attacker could retry at once and keep both slots busy.
         """
-        self._refuse_during_wait(username.casefold())
+        self._refuse_during_wait(key)
         try:
             async with asyncio.timeout(1):
                 await self.hashing.acquire()
         except TimeoutError:
             raise TooManyAttempts(1) from None
         try:
-            return await run_in_threadpool(self.sign_in, username, password, shared_device)
+            return await run_in_threadpool(work, *args)
         finally:
             self.hashing.release()
+
+    async def queued_sign_in(self, username, password, shared_device=False):
+        return await self._in_hashing_slot(username.casefold(), self.sign_in, username, password, shared_device)
+
+    async def queued_recheck(self, principal, password, case_id):
+        return await self._in_hashing_slot(principal.username.casefold(), self.recheck, principal, password, case_id)
+
+    def recheck(self, principal, password, case_id):
+        """A signed-in person's own password, checked again before Delete forever.
+
+        The wait is sign-in's, under the same name, so guesses here and at sign-in add up.
+        """
+        key = principal.username.casefold()
+        self._refuse_during_wait(key)
+        with self.store.connection() as con:
+            row = con.execute("SELECT password_hash FROM users WHERE id=? AND disabled_at IS NULL", (principal.id,)).fetchone()
+        if row is None or row["password_hash"] is None or not identity.verify_password(password, row["password_hash"]):
+            self.throttle.failed(key)
+            self.audit("case.purge_password_failed", principal.id, case_id)
+            raise WrongPassword
+        self.throttle.clear(key)
 
     def sign_in(self, username, password, shared_device=False):
         """Return (token, principal), or raise WrongPassword or TooManyAttempts."""

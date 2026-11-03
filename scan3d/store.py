@@ -10,7 +10,7 @@ import weakref
 
 from . import identity, inference_paths
 from .accounts import Accounts
-from .errors import NotFound
+from .errors import Conflict, NotFound
 from .fileio import atomic_json
 from .identifiers import identifier
 from .relationships import INDEPENDENT, relationship_dirty
@@ -345,6 +345,44 @@ class Store:
             if not con.execute("DELETE FROM trash WHERE case_id=? AND kind='case' AND state='trashed'", (case_id,)).rowcount:
                 raise NotFound("Case not found")
             Accounts._write_audit(con, "case.restore", actor_id, case_id)
+
+    @staticmethod
+    def _purge_refusal(con, case_id, busy):
+        """Why this case cannot be deleted forever now, raised. Not yours is the gate's 404, before this."""
+        if con.execute("SELECT 1 FROM trash WHERE case_id=? AND kind='case' AND state='trashed'", (case_id,)).fetchone() is None:
+            raise NotFound("Case not found")
+        # Trash flagged it to stop, and a job that never started holds no file, so only a running one waits.
+        running = con.execute("SELECT json_extract(data,'$.kind') AS kind FROM jobs WHERE case_id=? AND status='running' LIMIT 1", (case_id,)).fetchone()
+        if running and running["kind"] in ("orthanc_export", "orthanc_view_export"):
+            # A send Orthanc has started finishes on purpose, which can take its upload and two more minutes.
+            raise Conflict("A send to Orthanc is still finishing. Try again in a few minutes.")
+        if running:
+            raise Conflict("Work on this case is still stopping. Try again in a minute.")
+        if busy():
+            raise Conflict("This case is still in use. Try again in a minute.")
+
+    def check_purge(self, case_id, busy):
+        """The refusals of `purge_case`, with no write, so a case that cannot go yet costs no password hash."""
+        safe_id(case_id)
+        with self.connection() as con:
+            self._purge_refusal(con, case_id, busy)
+
+    def purge_case(self, case_id, actor_id, busy):
+        """Step 1 of Delete forever: every row of the case goes in one transaction, and its trash row stays as the tombstone."""
+        safe_id(case_id)
+        with self.connection() as con:
+            con.execute("BEGIN IMMEDIATE")
+            self._purge_refusal(con, case_id, busy)
+            counts = {
+                table: con.execute(f"DELETE FROM {table} WHERE case_id=?", (case_id,)).rowcount
+                for table in ("revisions", "jobs", "review_sessions", "image_assets")
+            }
+            for table in ("case_access", "case_opened", "case_summaries"):
+                con.execute(f"DELETE FROM {table} WHERE case_id=?", (case_id,))
+            con.execute("DELETE FROM trash WHERE case_id=? AND kind='revisions'", (case_id,))
+            con.execute("DELETE FROM cases WHERE id=?", (case_id,))
+            con.execute("UPDATE trash SET state='purging' WHERE case_id=? AND kind='case'", (case_id,))
+            Accounts._write_audit(con, "case.purge", actor_id, case_id, detail=counts)
 
     def rename_case(self, case_id, label):
         from .uploads import ImportConflict

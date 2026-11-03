@@ -26,21 +26,21 @@ or an unexpected 500 is plain text.
 | ------ | ------------------------------------------------------- | ----------------------------------------- |
 | 400    | Invalid input, or a `Host` outside the allowlist        | `ValueError`, `TrustedHostMiddleware`     |
 | 401    | No valid session, or a wrong password                   | `SessionGate`, `POST /api/session`        |
-| 403    | Mutation from another browser origin, or access this account lacks | Same-origin middleware, `SessionGate` |
+| 403    | Mutation from another browser origin, access this account lacks, or a wrong password on Delete forever | Same-origin middleware, `SessionGate`, `POST /api/trash/{id}/purge` |
 | 404    | Record is absent, belongs to another case, is in Trash, has been deleted forever, or this account cannot open it | `errors.NotFound`, `SessionGate`, a stay-purged trigger |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
-| 409    | Stale state; reload before retrying                     | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active |
+| 409    | Stale state; reload before retrying. Or work under way must finish first | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever |
 | 411    | Captured view or sign-in without a plain `Content-Length` | `dicom-view` upload and sign-in checks  |
 | 413    | Offline HTML export, captured view or sign-in over a size limit | `ExportTooLarge`, `dicom-view` upload and sign-in checks |
 | 422    | Schema validation failed                                | FastAPI                                   |
-| 429    | Too many sign-in attempts                               | `POST /api/session`                       |
+| 429    | Too many password attempts                              | `POST /api/session`, `POST /api/trash/{id}/purge` |
 | 499    | Client left while a mask or label union was being built | `volume-mask`, `volume-labels`            |
 | 500    | Unexpected exception, logged without internal detail    | Anything else, including a bare `KeyError` |
 | 502    | The configured Orthanc failed                           | `OrthancError`                            |
 | 503    | A cached surface or viewer bundle is missing            | Surface and export routes                 |
 
-The license and sign-in routes' validation messages are fixed, so a key or password is never
-echoed.
+The license, sign-in and Delete forever routes' validation messages are fixed, so a key or password
+is never echoed.
 [Inference path](#refusals-and-failures) refusals use fixed sentences, with no proof text or local
 paths.
 
@@ -110,7 +110,7 @@ with no session gets the 401, and a signed-in one the other.
 | Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
 | Archive   | `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
 | Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
-| Trashed   | `POST /api/trash/{id}/restore`                                          | 401, 404 `Case not found`                      |
+| Trashed   | `POST /api/trash/{id}/restore`, `POST /api/trash/{id}/purge`            | 401, 404 `Case not found`                      |
 | Job       | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`         | 401, 404 `Job not found`                       |
 | Upload    | `POST /api/imports/{id}/parts`, `.../finish`, `DELETE /api/imports/{id}` | 401, 404 `Upload not found`                   |
 
@@ -276,6 +276,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `PATCH /api/cases/{id}`                              | [Library](#library): rename             |
 | `POST /api/cases/{id}/open`                          | [Library](#library): record an open     |
 | `POST /api/cases/{id}/trash`, `GET /api/trash`, `POST /api/trash/{id}/restore` | Move to Trash, list it, restore |
+| `POST /api/trash/{id}/purge`                         | [Library](#library): Delete forever     |
 | `GET /api/sizes`, `GET /api/storage`                 | Case sizes, the storage report          |
 | `POST /api/cases/demo`, `.../import`, `.../import-local` | Phantom, multipart or local import  |
 | `POST /api/imports`, `.../{id}/parts`, `.../{id}/finish`, `DELETE .../{id}` | Staged upload            |
@@ -448,6 +449,25 @@ that does not exist answers 404 `Case not found`.
 **`POST /api/trash/{id}/restore`** returns the Case. Stopped jobs stay cancelled, so an import in
 progress comes back as `import_cancelled`. A case that is not yours, or is not in Trash, answers 404
 `Case not found`.
+
+**`POST /api/trash/{id}/purge`** deletes a case in Trash forever and returns `{id}`. The body is
+`{password}`, your own, in password mode, and `{confirm: true}` with sign-in off. The password shares
+sign-in's throttle and hashing slots, so guesses on either route add up. Every row of the case goes
+at once, in one transaction; its `trash` row and the audit log keep only its ID. A case that cannot
+go yet is refused before any password is checked. Every response is `no-store`.
+
+| Status | `detail`                                                            | When                                          |
+| ------ | ------------------------------------------------------------------- | --------------------------------------------- |
+| 400    | `Enter your password to delete forever.`                            | Password mode, no password                    |
+| 400    | `Confirm to delete forever.`                                        | Sign-in off, no `confirm: true`               |
+| 403    | `Delete forever through the HTTPS address`                          | `Origin` is not https and `Host` is not loopback |
+| 403    | `Wrong password.`                                                   | Never 401, which a browser reads as a lost session |
+| 404    | `Case not found`                                                    | Not yours, not in Trash, or already deleted   |
+| 409    | `A send to Orthanc is still finishing. Try again in a few minutes.` | A send of the case to Orthanc is running      |
+| 409    | `Work on this case is still stopping. Try again in a minute.`       | Another job of the case is running            |
+| 409    | `This case is still in use. Try again in a minute.`                 | A request on the case is in flight            |
+| 422    | `Invalid delete request.`                                           | Schema failure, with no input echoed          |
+| 429    | `Too many attempts. Try again in N seconds.`                        | Throttled, or no hashing slot in a second, with `Retry-After` |
 
 **`GET /api/sizes`** returns `{sizes}`, allocated bytes by case ID for this account's cases, including
 any in Trash. Sizes are measured on each request and leave out shared caches.

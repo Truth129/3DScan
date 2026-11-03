@@ -78,6 +78,7 @@ RULES = {
     ("POST", "/api/imports/{upload_id}/finish"): Rule("upload"),
     ("DELETE", "/api/imports/{upload_id}"): Rule("upload"),
     ("POST", "/api/trash/{case_id}/restore"): Rule("trashed"),
+    ("POST", "/api/trash/{case_id}/purge"): Rule("trashed"),
     ("GET", "/api/cases/{case_id}"): Rule("case", "case.open"),
     ("PATCH", "/api/cases/{case_id}"): Rule("case", "case.rename"),
     ("GET", "/api/cases/{case_id}/orthanc-series"): Rule("case_archive"),
