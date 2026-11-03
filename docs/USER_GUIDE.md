@@ -30,7 +30,8 @@ header. The first admin receives every case that has no owner.
 **Setting your password.** An admin sends you a link from **People**. Open it, type a password of
 10 to 1,024 characters twice and choose **Set password**. That signs you in, in place of anyone
 signed in on this browser. The link works once, within a day; if it has expired or was used, ask
-for a new one.
+for a new one. Set your password as soon as you open the link: the browser's history keeps the link,
+which works until it is used, and an admin's new link ends one left unused.
 
 **Signing in.** Enter your username and password. Over a network, use the HTTPS address. Everyone
 signed in sees and works on the same cases. You land on the [Library](#library), and a reload stays
@@ -123,12 +124,14 @@ If a case will not open, the page says why and you return to the case you had op
 
 ## Working on the same case
 
-Two people, or two tabs, can work on one case at once, and neither loses the other's work.
+Two people, or two tabs, can work on one case at once, and no saved version or draft is replaced
+unseen.
 
-**A newer version.** When someone else or another tab saves a newer version of the case you have
-open, the header says so within a minute, or when you return to the tab. **Show the newer version**
-opens it. Until then a refine, a correction or **Activate** from your page is refused instead of
-replacing the newer work, and a correction made on the old version cannot be saved.
+**A newer version.** When your page is not running its own work and someone else or another tab
+saves a newer version of the case you have open, the header says so within a minute, or when you
+return to the tab. **Show the newer version** opens it. Until then a refine, a correction or
+**Activate** from your page is refused instead of replacing the newer work, and a correction made
+on the old version cannot be saved.
 
 **Someone else's job or draft.** A job someone else started says **started by** and their name in
 the header, and a draft they started says so in the review toolbar. **Discard** on their draft names

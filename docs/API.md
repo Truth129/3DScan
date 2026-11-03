@@ -502,7 +502,7 @@ this route with the image-only revision.
 - `expected_active_revision_id` is the active revision the page shows. When another one is active by
   then, it answers 409 `Someone else or another tab saved a newer version of this case. Show it, then
   try again.` and changes nothing.
-- Without it, as from an older page, the route activates whatever is active.
+- Without it, as from an older page, the route activates the requested revision whatever is active.
 
 **`PATCH /api/cases/{id}/revisions/{rid}`** takes `{review_status}` and returns the Revision.
 Image-only revisions are refused.
