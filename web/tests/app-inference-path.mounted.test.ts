@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { h, type ComponentInternalInstance } from 'vue';
 import App from '../src/App.vue';
 import { api, ApiError } from '../src/lib/api';
 import { SEGMENT_PATH_KEY } from '../src/lib/inference-path';
-import { runCaseCheck } from '../src/lib/session';
+import { ARCHIVE_OFF, runCaseCheck, session } from '../src/lib/session';
 import type { Case, InferencePathRow, InteractiveReview, Job, Revision, SegmentationCatalog, Structure } from '../src/types';
 import { choose, createApp, FakeElement, press, settled } from './fake-dom';
 
@@ -402,6 +402,37 @@ describe('the header while a job runs', () => {
     vi.mocked(api.jobs).mockResolvedValue([{ ...queued, inference_path: bound(nvidia), started_by: 'Meera P' }]);
     const root = await start();
     expect(banner(root)).toBe('Waiting for the processing worker · NVIDIA Test GPU · started by Meera P');
+  });
+});
+
+describe('an account without the archive', () => {
+  beforeEach(() => {
+    session.value = {
+      mode: 'password',
+      setup_required: false,
+      user: { id: 'ravi', username: 'ravi', display_name: 'Ravi', role: 'member', archive_access: false },
+    };
+  });
+  afterEach(() => (session.value = undefined));
+
+  it('offers no Add series from Orthanc', async () => {
+    workstation([amd]);
+    vi.mocked(api.case).mockImplementation(async () => ({ ...scan, active_revision_id: null, import_source: { kind: 'orthanc' } }));
+    expect((await start()).named('add-series')).toBeUndefined();
+  });
+  it('says why an Orthanc launch cannot open, and asks the server nothing', async () => {
+    workstation([amd]);
+    const series = Array(5).fill('1234abcd').join('-');
+    vi.stubGlobal('window', { ...window, location: { hash: `#orthanc-series=${series}&orthanc-source=${'a'.repeat(64)}`, pathname: '/', search: '' } });
+    const resolve = vi.spyOn(api, 'orthancLaunch').mockImplementation(() => new Promise(() => {}));
+    const root = await start();
+    expect(root.content).toContain(ARCHIVE_OFF);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+  it('shows a member no form for the license key', async () => {
+    workstation([amd]);
+    const license = (await openPanel()).all.find(node => node.props['aria-label'] === 'TotalSegmentator license settings')!;
+    expect(license.all.some(node => node.tag === 'form')).toBe(false);
   });
 });
 
