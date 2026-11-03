@@ -93,7 +93,17 @@ def add_routes(app, service):
 
     @app.post("/api/cases/{case_id}/process")
     def process(case_id: str, body: Process):
-        return public_job(service.process(case_id, body.series_uid, body.profile, body.phase, cardiac_phase=body.cardiac_phase, rr_percent=body.rr_percent))
+        return public_job(
+            service.process(
+                case_id,
+                body.series_uid,
+                body.profile,
+                body.phase,
+                cardiac_phase=body.cardiac_phase,
+                rr_percent=body.rr_percent,
+                expected_active_revision_id=body.expected_active_revision_id,
+            )
+        )
 
     @app.get("/api/cases/{case_id}/images")
     def image_assets(case_id: str):

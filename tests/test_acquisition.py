@@ -15,6 +15,7 @@ from scan3d.api import create_app
 from scan3d.api_models import Process
 from scan3d.config import Settings
 from scan3d.segmentation_options import normalize_options
+from test_api import run
 
 
 @pytest.fixture
@@ -82,6 +83,20 @@ def test_all_studies_preserve_selected_ct_without_inference(acquisition_case, pr
     # Region labels cannot add, remove or change explicitly requested tasks.
     assert normalize_options(profile, {})["tasks"] == ["total"]
     assert normalize_options(profile, {"tasks": ["lung_vessels"]})["tasks"] == ["lung_vessels"]
+
+
+def test_a_prepare_from_a_page_behind_fails_and_keeps_the_newer_revision(acquisition_case):
+    http, service, case, *_ = acquisition_case
+    route, body = f"/api/cases/{case['id']}/process", dict(series_uid="selected-series", profile="chest", phase="venous")
+    shown = run(service, http.post(route, json=body).json())
+    behind = {**body, "expected_active_revision_id": shown["revision_id"]}
+    first, second = http.post(route, json=behind).json(), http.post(route, json=behind).json()
+    newer = run(service, first)
+    assert shown["status"] == newer["status"] == "completed"
+    failed = run(service, second)
+    assert failed["status"] == "failed" and failed["error"] == "The active revision changed; start from the current revision"
+    # The page's revision rides beside the payload, which is the new revision's acquisition.
+    assert failed["payload"] == body and service.store.get("cases", case["id"])["active_revision_id"] == newer["revision_id"]
 
 
 @pytest.mark.parametrize("rr_percent", [0, 69, 69.5, 100])

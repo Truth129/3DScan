@@ -101,6 +101,7 @@ class Process(Input):
     phase: str = Field(min_length=1, max_length=80)
     cardiac_phase: CardiacPhase | None = None
     rr_percent: float | None = Field(default=None, ge=0, le=100, strict=True)
+    expected_active_revision_id: str | None = None
 
 
 class Segment(Input):

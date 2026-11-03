@@ -457,10 +457,10 @@ keeps it out of real agreement statistics.
 
 ## Preparation and segmentation
 
-**`POST /api/cases/{id}/process`** takes `{series_uid, profile, phase, cardiac_phase?, rr_percent?}`
-and returns a `process` job, which creates an image-only revision with no inference. Unsupported
-series and disabled modalities are refused. The fields are saved metadata only: they never select
-frames, change intensities, crop anatomy or choose a task.
+**`POST /api/cases/{id}/process`** takes `{series_uid, profile, phase, cardiac_phase?, rr_percent?,
+expected_active_revision_id?}` and returns a `process` job, which creates an image-only revision
+with no inference. Unsupported series and disabled modalities are refused. The labels are saved
+metadata only: they never select frames, change intensities, crop anatomy or choose a task.
 
 - `profile`: `chest`, `abdomen`, `chest_abdomen` (the default), `corcta`, `cardiac`,
   `chest_abdomen_pelvis`, `abdomen_pelvis`, `pelvis`, `head_neck`, `breast`, `whole_body`, `other`
@@ -468,6 +468,9 @@ frames, change intensities, crop anatomy or choose a task.
 - `phase`: required free text of up to 80 characters, for contrast timing.
 - `cardiac_phase` (`unknown`, `best_diastolic`, `best_systolic`, `diastolic`, `systolic`, `other`)
   and `rr_percent` (0–100): only for `cardiac` and `corcta`.
+- `expected_active_revision_id` is the active revision the page shows. If another one is active when
+  the job saves, it fails with `The active revision changed; start from the current revision` and the
+  newer revision stays. Without it, the new image becomes active whatever is.
 
 **`POST /api/cases/{id}/segment`** takes `{revision_id, task?, robust_crop?, body_seg?,
 remove_small_blobs?, inference_path?}` and returns a `segment` job. `revision_id` must be active.

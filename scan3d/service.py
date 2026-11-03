@@ -267,8 +267,12 @@ class Service:
             self.store.save("cases", case)
             raise
 
-    def process(self, case_id, series_uid, profile, phase, *, cardiac_phase=None, rr_percent=None):
-        """Prepare a reference image for viewing, without running segmentation."""
+    def process(self, case_id, series_uid, profile, phase, *, cardiac_phase=None, rr_percent=None, expected_active_revision_id=None):
+        """Prepare a reference image for viewing, without running segmentation.
+
+        `expected_active_revision_id` is the active revision the page showed, so a page behind someone
+        else's save cannot replace it with a bare image. Older pages and the command line send none.
+        """
         from .acquisition import acquisition_labels
 
         case = self.store.get("cases", case_id)
@@ -282,7 +286,9 @@ class Service:
         if selected.get("modality", "CT") != "CT" and (cardiac_phase is not None or rr_percent is not None):
             raise ValueError("Cardiac CT timing does not apply to a static MR volume")
         acquisition = acquisition_labels(series_uid, profile, phase, cardiac_phase=cardiac_phase, rr_percent=rr_percent)
-        return self.store.enqueue(case_id, "process", acquisition)
+        # Beside the payload, which becomes the new revision's acquisition.
+        fields = {} if expected_active_revision_id is None else {"expected_active_revision_id": expected_active_revision_id}
+        return self.store.enqueue(case_id, "process", acquisition, **fields)
 
     def segment_case(self, case_id, revision_id, task=None, robust_crop=False, body_seg=False, remove_small_blobs=False, inference_path=None):
         from .segmentation_options import default_task, normalize_options
@@ -505,10 +511,11 @@ class Service:
                 raise ValueError("Unknown job kind")
             self.check_cancel(job)
             # A refine or correction is built on the revision its page showed, and must not replace one someone saved meanwhile.
+            # So is a prepare from a page that named one; only a prepare job carries it, beside its payload.
             expected = (
                 job["payload"]["revision_id"]
                 if job["kind"] in ("segment", "include_all", "review_accept", "dicom_seg_import", "refine", "correction")
-                else None
+                else job.get("expected_active_revision_id")
             )
             review_guard = {key: job["payload"][key] for key in ("session_id", "generation")} if job["kind"] == "review_accept" else None
             self.store.commit_revision(revision, job, expected_active_revision_id=expected, review_guard=review_guard)
