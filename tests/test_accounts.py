@@ -511,8 +511,8 @@ def test_the_cli_adds_changes_and_lists_accounts(tmp_path, monkeypatch, capsys):
     added = run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", "--display-name", "First Person", passwords=[password, password])
     assert "first" in added and str(tmp_path / "data") in added and added.rstrip().endswith(": 1") and password not in added
     listing = run_cli(monkeypatch, capsys, tmp_path, "list")
-    user_id, username, role, state = listing.strip().split("\t")
-    assert (username, role, state) == ("first", "admin", "active") and "scrypt" not in listing
+    user_id, username, role, archive, state = listing.strip().split("\t")
+    assert (username, role, archive, state) == ("first", "admin", "archive", "active") and "scrypt" not in listing
     changed = generated_password()
     assert "first" in run_cli(monkeypatch, capsys, tmp_path, "passwd", "first", passwords=[changed, changed])
     accounts = Accounts(store)
@@ -520,6 +520,23 @@ def test_the_cli_adds_changes_and_lists_accounts(tmp_path, monkeypatch, capsys):
     with store.connection() as con:
         assert [row[0] for row in con.execute("SELECT action FROM audit_events ORDER BY seq")] == ["user.add", "case.adopt", "user.password", "session.sign_in"]
         assert con.execute("SELECT archive_access FROM users").fetchone()[0] == 1
+
+
+def test_the_cli_changes_a_role_and_disables_and_enables_an_account(tmp_path, monkeypatch, capsys):
+    password = generated_password()
+
+    def listed():
+        return {fields[1]: fields[2:] for fields in (line.split("\t") for line in run_cli(monkeypatch, capsys, tmp_path, "list").splitlines())}
+
+    run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", passwords=[password, password])
+    with pytest.raises(SystemExit, match="Keep at least one administrator who can sign in"):
+        run_cli(monkeypatch, capsys, tmp_path, "role", "first", "member")
+    run_cli(monkeypatch, capsys, tmp_path, "add", "second", "--admin", passwords=[password, password])
+    assert run_cli(monkeypatch, capsys, tmp_path, "role", "first", "member") == "first is now a member\n"
+    assert run_cli(monkeypatch, capsys, tmp_path, "disable", "first") == "Disabled first and signed it out everywhere\n"
+    assert listed() == {"first": ["member", "archive", "disabled"], "second": ["admin", "archive", "active"]}
+    assert run_cli(monkeypatch, capsys, tmp_path, "enable", "first") == "Enabled first\n"
+    assert listed()["first"] == ["member", "archive", "active"]
 
 
 def test_the_cli_needs_admin_matching_passwords_and_a_known_account(tmp_path, monkeypatch, capsys):

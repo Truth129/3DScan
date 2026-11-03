@@ -51,8 +51,8 @@ every name in `SCAN3D_ALLOWED_HOSTS`. Loopback hosts are `127.0.0.1`, `::1`, `[:
 Any other value refuses to start.
 
 - `off`: one built-in user, and anything that can reach the port can read every case.
-- `password`: everyone needs an account. Create the first with `scan3d users add NAME --admin`. See
-  the [user guide](USER_GUIDE.md#sign-in).
+- `password`: everyone needs an account. Create the first with `scan3d users add NAME --admin`, and
+  add others from People. See the [user guide](USER_GUIDE.md#sign-in).
 - Beyond loopback a sign-in needs HTTPS, so publish 3DScan through an HTTPS reverse proxy.
 - A proxy that rewrites `Host` to loopback hides the published name from this table, so it must set
   `SCAN3D_AUTH=password` itself.

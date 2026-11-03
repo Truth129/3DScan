@@ -47,8 +47,9 @@ intact. Signing in as someone else reloads the page.
 .venv/bin/scan3d users passwd NAME
 ```
 
-`.venv/bin/scan3d users list` shows the accounts. Anyone with a shell on the machine can still read
-every file, so protect the machine and the data directory as well.
+`.venv/bin/scan3d users list` shows the accounts, with role, archive access and state. Anyone with
+a shell on the machine can still read every file, so protect the machine and the data directory as
+well.
 
 ## Library
 
@@ -629,3 +630,14 @@ A `refine` recipe is JSON in patient RAS millimetres:
 The operations are `keep_region` and `erase_region` with `bounds_ras`, and `keep_component` and
 `remove_component` with `seed_ras: [R, A, S]`. Operations with no effect, or that delete a whole
 structure, are rejected.
+
+Accounts can also be changed on the workstation. A change applies from the account's next request:
+
+```bash
+.venv/bin/scan3d users role NAME member     # or admin
+.venv/bin/scan3d users disable NAME
+.venv/bin/scan3d users enable NAME
+```
+
+`disable` ends the account's sessions and links, and `enable` brings back neither. The last admin
+who can sign in cannot be made a member or disabled.

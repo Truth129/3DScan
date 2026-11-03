@@ -50,9 +50,18 @@ def manage_users(args):
                 accounts.require_user(args.name)
                 accounts.set_password(args.name, new_password())
                 print(f"Changed the password of {args.name} and signed it out everywhere")
+            elif args.action == "role":
+                accounts.set_role(None, accounts.require_user(args.name), args.role)
+                print(f"{args.name} is now {'an administrator' if args.role == 'admin' else 'a member'}")
+            elif args.action == "disable":
+                accounts.disable(None, accounts.require_user(args.name))
+                print(f"Disabled {args.name} and signed it out everywhere")
+            elif args.action == "enable":
+                accounts.enable(None, accounts.require_user(args.name))
+                print(f"Enabled {args.name}")
             else:
-                for user in accounts.users():
-                    print(user["id"], user["username"], user["role"], "disabled" if user["disabled_at"] else "active", sep="\t")
+                for person in accounts.people():
+                    print(person["id"], person["username"], person["role"], "archive" if person["archive_access"] else "no archive", person["state"], sep="\t")
     except (NotFound, ValueError) as exc:
         raise SystemExit(str(exc)) from None
     except (EOFError, KeyboardInterrupt):
@@ -80,11 +89,18 @@ def main():
     actions = users.add_subparsers(dest="action", required=True)
     add_user = actions.add_parser("add", help="Create an account, which also takes any case with no owner")
     add_user.add_argument("name")
-    # Required for now, so that a plain add can mean a member later without changing what it does today.
-    add_user.add_argument("--admin", action="store_true", required=True, help="Every account is an administrator for now")
+    # Required: the command line adds administrators. A member comes from People with a link, so nobody types their password.
+    add_user.add_argument("--admin", action="store_true", required=True, help="The command line adds administrators only")
     add_user.add_argument("--display-name")
     passwd = actions.add_parser("passwd", help="Set a new password, which ends the account's sessions and links")
     passwd.add_argument("name")
+    role = actions.add_parser("role", help="Make an account an administrator or a member")
+    role.add_argument("name")
+    role.add_argument("role", choices=("admin", "member"))
+    disable = actions.add_parser("disable", help="Stop an account signing in, and end its sessions and links")
+    disable.add_argument("name")
+    enable = actions.add_parser("enable", help="Let a disabled account sign in again")
+    enable.add_argument("name")
     actions.add_parser("list", help="List accounts, without password hashes")
     sub.add_parser("demo")
     optimize = sub.add_parser("optimize", help="Prepare incremental viewer assets for an existing case without resegmenting")

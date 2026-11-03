@@ -119,7 +119,7 @@ class Accounts:
         self.hashing = asyncio.Semaphore(2)
 
     def add_user(self, username, password, display_name=None):
-        """Every account is an administrator with the archive until members exist."""
+        """The command line adds administrators only; a member comes from People with a link, so nobody types their password."""
         identity.check_username(username)
         name = _display_name(username, display_name)
         encoded = identity.hash_password(password)
@@ -152,13 +152,10 @@ class Accounts:
 
     def require_user(self, username):
         with self.store.connection() as con:
-            if con.execute("SELECT 1 FROM users WHERE username=?", (username,)).fetchone() is None:
-                raise NotFound("User not found")
-
-    def users(self):
-        with self.store.connection() as con:
-            rows = con.execute("SELECT id,username,display_name,role,archive_access,created_at,disabled_at FROM users ORDER BY created_at,id").fetchall()
-        return [dict(row) for row in rows]
+            row = con.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+        if row is None:
+            raise NotFound("User not found")
+        return row["id"]
 
     def has_users(self):
         with self.store.connection() as con:
