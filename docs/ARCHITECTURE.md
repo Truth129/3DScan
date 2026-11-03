@@ -499,7 +499,7 @@ label, search term or typed username. A row means a request was allowed to start
 fails the request. The actions are:
 
 - `session.sign_in`, `session.sign_in_failed`, `session.sign_out`, `session.sign_out_others`
-- `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`
+- `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`, `cache.clear`
 - `case.open`, once per session and case
 - `case.rename`
 - `case.trash`, `case.restore`, `case.purge`, each written with the change itself

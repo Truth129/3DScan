@@ -80,6 +80,11 @@ def add_routes(app, service):
     def storage():
         return storage_report(service.store, service.settings.data_dir, identity.case_scope(identity.current()))
 
+    @app.post("/api/storage/clear-caches")
+    def clear_caches():
+        freed = service.clear_caches()
+        return {"freed": freed, "storage": storage_report(service.store, service.settings.data_dir, identity.case_scope(identity.current()))}
+
     @app.post("/api/cases/{case_id}/process")
     def process(case_id: str, body: Process):
         return public_job(service.process(case_id, body.series_uid, body.profile, body.phase, cardiac_phase=body.cardiac_phase, rr_percent=body.rr_percent))

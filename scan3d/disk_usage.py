@@ -12,6 +12,7 @@ import stat
 SHARED_CACHES = ("review-cache", "surface-cache", "analysis-cache", "agreement-cache", "cinematic-cache")
 # Rebuilt when next needed, so Clear caches may empty them. surface-cache/assets is not: a read answers 503.
 REBUILT_ON_A_MISS = ("analysis-cache", "agreement-cache", "surface-cache/contours")
+REBUILDABLE = ("review-cache", *REBUILT_ON_A_MISS)
 
 
 def tree_bytes(path):
@@ -50,6 +51,7 @@ def storage_report(store, root, scope):
         "trash": sum(row["size"] for row in rows if row["trashed_at"]),
         "shared_caches": sum(tree_bytes(root / name) for name in SHARED_CACHES),
         "other": sum(tree_bytes(path) for path in others),
+        "rebuildable": sum(tree_bytes(root / name) for name in REBUILDABLE),
     }
     # Another owner's case gives its owner, date and size. Its ID and Trash state stay theirs.
     shown = [row if row["label"] is not None else {key: row[key] for key in ("label", "owner", "created_at", "size")} for row in rows]

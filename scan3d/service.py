@@ -19,7 +19,8 @@ from .accounts import Accounts
 from .activity import Activity
 from .config import Settings
 from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
-from .janitor import Janitor, generation_locks, remove_tree
+from .errors import Conflict
+from .janitor import Janitor, empty_rebuildable, generation_locks, maintenance_lock, remove_tree
 from .orthanc_models import series_source
 from .store import LANES, Store, identifier, job_lane, now
 
@@ -364,6 +365,19 @@ class Service:
         self.store.purge_case(case_id, identity.actor_id(), lambda: self.activity.busy(case_id))
         self.janitor.wake.set()
         return {"id": case_id}
+
+    def clear_caches(self):
+        """Empty the rebuildable caches for an admin, refused with a reason while anything could be using them."""
+        with maintenance_lock(self.settings.data_dir, exclusive=True) as held:
+            if not held:
+                raise Conflict("A backup, a deletion or another 3DScan command is running. Try again when it finishes.")
+            # This request is itself in flight.
+            with self.idle(own=1) as refusal:
+                if refusal:
+                    raise Conflict(refusal)
+                freed = empty_rebuildable(self.settings.data_dir)
+        self.accounts.audit("cache.clear", identity.actor_id(), detail={"bytes": freed})
+        return freed
 
     def stage(self, job, name):
         self.check_cancel(job)

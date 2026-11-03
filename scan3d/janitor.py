@@ -15,7 +15,7 @@ import re
 import shutil
 import threading
 
-from .disk_usage import REBUILT_ON_A_MISS
+from .disk_usage import REBUILDABLE, REBUILT_ON_A_MISS, tree_bytes
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +177,20 @@ def sweep_surface_assets(directory, live_keys):
             key = item.name.removeprefix(".")[:64]
             if _KEY.fullmatch(key) and key not in live_keys:
                 remove_tree(item)
+
+
+def empty_rebuildable(data_dir):
+    """Clear caches: every review volume and the caches rebuilt on a miss. Returns the bytes freed."""
+    data_dir = Path(data_dir)
+    freed = sum(tree_bytes(data_dir / name) for name in REBUILDABLE)
+    review = data_dir / "review-cache"
+    for child in review.iterdir() if review.is_dir() else ():
+        # A holder of a generation lock must keep the same file.
+        if not child.name.endswith(".lock"):
+            remove_tree(child)
+    for name in REBUILT_ON_A_MISS:
+        remove_tree(data_dir / name)
+    return freed
 
 
 class Janitor:

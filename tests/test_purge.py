@@ -12,6 +12,7 @@ import pytest
 from scan3d import identity
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.disk_usage import REBUILDABLE, REBUILT_ON_A_MISS, tree_bytes
 from scan3d.janitor import maintenance_lock, review_entries
 from scan3d.store import identifier
 from test_access import BASE, account
@@ -401,5 +402,55 @@ def test_an_idle_gpu_lane_releases_the_warm_engine_after_a_purge(tmp_path, monke
     service.start()
     try:
         assert released.wait(2) and not service.release_engine.is_set()
+    finally:
+        service.stop()
+
+
+def test_clear_caches_empties_rebuildable_caches_and_keeps_surfaces(started):
+    service, http = started
+    data = service.settings.data_dir
+    for name in REBUILDABLE:
+        fill(data / name / "aa" / "cached.bin", 8192)
+    fill(data / "review-cache" / "generation-full.lock", 0)
+    kept = [data / "surface-cache" / "assets" / "aa" / "x.glb", data / "cases" / service.new_case("Synthetic")["id"] / "scan.bin"]
+    for path in kept:
+        fill(path, 8192)
+    expected = sum(tree_bytes(data / name) for name in REBUILDABLE)
+    response = http.post("/api/storage/clear-caches")
+    assert response.status_code == 200, response.text
+    freed = response.json()["freed"]
+    assert freed == expected >= 4 * 8192
+    assert all(child.name.startswith("generation-") and child.name.endswith(".lock") for child in (data / "review-cache").iterdir())
+    assert not any((data / name).exists() for name in REBUILT_ON_A_MISS)
+    assert all(path.exists() for path in kept)
+    assert response.json()["storage"]["totals"]["rebuildable"] < freed
+    with service.store.connection() as con:
+        row = con.execute("SELECT detail FROM audit_events WHERE action='cache.clear' ORDER BY seq DESC").fetchone()
+    assert json.loads(row["detail"]) == {"bytes": freed}
+
+
+def test_clear_caches_refuses_while_anything_is_active(tmp_path):
+    service, http = off_mode(tmp_path)
+
+    def refusal():
+        response = http.post("/api/storage/clear-caches")
+        assert response.status_code == 409, response.text
+        return response.json()["detail"]
+
+    assert refusal() == "Another 3DScan command was running when 3DScan started. Restart 3DScan, then try again."
+    service.start()
+    try:
+        # Written as running in one step, so no lane claims it first.
+        job = service.store.save("jobs", dict(id=identifier(), case_id=service.new_case("Synthetic")["id"], kind="include_all", status="running"))
+        assert refusal() == "Jobs are running. Try again when they finish."
+        service.store.update_job(job["id"], status="completed")
+        service.activity.enter()
+        try:
+            assert refusal() == "Images are still loading. Try again in a minute."
+        finally:
+            service.activity.leave()
+        with maintenance_lock(service.settings.data_dir, exclusive=False):
+            assert refusal() == "A backup, a deletion or another 3DScan command is running. Try again when it finishes."
+        assert http.post("/api/storage/clear-caches").status_code == 200
     finally:
         service.stop()

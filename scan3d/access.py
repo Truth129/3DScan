@@ -65,6 +65,7 @@ RULES = {
     ("GET", _LICENSE): Rule("signed_in"),
     ("POST", "/api/cases/import-local"): Rule("admin", "case.import"),
     ("GET", "/api/storage"): Rule("admin"),
+    ("POST", "/api/storage/clear-caches"): Rule("admin"),
     ("PUT", _LICENSE): Rule("admin", "license.change"),
     ("DELETE", _LICENSE): Rule("admin", "license.change"),
     ("POST", "/api/orthanc/studies/query"): Rule("archive", "archive.query"),

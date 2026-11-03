@@ -29,7 +29,7 @@ or an unexpected 500 is plain text.
 | 403    | Mutation from another browser origin, access this account lacks, or a wrong password on Delete forever | Same-origin middleware, `SessionGate`, `POST /api/trash/{id}/purge` |
 | 404    | Record is absent, belongs to another case, is in Trash, has been deleted forever, or this account cannot open it | `errors.NotFound`, `SessionGate`, a stay-purged trigger |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
-| 409    | Stale state; reload before retrying. Or work under way must finish first | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever |
+| 409    | Stale state; reload before retrying. Or work under way must finish first | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever and Clear caches |
 | 411    | Captured view or sign-in without a plain `Content-Length` | `dicom-view` upload and sign-in checks  |
 | 413    | Offline HTML export, captured view or sign-in over a size limit | `ExportTooLarge`, `dicom-view` upload and sign-in checks |
 | 422    | Schema validation failed                                | FastAPI                                   |
@@ -107,7 +107,7 @@ with no session gets the 401, and a signed-in one the other.
 | --------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
 | Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, the viewer files | None                                         |
 | Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `GET /api/sizes`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/orthanc/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
-| Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
+| Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license` | 401, 403 `Administrator access is required` |
 | Archive   | `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
 | Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
 | Trashed   | `POST /api/trash/{id}/restore`, `POST /api/trash/{id}/purge`            | 401, 404 `Case not found`                      |
@@ -278,6 +278,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `POST /api/cases/{id}/trash`, `GET /api/trash`, `POST /api/trash/{id}/restore` | Move to Trash, list it, restore |
 | `POST /api/trash/{id}/purge`                         | [Library](#library): Delete forever     |
 | `GET /api/sizes`, `GET /api/storage`                 | Case sizes, the storage report          |
+| `POST /api/storage/clear-caches`                     | [Library](#library): Clear caches       |
 | `POST /api/cases/demo`, `.../import`, `.../import-local` | Phantom, multipart or local import  |
 | `POST /api/imports`, `.../{id}/parts`, `.../{id}/finish`, `DELETE .../{id}` | Staged upload            |
 | `GET /api/orthanc/status`, `POST .../studies/query`  | Connector state, study search           |
@@ -478,8 +479,21 @@ any in Trash. Sizes are measured on each request and leave out shared caches.
 
 - `cases` is every case as `{id, label, owner, created_at, trashed_at, size}`. Another owner's case
   gives only `{label: null, owner, created_at, size}`. With sign-in off every row is complete.
-- `totals` is `{cases, trash, shared_caches, other}` in bytes, covering every account.
+- `totals` is `{cases, trash, shared_caches, other, rebuildable}` in bytes, covering every account.
+  `rebuildable` is what Clear caches would free.
 - `disk` is `{total, free}` for the data directory's volume.
+
+**`POST /api/storage/clear-caches`** empties the caches that rebuild when next needed: every review
+volume, the analysis and agreement caches and the surface contours. Saved surfaces and cases stay. It
+returns `{freed, storage}`, the bytes freed and a fresh storage report. A member gets 403
+`Administrator access is required`.
+
+| Status | `detail`                                                                                  | When                                        |
+| ------ | ----------------------------------------------------------------------------------------- | ------------------------------------------- |
+| 409    | `A backup, a deletion or another 3DScan command is running. Try again when it finishes.`  | Something holds `maintenance.lock`          |
+| 409    | `Another 3DScan command was running when 3DScan started. Restart 3DScan, then try again.` | Another process held `worker.lock` at start |
+| 409    | `Jobs are running. Try again when they finish.`                                           | A job is running                            |
+| 409    | `Images are still loading. Try again in a minute.`                                        | Another request is in flight, or a review volume is being written |
 
 ## Jobs
 
