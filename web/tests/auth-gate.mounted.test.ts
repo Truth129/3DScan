@@ -11,8 +11,8 @@ vi.mock('../src/App.vue', async () => {
   return { default: { render: () => h('div', { class: 'app-shell', 'data-case': localStorage.getItem('scan3d-case') }, 'Workspace') } };
 });
 
-const asha: SessionUser = { id: 'asha-id', username: 'asha', display_name: 'Asha', role: 'admin' };
-const ravi: SessionUser = { id: 'ravi-id', username: 'ravi', display_name: 'Ravi', role: 'admin' };
+const asha: SessionUser = { id: 'asha-id', username: 'asha', display_name: 'Asha', role: 'admin', archive_access: true };
+const ravi: SessionUser = { id: 'ravi-id', username: 'ravi', display_name: 'Ravi', role: 'admin', archive_access: true };
 const seen = (user: SessionUser | null, setup_required = false): SessionView => ({ mode: 'password', user, setup_required });
 
 class FakeChannel {
@@ -36,13 +36,21 @@ class FakeObserver {
 
 const reload = vi.fn();
 let channels: FakeChannel[], observers: FakeObserver[], signIns: unknown[], current: SessionView, accepts: SessionView | undefined, refusing: boolean;
+let redeems: unknown[], redeemed: SessionView | undefined;
+const USED = 'This link has expired or was already used. Ask an administrator for a new one.';
 
-/** The server: `current` answers the session route, `accepts` a sign-in, and `refusing` every other route. */
+/** The server: `current` answers the session route, `accepts` a sign-in, `redeemed` a link, and `refusing` every other route. */
 function workstation(view: SessionView) {
   current = view;
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === '/api/session/redeem') {
+        redeems.push(JSON.parse(init!.body as string));
+        if (!redeemed) return Response.json({ detail: USED }, { status: 410 });
+        current = redeemed;
+        return Response.json(current);
+      }
       if (url !== '/api/session') return new Response(null, { status: refusing ? 401 : 200 });
       if (init?.method === 'POST') {
         signIns.push(JSON.parse(init.body as string));
@@ -85,6 +93,8 @@ beforeEach(() => {
   observers = [];
   signIns = [];
   accepts = undefined;
+  redeems = [];
+  redeemed = undefined;
   refusing = false;
   reload.mockClear();
   session.value = undefined;
@@ -104,6 +114,7 @@ describe('opening the page', () => {
     expect(named(view, 'username').getAttribute('autocomplete')).toBe('username');
     expect(named(view, 'password').getAttribute('autocomplete')).toBe('current-password');
     expect(view.text()).toContain('Signs out when the browser closes, and after 12 hours at most.');
+    expect(view.text()).toContain('Forgotten your password, or cannot sign in? An administrator can send you a reset link.');
     accepts = seen(asha);
     await signIn(view);
     expect(signIns).toEqual([{ username: 'asha', password: 'made up for this test', shared_device: false }]);
@@ -165,6 +176,102 @@ describe('opening the page', () => {
     expect(app(view).getAttribute('data-case')).toBeNull();
     expect(localStorage.getItem('scan3d-job:case-of-asha')).toBe('job-of-asha');
     localStorage.removeItem('scan3d-job:case-of-asha');
+  });
+});
+
+describe('a set-password link', () => {
+  const CODE = 'made-up-link-code',
+    PASSWORD = 'made up for this link';
+  let replaceState: ReturnType<typeof vi.fn>, tab: EventTarget;
+  beforeEach(() => {
+    replaceState = vi.fn();
+    vi.stubGlobal('history', { state: null, replaceState });
+    // A window of its own, so this test can dispatch hashchange.
+    tab = new EventTarget();
+    vi.stubGlobal('addEventListener', tab.addEventListener.bind(tab));
+    vi.stubGlobal('removeEventListener', tab.removeEventListener.bind(tab));
+  });
+  const opened = (username = 'ravi') => (location.hash = `#set-password=${CODE}&username=${username}`);
+  async function setPassword(view: Mounted, repeated = PASSWORD) {
+    fill(named(view, 'new-password'), PASSWORD);
+    fill(named(view, 'repeat-password'), repeated);
+    view.all(element => element.tagName === 'FORM')[0].dispatchEvent(new Event('submit', { cancelable: true }));
+    await settled();
+  }
+
+  it('takes the code out of the address before anything else, and signs in with the new password', async () => {
+    opened();
+    const view = await gate(seen(null));
+    expect(replaceState).toHaveBeenCalledExactlyOnceWith(null, '', '/');
+    expect(replaceState.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(fetch).mock.invocationCallOrder[0]);
+    expect(view.text()).toContain('Set your password');
+    expect(fieldValue(named(view, 'username'))).toBe('ravi');
+    expect(named(view, 'password')).toBeUndefined();
+    expect(document.activeElement).toBe(named(view, 'new-password'));
+    redeemed = seen(ravi);
+    await setPassword(view);
+    expect(redeems).toEqual([{ code: CODE, password: PASSWORD, shared_device: false }]);
+    const elsewhere = vi.mocked(fetch).mock.calls.filter(([url]) => url !== '/api/session/redeem');
+    expect(JSON.stringify(elsewhere)).not.toContain(CODE);
+    expect(app(view)).toBeDefined();
+    expect(overlay(view).open).toBe(false);
+    expect(channels[0].posted).toEqual(['signed-in']);
+  });
+  it('says when the two passwords differ, and sends nothing', async () => {
+    opened();
+    const view = await gate(seen(null));
+    await setPassword(view, PASSWORD + '!');
+    expect(view.text()).toContain('The two passwords differ.');
+    expect(redeems).toEqual([]);
+    expect(app(view)).toBeUndefined();
+  });
+  it('shows the sentence for a used link and offers sign-in instead', async () => {
+    opened();
+    const view = await gate(seen(null));
+    // As a browser leaves it once the field it was in is disabled for the wait.
+    document.body.focus();
+    await setPassword(view);
+    expect(view.text()).toContain(USED);
+    expect(fieldValue(named(view, 'new-password'))).toBe('');
+    expect(document.activeElement).toBe(named(view, 'new-password'));
+    click(view.button('Sign in instead'));
+    await settled();
+    expect(view.text()).toContain('Sign in to 3DScan');
+    expect(view.text()).not.toContain(USED);
+    expect(fieldValue(named(view, 'password'))).toBe('');
+    expect(redeems).toHaveLength(1);
+  });
+  it('keeps the form up while someone else is signed in, then opens the app for the new person', async () => {
+    localStorage.setItem('scan3d-last-user', asha.id);
+    localStorage.setItem('scan3d-case', 'case-of-asha');
+    opened();
+    const view = await gate(seen(asha));
+    await heartbeat();
+    expect(app(view)).toBeUndefined();
+    expect(overlay(view).open).toBe(true);
+    expect(view.text()).toContain('Set your password');
+    redeemed = seen(ravi);
+    await setPassword(view);
+    expect(app(view).getAttribute('data-case')).toBeNull();
+    expect(localStorage.getItem('scan3d-last-user')).toBe(ravi.id);
+    expect(overlay(view).open).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+  it('takes a link pasted into a tab already open, over the app', async () => {
+    const view = await gate(seen(asha));
+    expect(replaceState).not.toHaveBeenCalled();
+    opened('asha');
+    tab.dispatchEvent(new Event('hashchange'));
+    await settled();
+    expect(replaceState).toHaveBeenCalledExactlyOnceWith(null, '', '/');
+    expect(overlay(view).open).toBe(true);
+    expect(app(view).className).toContain('session-covered');
+    expect(view.text()).toContain('Set your password');
+    redeemed = seen(asha);
+    await setPassword(view);
+    expect(overlay(view).open).toBe(false);
+    expect(app(view).className).not.toContain('session-covered');
+    expect(reload).not.toHaveBeenCalled();
   });
 });
 

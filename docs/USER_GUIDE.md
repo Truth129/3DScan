@@ -27,6 +27,11 @@ or with `SCAN3D_AUTH=password`, everyone needs an account. See
 It asks for a password of 10 to 1,024 characters, twice. `--display-name` sets the name shown in the
 header. The first admin receives every case that has no owner.
 
+**Setting your password.** An admin sends you a link from **People**. Open it, type a password of
+10 to 1,024 characters twice and choose **Set password**. That signs you in, in place of anyone
+signed in on this browser. The link works once, within a day; if it has expired or was used, ask
+for a new one.
+
 **Signing in.** Enter your username and password. Over a network, use the HTTPS address. Everyone
 signed in sees and works on the same cases. You land on the [Library](#library), and a reload stays
 on your case.

@@ -48,6 +48,32 @@ export async function signIn(username: string, password: string, sharedDevice: b
   return view;
 }
 
+export async function redeemLink(code: string, password: string, sharedDevice: boolean) {
+  const view = await request<SessionView>('/api/session/redeem', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, password, shared_device: sharedDevice }),
+  });
+  announce('signed-in');
+  return view;
+}
+
+/**
+ * A set-password link keeps its code in the fragment, which no request, log or Referer carries.
+ * It is read once and taken out of the address before anything can reload the page with it.
+ */
+export function takeLink() {
+  const fields = new URLSearchParams(location.hash.slice(1)),
+    code = fields.get('set-password');
+  if (!code) return undefined;
+  const username = fields.get('username') ?? '';
+  fields.delete('set-password');
+  fields.delete('username');
+  const rest = fields.toString();
+  history.replaceState(history.state, '', `${location.pathname}${location.search}${rest ? `#${rest}` : ''}`);
+  return { code, username };
+}
+
 export async function signOut() {
   await request<SessionView>('/api/session', { method: 'DELETE' });
   clearLocalKeys();
@@ -63,7 +89,7 @@ export const sessionFailure = (reason: unknown) =>
 
 /**
  * These name cases and jobs of the person leaving, which must not follow the next one.
- * `scan3d-structure-colors-v1:*` stays: IDs and colours only, of a case the next person cannot open, and held nowhere else.
+ * `scan3d-structure-colors-v1:*` stays: IDs and a display choice, held nowhere else.
  */
 export function clearLocalKeys() {
   try {

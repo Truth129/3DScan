@@ -7,11 +7,13 @@ import {
   forgetOpenCase,
   getSession,
   leavePage,
+  redeemLink,
   rememberUser,
   runCaseCheck,
   session,
   sessionFailure,
   signIn,
+  takeLink,
   watchOtherTabs,
   type SessionView,
 } from '../lib/session';
@@ -20,7 +22,8 @@ const HEARTBEAT_MS = 60_000;
 
 const panel = ref<HTMLDialogElement>(),
   usernameField = ref<HTMLInputElement>(),
-  passwordField = ref<HTMLInputElement>();
+  passwordField = ref<HTMLInputElement>(),
+  newPasswordField = ref<HTMLInputElement>();
 // The person App was opened for. Everything it holds in memory is theirs.
 const appUser = ref(''),
   covered = ref(false),
@@ -30,16 +33,23 @@ const username = ref(''),
   shared = ref(false),
   busy = ref(false),
   message = ref('');
+const link = ref<{ code: string; username: string }>(),
+  repeat = ref('');
 const title = computed(() => {
   if (unreachable.value) return 'The workstation cannot be reached';
+  if (link.value) return 'Set your password';
   if (session.value?.setup_required) return 'Create the first account';
   return appUser.value ? 'Your session has ended' : 'Sign in to 3DScan';
 });
 // The form can replace another screen while covered, and a boolean keeps a heartbeat from taking focus from someone typing.
-const formShown = computed(() => covered.value && !unreachable.value && !!session.value && !session.value.setup_required);
+const formShown = computed(() => covered.value && !unreachable.value && !!session.value && !session.value.setup_required && !link.value);
 watch(formShown, shown => {
   // A name already filled in leaves the password to type.
   if (shown) void nextTick(() => (username.value ? passwordField : usernameField).value?.focus());
+});
+const linkShown = computed(() => covered.value && !unreachable.value && !!link.value);
+watch(linkShown, shown => {
+  if (shown) void nextTick(() => newPasswordField.value?.focus());
 });
 let reads = 0,
   held: Promise<void> | undefined,
@@ -88,6 +98,8 @@ function leave() {
 function follow(view: SessionView) {
   session.value = view;
   unreachable.value = false;
+  // A set-password link waits for its form, whoever this browser has signed in.
+  if (link.value) return cover();
   const user = view.user;
   if (!user) cover();
   else if (appUser.value && user.id !== appUser.value) leave();
@@ -142,6 +154,44 @@ async function submit() {
     busy.value = false;
   }
 }
+async function setPassword() {
+  if (busy.value || !link.value) return;
+  if (password.value !== repeat.value) {
+    message.value = 'The two passwords differ.';
+    return;
+  }
+  busy.value = true;
+  message.value = '';
+  try {
+    const view = await redeemLink(link.value.code, password.value, shared.value);
+    link.value = undefined;
+    reads++;
+    // A link starts at the Library, as the sign-in form does.
+    if (!appUser.value) forgetOpenCase();
+    follow(view);
+  } catch (reason) {
+    message.value = sessionFailure(reason);
+    void nextTick(() => newPasswordField.value?.focus());
+  } finally {
+    password.value = repeat.value = '';
+    busy.value = false;
+  }
+}
+function skipLink() {
+  link.value = undefined;
+  // The sign-in form shares the password field, which must not arrive filled.
+  message.value = password.value = repeat.value = '';
+  void refresh();
+}
+/** A link pasted into a tab already on 3DScan changes only the fragment, which reloads nothing. */
+function linkArrived() {
+  const next = takeLink();
+  if (!next) return;
+  link.value = next;
+  message.value = '';
+  password.value = repeat.value = '';
+  cover();
+}
 function otherTab(change: 'signed-in' | 'signed-out') {
   if (change === 'signed-in') void refresh();
   else if (appUser.value) leave();
@@ -150,11 +200,13 @@ function visible() {
   if (document.visibilityState === 'visible') void refresh();
 }
 onMounted(() => {
+  linkArrived();
   setReauthentication(sessionLost);
   stopWatchingTabs = watchOtherTabs(otherTab);
   stack.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
   heartbeat = window.setInterval(refresh, HEARTBEAT_MS);
   window.addEventListener('focus', refresh);
+  window.addEventListener('hashchange', linkArrived);
   document.addEventListener('visibilitychange', visible);
   void refresh();
 });
@@ -164,6 +216,7 @@ onBeforeUnmount(() => {
   stack.disconnect();
   clearInterval(heartbeat);
   window.removeEventListener('focus', refresh);
+  window.removeEventListener('hashchange', linkArrived);
   document.removeEventListener('visibilitychange', visible);
 });
 </script>
@@ -183,6 +236,28 @@ onBeforeUnmount(() => {
         <p class="muted">Check the connection. This page keeps trying.</p>
         <button class="button secondary" type="button" @click="refresh">Try again</button>
       </template>
+      <form v-else-if="link" @submit.prevent="setPassword">
+        <p class="muted">Choose a password of at least 10 characters. You will sign in with it.</p>
+        <label v-if="link.username" class="field">Username<input name="username" autocomplete="username" :value="link.username" readonly /></label>
+        <label class="field"
+          >New password<input
+            ref="newPasswordField"
+            v-model="password"
+            name="new-password"
+            type="password"
+            autocomplete="new-password"
+            required
+            :disabled="busy"
+        /></label>
+        <label class="field"
+          >Repeat the password<input v-model="repeat" name="repeat-password" type="password" autocomplete="new-password" required :disabled="busy"
+        /></label>
+        <label class="sign-in-shared"><input v-model="shared" type="checkbox" :disabled="busy" /><span>Shared computer</span></label>
+        <p class="help">Signs out when the browser closes, and after 12 hours at most.</p>
+        <p v-if="message" class="sign-in-error" role="alert">{{ message }}</p>
+        <button class="button primary" type="submit" :disabled="busy">{{ busy ? 'Setting…' : 'Set password' }}</button>
+        <button class="text-button" type="button" :disabled="busy" @click="skipLink">Sign in instead</button>
+      </form>
       <template v-else-if="session?.setup_required">
         <p class="muted">Run this on the workstation. This page continues once the account exists.</p>
         <code class="sign-in-command">scan3d users add NAME --admin</code>
@@ -207,6 +282,7 @@ onBeforeUnmount(() => {
         <p class="help">Signs out when the browser closes, and after 12 hours at most.</p>
         <p v-if="message" class="sign-in-error" role="alert">{{ message }}</p>
         <button class="button primary" type="submit" :disabled="busy">{{ busy ? 'Signing in…' : 'Sign in' }}</button>
+        <p class="help">Forgotten your password, or cannot sign in? An administrator can send you a reset link.</p>
       </form>
     </div>
   </dialog>

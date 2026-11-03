@@ -506,7 +506,8 @@ active admin and its person is not disabled. Redeeming hashes in the sign-in slo
 own, and checks the link again under the write lock, so of two uses at once only the first wins.
 `scan3d users passwd` ends every link for or by that person. The server knows no public address, so
 the admin's page builds the link from its own, with the code in the fragment, which no request, log
-or Referer carries.
+or Referer carries. The page that opens it takes the code out of the address before any request,
+and sends it only in the redeem body.
 
 **An open tab.** Each session read, every 60 seconds and on focus, also reads the open case. A tab
 closes a case that answers `Case not found`, and takes only the label from any other answer. Lost

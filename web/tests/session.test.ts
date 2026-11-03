@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setReauthentication } from '../src/lib/api-fetch';
-import { clearLocalKeys, forgetCase, rememberUser, startDownload } from '../src/lib/session';
+import { clearLocalKeys, forgetCase, rememberUser, startDownload, takeLink } from '../src/lib/session';
 
 function browserStorage(entries: Record<string, string>) {
   const stored = new Map(Object.entries(entries));
@@ -74,6 +74,19 @@ describe('forgetCase', () => {
       'scan3d-workspace-panels-v1',
       'scan3d-last-user',
     ]);
+  });
+});
+
+describe('a set-password link', () => {
+  it('takeLink reads the code and username and keeps other fragment keys', () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal('history', { state: { kept: true }, replaceState });
+    vi.stubGlobal('location', { pathname: '/', search: '?q=1', hash: '#orthanc-series=x' });
+    expect(takeLink()).toBeUndefined();
+    expect(replaceState).not.toHaveBeenCalled();
+    vi.stubGlobal('location', { pathname: '/', search: '?q=1', hash: '#set-password=made-up&username=a%40b&orthanc-series=x' });
+    expect(takeLink()).toEqual({ code: 'made-up', username: 'a@b' });
+    expect(replaceState).toHaveBeenCalledExactlyOnceWith({ kept: true }, '', '/?q=1#orthanc-series=x');
   });
 });
 
