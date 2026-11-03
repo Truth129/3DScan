@@ -406,7 +406,7 @@ describe('the recheck after the capture', () => {
     vi.spyOn(api, 'activate').mockImplementation(async () => ({ ...cases[0], active_revision_id: 'revision-a1' }));
     await during(async view => {
       await view.activateParent();
-      expect(api.activate).toHaveBeenCalledWith('case-a', 'revision-a1');
+      expect(api.activate).toHaveBeenCalledWith('case-a', 'revision-a1', 'revision-a2');
     });
   });
   it('discards the capture when Before is shown', () => during(view => click(view.button('Before'))));

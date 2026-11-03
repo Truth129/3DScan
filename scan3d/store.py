@@ -510,7 +510,7 @@ class Store:
             return self.register_image_asset(asset)
         return asset
 
-    def activate(self, case_id, revision_id):
+    def activate(self, case_id, revision_id, expected=None):
         acquisition = self.revision(case_id, revision_id).get("acquisition")
         with self.connection() as con:
             con.execute("BEGIN IMMEDIATE")
@@ -518,6 +518,9 @@ class Store:
             if row is None:
                 raise NotFound("Case not found")
             case = json.loads(row["data"])
+            # A page behind someone else's save picks from a History that lacks it, so it must not replace it unseen.
+            if expected is not None and case.get("active_revision_id") != expected:
+                raise Conflict("Someone else or another tab saved a newer version of this case. Show it, then try again.")
             case.update(
                 active_revision_id=revision_id,
                 status="ready",

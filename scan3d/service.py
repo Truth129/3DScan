@@ -504,7 +504,12 @@ class Service:
             else:
                 raise ValueError("Unknown job kind")
             self.check_cancel(job)
-            expected = job["payload"]["revision_id"] if job["kind"] in ("segment", "include_all", "review_accept", "dicom_seg_import") else None
+            # A refine or correction is built on the revision its page showed, and must not replace one someone saved meanwhile.
+            expected = (
+                job["payload"]["revision_id"]
+                if job["kind"] in ("segment", "include_all", "review_accept", "dicom_seg_import", "refine", "correction")
+                else None
+            )
             review_guard = {key: job["payload"][key] for key in ("session_id", "generation")} if job["kind"] == "review_accept" else None
             self.store.commit_revision(revision, job, expected_active_revision_id=expected, review_guard=review_guard)
         except InterruptedError as exc:

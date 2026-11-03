@@ -93,8 +93,17 @@ frees space for a while. Saved surfaces and cases stay. It does not run while jo
 a backup runs or another 3DScan command runs, and the tab says what to wait for.
 
 If a case you have open is moved to Trash elsewhere, by someone else or in another tab, the page says
-so, points you to Trash and returns to the Library, within a minute or when you return to the tab. If a case will not open, the
-page says why and you return to the case you had open.
+so, points you to Trash and returns to the Library, within a minute or when you return to the tab.
+If a case will not open, the page says why and you return to the case you had open.
+
+## Working on the same case
+
+Two people, or two tabs, can work on one case at once, and neither loses the other's work.
+
+**A newer version.** When someone else or another tab saves a newer version of the case you have
+open, the header says so within a minute, or when you return to the tab. **Show the newer version**
+opens it. Until then a refine, a correction or **Activate** from your page is refused instead of
+replacing the newer work, and a correction made on the old version cannot be saved.
 
 ## Import a study
 
@@ -407,7 +416,8 @@ existing segment empty at 0 mL, but empty new segments and empty AI candidates c
 ### Undo and revisions
 
 In **Revision history**, **↶ Undo to parent** restores the previous revision exactly, and
-**Activate** switches to any other. Nothing is deleted. **Current** and **Before** in the 3D header
+**Activate** switches to any other, unless someone saved a newer version meanwhile; see
+[Working on the same case](#working-on-the-same-case). Nothing is deleted. **Current** and **Before** in the 3D header
 compare surfaces with the parent, and **Compare CT overlay with parent** does so on the slices.
 
 On a case prepared from a series, once a segmentation is active, **Reset to scan** returns to the

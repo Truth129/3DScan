@@ -936,6 +936,21 @@ describe('the Library', () => {
     expect(api.revision).not.toHaveBeenCalled();
     expect(root.button('Select series'), 'the series this tab read stay').toBeUndefined();
   });
+  it('says when someone else saves a newer version, and shows it', async () => {
+    const later: Revision = { ...prepared, id: 'later', parent_id: 'prepared' };
+    workstation([amd], { revisions: [later, prepared] });
+    vi.mocked(api.revision).mockImplementation(async (_case, id) => (id === 'later' ? later : prepared));
+    const root = await start();
+    await heartbeat();
+    expect(root.content, 'the same version').not.toContain('saved a newer version');
+    vi.mocked(api.case).mockResolvedValue({ ...scan, active_revision_id: 'later' });
+    await heartbeat();
+    expect(root.content).toContain('Someone else or another tab saved a newer version of this case.');
+    vi.mocked(api.revision).mockClear();
+    await press(root.button('Show the newer version'));
+    expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'later');
+    expect(root.content).not.toContain('saved a newer version');
+  });
   it('reads the series again for the series page, because one can be added while it is closed', async () => {
     workstation([amd]);
     const series = (uid: string) => ({ uid, description: uid, modality: 'CT', slice_count: 1, spacing: [1, 1, 1], warnings: [] });
@@ -989,7 +1004,7 @@ describe('the Library', () => {
       const root = await start();
       await press(root.button('Revision history'));
       await press(root.button('Reset to scan'));
-      expect(activate).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
+      expect(activate).toHaveBeenCalledExactlyOnceWith('case', 'prepared', 'segmented');
       expect(root.content).toContain('Back to the scan. Earlier versions stay in Revision history.');
       expect(root.named('case-toolbar')).toBeDefined();
     });

@@ -419,15 +419,21 @@ See [Choosing a path](#choosing-a-path).
 
 **`POST /api/cases/{id}/refinements`** takes `{revision_id, structure_id, operation}` and returns a
 `refine` job. `operation` is `{type, seed_ras?, bounds_ras?}`. A result that changes nothing or
-empties the mask is refused.
+empties the mask is refused. `revision_id` must still be active when the job saves, or it fails with
+`The active revision changed; start from the current revision` and the newer revision stays.
 
 - `keep_component` and `remove_component` need a seed inside the mask. Components are six-connected.
 - `keep_region` and `erase_region` need bounds with positive extent, and select voxel centres inside
   world-axis-aligned bounds.
 
-**`POST /api/cases/{id}/activate`** takes `{revision_id}` and returns the Case. This is undo and
-redo: masks, volumes and relationships return exactly. Reset to scan is this route with the
-image-only revision.
+**`POST /api/cases/{id}/activate`** takes `{revision_id, expected_active_revision_id?}` and returns
+the Case. This is undo and redo: masks, volumes and relationships return exactly. Reset to scan is
+this route with the image-only revision.
+
+- `expected_active_revision_id` is the active revision the page shows. When another one is active by
+  then, it answers 409 `Someone else or another tab saved a newer version of this case. Show it, then
+  try again.` and changes nothing.
+- Without it, as from an older page, the route activates whatever is active.
 
 **`PATCH /api/cases/{id}/revisions/{rid}`** takes `{review_status}` and returns the Revision.
 Image-only revisions are refused.
@@ -934,7 +940,8 @@ with overlapping masks in separate layers and stable IDs preserved.
 
 **`POST /api/cases/{id}/corrections`** takes multipart `revision_id` and `segmentation` and returns
 a `correction` job. It verifies geometry, segment identity and the source hash, handles cropped
-labelmaps, and marks the new revision `corrected`.
+labelmaps, and marks the new revision `corrected`. Like a refine, it fails if `revision_id` is no
+longer active when it saves.
 
 ### Offline HTML
 

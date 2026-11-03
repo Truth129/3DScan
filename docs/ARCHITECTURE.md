@@ -498,7 +498,13 @@ n=2^17, r=8 and p=1.
 
 **An open tab.** Each session read, every 60 seconds and on focus, also reads the open case. A tab
 closes a case that answers `Case not found`, and takes only the label from any other answer. Lost
-connections and server errors never close a case.
+connections and server errors never close a case. When the answer names another active revision and
+the tab is not busy with its own work, it offers **Show the newer version**.
+
+**Two people on one case.** The generation checks never read the actor, so a stale page gets 409
+across accounts as across tabs. Segment, refine, correction, include-all, review accept and DICOM SEG
+import save only while their starting revision is still active, and Activate sends the active
+revision the page shows, so a page behind someone else's save cannot replace it unseen.
 
 **Audit.** `audit_events` is append-only, enforced by triggers. Rows hold IDs and counts, never a
 label, search term or typed username. A row means a request was allowed to start, and a failed write

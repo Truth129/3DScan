@@ -249,3 +249,46 @@ def test_a_clean_stop_leaves_no_write_log(tmp_path):
         assert http.post("/api/cases/demo").status_code == 200
         assert log.exists()
     assert not log.exists()
+
+
+def idle(tmp_path):
+    """No worker runs outside a `with` block, so these tests run each job themselves, in their own order."""
+    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
+    return TestClient(app, base_url="http://127.0.0.1"), app.state.service
+
+
+def refine(service, case):
+    """A refine from the revision a page showed when the demo loaded."""
+    operation = {"type": "erase_region", "bounds_ras": [[0, -80, -100], [37, 80, 0]]}
+    return service.store.enqueue(case["id"], "refine", {"revision_id": case["active_revision_id"], "structure_id": "synthetic:liver", "operation": operation})
+
+
+def run(service, queued):
+    claimed = service.store.claim()
+    assert claimed and claimed["id"] == queued["id"]
+    service.execute(claimed)
+    return service.store.get("jobs", queued["id"])
+
+
+def test_a_refine_from_a_revision_no_longer_active_fails_and_keeps_the_newer_one(tmp_path):
+    http, service = idle(tmp_path)
+    case = http.post("/api/cases/demo").json()
+    first, second = refine(service, case), refine(service, case)
+    first = run(service, first)
+    assert first["status"] == "completed"
+    second = run(service, second)
+    assert second["status"] == "failed" and second["error"] == "The active revision changed; start from the current revision"
+    assert service.store.get("cases", case["id"])["active_revision_id"] == first["revision_id"]
+
+
+def test_activate_from_a_page_behind_is_refused_and_keeps_the_newer_one(tmp_path):
+    http, service = idle(tmp_path)
+    case = http.post("/api/cases/demo").json()
+    parent, route = case["active_revision_id"], f"/api/cases/{case['id']}/activate"
+    newer = run(service, refine(service, case))["revision_id"]
+    refused = http.post(route, json={"revision_id": parent, "expected_active_revision_id": parent})
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": "Someone else or another tab saved a newer version of this case. Show it, then try again."}
+    assert service.store.get("cases", case["id"])["active_revision_id"] == newer
+    assert http.post(route, json={"revision_id": parent, "expected_active_revision_id": newer}).json()["active_revision_id"] == parent
+    assert http.post(route, json={"revision_id": newer}).json()["active_revision_id"] == newer

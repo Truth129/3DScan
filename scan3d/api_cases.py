@@ -213,7 +213,7 @@ def add_routes(app, service):
 
     @app.post("/api/cases/{case_id}/activate")
     def activate(case_id: str, body: Activate):
-        return public_case(service.store.activate(case_id, body.revision_id), service.settings)
+        return public_case(service.store.activate(case_id, body.revision_id, expected=body.expected_active_revision_id), service.settings)
 
     @app.patch("/api/cases/{case_id}/revisions/{revision_id}")
     def review(case_id: str, revision_id: str, body: Review):

@@ -139,7 +139,9 @@ export const api = {
   cinematicReference: (id: string, rid: string, signal?: AbortSignal) => request<CinematicReference>(`${revisionUrl(id, rid)}/cinematic-reference`, { signal }),
   agreement: (id: string, rid: string, signal?: AbortSignal) => request<RevisionAgreement>(`${revisionUrl(id, rid)}/agreement`, { signal }),
   agreementSummary: (signal?: AbortSignal) => request<AgreementAggregate>('/api/agreement', { signal }),
-  activate: (id: string, rid: string) => request<Case>(`${caseUrl(id)}/activate`, json('POST', { revision_id: rid })),
+  /** `expected` is the active revision the page shows, so a page behind someone else's save cannot replace it. */
+  activate: (id: string, rid: string, expected?: string | null) =>
+    request<Case>(`${caseUrl(id)}/activate`, json('POST', { revision_id: rid, expected_active_revision_id: expected ?? null })),
   rename: (id: string, label: string) => request<Case>(caseUrl(id), json('PATCH', { label })),
   markOpened: (id: string) => request<{ id: string }>(`${caseUrl(id)}/open`, { method: 'POST' }),
   trash: (id: string) => request<TrashResult>(`${caseUrl(id)}/trash`, { method: 'POST' }),

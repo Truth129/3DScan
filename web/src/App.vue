@@ -40,7 +40,7 @@ import SeriesPicker from './components/SeriesPicker.vue';
 import UserMenu from './components/UserMenu.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
-import { api, revisionUrl } from './lib/api';
+import { api, ApiError, revisionUrl } from './lib/api';
 import { colorCss, initialDisplay, prettyName } from './lib/geometry';
 import { useStructureDisplay } from './lib/use-structure-display';
 import { useStructureColors } from './lib/use-structure-colors';
@@ -123,6 +123,8 @@ const libraryOpen = ref(false),
   libraryStamp = ref(0),
   caseButton = ref<HTMLButtonElement>(),
   trashOffer = ref<{ id: string; message: string; reopen: boolean; stopped: number }>();
+// Someone else or another tab made a different revision active, and this page still shows its own.
+const newerVersion = ref(false);
 const libraryShown = computed(() => libraryOpen.value || (!activeCase.value && !loading.value));
 const selected = ref(''),
   display = ref<StructureDisplay>({}),
@@ -594,6 +596,7 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
     pendingStructures.value = [];
   }
   revision.value = next;
+  newerVersion.value = false;
   revisions.value = all;
   before.value = false;
   compare.value = false;
@@ -629,6 +632,7 @@ function resetCaseView() {
   sourceAssets.value = [];
   loading.value = true;
   error.value = '';
+  newerVersion.value = false;
   setInteractiveReview(undefined);
   pendingStructures.value = [];
   interactiveTool.value = 'navigate';
@@ -731,7 +735,11 @@ async function checkOpenCase() {
   try {
     const current = await api.case(id);
     // Only the label: the whole record would overwrite the series and active revision on screen.
-    if (generation === caseGeneration && activeCase.value?.id === id) activeCase.value.label = current.label;
+    if (generation === caseGeneration && activeCase.value?.id === id) {
+      activeCase.value.label = current.label;
+      // Someone else or another tab saved a newer version. This page's own run or activation reloads itself.
+      if (current.active_revision_id !== activeCase.value.active_revision_id && !busy.value) newerVersion.value = true;
+    }
   } catch (reason) {
     if (generation === caseGeneration && activeCase.value?.id === id && caseIsGone(reason)) await closeCase(id);
   } finally {
@@ -1194,12 +1202,13 @@ async function activate(id: string, message = 'Revision activated. Previous revi
   error.value = '';
   const generation = caseGeneration;
   try {
-    const current = await api.activate(activeCase.value.id, id);
+    const current = await api.activate(activeCase.value.id, id, activeCase.value.active_revision_id);
     if (generation !== caseGeneration) return;
     activeCase.value = current;
     await loadRevision(current.id, id, generation, true);
     toast(message);
   } catch (reason) {
+    if (generation === caseGeneration && reason instanceof ApiError && reason.status === 409) newerVersion.value = true;
     fail(reason);
   } finally {
     actionBusy.value = false;
@@ -1367,6 +1376,10 @@ onBeforeUnmount(() => {
         </div>
         <button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button
         ><button v-else class="text-button" @click="job = undefined">Dismiss</button>
+      </div>
+      <div v-else-if="activeCase && newerVersion" class="job-banner" role="status">
+        <div><strong>Someone else or another tab saved a newer version of this case.</strong><span>Work on the version shown here cannot be saved.</span></div>
+        <button class="button secondary compact" type="button" @click="openCase(activeCase.id)">Show the newer version</button>
       </div>
       <div class="worker-status">
         <span class="live-dot"></span><span>{{ workerText }}</span>

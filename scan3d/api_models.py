@@ -117,6 +117,7 @@ class Refine(Input):
 
 class Activate(Input):
     revision_id: str
+    expected_active_revision_id: str | None = None
 
 
 class CaseRename(Input):
