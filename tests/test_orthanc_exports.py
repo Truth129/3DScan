@@ -623,6 +623,24 @@ def test_an_unconfirmed_remote_job_survives_restart_and_retry_polls_it_without_r
     assert len(rig.archive.sends) == 1 and rig.archive.polls == [remote_id, remote_id] and len(rig.calls) == 1
 
 
+def test_a_pending_send_whose_orthanc_job_is_gone_becomes_unknown_and_the_next_retry_sends_again(rig, monkeypatch):
+    import scan3d.orthanc_exports as exports
+    from scan3d.errors import NotFound
+
+    monkeypatch.setattr(exports, "DELIVERY_WAIT_SECONDS", 0)
+    rig.archive.remote_state = "Paused"
+    pending = execute(rig, start(rig, destination="osirix"))
+    # Orthanc keeps only its last JobsHistorySize jobs, and forgets all of them when it restarts.
+    rig.archive.remote_state, rig.archive.poll_error = "Success", NotFound("Synthetic forgotten job")
+    lost = execute(rig, start(rig, destination="osirix"))
+    assert lost["status"] == "failed" and "may already have arrived" in lost["error"] and len(rig.archive.sends) == 1
+    receipt = json.loads((artifact(rig, lost)[0] / "delivery.json").read_text())
+    assert receipt["destinations"]["osirix"] == {"state": "unknown", "job_id": None, "attempt_id": pending["payload"]["delivery_attempt_id"]}
+    finished = execute(rig, start(rig, destination="osirix"))
+    assert finished["result"]["dicom_seg"]["sent"] is True
+    assert len(rig.archive.sends) == 2 and rig.archive.polls[-1] == rig.archive.sends[1][0]
+
+
 def test_uncertain_send_requires_explicit_retry_with_same_sops_and_never_autoresends(rig):
     rig.archive.start_error = OrthancDeliveryUnknown("Synthetic lost start response")
     failed = execute(rig, start(rig, destination="osirix"))

@@ -208,6 +208,7 @@ class OrthancExports:
         "Delivery is not confirmed. Check the destination before retrying; a retry reuses the exact SEG instances and checks any known Orthanc job."
     )
     still_active_error = "An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status."
+    lost_job_error = "Orthanc no longer has the delivery job, so the SEG may already have arrived. Check the destination before retrying; a retry sends the same SEG instances again."
     file_interrupted_error = "Export interrupted. Retry to reuse its exact SEG bytes."
     offers_file = True
 
@@ -796,7 +797,15 @@ class OrthancExports:
                         self.service.store.update_job(job["id"], stage=f"Checking Orthanc {self.label} delivery")
                         deadline = time.monotonic() + DELIVERY_WAIT_SECONDS
                         while True:
-                            remote = client.store_job(delivery.job_id)
+                            try:
+                                remote = client.store_job(delivery.job_id)
+                            except NotFound:
+                                # Orthanc forgets old jobs, so this one can never be checked. Without
+                                # a job ID, only another explicit retry starts a fresh send.
+                                delivery = _Delivery("unknown", None, delivery.attempt_id)
+                                receipt.destinations[destination] = delivery
+                                save_receipt()
+                                raise ExportUnavailable(self.lost_job_error) from None
                             state = remote["state"]
                             if state in {"Success", "Failure"}:
                                 success = state == "Success" and remote["instances_count"] == len(artifact.files) and remote["failed_instances_count"] == 0

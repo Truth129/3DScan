@@ -76,6 +76,7 @@ class OrthancViewExports(OrthancExports):
     undelivered_error = "Orthanc could not deliver this view. Check the destination."
     unconfirmed_error = "Delivery is not confirmed. Check the destination."
     still_active_error = "An earlier Orthanc delivery may still be active. Check the destination."
+    lost_job_error = "Orthanc no longer has the delivery job, so the view may already have arrived. Check the destination."
     offers_file = False
 
     def _inputs(self, case_id, revision_id, structure_ids=None):
