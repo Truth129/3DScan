@@ -140,6 +140,7 @@ Orthanc is optional, and the integration is off until `SCAN3D_ORTHANC_URL` is se
 | `SCAN3D_ORTHANC_USERNAME`            | unset   | REST API user.                                                |
 | `SCAN3D_ORTHANC_PASSWORD`            | unset   | REST API password.                                            |
 | `SCAN3D_ORTHANC_EXPORT_DESTINATIONS` | unset   | Orthanc modality identifiers offered for SEG and view export. |
+| `SCAN3D_ORTHANC_CA_BUNDLE`           | unset   | Absolute path to a PEM file, for an Orthanc with a private CA. |
 
 ## Examples
 

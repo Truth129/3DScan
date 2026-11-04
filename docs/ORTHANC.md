@@ -47,7 +47,8 @@ identifiers, each up to 64 letters, digits, `_` or `-`.
 - An empty list still allows **Archive in Orthanc**.
 
 The client verifies TLS certificates, follows no redirects, and ignores proxy variables, `.netrc`
-and `REQUESTS_CA_BUNDLE`. Use a certificate that Python's default CA bundle trusts.
+and `REQUESTS_CA_BUNDLE`. It trusts the public CAs bundled with Python's `requests`. For a private
+CA, set `SCAN3D_ORTHANC_CA_BUNDLE` to the absolute path of its PEM file.
 
 ## Run Orthanc
 

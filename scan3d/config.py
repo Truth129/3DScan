@@ -107,6 +107,7 @@ class Settings:
     orthanc_password: str = field(default="", repr=False)
     orthanc_export_destinations: tuple[str, ...] = ()
     auth: str = "off"
+    orthanc_ca_bundle: str = ""
 
     @classmethod
     def from_env(cls):
@@ -118,6 +119,9 @@ class Settings:
         destinations = tuple(dict.fromkeys(part.strip() for part in os.environ.get("SCAN3D_ORTHANC_EXPORT_DESTINATIONS", "").split(",") if part.strip()))
         if any(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", part) is None for part in destinations):
             raise ValueError("SCAN3D_ORTHANC_EXPORT_DESTINATIONS must list configured Orthanc modality identifiers")
+        ca_bundle = os.environ.get("SCAN3D_ORTHANC_CA_BUNDLE", "").strip()
+        if ca_bundle and not Path(ca_bundle).is_absolute():
+            raise ValueError("SCAN3D_ORTHANC_CA_BUNDLE must be an absolute path to a PEM file")
         allowed_hosts = tuple(p.strip() for p in os.environ.get("SCAN3D_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if p.strip())
         host = os.environ.get("SCAN3D_HOST", DEFAULT_HOST).strip()
         return cls(
@@ -131,6 +135,7 @@ class Settings:
             orthanc_password=os.environ.get("SCAN3D_ORTHANC_PASSWORD", ""),
             orthanc_export_destinations=destinations,
             auth=resolve_auth(os.environ.get("SCAN3D_AUTH"), (*allowed_hosts, host)),
+            orthanc_ca_bundle=ca_bundle,
         )
 
     @property

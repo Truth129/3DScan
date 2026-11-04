@@ -40,7 +40,7 @@ class OrthancImports:
         settings = self.service.settings
         if not settings.orthanc_url:
             raise ValueError("An Orthanc connection has not been configured on this workstation")
-        return OrthancClient(settings.orthanc_url, settings.orthanc_username, settings.orthanc_password)
+        return OrthancClient(settings.orthanc_url, settings.orthanc_username, settings.orthanc_password, ca_bundle=settings.orthanc_ca_bundle)
 
     def status(self):
         if not self.service.settings.orthanc_url:
