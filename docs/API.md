@@ -1130,7 +1130,8 @@ with no patient fields. `sent` is true only after an exact successful C-STORE co
 
 - A duplicate request reuses the job and artifact. File and archive exports of the same selection
   and ranking share one artifact and SOP instance.
-- A retry reuses the exact SOP bytes and checks any known remote job.
+- A retry reuses the exact SOP bytes and checks any known remote job. If Orthanc no longer has that
+  job, the outcome is unknown and the next retry sends again.
 - `resend: true` needs a destination and a known successful send, and makes a new delivery attempt
   with the same SOPs.
 - A new encoder version makes fresh SOPs on explicit export.
