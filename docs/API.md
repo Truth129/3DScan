@@ -971,18 +971,27 @@ parent lineage that is a saved inference output with a matching ID.
  aggregate_pool: "real" | "synthetic" | null, implementation, hd95_exact,
  grid: {voxel_volume_ml, spacing_mm, sheared},
  summary: {structures, compared, unchanged, changed, excluded, dice_mean, dice_median,
-           abs_volume_change_ml_mean},
+           abs_volume_change_ml_mean, edit_kinds},
  structures, excluded, cache: {hits, computed}}
 ```
 
 Each `structures` row has `id`, `name`, `task`, `group`, `origin: {kind, revision_id, run_id?,
 task?, engine_version?}`, `basis` (`same_file`, `same_digest` or `voxels`), `unchanged`, `dice`,
 `hd95_mm`, original and current voxels and volumes, `volume_change_ml` (accepted minus original),
-`added_voxels` and `removed_voxels`. Synthetic demo cases use their phantom as the origin.
+`added_voxels`, `removed_voxels`, `edit_kind` and `edits`. Synthetic demo cases use their phantom
+as the origin.
 
 - Dice is `2|A∩B| / (|A| + |B|)`.
 - HD95 is the larger of the two directed 95th percentiles of distances between face-exposed surface
   voxel centres, in millimetres through the full affine. Null when either mask is empty.
+- `edits` lists the `source` of each revision that saved a new mask since the original, oldest
+  first.
+- `edit_kind` is null for an unchanged mask. Otherwise it is `ai_assisted` if any edit is
+  `nninteractive_correction`, `direct_edit` if every edit is `direct_edit_correction`, and `other`
+  otherwise. An AI-assisted save keeps the model's rewrite away from the marks, so its figures
+  overstate the reader's change.
+- `edit_kinds` maps each kind present to `{changed, dice_mean, dice_median,
+  abs_volume_change_ml_mean}`.
 
 `excluded` rows have `{id, name, task, group, code, reason}`, where `code` is `reviewer_created`,
 `no_model_output`, `model_output_unavailable`, `different_image` or `unreadable`.
@@ -998,8 +1007,8 @@ task?, engine_version?}`, `basis` (`same_file`, `same_digest` or `voxels`), `unc
 ```
 
 A pool is `{cases, excluded, summary, tasks: [{task, ...stats, structures: [{id, name, task,
-...stats}]}]}`. Stats are `reviewed`, `unchanged`, `unchanged_percent`, `dice_mean`, `dice_median`
-and `abs_volume_change_ml_mean`. Synthetic cases never enter the real pool.
+...stats}]}]}`. Stats are `reviewed`, `unchanged`, `unchanged_percent`, `dice_mean`, `dice_median`,
+`abs_volume_change_ml_mean` and `edit_kinds`. Synthetic cases never enter the real pool.
 
 ## Exports
 

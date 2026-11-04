@@ -46,6 +46,10 @@ _REASONS = {
     "different_image": "The model output does not belong to this revision's source image.",
     "unreadable": "These masks could not be compared on the reference grid.",
 }
+# An AI-assisted save keeps the model's whole output, so its figures include voxels the
+# model rewrote away from the reader's marks; totals keep it apart from reader-only edits.
+EDIT_KINDS = ("direct_edit", "ai_assisted", "other")
+_AI_ASSISTED, _DIRECT = "nninteractive_correction", "direct_edit_correction"
 
 
 def _surface(mask):
@@ -244,6 +248,28 @@ class _Lineage:
             index += 1
         return None
 
+    def edits(self, structure_id, origin_id):
+        """Sources of the revisions that saved a new mask file since the original, oldest first.
+
+        `origin` walked every revision down to the original, so each holds the structure.
+        A review save's source is its operation type; a refinement records only a source.
+        """
+        sources, index = [], 0
+        while (item := self[index])[0]["id"] != origin_id:
+            if item[1][structure_id]["mask_file"] != self[index + 1][1][structure_id]["mask_file"]:
+                sources.append(item[0].get("source") or "unknown")
+            index += 1
+        return sources[::-1]
+
+
+def _edit_kind(edits, unchanged):
+    """Unchanged masks have no kind; any AI-assisted save marks the row as one."""
+    if unchanged:
+        return None
+    if _AI_ASSISTED in edits:
+        return "ai_assisted"
+    return "direct_edit" if edits and set(edits) == {_DIRECT} else "other"
+
 
 def _same_file(first, second):
     try:
@@ -331,7 +357,9 @@ def _agreement(service, case, revision):
         identity = {"id": sid, "name": structure.get("name", sid), "task": structure.get("task"), "group": structure.get("group")}
         if sid in compared:
             origin, basis, metrics = compared[sid]
-            structures.append({**identity, "origin": origin, "basis": basis, **_with_volumes({key: metrics[key] for key in _METRICS}, voxel_ml)})
+            row = {**identity, "origin": origin, "basis": basis, **_with_volumes({key: metrics[key] for key in _METRICS}, voxel_ml)}
+            edits = lineage.edits(sid, origin["revision_id"])
+            structures.append({**row, "edit_kind": _edit_kind(edits, row["unchanged"]), "edits": edits})
         else:
             exclusions.append({**identity, "code": excluded[sid], "reason": _REASONS[excluded[sid]]})
     active = case.get("active_revision_id") == revision["id"]
@@ -400,16 +428,22 @@ def _compute(service, revision, pending, excluded):
     return results
 
 
-def _statistics(rows, counts=True):
+def _averages(rows):
     dice = [row["dice"] for row in rows]
-    summary = {
+    return {
         "dice_mean": statistics.fmean(dice) if dice else None,
         "dice_median": statistics.median(dice) if dice else None,
         "abs_volume_change_ml_mean": statistics.fmean(abs(row["volume_change_ml"]) for row in rows) if rows else None,
     }
+
+
+def _statistics(rows, counts=True):
+    summary = _averages(rows)
     if counts:
         unchanged = sum(row["unchanged"] for row in rows)
         summary = {"reviewed": len(rows), "unchanged": unchanged, "unchanged_percent": 100 * unchanged / len(rows) if rows else None, **summary}
+    kinds = {kind: [row for row in rows if row["edit_kind"] == kind] for kind in EDIT_KINDS}
+    summary["edit_kinds"] = {kind: {"changed": len(group), **_averages(group)} for kind, group in kinds.items() if group}
     return summary
 
 

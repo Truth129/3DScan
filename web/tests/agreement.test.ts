@@ -3,6 +3,9 @@ import {
   agreementHeadline,
   agreementRows,
   countingNote,
+  editKindSummary,
+  editKindTotals,
+  editsLabel,
   formatDice,
   formatDistance,
   formatPercent,
@@ -27,6 +30,8 @@ function structure(id: string, dice: number, change = 0, name = id): StructureAg
     group: 'Organs',
     basis: unchanged ? 'same_file' : 'voxels',
     unchanged,
+    edit_kind: unchanged ? null : 'direct_edit',
+    edits: unchanged ? [] : ['direct_edit_correction'],
     dice,
     hd95_mm: unchanged ? 0 : 2.5,
     original_voxels: 100,
@@ -62,6 +67,7 @@ function report(structures: StructureAgreement[], overrides: Partial<RevisionAgr
       dice_mean: null,
       dice_median: null,
       abs_volume_change_ml_mean: null,
+      edit_kinds: {},
     },
     structures,
     excluded: [],
@@ -81,6 +87,7 @@ function pooled(id: string, unchanged_percent: number, dice_mean: number, review
     dice_mean,
     dice_median: dice_mean,
     abs_volume_change_ml_mean: 1,
+    edit_kinds: {},
   };
 }
 
@@ -151,6 +158,15 @@ describe('revision agreement presentation', () => {
     expect(countingNote(report(rows, { aggregate_pool: 'synthetic', synthetic: true }))).toMatch(/never with real cases/);
     expect(countingNote(report(rows, { aggregate_pool: null }))).toMatch(/marked Reviewed or Corrected/);
     expect(countingNote(report(rows, { aggregate_pool: null, active: false }))).toMatch(/active revision/);
+  });
+
+  it('orders totals by kind of save and names the saves behind a row', () => {
+    const assisted = { changed: 2, dice_mean: 0.97, dice_median: 0.982, abs_volume_change_ml_mean: 8.17 };
+    expect(editKindTotals({ other: { ...assisted, changed: 1 }, ai_assisted: assisted }).map(item => item.kind)).toEqual(['ai_assisted', 'other']);
+    expect(editKindTotals(undefined)).toEqual([]);
+    expect(editKindSummary(assisted, 'en-US')).toBe('2 changed · median Dice 0.982 · mean |ΔV| 8.17 mL');
+    expect(editsLabel(['refinement', 'nninteractive_correction'])).toBe('Saved by refinement, then AI assist');
+    expect(editsLabel([])).toBe('No saved edit');
   });
 
   it('labels model and phantom origins without filesystem details', () => {

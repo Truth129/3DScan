@@ -10,6 +10,12 @@ export interface AgreementOrigin {
   task?: string;
   engine_version?: string;
 }
+/** What saved a changed mask. AI assist keeps the model's own rewrite, so it is counted apart. */
+export type EditKind = 'direct_edit' | 'ai_assisted' | 'other';
+export interface KindAgreement extends AgreementAverages {
+  changed: number;
+}
+export type EditKindTotals = Partial<Record<EditKind, KindAgreement>>;
 export interface StructureAgreement {
   id: string;
   name: string;
@@ -18,6 +24,9 @@ export interface StructureAgreement {
   origin: AgreementOrigin;
   basis: AgreementBasis;
   unchanged: boolean;
+  edit_kind: EditKind | null;
+  /** Revision sources that saved a new mask since the original, oldest first. */
+  edits: string[];
   dice: number;
   hd95_mm: number | null;
   original_voxels: number;
@@ -52,7 +61,7 @@ export interface RevisionAgreement {
   implementation: string;
   hd95_exact: boolean;
   grid: { voxel_volume_ml: number; spacing_mm: number[]; sheared: boolean };
-  summary: AgreementAverages & { structures: number; compared: number; unchanged: number; changed: number; excluded: number };
+  summary: AgreementAverages & { structures: number; compared: number; unchanged: number; changed: number; excluded: number; edit_kinds: EditKindTotals };
   structures: StructureAgreement[];
   excluded: AgreementExclusion[];
   cache: { hits: number; computed: number };
@@ -64,6 +73,7 @@ export interface PooledAgreement {
   dice_mean: number;
   dice_median: number;
   abs_volume_change_ml_mean: number;
+  edit_kinds: EditKindTotals;
 }
 export interface StructurePool extends PooledAgreement {
   id: string;
@@ -175,6 +185,28 @@ export const basisLabels: Record<AgreementBasis, string> = {
   same_digest: 'Byte-identical copy of the model output',
   voxels: 'Compared voxel by voxel on the reference grid',
 };
+
+/** The asterisk points at AI_REWRITE_NOTE wherever AI-assisted figures are shown. */
+export const editKindLabels: Record<EditKind, string> = { direct_edit: 'Direct edit', ai_assisted: 'AI assist*', other: 'Other' };
+export const AI_REWRITE_NOTE = "* AI assist figures include voxels the model rewrote away from the reader's marks, so they overstate the reader's change.";
+const EDIT_KINDS: EditKind[] = ['direct_edit', 'ai_assisted', 'other'];
+const SOURCES: Record<string, string> = { nninteractive_correction: 'AI assist', direct_edit_correction: 'direct edit', slicer_correction: 'Slicer import' };
+
+export function editKindTotals(totals: EditKindTotals | undefined): (KindAgreement & { kind: EditKind })[] {
+  return EDIT_KINDS.flatMap(kind => {
+    const item = totals?.[kind];
+    return item ? [{ kind, ...item }] : [];
+  });
+}
+
+export function editKindSummary(item: KindAgreement, locale?: string): string {
+  return `${item.changed.toLocaleString(locale)} changed · median Dice ${formatDice(item.dice_median)} · mean |ΔV| ${formatVolume(item.abs_volume_change_ml_mean, locale)}`;
+}
+
+/** The saves behind a row, oldest first. */
+export function editsLabel(edits: string[]): string {
+  return edits.length ? `Saved by ${edits.map(source => SOURCES[source] ?? source.replaceAll('_', ' ')).join(', then ')}` : 'No saved edit';
+}
 
 export function poolLabel(name: AgreementPoolName): string {
   return name === 'real' ? 'Reviewed cases' : 'Synthetic demo cases';
