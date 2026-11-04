@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import vtkRenderer from '@kitware/vtk.js/Rendering/Core/Renderer';
+import type { vtkCamera } from '@kitware/vtk.js/Rendering/Core/Camera';
+// Core does not export the camera its viewports unproject through.
+import vtkSlabCamera from '../node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkSlabCamera.js';
 import type { Geometry, Point } from '../src/types';
 import {
   cornerstoneMPRDisplayMeta,
@@ -56,6 +60,33 @@ function geometry(volume = descriptor()): Geometry {
 }
 const close = (actual: readonly number[], expected: readonly number[], digits = 10) =>
   actual.forEach((value, axis) => expect(value).toBeCloseTo(expected[axis], digits));
+
+/** A native pane's canvasToWorld as Cornerstone runs it: Viewport.resetCamera puts the slab camera
+ * half the bounds diagonal from the focal point, and BaseVolumeViewport unprojects through its
+ * Float32 projection matrix. */
+function cornerstoneCanvasToWorld(grid: Geometry, axis: 0 | 1 | 2, index: number, width: number, height: number) {
+  const { viewPlaneNormal, viewUp } = nativeCameraOrientation(grid, axis);
+  const centre = grid.shape.map(size => (size - 1) / 2) as Point;
+  centre[axis] = index;
+  const focal = rasToLps(transformPoint(grid.affine_ras, centre));
+  const distance = Math.hypot(...grid.shape.map((size, column) => (size - 1) * grid.spacing[column])) / 2;
+  const camera = vtkSlabCamera.newInstance(),
+    renderer = vtkRenderer.newInstance();
+  camera.setParallelProjection(true);
+  camera.setParallelScale(height / 2);
+  camera.setFocalPoint(...focal);
+  camera.setPosition(...(focal.map((value, a) => value + distance * viewPlaneNormal[a]) as Point));
+  camera.setViewUp(...viewUp);
+  renderer.setActiveCamera(camera as unknown as vtkCamera);
+  return ([x, y]: [number, number]) => {
+    camera.setIsPerformingCoordinateTransformation(true);
+    const projection = renderer.normalizedDisplayToProjection(x / width, 1 - y / height, 0);
+    const view = renderer.projectionToView(projection[0], projection[1], projection[2], width / height);
+    const world = renderer.viewToWorld(view[0], view[1], view[2]);
+    camera.setIsPerformingCoordinateTransformation(false);
+    return world;
+  };
+}
 
 describe('native Cornerstone volume geometry', () => {
   it('reconstructs oblique reflected native landmarks without flipping or reordering k', () => {
@@ -133,6 +164,40 @@ describe('native Cornerstone volume geometry', () => {
     // One-pixel changes are tiny at this zoom, but the full viewport crosses slices.
     expect(cornerstoneMPRDisplayMeta(geometry(), 'coronal', 1000, 200, rotated).native).toBeUndefined();
     expect(() => cornerstoneMPRDisplayMeta(geometry(), 'coronal', 0, 200, camera)).toThrow('not ready');
+  });
+
+  it('keeps native authority and drawing through the Float32 depth of a Cornerstone camera', () => {
+    // The camera distance follows the grid, so the rounded depth changes with the slice
+    // count. Around 312 slices at 0.7/0.7/0.625 mm it often passed 1e-5 voxel, and the
+    // panes refused every drawing tool.
+    for (let slices = 300; slices <= 330; slices++) {
+      const grid: Geometry = {
+        ...geometry(),
+        shape: [512, 512, slices],
+        spacing: [0.7, 0.7, 0.625],
+        affine_ras: [
+          [-0.7, 0, 0, 179.3],
+          [0, -0.7, 0, 201.6],
+          [0, 0, 0.625, -412.5],
+          [0, 0, 0, 1],
+        ],
+      };
+      for (const [plane, axis] of [
+        ['sagittal', 0],
+        ['coronal', 1],
+        ['axial', 2],
+      ] as const) {
+        const index = Math.floor(grid.shape[axis] / 3);
+        const meta = cornerstoneMPRDisplayMeta(grid, plane, 600, 500, cornerstoneCanvasToWorld(grid, axis, index, 600, 500));
+        expect(meta.native, `${slices} slices, ${plane}`).toEqual({ axis, index });
+        const lasso = createReviewGesture(grid, meta, 'lasso', true, [
+          [2, 3],
+          [590, 10],
+          [300, 490],
+        ]);
+        expect(lasso).toMatchObject({ axis, index });
+      }
+    }
   });
 });
 
