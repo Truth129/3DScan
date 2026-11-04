@@ -400,8 +400,8 @@ second GPU copy of the CT.
 - **Color segments** tints the CT before lighting from a label union, largest structure first.
 - **Review** can show the CT volume, with masking, colouring and Cinematic heart off because they
   would follow the candidate mask. The default preset stands in for Cinematic heart on screen
-  only, so edits there keep the main page's preset and reference HU. While the CT plane shows, the
-  crop plane on its axis moves to the slice to cut away the camera's side, because vtk.js volume
+  only, so edits there keep the main page's preset and reference HU. While the reader marks on the CT
+  plane, the crop plane on its axis moves to the slice to cut away the camera's side, because vtk.js volume
   shaders take six clipping planes.
 - **Volume point** marches the click's ray on the CPU through the shared ImageVolume's voxels
   (`volume-ray.ts`), because vtk.js cannot pick a shared GPU volume. It samples trilinearly every

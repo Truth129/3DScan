@@ -541,7 +541,9 @@ function syncPresentation() {
     reviewPlaneReady.value = false;
     planeError.value = reason instanceof Error ? reason.message : 'The CT plane could not load.';
   }
-  viewer.setReviewCut(props.reviewPlaneActive && !planeError.value && props.plane ? { axis: props.plane.axis, index: props.plane.index } : undefined);
+  // Only while marking on the plane: shown edge-on in another mode, a cut would remove half the volume.
+  const cut = props.reviewPlaneActive && props.review?.mode === 'plane' && !planeError.value && props.plane;
+  viewer.setReviewCut(cut ? { axis: props.plane!.axis, index: props.plane!.index } : undefined);
   surfaces?.setPresentation(props.structures ?? [], props.display ?? {}, props.selected ?? '', {
     // A failed or pending revision replacement must not present old surfaces
     // as though they belonged to the currently selected masks.
@@ -674,6 +676,7 @@ watch(
     props.reviewLevel,
     props.reviewOverlayCount,
     props.reviewCompare,
+    props.review?.mode,
   ],
   async () => {
     const instance = viewer,

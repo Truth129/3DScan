@@ -444,8 +444,8 @@ With **CT volume** on in review:
   tools, Direct edit's included, move the crosshair there so you can draw on the slices.
 - A click on no visible volume, or on a surface or the CT plane in front of it, makes no mark.
 - **Surface point** refuses a surface the volume covers.
-- The **CT plane** cuts away the volume on your side of it, and **Focus** keeps the whole CT in
-  depth.
+- While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps the
+  whole CT in depth.
 - **Mask to segmentation**, **Color segments** and **Cinematic heart** stay off, because they would
   follow the mask being edited. A Cinematic heart volume shows with the default preset, and
   returns on **Exit review** unless you choose another preset.

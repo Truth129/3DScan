@@ -1397,6 +1397,12 @@ watch(
 let volumeBeforeReview = showVolume.value;
 let segmentationBeforeReview = showSegmentation.value;
 let planeBeforeReview = showPlane.value;
+// Focus, or a rotate while the volume was hidden, fits clipping to the target or the surfaces; a volume
+// turned on afterwards would draw as a slab until the next rotate.
+watch(showVolume, visible => {
+  if (visible && props.reviewActive && vtkSelected.value && vtkCamera.value && props.geometry?.bounds_ras)
+    vtkCamera.value = fitVolumeCameraClipping(vtkCamera.value, props.geometry.bounds_ras);
+});
 watch(
   () => props.reviewActive,
   active => {

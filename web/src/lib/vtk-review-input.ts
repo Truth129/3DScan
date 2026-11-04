@@ -59,6 +59,7 @@ export interface NativeReviewOptions {
 }
 export const VOLUME_MISSED_MESSAGE = 'No visible CT volume under the pointer.';
 export const VOLUME_COVERED_MESSAGE = 'A surface or the CT plane is in front of the CT volume here.';
+export const VOLUME_UNREADABLE_MESSAGE = 'The CT volume could not be read here; try again.';
 export const SURFACE_COVERED_MESSAGE = 'The CT volume covers this surface here. Use Volume point, or turn CT volume off.';
 const svgNS = 'http://www.w3.org/2000/svg';
 const dot = (a: readonly number[], b: readonly number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
@@ -278,8 +279,13 @@ export class VTKReviewInput {
       ],
     };
   }
+  /** Undefined when nothing visible lies on the ray; null when the CT could not be read, which refuses one click, not the viewer. */
   private volumeHit(ray: { origin: Point; direction: Point; clip: VolumeRayHalfSpace[] }, source: VolumeRaySource, maxDistanceMM?: number) {
-    return firstVisibleVolumePoint(ray.origin, ray.direction, { ...source, clip: [...(source.clip ?? []), ...ray.clip] }, { maxDistanceMM });
+    try {
+      return firstVisibleVolumePoint(ray.origin, ray.direction, { ...source, clip: [...(source.clip ?? []), ...ray.clip] }, { maxDistanceMM });
+    } catch {
+      return null;
+    }
   }
   /** Opaque surfaces and the CT plane hide the volume behind them, so the ray stops at the nearest. */
   private volumePoint(event: PointerEvent, state: NativeReviewState) {
@@ -292,8 +298,10 @@ export class VTKReviewInput {
       limit = depths.length ? Math.min(...depths) : undefined,
       hit = this.volumeHit(ray, source, limit),
       ras = hit && nativeReviewVoxelCentre(hit.ras, state.geometry);
-    if (!ras) this.options.onNotice?.(limit === undefined ? VOLUME_MISSED_MESSAGE : VOLUME_COVERED_MESSAGE);
-    return ras;
+    if (hit === null) this.options.onNotice?.(VOLUME_UNREADABLE_MESSAGE);
+    // Covered only when visible volume does lie behind what stopped the ray.
+    else if (!ras) this.options.onNotice?.(limit !== undefined && this.volumeHit(ray, source) ? VOLUME_COVERED_MESSAGE : VOLUME_MISSED_MESSAGE);
+    return ras || undefined;
   }
   /** Meshes follow masks and can sit up to a voxel off the CT edge they trace, so only volume clearly in front hides a surface. */
   private surfaceCovered(event: PointerEvent, surface: Point, geometry: Geometry) {
