@@ -43,7 +43,14 @@ import { imagePresentation, type ImageContext, type ImageCapability } from '../l
 import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
 import { freshNativeVolumeLighting } from '../lib/volume-lighting';
-import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, DEFAULT_VOLUME_SETTINGS, freshVolumeSettings } from '../lib/volume-presets';
+import {
+  CINEMATIC_HEART_PRESET,
+  MR_SIGNAL_PRESET,
+  DEFAULT_CINEMATIC_SETTINGS,
+  DEFAULT_VOLUME_SETTINGS,
+  freshVolumeSettings,
+  type CTVolumeSettings,
+} from '../lib/volume-presets';
 import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
 import { useExpandedViewport } from '../lib/use-expanded-viewport';
@@ -278,6 +285,13 @@ const renderVolumeSettings = computed(() =>
       ? freshVolumeSettings({ ...volumeSettings.value, preset: DEFAULT_VOLUME_SETTINGS.preset })
       : volumeSettings.value,
 );
+// The default preset stands in for Cinematic heart in review for display only. An edit made there
+// keeps the main page's preset and reference HU, which review cannot show, so Exit review restores
+// them. A preset the reader picks is never the 'angiography' alias, so it is still saved.
+function updateVolumeSettings(settings: CTVolumeSettings) {
+  const standIn = !segmentDrivenVolume.value && volumeSettings.value.preset === CINEMATIC_HEART_PRESET && settings.preset === renderVolumeSettings.value.preset;
+  setVolumeSettings(standIn ? { ...settings, preset: CINEMATIC_HEART_PRESET, cinematic: volumeSettings.value.cinematic } : settings);
+}
 const shownVolumeMask = computed(() => (segmentDrivenVolume.value ? volumeMask.value : { ...volumeMask.value, enabled: false }));
 const shownVolumeColors = computed(() =>
   segmentDrivenVolume.value ? volumeColorsRequest.value : { ...volumeColorsRequest.value, enabled: false, ids: [], colors: [] },
@@ -1911,7 +1925,7 @@ defineExpose({
           :mask-error="!!effectiveMaskError"
           :message="showVolume ? volumeMessage : ''"
           @update:enabled="setVolumeEnabled"
-          @update:settings="setVolumeSettings"
+          @update:settings="updateVolumeSettings"
           @update:native-lighting="nativeLighting = $event"
           @update:mask="setVolumeMask"
           @retry-mask="retryVolumeMask"

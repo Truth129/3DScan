@@ -447,7 +447,8 @@ With **CT volume** on in review:
 - The **CT plane** cuts away the volume on your side of it, and **Focus** keeps the whole CT in
   depth.
 - **Mask to segmentation**, **Color segments** and **Cinematic heart** stay off, because they would
-  follow the mask being edited. A Cinematic heart volume shows with the default preset.
+  follow the mask being edited. A Cinematic heart volume shows with the default preset, and
+  returns on **Exit review** unless you choose another preset.
 
 **Review tools** starts folded. A mark cannot start underneath it, so fold it to reach that part of
 the view.
