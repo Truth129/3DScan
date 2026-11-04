@@ -189,7 +189,8 @@ def create_app(settings: Settings | None = None):
         # Local filesystem endpoints must not be callable by an unrelated browser origin.
         # scope["path"] is what routing matches. request.url.path would stop at
         # an encoded "?" in an earlier segment, and miss the upload check below.
-        view_export = request.scope["path"].endswith(("/dicom-view", "/dicom-view-file"))
+        # A final newline reaches the same handler, because a route's $ also matches before one.
+        view_export = request.scope["path"].removesuffix("\n").endswith(("/dicom-view", "/dicom-view-file"))
         session = _is_session_path(request)
         redeem = _is_redeem_path(request)
         private = (
