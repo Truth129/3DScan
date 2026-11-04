@@ -35,9 +35,22 @@ MODEL_REVISION = "3f308d751c00644e4fde6f09c600264b393b21b5"
 CHECKPOINT_SHA256 = "b3ac4421f85457bbd1aa0d87f5e67bcb7bc8e2ce6b824b6ac45077cc5d630ea9"
 MODEL_LICENSE = "CC BY-NC-SA 4.0"
 MIOPEN_FIND_MODE = "FAST"
-# A stored result is rebuilt from only on the model, card and build that made it, so a
-# draft's later steps never continue another card's bytes.
-RESULT_IDENTITY = ("engine", "engine_version", "checkpoint_sha256", "device", "gpu_name", "torch_version", "hip_version", "cuda_version")
+# A stored result is rebuilt from only on the model, card, build and adapter code that made it,
+# so a draft's later steps never continue another card's bytes, nor bytes an older adapter made
+# (one from before Refine kept marks would otherwise get every earlier mark back).
+RESULT_IDENTITY = (
+    "engine",
+    "engine_version",
+    "checkpoint_sha256",
+    "device",
+    "gpu_name",
+    "torch_version",
+    "hip_version",
+    "cuda_version",
+    "wrapper_sha256",
+    "batch_adapter_sha256",
+    "prompt_rasterizer_sha256",
+)
 
 
 @contextmanager
@@ -499,7 +512,8 @@ class InteractiveRuntime:
                     self._applied_batches.append(batch)
                     if check is not None and len(self._applied_batches) == check["batches"]:
                         # The reader saw the stored result of this step; say how far the replay moved from it.
-                        replay_check = {"batches": check["batches"], "changed_voxels": self._changed_since(check, image, affine)}
+                        moved = self._changed_since(check, image, affine)
+                        replay_check = None if moved is None else {"batches": check["batches"], "changed_voxels": moved}
             prediction_seconds = time.monotonic() - prediction_started
             self._cancel(cancelled)
             if self._target.dtype != np.uint8 or self._target.min() < 0 or self._target.max() > 1:
@@ -551,13 +565,22 @@ class InteractiveRuntime:
             return None, "The stored mask does not match its recorded hash"
         if any(batch["legacy"] for batch in history[: stored["batches"]]):
             return "compare", "Pointwise steps from before per-step results always replay"
-        if any(self._model_provenance.get(key) != stored["engine"].get(key) for key in RESULT_IDENTITY):
-            return "compare", "Another model, card or build made the stored result"
+        current = {
+            **self._model_provenance,
+            "batch_adapter_sha256": _sha256(_identity(Path(__file__).with_name("interactive_batch.py"))),
+            "prompt_rasterizer_sha256": _sha256(_identity(Path(__file__).with_name("interactive_prompts.py"))),
+        }
+        if any(current.get(key) != stored["engine"].get(key) for key in RESULT_IDENTITY):
+            return "compare", "Another model, card, build or adapter version made the stored result"
         return "restore", None
 
     def _changed_since(self, stored, image, affine):
-        """Voxels of the target that differ from a stored result, in bounded slabs."""
-        expected, _, _ = _binary(stored["mask_path"], image, affine)
+        """Voxels of the target that differ from a stored result, in bounded slabs; None if it is gone."""
+        try:
+            expected, _, _ = _binary(stored["mask_path"], image, affine)
+        except (OSError, ValueError):
+            # A notice, not the run: a stored file removed since it was checked skips the comparison.
+            return None
         return sum(int(np.count_nonzero(self._target[offset : offset + 16] != expected[offset : offset + 16])) for offset in range(0, image.shape[0], 16))
 
     def release(self):

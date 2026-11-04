@@ -817,7 +817,9 @@ A saved correction's `operation.runtime` records what made its candidate:
 - **nnInteractive.** The same `device`, `gpu_name`, `torch_version`, `hip_version` and
   `cuda_version`, plus `inference_path` if named. `miopen_find_mode` is null unless the build is
   HIP. `restored` is `{batches, mask_sha256}` when the run rebuilt its first steps from a stored
-  result, else null, and `stored_result_refused` says why a stored result was not used.
+  result, else null, and `stored_result_refused` says why a stored result was not used. When one
+  was refused but still trusted, `replay_check` is `{batches, changed_voxels}` from comparing the
+  replay with it at that step, and voxels that moved add a candidate warning.
 - **Direct edit.** `device: "cpu"` and no GPU or PyTorch keys.
 - **Relationship-only.** Its prediction's provenance, or `engine: "mask-relationship-processing"`
   and none of these keys with no prediction to reuse.

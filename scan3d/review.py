@@ -826,7 +826,8 @@ class ReviewManager:
             )
         # A stored result that could not be rebuilt from, as after a re-run on another card, was still
         # compared with the replay at its step: those are voxels the reader already inspected.
-        if (check := provenance.get("replay_check")) and check["changed_voxels"]:
+        # A relationship-only Apply copies an earlier run's provenance but repeats nothing.
+        if (check := provenance.get("replay_check")) and check["changed_voxels"] and not provenance.get("reused_prediction"):
             moved = check["changed_voxels"]
             overlap["warnings"].insert(
                 0,

@@ -897,6 +897,35 @@ def test_a_run_names_the_stored_result_of_its_longest_run_of_applied_steps(examp
     assert sent(example)[1]["stored"]["batches"] == 3
 
 
+def test_a_stored_result_is_offered_only_for_the_same_marks_options_and_sources():
+    from scan3d.review import _stored_result
+
+    steps = [dict(end=1, autozoom=True, full_refine=False, legacy=False)]
+    payload = dict(prompts=["mark-1", "mark-2"], options={"autozoom": True}, batches=[*steps, dict(end=2, autozoom=True, full_refine=False, legacy=False)])
+
+    def candidate(name, **change):
+        value = dict(
+            batches_snapshot=steps,
+            prompts_snapshot=["mark-1"],
+            options={"autozoom": True},
+            ct_sha256="ct",
+            before_mask_sha256="mask",
+            mask_sha256=name,
+            mask_file=f"/{name}.nii.gz",
+            provenance={"output_mask_sha256": name},
+        )
+        return {**value, **change}
+
+    def offered(*candidates):
+        found = _stored_result(dict(candidates={str(i): c for i, c in enumerate(candidates)}), payload, "ct", "mask")
+        return found and found["mask_sha256"]
+
+    # Of two equal results the latest wins.
+    assert offered(candidate("older"), candidate("newer")) == "newer"
+    for change in (dict(prompts_snapshot=["other"]), dict(options={"autozoom": False}), dict(ct_sha256="other"), dict(before_mask_sha256="other")):
+        assert offered(candidate("changed", **change)) is None
+
+
 @pytest.mark.parametrize("ending", ["failed", "cancelled", "interrupted"])
 def test_a_refine_with_nothing_pending_that_does_not_finish_leaves_the_last_result_saveable(example, ending):
     service, case, _, _ = example

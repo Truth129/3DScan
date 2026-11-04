@@ -405,8 +405,8 @@ A held draft shows **Re-run draft on** instead of **Run on**. To move it, choose
 
 - repeats every Apply step from the original mask, with any pending marks last
 - replaces the current result only when it finishes
-- can change regions where you made no marks. A warning beside **Exit review** says how many voxels
-  of the result you saw moved, so inspect the new result before saving
+- can change regions where you made no marks. If voxels of the result you saw moved, a warning beside
+  **Exit review** says how many, so inspect the new result before saving
 
 If a re-run fails or is cancelled, the old result stays visible but cannot be saved. Choose
 **Re-run on this GPU** again, or **Discard draft**. Your marks are never lost.
