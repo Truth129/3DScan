@@ -190,7 +190,13 @@ export const basisLabels: Record<AgreementBasis, string> = {
 export const editKindLabels: Record<EditKind, string> = { direct_edit: 'Direct edit', ai_assisted: 'AI assist*', other: 'Other' };
 export const AI_REWRITE_NOTE = "* AI assist figures include voxels the model rewrote away from the reader's marks, so they overstate the reader's change.";
 const EDIT_KINDS: EditKind[] = ['direct_edit', 'ai_assisted', 'other'];
-const SOURCES: Record<string, string> = { nninteractive_correction: 'AI assist', direct_edit_correction: 'direct edit', slicer_correction: 'Slicer import' };
+const SOURCES: Record<string, string> = {
+  nninteractive_correction: 'AI assist',
+  nninteractive_new_structure: 'new segment (AI assist)',
+  direct_edit_correction: 'direct edit',
+  direct_edit_new_structure: 'new segment (direct edit)',
+  slicer_correction: 'Slicer import',
+};
 
 export function editKindTotals(totals: EditKindTotals | undefined): (KindAgreement & { kind: EditKind })[] {
   return EDIT_KINDS.flatMap(kind => {

@@ -497,8 +497,9 @@ Dice and mean absolute ΔV. Synthetic demo cases form a separate pool.
 
 Both views also total changed masks by kind of save. An AI-assisted save keeps the model's own
 rewrite away from your marks, so **AI assist\*** figures overstate your change. A mask counts as
-**AI assist\*** if any save since its original used AI assist. **Other** covers refinements and
-Slicer imports, alone or with direct edits.
+**AI assist\*** if any save since its original used AI assist, **Direct edit** if every save was a
+direct edit, and **Other** otherwise, such as after a refinement or Slicer import. A save that adds
+a segment counts for each mask it took voxels from.
 
 - These numbers measure reviewer edits, not ground truth. An uncorrected mask can still be wrong.
 - Review status covers a whole revision, so a structure nobody inspected counts as accepted.

@@ -987,9 +987,10 @@ as the origin.
 - `edits` lists the `source` of each revision that saved a new mask since the original, oldest
   first.
 - `edit_kind` is null for an unchanged mask. Otherwise it is `ai_assisted` if any edit is
-  `nninteractive_correction`, `direct_edit` if every edit is `direct_edit_correction`, and `other`
-  otherwise. An AI-assisted save keeps the model's rewrite away from the marks, so its figures
-  overstate the reader's change.
+  `nninteractive_correction` or `nninteractive_new_structure`, `direct_edit` if every edit is
+  `direct_edit_correction` or `direct_edit_new_structure`, and `other` otherwise. A new structure's
+  save is an edit of each exclusive sibling it carved. An AI-assisted save keeps the model's rewrite
+  away from the marks, so its figures overstate the reader's change.
 - `edit_kinds` maps each kind present to `{changed, dice_mean, dice_median,
   abs_volume_change_ml_mean}`.
 

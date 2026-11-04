@@ -166,6 +166,7 @@ describe('revision agreement presentation', () => {
     expect(editKindTotals(undefined)).toEqual([]);
     expect(editKindSummary(assisted, 'en-US')).toBe('2 changed · median Dice 0.982 · mean |ΔV| 8.17 mL');
     expect(editsLabel(['refinement', 'nninteractive_correction'])).toBe('Saved by refinement, then AI assist');
+    expect(editsLabel(['nninteractive_new_structure', 'direct_edit_new_structure'])).toBe('Saved by new segment (AI assist), then new segment (direct edit)');
     expect(editsLabel([])).toBe('No saved edit');
   });
 

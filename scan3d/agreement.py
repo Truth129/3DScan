@@ -49,7 +49,9 @@ _REASONS = {
 # An AI-assisted save keeps the model's whole output, so its figures include voxels the
 # model rewrote away from the reader's marks; totals keep it apart from reader-only edits.
 EDIT_KINDS = ("direct_edit", "ai_assisted", "other")
-_AI_ASSISTED, _DIRECT = "nninteractive_correction", "direct_edit_correction"
+# A save that adds a segment can carve an exclusive sibling, so the kind follows the method.
+_AI_ASSISTED = {"nninteractive_correction", "nninteractive_new_structure"}
+_DIRECT = {"direct_edit_correction", "direct_edit_new_structure"}
 
 
 def _surface(mask):
@@ -266,9 +268,9 @@ def _edit_kind(edits, unchanged):
     """Unchanged masks have no kind; any AI-assisted save marks the row as one."""
     if unchanged:
         return None
-    if _AI_ASSISTED in edits:
+    if _AI_ASSISTED.intersection(edits):
         return "ai_assisted"
-    return "direct_edit" if edits and set(edits) == {_DIRECT} else "other"
+    return "direct_edit" if edits and set(edits) <= _DIRECT else "other"
 
 
 def _same_file(first, second):
