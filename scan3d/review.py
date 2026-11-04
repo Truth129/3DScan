@@ -20,7 +20,7 @@ from .fileio import atomic_json, code_fingerprint, hash_file as _digest
 from . import __version__, imaging, inference_paths
 from .errors import NotFound
 from .identity import actor_id
-from .interactive_prompts import normalize_options, normalize_prompts
+from .interactive_prompts import mark_name, materialize_prompt, normalize_options, normalize_prompts
 from .relationships import (
     INDEPENDENT,
     ancestors,
@@ -363,6 +363,15 @@ class ReviewManager:
             raise ValueError("Direct editing supports paint and erase strokes or 3D scissors only")
         if review.get("method") != "direct" and any(prompt["kind"] == "scissors" for prompt in normalized):
             raise ValueError("3D scissors are only available in direct editing")
+        for number, prompt in enumerate(normalized, 1):
+            # A run rasterizes every pending mark, so one that selects no voxel centre would fail
+            # each Run AI or Apply, good marks with it, and a reloaded draft has no Undo. A mark
+            # already in the draft is left alone: an older build's still saves, and the run names it.
+            if prompt["kind"] in {"lasso", "scribble"} and prompt not in review["prompts"]:
+                try:
+                    materialize_prompt(prompt, affine, image.shape, mark_name(prompt, number, review.get("method") == "direct"))
+                except ValueError as exc:
+                    raise ValueError(f"{exc}. Draw it larger.") from None
         return normalized
 
     def update(self, case_id, session_id, expected_generation, prompts, options=None, relationship=None):

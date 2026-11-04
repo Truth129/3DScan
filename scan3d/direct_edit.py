@@ -8,7 +8,7 @@ import time
 import numpy as np
 
 from . import __version__, imaging
-from .interactive_prompts import materialize_prompt, normalize_options, normalize_prompts
+from .interactive_prompts import mark_name, materialize_prompt, normalize_options, normalize_prompts
 
 
 def apply_strokes(ct_path, mask_path, prompts, output_path, *, options=None, progress=lambda _: None, cancelled=lambda: False):
@@ -54,7 +54,8 @@ def apply_strokes(ct_path, mask_path, prompts, output_path, *, options=None, pro
             )
             continue
         progress(f"Applying {'paint' if stroke['include'] else 'erase'} stroke {index}/{len(strokes)}")
-        materialized = materialize_prompt(stroke, affine, image.shape)
+        # A draft saved before such strokes were refused can hold one; name it.
+        materialized = materialize_prompt(stroke, affine, image.shape, mark_name(stroke, index, direct=True))
         bounds = tuple(slice(low, high) for low, high in materialized["interaction_bbox"])
         plane = after[bounds]
         # The cropped interaction image has one voxel of depth along its axis.

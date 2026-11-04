@@ -325,10 +325,11 @@ export class InteractiveController {
     this.saving = true;
     this.notify();
     this.writing = (async () => {
+      let requested: Snapshot | undefined;
       try {
         if (!this.review) await this.createReview();
         while (this.unsaved && !this.conflict) {
-          const requested = snapshot(this.prompts, this.options, this.relationship);
+          requested = snapshot(this.prompts, this.options, this.relationship);
           const value = await this.reader.interactivePrompts(
             this.caseId,
             this.review!.id,
@@ -345,6 +346,7 @@ export class InteractiveController {
       } catch (reason) {
         this.error = reason instanceof Error ? reason.message : String(reason);
         if (reason instanceof ApiError && reason.status === 409) this.conflict = true;
+        else if (reason instanceof ApiError && reason.status === 400 && requested) this.withdraw(requested);
         throw reason;
       } finally {
         this.saving = false;
@@ -353,6 +355,34 @@ export class InteractiveController {
       }
     })();
     return this.writing;
+  }
+  /**
+   * Takes out the marks a refused save added, such as a drawing that covers no voxel centre. Every
+   * later save would carry them and be refused too. Their steps leave the history as well, so Undo
+   * cannot bring one back.
+   */
+  private withdraw(requested: Snapshot) {
+    const value = this.review;
+    if (!value) return;
+    const held = new Set(value.prompts.map(item => item.id)),
+      refused = new Set(requested.prompts.filter(item => !held.has(item.id)).map(item => item.id)),
+      keep = (prompts: InteractivePrompt[]) => prompts.filter(item => !refused.has(item.id)),
+      rest = signature(snapshot(keep(requested.prompts), requested.options, requested.relationship));
+    // Only a save that added nothing but marks was refused for one of them. A draft started with a
+    // relationship holds it before this page's first save does, so the record counts as saved too.
+    if (!refused.size || (rest !== this.persisted && rest !== saved(value))) return;
+    const history: Snapshot[] = [];
+    let cursor = 0;
+    this.history.forEach((item, index) => {
+      const next = { ...item, prompts: keep(item.prompts) };
+      if (!history.length || signature(next) !== signature(history[history.length - 1])) history.push(next);
+      if (index === this.cursor) cursor = history.length - 1;
+    });
+    this.history = history;
+    this.cursor = cursor;
+    this.prompts = keep(this.prompts);
+    // Marks made while the save was out are not part of the refusal, and still need saving.
+    this.schedule();
   }
   async reload() {
     clearTimeout(this.timer);

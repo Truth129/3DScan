@@ -14,6 +14,14 @@ from .imaging import _voxel
 
 
 DEFAULT_OPTIONS = {"autozoom": True, "start_empty": False}
+_TOOLS = {"point": "Point", "bbox": "Box", "lasso": "Lasso", "scribble": "Hint brush", "scissors": "Scissors"}
+
+
+def mark_name(prompt, number, direct=False):
+    """A mark as the review panel names its tool, so a refusal says which one to redraw."""
+    if direct and prompt["kind"] == "scribble":
+        return f"{'Paint' if prompt['include'] else 'Erase'} stroke {number}"
+    return f"{_TOOLS[prompt['kind']]} mark {number}"
 
 
 def normalize_options(options=None):
@@ -102,8 +110,11 @@ def normalize_prompts(prompts, affine, shape):
     return result
 
 
-def materialize_prompt(prompt, affine, shape):
-    """Return small native arrays; callers normalize the complete list first."""
+def materialize_prompt(prompt, affine, shape, name="The drawing"):
+    """Return small native arrays; callers normalize the complete list first.
+
+    `name` is the mark's `mark_name`, for the refusal of a drawing that selects no voxel centre.
+    """
     kind = prompt.get("kind", "point")
     if kind == "scissors":
         raise ValueError("3D scissors are deterministic direct edits, not AI prompts")
@@ -155,7 +166,7 @@ def materialize_prompt(prompt, affine, shape):
             residual = delta - np.asarray(fraction)[..., None] * direction
             plane |= np.einsum("...i,...i->...", residual, residual) < 1e-12
     if not plane.any():
-        raise ValueError("The drawing does not cover any native voxel centres")
+        raise ValueError(f"{name} covers no voxel centre on its slice")
     image = np.expand_dims(plane.astype(np.uint8), axis=axis)
     result.update(interaction_bbox=bounds, image=np.ascontiguousarray(image), support_bbox_ijk=bounds)
     return result

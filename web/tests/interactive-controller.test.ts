@@ -128,6 +128,32 @@ describe('optimistic interactive draft queue', () => {
     expect(controller.prompts[0].id).toBe('local');
     expect(reader.predictInteractive).not.toHaveBeenCalled();
   });
+  it('takes out a mark the server refuses, and its undo step, and keeps the reason on screen', async () => {
+    const { controller, reader } = fixture(base());
+    await controller.load();
+    controller.append(point('kept'));
+    await controller.flush();
+    const reason = 'Lasso mark 2 covers no voxel centre on its slice. Draw it larger.';
+    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(400, reason));
+    controller.append({
+      id: 'missed',
+      kind: 'lasso',
+      include: true,
+      axis: 2,
+      index: 4,
+      vertices: [
+        [2.2, 2.2],
+        [2.8, 2.2],
+        [2.5, 2.8],
+      ],
+    });
+    await expect(controller.flush()).rejects.toThrow(reason);
+    expect(controller.prompts.map(item => item.id)).toEqual(['kept']);
+    expect([controller.unsaved, controller.conflict, controller.error]).toEqual([false, false, reason]);
+    controller.undo();
+    expect(controller.prompts).toEqual([]);
+    expect(controller.canUndo).toBe(false);
+  });
   it('compares normalized point kinds and server key ordering consistently', async () => {
     const applied = { include: true, ras: [1, 2, 3] as [number, number, number], id: 'legacy', kind: 'point' as const };
     const initial = {
