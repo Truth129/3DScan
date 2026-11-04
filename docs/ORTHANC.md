@@ -147,7 +147,9 @@ compare hashes. Sending then asks Orthanc to perform C-STORE to that modality.
 - After a confirmed success, **Send again** delivers the same SOP instances anew, for example if the
   receiver deleted them.
 - If 3DScan cannot confirm an outcome it says so. A retry reuses the same instances and first checks
-  any known Orthanc job.
+  any known Orthanc job. Orthanc keeps only `JobsHistorySize` finished jobs, 10 by default, so set
+  it to `100` or more. Once Orthanc drops a job, its outcome is unknown and the next retry sends
+  again.
 
 To send native OsiriX ROIs instead, choose **OsiriX ROIs** under **Format** first. Each slice that a
 selected mask touches becomes one `OsiriX ROI SR` report in its own series, holding one brush ROI
@@ -209,6 +211,22 @@ In Explorer 2, click a study, click a series, then click the cube icon at the ri
   status check. A case in Trash, or deleted forever, counts as absent, so you import a new one.
 - Otherwise confirm the patient shown and choose **Import selected series**.
 - The link never prepares a CT, runs segmentation or imports SEG.
+
+## Other archives through Orthanc
+
+Orthanc can fetch studies from other archives and send results to other nodes for 3DScan.
+
+- **A DICOM archive (PACS).** Add it to `DicomModalities`, then find and retrieve studies in
+  Explorer 2 or through `/modalities/<id>/query`. With `"RetrieveMethod": "C-GET"` on its entry
+  (Orthanc 1.12.6 and later), the archive needs no entry for Orthanc. With C-MOVE, the default,
+  the archive must list Orthanc's AE title, address and port as a move destination.
+- **A DICOMweb server.** List it under `DicomWeb.Servers`, then retrieve through
+  `POST /dicom-web/servers/<name>/retrieve`.
+- **Results.** Add any DICOM node to `DicomModalities` and its identifier to
+  `SCAN3D_ORTHANC_EXPORT_DESTINATIONS`.
+
+Retrieved series then import as above. Without any server, import a folder or ZIP and
+[save the SEG as a file](USER_GUIDE.md#dicom-seg).
 
 ## Compatibility notes
 
