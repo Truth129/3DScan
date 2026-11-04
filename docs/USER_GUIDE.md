@@ -333,7 +333,8 @@ crosshairs pause, until **Exit review**.
 - Marks autosave into a draft that survives reloads and restarts. Accepted masks change only when
   you save.
 - Mark only a settled, full-resolution view.
-- **↶ Undo** and **↷ Redo** step through your marks.
+- **↶ Undo** and **↷ Redo** step through your marks. Undo back to an applied step shows its result
+  again, with no new run.
 
 ### Direct edit
 
@@ -363,6 +364,9 @@ noncommercial use only. Inference stays on your computer and never trains the mo
 - **Automatically focus inference**, on by default
 - **Start from an empty mask**, which leaves the saved mask unchanged
 - **Refine whole mask**, a slower extra model stage
+
+If **Refine whole mask** fails or is cancelled with no marks waiting, the result before it stays
+and can be saved.
 
 Save or discard your draft before switching between **Direct edit** and **AI assist**.
 

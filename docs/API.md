@@ -621,14 +621,15 @@ relationship?}` and replaces the complete ordered prompt list, with no inference
 
 **`POST .../reviews/{sid}/predict`** takes `{generation, full_refine?, inference_path?, replay?}`
 and returns a `review_predict` job, which applies every pending mark and publishes a candidate, not
-a revision. With nothing pending, it needs `full_refine`, a changed relationship or `replay`. See
-[Choosing a path](#choosing-a-path).
+a revision. With nothing pending, it needs `full_refine`, a changed relationship or `replay`, or
+marks with no `candidate`, whose applied steps it repeats. See [Choosing a path](#choosing-a-path).
 
 - Queuing a run moves `generation`, and publishing its result does not. A client that has not seen
   the run gets 409, so it can neither cancel the run nor replace its result.
 - A policy-only Apply reuses the previous prediction with no inference.
 - `full_refine` (nnInteractive only) refines the whole mask from the current candidate, and can take
-  longer than a local correction.
+  longer than a local correction. If it fails or is cancelled with nothing pending, the candidate
+  before it is restored under a fresh alias and can be accepted.
 
 **`POST .../reviews/{sid}/accept`** takes `{generation}` and returns a `review_accept` job, which
 marks the new revision `corrected`. The candidate must be current and change masks or relationships,
