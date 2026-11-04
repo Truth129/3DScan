@@ -583,6 +583,17 @@ with the arrows. The higher mask keeps overlapping voxels.
 - If a mask would lose every voxel, the export stops and names its rank.
 - Each ranking is a separate export, and sending one does not count as sending another.
 
+#### OsiriX ROIs
+
+If the CT came from a configured Orthanc, **Format** also offers **OsiriX ROIs**: native OsiriX
+brush ROIs, one per mask on each slice it touches. Choose it, select the masks, then choose
+**Archive in Orthanc** or **Send to** your OsiriX destination.
+
+- Overlaps stay as they are, so there is no ranking, and there is no file to download.
+- Sending ROIs does not count as sending a SEG of the same masks, or the reverse.
+- This format is experimental. It has been checked in OsiriX MD 14.3 on synthetic scans only, so
+  compare the ROIs with the masks before you rely on them.
+
 ## Import existing DICOM SEG masks
 
 **Import DICOM SEG…** adds masks made elsewhere to an open CT, whether that CT came from a folder, a

@@ -149,6 +149,12 @@ compare hashes. Sending then asks Orthanc to perform C-STORE to that modality.
 - If 3DScan cannot confirm an outcome it says so. A retry reuses the same instances and first checks
   any known Orthanc job.
 
+To send native OsiriX ROIs instead, choose **OsiriX ROIs** under **Format** first. Each slice that a
+selected mask touches becomes one `OsiriX ROI SR` report in its own series, holding one brush ROI
+per mask. Archiving, sending, retries and **Send again** work as for a SEG. Only OsiriX reads these
+reports, so send them to an OsiriX destination. See
+[OsiriX ROIs](USER_GUIDE.md#osirix-rois) for the limits.
+
 ## Send a 3D view back
 
 **DICOM ↗** in the 3D view exports what **PNG ↗** saves, as a new one-image series in the original
@@ -219,6 +225,9 @@ alignment. Editing ROIs and saving them back has not been checked. OHIF has been
   as unrecognized. Coded values and person names copied from the source are preserved. These
   warnings concern metadata, not pixels or geometry.
 - **3D views.** OsiriX display of a view is not verified, and other viewers are untested.
+- **OsiriX ROIs.** OsiriX MD 14.3 displayed synthetic brush ROIs correctly, including holes and
+  overlap. Real scans, other source orientations, and editing and saving the ROIs in OsiriX are
+  unchecked.
 
 ## Security
 
