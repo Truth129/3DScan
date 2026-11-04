@@ -133,6 +133,9 @@ export const viewExportScopeHeld = (frozen: ViewExportScope, current: ViewExport
   viewExportScopeReady(current) && current.caseId === frozen.caseId && current.revisionId === frozen.revisionId && current.generation === frozen.generation;
 
 export const pendingDicomViewExport = (job?: Job) => !!job && ['queued', 'running'].includes(job.status);
+/** A prepared file waits for its Download click, which only a dialog holding its capture can offer. */
+export const dicomViewFileReady = (job?: DicomViewExportJob) =>
+  job?.kind === DICOM_VIEW_FILE_KIND && job.status === 'completed' && job.result?.dicom_view?.file === true;
 export const matchesDicomViewExport = (job: Job, caseId: string, revisionId: string) =>
   [DICOM_VIEW_KIND, DICOM_VIEW_FILE_KIND].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId;
 

@@ -560,7 +560,8 @@ and nothing in it marks left from right.
   capture the view again.
 - If the dialog says the outcome is unknown, press the same button again.
 - You can close the dialog during an export. The result appears as a notice, or in the error banner
-  if it fails or cannot be confirmed.
+  if it fails or cannot be confirmed. A file that finishes after you close the dialog waits for the
+  next **DICOM ↗**, which reopens it with **Download file**.
 
 ### Portable offline HTML
 

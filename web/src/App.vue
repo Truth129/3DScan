@@ -67,6 +67,7 @@ import { trashMessage } from './lib/library';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import {
   freezeViewCapture,
+  dicomViewFileReady,
   pendingDicomViewExport,
   VIEW_CHANGED_MESSAGE,
   VIEW_NOT_READY_MESSAGE,
@@ -487,6 +488,7 @@ const viewJobs = useDicomViewJobs({
   activeCaseId: () => revision.value?.case_id,
   caseLabel: id => cases.value.find(item => item.id === id)?.label,
   showing: id => viewExportOpen.value && viewJobId.value === id,
+  held: id => !!viewCapture.value && viewJobId.value === id,
   success: toast,
   failure: alertViewExport,
 });
@@ -523,7 +525,7 @@ async function exportView() {
   if (viewCapturing.value) return;
   error.value = '';
   model.value?.showRefusal('');
-  if (viewCapture.value && pendingDicomViewExport(viewJob.value)) {
+  if (viewCapture.value && (pendingDicomViewExport(viewJob.value) || dicomViewFileReady(viewJob.value))) {
     viewExportOpen.value = true;
     return;
   }
@@ -564,9 +566,9 @@ function closeViewExport() {
   if (!pendingDicomViewExport(viewJob.value)) dropViewCapture();
 }
 watch(() => `${activeCase.value?.id}:${revision.value?.id}`, dropViewCapture);
-// A closed dialog only stays to be reopened while its job runs.
+// A closed dialog only stays to be reopened while its job runs, or once, to save a file that finished meanwhile.
 watch(viewJob, next => {
-  if (viewCapture.value && !viewExportOpen.value && !pendingDicomViewExport(next)) dropViewCapture();
+  if (viewCapture.value && !viewExportOpen.value && !pendingDicomViewExport(next) && !dicomViewFileReady(next)) dropViewCapture();
 });
 let casesRequest = 0;
 async function refreshCases() {

@@ -252,7 +252,7 @@ describe('the dialog', () => {
     expect(view.button('Archive in Orthanc')).toBeUndefined();
     expect(view.all(element => element.tagName === 'SELECT')).toEqual([]);
     expect(view.text()).toContain('Save this image as a DICOM file');
-    expect(view.text()).not.toContain('cannot use the archive');
+    expect(view.text()).toContain('Archive and send are unavailable. This account cannot use the archive');
     click(view.button('Prepare file'));
     await settled();
     expect(prepare).toHaveBeenCalledExactlyOnceWith('case-a', 'revision-a', { image: capture.image, referenceImageId: 'image-a' });
@@ -484,6 +484,20 @@ describe('the dialog', () => {
     });
     it('leaves a lasting warning if it closes with the outcome still unknown', async () => {
       const view = await lost();
+      view.unmount();
+      expect(view.state.report).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Check the study in Orthanc'), capture);
+    });
+    it('keeps a lost archive unknown when only a file is answered', async () => {
+      vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
+      vi.spyOn(api, 'dicomViewFileAvailability').mockResolvedValue({ available: true, exports: [] });
+      vi.spyOn(api, 'exportDicomView').mockRejectedValueOnce(new TypeError('Connection closed'));
+      const file = vi.spyOn(api, 'exportDicomViewFile').mockResolvedValue(job('queued', { id: 'file', kind: 'view_file_export' }));
+      const view = await dialog();
+      click(view.button('Archive in Orthanc'));
+      await settled();
+      click(view.button('Prepare file'));
+      await settled();
+      expect(file).toHaveBeenCalledOnce();
       view.unmount();
       expect(view.state.report).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Check the study in Orthanc'), capture);
     });

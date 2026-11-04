@@ -23,6 +23,7 @@ function fixture() {
   const scope = effectScope(),
     active = ref('case-a'),
     shown = ref(''),
+    held = ref(''),
     success = vi.fn(),
     failure = vi.fn();
   const watcher = scope.run(() =>
@@ -30,11 +31,12 @@ function fixture() {
       activeCaseId: () => active.value,
       caseLabel: id => ({ 'case-a': 'Case A', 'case-b': 'Case B' })[id],
       showing: id => shown.value === id,
+      held: id => held.value === id,
       success,
       failure,
     }),
   )!;
-  return { scope, active, shown, success, failure, watcher };
+  return { scope, active, shown, held, success, failure, watcher };
 }
 beforeEach(() => {
   vi.useFakeTimers();
@@ -45,6 +47,19 @@ afterEach(() => {
 });
 
 describe('view export watcher', () => {
+  it('says where a file that finished after its dialog closed can be saved, or that it cannot', async () => {
+    const file = { dicom_view: { export_id: 'view', archived: false, sent: false, file: true, instance_count: 1 } };
+    vi.spyOn(api, 'job').mockImplementation(async id => job('completed', { id, kind: 'view_file_export', result: file }));
+    const { watcher, held, success } = fixture();
+    held.value = 'view-1';
+    watcher.follow(job('running', { kind: 'view_file_export' }));
+    watcher.follow(job('running', { id: 'view-2', kind: 'view_file_export' }));
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(success.mock.calls).toEqual([
+      ['View ready as a DICOM file. Nothing was archived or sent. Choose DICOM ↗ to save it.'],
+      ['A DICOM view file was prepared after its dialog closed. Choose DICOM ↗ and prepare it again to save it.'],
+    ]);
+  });
   it('outlives everything keyed by the case, and exposes the same job as it changes', async () => {
     const poll = vi
       .spyOn(api, 'job')

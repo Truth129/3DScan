@@ -124,7 +124,8 @@ async function start(chosen?: string, resend = false, file = false) {
         });
     if (!matchesDicomViewExport(queued, capture.caseId, capture.revisionId)) throw new ApiError(400, 'The export job does not match this capture.');
     props.follow(queued, capture);
-    if (lost?.destination === chosen) lost = undefined;
+    // Only a repeat of the lost request settles it: a file is a different request, even with no destination.
+    if (!file && lost?.destination === chosen) lost = undefined;
   } catch (reason) {
     const message = reason instanceof Error ? reason.message : 'The export request could not finish.',
       // A refusal settles it. Anything else may have queued the job before its answer was lost.
@@ -216,6 +217,7 @@ onBeforeUnmount(() => {
     <p v-if="availability && !orthancReady && (showOrthanc || !fileReady)" class="export-error" role="status">
       {{ (!fileReady && fileAvailability?.reason) || availability.reason || 'DICOM view export is unavailable for this saved revision.' }}
     </p>
+    <p v-else-if="availability?.reason && !orthancReady" class="help" role="status">Archive and send are unavailable. {{ availability.reason }}</p>
     <p v-if="earlier" class="help" role="status">
       {{
         pendingDicomViewExport(earlier)
