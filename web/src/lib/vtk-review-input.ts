@@ -59,6 +59,7 @@ export interface NativeReviewOptions {
 }
 export const VOLUME_MISSED_MESSAGE = 'No visible CT volume under the pointer.';
 export const VOLUME_COVERED_MESSAGE = 'A surface or the CT plane is in front of the CT volume here.';
+export const SURFACE_COVERED_MESSAGE = 'The CT volume covers this surface here. Use Volume point, or turn CT volume off.';
 const svgNS = 'http://www.w3.org/2000/svg';
 const dot = (a: readonly number[], b: readonly number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
 const cross = (a: readonly number[], b: readonly number[]): Point => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -294,6 +295,14 @@ export class VTKReviewInput {
     if (!ras) this.options.onNotice?.(limit === undefined ? VOLUME_MISSED_MESSAGE : VOLUME_COVERED_MESSAGE);
     return ras;
   }
+  /** Meshes follow masks and can sit up to a voxel off the CT edge they trace, so only volume clearly in front hides a surface. */
+  private surfaceCovered(event: PointerEvent, surface: Point, geometry: Geometry) {
+    const source = this.options.volume?.();
+    if (!source) return false;
+    const ray = this.ray(event),
+      tolerance = Math.max(1, ...[0, 1, 2].map(axis => Math.hypot(...geometry.affine_ras.slice(0, 3).map(row => row[axis]))));
+    return !!this.volumeHit(ray, source, dot(subtract(surface, ray.origin), ray.direction) - tolerance);
+  }
   private capture(): ScissorsCapture {
     const { left, top, width, height } = this.viewport.canvas.getBoundingClientRect();
     return { rasToClip: nativeReviewProjection(this.viewport), viewport: { left, top, width, height } };
@@ -332,6 +341,10 @@ export class VTKReviewInput {
           ),
           ras = hit && nativeReviewSurfacePoint(hit.ras, state.geometry);
         if (!ras) return;
+        if (this.surfaceCovered(event, hit.ras, state.geometry)) {
+          this.options.onNotice?.(SURFACE_COVERED_MESSAGE);
+          return;
+        }
         gesture.surface = ras;
       } else if (state.mode === 'volume') {
         const ras = this.volumePoint(event, state);

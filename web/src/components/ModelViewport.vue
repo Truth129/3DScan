@@ -505,9 +505,10 @@ const reviewHint = computed(() => {
   }
   if (reviewMode.value === 'volume') {
     if (props.reviewDisabled && props.reviewTool !== 'navigate') return 'Editing paused while the current operation finishes.';
+    const cut = showPlane.value ? ' The CT plane cuts away the volume in front of it.' : '';
     if (props.reviewTool === 'point')
-      return `Click the CT volume to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point where it first shows. Right drag rotates.`;
-    return `Click the CT volume to move the crosshair there${props.reviewTool === 'navigate' ? '' : ', then draw on the slices'}. ${props.reviewTool === 'navigate' ? 'Drag' : 'Right drag'} rotates.`;
+      return `Click the CT volume to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point where it first shows. Right drag rotates.${cut}`;
+    return `Click the CT volume to move the crosshair there${props.reviewTool === 'navigate' ? '' : ', then draw on the slices'}. ${props.reviewTool === 'navigate' ? 'Drag' : 'Right drag'} rotates.${cut}`;
   }
   if (!hasTargetSurface.value && reviewMode.value === 'surface') return `This segment has no saved surface. Mark its ${modality.value} plane to create it.`;
   if (reviewMode.value === 'surface' && (!showSegmentation.value || selectedSegmentationOpacity.value <= 0.02))
@@ -1510,7 +1511,9 @@ function nativeAspect() {
 }
 function focusView() {
   if (vtkSelected.value && props.reviewActive && target.value?.bounds_ras && vtkCamera.value) {
-    vtkCamera.value = fitVolumeCameraBounds(vtkCamera.value, target.value.bounds_ras, nativeAspect());
+    const fitted = fitVolumeCameraBounds(vtkCamera.value, target.value.bounds_ras, nativeAspect());
+    // Clipping to the target alone would leave a visible CT volume as a slab around it.
+    vtkCamera.value = showVolume.value ? fitVolumeCameraClipping(fitted, props.geometry!.bounds_ras) : fitted;
   } else if (vtkSelected.value) volumePreview.value?.resetView();
   else scene?.focus();
 }

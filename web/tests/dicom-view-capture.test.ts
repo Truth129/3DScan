@@ -39,6 +39,7 @@ vi.mock('../src/lib/cornerstone-volume-3d', () => ({
         clearLabels() {},
         setLabelStyle() {},
         setVolumeVisible() {},
+        setReviewCut() {},
         setSettings() {},
         setLighting() {},
         setCamera() {},

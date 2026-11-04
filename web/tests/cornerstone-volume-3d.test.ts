@@ -135,6 +135,8 @@ function setup() {
               clipping = [near, far];
             },
             getClippingRange: () => clipping,
+            getPosition: () => state.position,
+            getFocalPoint: () => state.focalPoint,
           }),
         }),
       };
@@ -401,6 +403,32 @@ describe('physical shared CT volume', () => {
       expect(Math.hypot(...plane.normal)).toBeCloseTo(1, 12);
     }
     expect(cornerstoneVolumeCropPlanes(source, freshVolumeSettings())).toEqual([]);
+  });
+
+  it('cuts away the camera side of a review slice within six planes, and follows the camera across it', async () => {
+    const fixture = setup(),
+      adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera });
+    adapters.push(adapter);
+    adapter.setReviewCut({ axis: 2, index: 3 });
+    const mapper = adapter.nativeViewport.getActors()[0].actor.getMapper() as ReturnType<typeof vtkVolumeMapper.newInstance>,
+      affine = fixture.owner.sourceDescriptor.affine_ras,
+      // A probe in the middle of i and j at slice k, against every mapper plane in LPS.
+      kept = (k: number) =>
+        mapper.getClippingPlanes().every(plane => {
+          const probe = rasToLps(transformPoint(affine, [3, 2, k])),
+            origin = plane.getOrigin(),
+            normal = plane.getNormal();
+          return probe.reduce((sum, value, axis) => sum + (value - origin[axis]) * normal[axis], 0) >= -1e-9;
+        });
+    // This camera looks down k, so the volume from the slice down stays.
+    expect(mapper.getClippingPlanes()).toHaveLength(6);
+    expect([kept(1), kept(3), kept(4)]).toEqual([true, true, false]);
+    expect(adapter.rayVolume()!.clip).toHaveLength(6);
+    adapter.setCamera({ ...camera, positionRAS: [80, -100, -120] });
+    expect(mapper.getClippingPlanes()).toHaveLength(6);
+    expect([kept(1), kept(3), kept(4)]).toEqual([false, true, true]);
+    adapter.setReviewCut(undefined);
+    expect(mapper.getClippingPlanes()).toHaveLength(0);
   });
 
   it('shares one source and context, and detaches its tools before owner destruction', async () => {

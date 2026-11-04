@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Geometry, Point } from '../src/types';
-import { transformPoint, type VolumeDescriptor } from '../src/lib/ct-reslice';
+import { inverseAffine, transformPoint, type VolumeDescriptor } from '../src/lib/ct-reslice';
 import { lpsToRas } from '../src/lib/cornerstone-frame';
-import { cornerstoneVolumeCropPlanes } from '../src/lib/cornerstone-volume-3d';
+import { cornerstoneVolumeCropPlanes, type CornerstoneVolumeCut } from '../src/lib/cornerstone-volume-3d';
 import { firstVisibleVolumePoint, type VolumeRaySource } from '../src/lib/volume-ray';
 import { nativeReviewVoxelCentre } from '../src/lib/vtk-review-input';
 import { vtkVolumeScalarOpacity } from '../src/lib/vtk-volume-preset';
@@ -62,10 +62,10 @@ describe('first visible volume point', () => {
     expect(firstVisibleVolumePoint(along(-300).map((value, axis) => value + aside[axis]) as Point, direction, source)).toBeUndefined();
   });
 
-  it('honours the crop planes the mapper clips to', () => {
+  it('honours the mapper planes, including a review cut that tightens the crop on its own axis', () => {
     const descriptor = { shape, affine_ras: affine } as VolumeDescriptor,
-      clip = (settings: CTVolumeSettings) =>
-        cornerstoneVolumeCropPlanes(descriptor, settings).map(({ normal, origin }) => ({ normal: lpsToRas(normal), origin: lpsToRas(origin) }));
+      clip = (settings: CTVolumeSettings, cut?: CornerstoneVolumeCut) =>
+        cornerstoneVolumeCropPlanes(descriptor, settings, cut).map(({ normal, origin }) => ({ normal: lpsToRas(normal), origin: lpsToRas(origin) }));
     // A crop that leaves out the sphere's i range shows nothing.
     const crop = freshVolumeSettings({
       crop: [
@@ -74,6 +74,11 @@ describe('first visible volume point', () => {
       ],
     });
     expect(firstVisibleVolumePoint(along(-300), direction, { ...source, clip: clip(crop) })).toBeUndefined();
+    // The camera-side half of the sphere is cut away, so the ray first meets the cut face.
+    const side = dot(direction, inverseAffine(affine)[2]) >= 0 ? 0 : 1,
+      hit = firstVisibleVolumePoint(along(-300), direction, { ...source, clip: clip(freshVolumeSettings(), { axis: 2, index: 12, side }) })!;
+    expect(Math.abs(hit.voxel[2] - 12)).toBeLessThan(0.5);
+    expect(distance(hit.ras, centre)).toBeLessThan(radius - 1);
   });
 
   it('uses the shifted scalar opacity the native actor draws, and rounds a hit to the voxel the server uses', () => {

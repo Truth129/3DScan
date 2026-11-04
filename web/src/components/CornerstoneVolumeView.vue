@@ -541,6 +541,7 @@ function syncPresentation() {
     reviewPlaneReady.value = false;
     planeError.value = reason instanceof Error ? reason.message : 'The CT plane could not load.';
   }
+  viewer.setReviewCut(props.reviewPlaneActive && !planeError.value && props.plane ? { axis: props.plane.axis, index: props.plane.index } : undefined);
   surfaces?.setPresentation(props.structures ?? [], props.display ?? {}, props.selected ?? '', {
     // A failed or pending revision replacement must not present old surfaces
     // as though they belonged to the currently selected masks.
