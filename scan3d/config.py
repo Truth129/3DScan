@@ -2,6 +2,10 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .archive.settings import DicomWebSettings
 
 ROOT = Path(__file__).resolve().parent.parent
 # Local, git-ignored settings; scan3d.env.example documents every variable.
@@ -89,6 +93,13 @@ def device_request() -> str:
     return os.environ.get("SCAN3D_DEVICE", "").strip() or DEFAULT_DEVICE
 
 
+def _dicomweb_settings():
+    """Imported here, so GPU child processes that read settings never load the archive package."""
+    from .archive.settings import DicomWebSettings
+
+    return DicomWebSettings.from_env(orthanc_url=os.environ.get("SCAN3D_ORTHANC_URL", "").strip())
+
+
 # One captured view. Multipart parsing buffers a body in RAM-backed /tmp before
 # any handler runs, so this also bounds what one request can make the server hold.
 VIEW_UPLOAD_LIMIT = 128 * 1024**2
@@ -108,6 +119,7 @@ class Settings:
     orthanc_export_destinations: tuple[str, ...] = ()
     auth: str = "off"
     orthanc_ca_bundle: str = ""
+    dicomweb: "DicomWebSettings | None" = None
 
     @classmethod
     def from_env(cls):
@@ -136,6 +148,7 @@ class Settings:
             orthanc_export_destinations=destinations,
             auth=resolve_auth(os.environ.get("SCAN3D_AUTH"), (*allowed_hosts, host)),
             orthanc_ca_bundle=ca_bundle,
+            dicomweb=_dicomweb_settings(),
         )
 
     @property

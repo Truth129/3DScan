@@ -125,6 +125,9 @@ def _is_purge_path(request):
 
 def create_app(settings: Settings | None = None):
     service = Service(settings)
+    # Checked here rather than with the other settings, so a backup never stops for a missing token.
+    if service.settings.dicomweb and (missing := service.settings.dicomweb.missing_files()):
+        raise ValueError(f"{' and '.join(missing)} cannot be read")
 
     @asynccontextmanager
     async def lifespan(app):
