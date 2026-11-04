@@ -175,7 +175,7 @@ const orientation = ref<OrientationAxis[]>([]);
 const progress = ref<SurfaceProgress>();
 const hasModel = ref(false);
 const surfaceRevisionLoaded = ref('');
-const reviewMode = ref<'surface' | 'plane'>('surface'),
+const reviewMode = ref<'surface' | 'plane' | 'volume'>('surface'),
   reviewPlane = ref<Plane>(props.initialSnapshot?.state.plane.plane ?? 'axial'),
   showPlane = ref(props.initialSnapshot?.layers.ct_plane ?? false);
 const planeFrame = shallowRef<ModelReviewFrame>();
@@ -208,6 +208,7 @@ const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? preferCornerst
   volumeFamilyReady = ref('');
 // Cornerstone review starts with the CT volume as the reader last left it there, off at first.
 const reviewVolume = useFoldingControls('scan3d-review-ct-volume-v1', () => false);
+const reviewNotice = ref('');
 // Masking, segment colours and Cinematic heart follow the masks being edited, so Cornerstone
 // review leaves them off and keeps the main page's choices for Exit review.
 const segmentDrivenVolume = computed(() => !(props.reviewActive && vtkSelected.value));
@@ -281,6 +282,7 @@ const shownVolumeMask = computed(() => (segmentDrivenVolume.value ? volumeMask.v
 const shownVolumeColors = computed(() =>
   segmentDrivenVolume.value ? volumeColorsRequest.value : { ...volumeColorsRequest.value, enabled: false, ids: [], colors: [] },
 );
+const volumeMarkAvailable = computed(() => vtkSelected.value && showVolume.value);
 const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!props.revisionId && !!props.point);
 const segmentationAvailable = computed(() => props.structures.length > 0 && props.availableLayers?.segmentation !== false);
 const ctVolumeAvailable = computed(() => planeAvailable.value && allows('volume_rendering') && props.availableLayers?.ct_volume !== false);
@@ -419,22 +421,24 @@ const reviewReady = computed(
       ? vtkSelected.value
         ? vtkReady.value && !nativeReviewStatus.value.surfaceLoading && !nativeReviewStatus.value.surfaceError
         : !loading.value && !error.value
-      : reviewMode.value === 'plane'
-        ? showPlane.value &&
-          exactPlaneReady.value &&
-          targetOverlayAvailable.value &&
-          (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady && !nativeReviewStatus.value.planeError))
-        : showSegmentation.value &&
-          selectedSegmentationOpacity.value > 0.02 &&
-          hasTargetSurface.value &&
-          (vtkSelected.value
-            ? vtkReady.value &&
-              nativeReviewStatus.value.targetReady &&
-              nativeReviewStatus.value.surfaceRevision === props.modelRevisionId &&
-              !nativeReviewStatus.value.surfaceLoading &&
-              !nativeReviewStatus.value.surfaceError
-            : hasModel.value && !loading.value) &&
-          props.reviewTool === 'point'),
+      : reviewMode.value === 'volume'
+        ? volumeMarkAvailable.value && vtkReady.value
+        : reviewMode.value === 'plane'
+          ? showPlane.value &&
+            exactPlaneReady.value &&
+            targetOverlayAvailable.value &&
+            (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady && !nativeReviewStatus.value.planeError))
+          : showSegmentation.value &&
+            selectedSegmentationOpacity.value > 0.02 &&
+            hasTargetSurface.value &&
+            (vtkSelected.value
+              ? vtkReady.value &&
+                nativeReviewStatus.value.targetReady &&
+                nativeReviewStatus.value.surfaceRevision === props.modelRevisionId &&
+                !nativeReviewStatus.value.surfaceLoading &&
+                !nativeReviewStatus.value.surfaceError
+              : hasModel.value && !loading.value) &&
+            props.reviewTool === 'point'),
 );
 const reviewContext = computed(() =>
   JSON.stringify([
@@ -473,6 +477,7 @@ const reviewHint = computed(() => {
   if (vtkSelected.value && props.reviewActive) {
     if (vtkError.value) return vtkError.value;
     if (!vtkReady.value) return 'Preparing the native CT review scene…';
+    if (reviewNotice.value) return reviewNotice.value;
     if (reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceError) return nativeReviewStatus.value.surfaceError;
     if (nativeReviewStatus.value.planeError) return nativeReviewStatus.value.planeError;
     if (reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceLoading) return 'Preparing the target surface…';
@@ -497,6 +502,12 @@ const reviewHint = computed(() => {
     if (gpuPreparing.value) return 'Preparing GPU volume · local slice navigation remains available.';
     if (gpuFallback.value) return `Local slice navigation. ${gpuFallback.value}`;
     return `${currentPlane.value.quality === 'preview' ? `Local preview · full ${modality.value} preloading.` : `Full ${modality.value} · local navigation.`} Drag to rotate; scroll to zoom.`;
+  }
+  if (reviewMode.value === 'volume') {
+    if (props.reviewDisabled && props.reviewTool !== 'navigate') return 'Editing paused while the current operation finishes.';
+    if (props.reviewTool === 'point')
+      return `Click the CT volume to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point where it first shows. Right drag rotates.`;
+    return `Click the CT volume to move the crosshair there${props.reviewTool === 'navigate' ? '' : ', then draw on the slices'}. ${props.reviewTool === 'navigate' ? 'Drag' : 'Right drag'} rotates.`;
   }
   if (!hasTargetSurface.value && reviewMode.value === 'surface') return `This segment has no saved surface. Mark its ${modality.value} plane to create it.`;
   if (reviewMode.value === 'surface' && (!showSegmentation.value || selectedSegmentationOpacity.value <= 0.02))
@@ -611,7 +622,8 @@ function syncReview() {
         ]);
   scene.setReview({
     enabled: true,
-    mode: reviewMode.value,
+    // Volume point is Cornerstone's alone, and leaves review when Three.js takes over.
+    mode: reviewMode.value === 'volume' ? 'surface' : reviewMode.value,
     showPlane: showPlane.value,
     targetId: target.value.id,
     geometry: props.geometry,
@@ -1011,7 +1023,7 @@ function queueReviewPlane() {
   });
 }
 function changeMode(event: Event) {
-  reviewMode.value = (event.target as HTMLSelectElement).value as 'surface' | 'plane';
+  reviewMode.value = (event.target as HTMLSelectElement).value as 'surface' | 'plane' | 'volume';
   if (reviewMode.value === 'plane') {
     showPlane.value = true;
     faceWhenReady = true;
@@ -1027,7 +1039,7 @@ function slidePlane(event: Event) {
 }
 function reviewGesture(prompt: InteractivePrompt) {
   if (!reviewReady.value || !props.reviewActive || disposed) return;
-  if (reviewMode.value === 'surface' && prompt.kind && prompt.kind !== 'point' && prompt.kind !== 'scissors') return;
+  if (reviewMode.value !== 'plane' && prompt.kind && prompt.kind !== 'point' && prompt.kind !== 'scissors') return;
   if (reviewMode.value === 'plane' && 'axis' in prompt) {
     const native = displayedMeta.value?.native;
     if (!native || prompt.axis !== native.axis || prompt.index !== native.index) return;
@@ -1443,7 +1455,8 @@ watch(
       reviewMode.value = 'surface';
       return;
     }
-    if (!hasTargetSurface.value || (props.reviewTool && !['navigate', 'point'].includes(props.reviewTool))) {
+    const pointTool = !props.reviewTool || ['navigate', 'point'].includes(props.reviewTool);
+    if ((!hasTargetSurface.value && reviewMode.value !== 'volume') || !pointTool) {
       // Opening review keeps the main page's camera; Face plane is there to turn it.
       const opening = !!previous && !previous[0];
       if (reviewMode.value !== 'plane' && !opening) faceWhenReady = true;
@@ -1452,6 +1465,25 @@ watch(
     }
   },
   { immediate: true },
+);
+// Volume point needs the CT volume on screen. Without it, marking returns to where the tool belongs.
+watch(
+  () => [props.reviewActive, volumeMarkAvailable.value],
+  () => {
+    if (!props.reviewActive || volumeMarkAvailable.value || reviewMode.value !== 'volume') return;
+    if (hasTargetSurface.value && (!props.reviewTool || ['navigate', 'point'].includes(props.reviewTool))) reviewMode.value = 'surface';
+    else {
+      reviewMode.value = 'plane';
+      showPlane.value = true;
+    }
+  },
+  { immediate: true },
+);
+watch(
+  () => [props.reviewActive, props.reviewTool, reviewMode.value, showVolume.value],
+  () => {
+    reviewNotice.value = '';
+  },
 );
 const cameras: CameraView[] = ['anterior', 'posterior', 'right', 'left', 'superior', 'oblique'];
 function cameraFitFactor() {
@@ -1728,6 +1760,8 @@ defineExpose({
       @retry-plane="queueReviewPlane"
       @gesture="reviewGesture"
       @pick="(id: string, ras: Point) => emit('pick', id, ras)"
+      @point="(ras: Point) => props.reviewActive && emit('point', ras)"
+      @notice="reviewNotice = $event"
       @ready="nativeReady"
       @error="vtkError = $event"
       @camera="vtkCamera = $event"
@@ -1892,6 +1926,7 @@ defineExpose({
           >Mark on
           <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode">
             <option value="surface">Surface point</option>
+            <option v-if="volumeMarkAvailable" value="volume">Volume point</option>
             <option value="plane">{{ modality }} plane</option>
           </select></label
         >

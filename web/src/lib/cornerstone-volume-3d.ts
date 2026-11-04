@@ -10,7 +10,8 @@ import { lpsToRas, rasToLps } from './cornerstone-frame';
 import { inverseAffine, transformPoint, type VolumeDescriptor } from './ct-reslice';
 import { cornerstoneVolumeGeometry } from './cornerstone-volume';
 import { freshVolumeSettings, type CTVolumeSettings } from './volume-presets';
-import { applyVTKVolumePreset } from './vtk-volume-preset';
+import { applyVTKVolumePreset, vtkVolumeScalarOpacity } from './vtk-volume-preset';
+import { trilinearSampler, type VolumeRaySource } from './volume-ray';
 import { VTKVolumeMask, type VTKMaskMapper, type VTKMaskMapperNode, type VTKVolumeMaskMode } from './vtk-volume-mask';
 import { VTKVolumeLabels, type VTKVolumeLabelStyle } from './vtk-volume-labels';
 import type { GPUVolumeSource } from './gpu-volume-data';
@@ -133,6 +134,8 @@ export class CornerstoneVolume3D {
   private presetStats: Partial<ReturnType<typeof applyVTKVolumePreset>> = {};
   private listeners: (() => void)[] = [];
   private clipping: { plane: ReturnType<typeof vtkPlane.newInstance>; normal: Point; origin: Point }[] = [];
+  private rayOpacity?: ReturnType<typeof vtkVolumeScalarOpacity>;
+  private raySample?: VolumeRaySource['sample'];
   private applyingCamera = false;
   private ownedCamera?: CornerstoneVolumeCameraRAS;
   private cameraUpdateQueued = false;
@@ -264,6 +267,20 @@ export class CornerstoneVolume3D {
     this.volumeVisible = visible;
     this.applyVolumeVisibility();
     this.requestRender();
+  }
+
+  /** What a CPU ray needs to find the CT as drawn: its source samples, scalar opacity and the very clipping planes the mapper uses. Nothing while it is hidden or masked. */
+  rayVolume(): VolumeRaySource | undefined {
+    if (this.disposed || !this.ready || !this.actor?.getVisibility() || this.maskMode !== 'off' || !this.rayOpacity) return;
+    const descriptor = this.owner.sourceDescriptor;
+    this.raySample ??= trilinearSampler(descriptor.shape, (i, j, k) => this.sourceVoxelValue(i, j, k));
+    return {
+      affine: descriptor.affine_ras,
+      shape: descriptor.shape,
+      sample: this.raySample,
+      ...this.rayOpacity,
+      clip: this.clipping.map(({ normal, origin }) => ({ normal: lpsToRas(normal), origin: lpsToRas(origin) })),
+    };
   }
 
   private applyVolumeVisibility() {
@@ -520,6 +537,7 @@ export class CornerstoneVolume3D {
       sampleDistanceMM: cornerstoneVolumeStepMM(this.owner.sourceDescriptor, this.settings.quality),
       nativeLighting: this.lighting,
     });
+    this.rayOpacity = vtkVolumeScalarOpacity(this.settings);
     const mapper = this.actor!.getMapper()!;
     mapper.removeAllClippingPlanes();
     for (const { plane } of this.clipping) plane.delete();

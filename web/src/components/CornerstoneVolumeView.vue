@@ -57,6 +57,8 @@ const emit = defineEmits<{
   colorStatus: [status: VolumeMaskStatus];
   gesture: [prompt: InteractivePrompt];
   pick: [id: string, point: Point];
+  point: [point: Point];
+  notice: [message: string];
   retryPlane: [];
   reviewStatus: [
     status: { surfaceLoading: boolean; surfaceError: string; surfaceRevision: string; targetReady: boolean; planeReady: boolean; planeError: string },
@@ -316,8 +318,11 @@ async function initialize() {
     instance.nativeRenderer.addViewProp(reviewPlaneLayer.actor);
     reviewInput = new VTKReviewInput(host.value, instance.nativeViewport, {
       actors: () => surfaces?.actors ?? [],
+      volume: () => (viewer === instance && props.volumeVisible !== false ? instance.rayVolume() : undefined),
       onGesture: prompt => emit('gesture', prompt),
       onPick: (id, ras) => emit('pick', id, ras),
+      onPoint: ras => emit('point', ras),
+      onNotice: message => emit('notice', message),
       onError: reason => {
         if (!disposed && id === generation) fail(reason);
       },

@@ -433,12 +433,16 @@ Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a re
 ### Mark in the 3D view
 
 **Mark on**, under **Review tools**, selects **Surface point**, which locks picking to the target,
-or **CT plane**, which takes all the drawing tools on a native slice. Right drag rotates while
-marking, and a 3D point moves the linked CT crosshair so you can confirm it. **Face plane** faces
-the CT plane at any time.
+**Volume point**, or **CT plane**, which takes all the drawing tools on a native slice. Right drag
+rotates while marking, and a 3D point moves the linked CT crosshair so you can confirm it. **Face
+plane** faces the CT plane at any time.
 
 With **CT volume** on in review:
 
+- **Volume point** takes the first point along your click where the volume turns half opaque, at
+  its nearest voxel centre. **Point** in AI assist adds it as an Include or Exclude point. Other
+  tools, Direct edit's included, move the crosshair there so you can draw on the slices.
+- A click on no visible volume, or on a surface or the CT plane in front of it, makes no mark.
 - **Mask to segmentation**, **Color segments** and **Cinematic heart** stay off, because they would
   follow the mask being edited. A Cinematic heart volume shows with the default preset.
 
