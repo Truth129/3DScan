@@ -326,8 +326,9 @@ Select anatomy in the list or on the model, inspect its overlay in all three pla
 QC messages under **Selected structure** against the CT. Then choose **Review segmentation ↗** and
 pick the target under **Structure**.
 
-Review opens on your main-page views. **CT volume** turns off, and slab projection and rotatable
-crosshairs pause, until **Exit review**.
+Review opens on your main-page views, and slab projection and rotatable crosshairs pause until
+**Exit review**. **CT volume** starts as you last left it in review, off at first, and **Exit
+review** restores the main page's choice. MRI, tilted-gantry CT and the portable page keep it off.
 
 - Planes lock to the native source slices.
 - Marks autosave into a draft that survives reloads and restarts. Accepted masks change only when
@@ -435,6 +436,11 @@ Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a re
 or **CT plane**, which takes all the drawing tools on a native slice. Right drag rotates while
 marking, and a 3D point moves the linked CT crosshair so you can confirm it. **Face plane** faces
 the CT plane at any time.
+
+With **CT volume** on in review:
+
+- **Mask to segmentation**, **Color segments** and **Cinematic heart** stay off, because they would
+  follow the mask being edited. A Cinematic heart volume shows with the default preset.
 
 **Review tools** starts folded. A mark cannot start underneath it, so fold it to reach that part of
 the view.

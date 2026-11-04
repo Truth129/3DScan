@@ -43,7 +43,7 @@ import { imagePresentation, type ImageContext, type ImageCapability } from '../l
 import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
 import { freshNativeVolumeLighting } from '../lib/volume-lighting';
-import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings } from '../lib/volume-presets';
+import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, DEFAULT_VOLUME_SETTINGS, freshVolumeSettings } from '../lib/volume-presets';
 import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
 import { useExpandedViewport } from '../lib/use-expanded-viewport';
@@ -206,6 +206,11 @@ const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? preferCornerst
   nativeLighting = shallowRef(freshNativeVolumeLighting()),
   volumeError = ref(''),
   volumeFamilyReady = ref('');
+// Cornerstone review starts with the CT volume as the reader last left it there, off at first.
+const reviewVolume = useFoldingControls('scan3d-review-ct-volume-v1', () => false);
+// Masking, segment colours and Cinematic heart follow the masks being edited, so Cornerstone
+// review leaves them off and keeps the main page's choices for Exit review.
+const segmentDrivenVolume = computed(() => !(props.reviewActive && vtkSelected.value));
 const referenceAvailable = computed(
   () => !signalVolume.value && !!props.caseId && !!props.revisionId && !props.initialSnapshot && !props.reviewActive && props.structures.length > 0,
 );
@@ -268,7 +273,13 @@ const renderVolumeSettings = computed(() =>
           invert: sourcePresentation.value.photometric_interpretation === 'MONOCHROME1',
         },
       })
-    : volumeSettings.value,
+    : !segmentDrivenVolume.value && volumeSettings.value.preset === CINEMATIC_HEART_PRESET
+      ? freshVolumeSettings({ ...volumeSettings.value, preset: DEFAULT_VOLUME_SETTINGS.preset })
+      : volumeSettings.value,
+);
+const shownVolumeMask = computed(() => (segmentDrivenVolume.value ? volumeMask.value : { ...volumeMask.value, enabled: false }));
+const shownVolumeColors = computed(() =>
+  segmentDrivenVolume.value ? volumeColorsRequest.value : { ...volumeColorsRequest.value, enabled: false, ids: [], colors: [] },
 );
 const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!props.revisionId && !!props.point);
 const segmentationAvailable = computed(() => props.structures.length > 0 && props.availableLayers?.segmentation !== false);
@@ -368,13 +379,13 @@ const volumeMessage = computed(
 );
 const volumeStackStatus = computed(() => {
   if (vtkSelected.value ? vtkError.value : volumeError.value) return 'Unavailable';
-  if (volumeMask.value.enabled) {
+  if (shownVolumeMask.value.enabled) {
     if (!volumeMaskIds.value.length) return 'Choose mask segments';
     if (volumeMaskIds.value.length > MAX_VOLUME_MASK_SEGMENTS) return 'Reduce mask selection';
     if (effectiveMaskError.value) return 'Mask unavailable';
   }
   if (!vtkSelected.value && needsVolume.value && (!props.fullResolution || gpuPreparing.value)) return 'Preparing…';
-  if (volumeMask.value.enabled && !volumeMaskReady.value) return 'Preparing mask…';
+  if (shownVolumeMask.value.enabled && !volumeMaskReady.value) return 'Preparing mask…';
   if (vtkSelected.value) return vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
   return volumeReady.value ? 'Visible' : `Waiting for ${modality.value}`;
 });
@@ -856,6 +867,10 @@ function setVolumeEnabled(enabled: boolean) {
   showVolume.value = enabled;
   volumeError.value = '';
   syncReview();
+}
+function chooseVolume(enabled: boolean) {
+  setVolumeEnabled(enabled);
+  if (props.reviewActive) reviewVolume.setOpen(enabled);
 }
 function fallbackToCTPlane() {
   if (!ctOnly.value) return;
@@ -1363,7 +1378,7 @@ watch(
       segmentationBeforeReview = showSegmentation.value;
       planeBeforeReview = showPlane.value;
       showSegmentation.value = true;
-      setVolumeEnabled(false);
+      setVolumeEnabled(vtkSelected.value && reviewVolume.open.value);
     } else {
       showSegmentation.value = segmentationBeforeReview;
       showPlane.value = planeBeforeReview;
@@ -1696,8 +1711,8 @@ defineExpose({
       :structures="structures"
       :display="display"
       :selected="selected"
-      :mask="volumeMask"
-      :colors="volumeColorsRequest"
+      :mask="shownVolumeMask"
+      :colors="shownVolumeColors"
       :revision-base="planeRequest?.base"
       :mask-source-provider="maskSourceProvider"
       :model-revision-id="modelRevisionId"
@@ -1792,13 +1807,13 @@ defineExpose({
             }}</output></label
           >
         </div>
-        <div v-if="ctVolumeAvailable && !reviewActive" class="rendering-stack-layer">
+        <div v-if="ctVolumeAvailable && (!reviewActive || vtkSelected)" class="rendering-stack-layer">
           <label class="rendering-stack-toggle"
             ><input
               type="checkbox"
               :aria-label="`Show ${modality} volume`"
               :checked="showVolume"
-              @change="setVolumeEnabled(($event.target as HTMLInputElement).checked)"
+              @change="chooseVolume(($event.target as HTMLInputElement).checked)"
             />
             {{ modality }} volume</label
           >
@@ -1818,7 +1833,7 @@ defineExpose({
         </div>
       </section>
       <details
-        v-if="!reviewActive && ctVolumeAvailable"
+        v-if="(!reviewActive || vtkSelected) && ctVolumeAvailable"
         v-show="showVolume"
         class="stack-volume-options"
         :open="volumeOptionsOpen"
@@ -1827,7 +1842,11 @@ defineExpose({
           if (volumeOptionsOpen) controlsOpen = true;
         "
       >
-        <summary>{{ modality }} volume settings <span>Appearance · lighting · mask · crop</span></summary>
+        <!-- prettier-ignore -->
+        <summary>{{ modality }} volume settings <span>Appearance · lighting · {{ reviewActive ? '' : 'mask · ' }}crop</span></summary>
+        <p v-if="reviewActive" class="volume-preview-note">
+          Mask to segmentation, Color segments and Cinematic heart are off in review, because they would follow the mask being edited.
+        </p>
         <VolumeControls
           headerless
           :enabled="showVolume"
@@ -1841,13 +1860,15 @@ defineExpose({
           :reference-message="referenceMessage"
           :reference-error="referenceError"
           @measure-reference="measureCinematicReference()"
-          :ready="vtkSelected ? vtkReady && (!volumeMask.enabled || volumeMaskReady) : volumeReady && !volumeError"
+          :ready="vtkSelected ? vtkReady && (!shownVolumeMask.enabled || volumeMaskReady) : volumeReady && !volumeError"
           :loading="vtkSelected ? (!vtkReady && !vtkError) || volumeMaskLoading : needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
           :mask="volumeMask"
           :structures="availableMaskStructures"
           :selected="selected"
           :display="display"
           :mask-margin-fixed="!!props.localSession?.networkFree"
+          :mask-supported="segmentDrivenVolume"
+          :cinematic-available="segmentDrivenVolume"
           :mask-loading="volumeMaskLoading"
           :mask-message="volumeMaskMessage"
           :mask-error="!!effectiveMaskError"
@@ -1858,7 +1879,7 @@ defineExpose({
           @update:mask="setVolumeMask"
           @retry-mask="retryVolumeMask"
           :colors="volumeColors"
-          :colors-available="vtkSelected"
+          :colors-available="vtkSelected && segmentDrivenVolume"
           :colors-loading="nativeColorStatus.loading"
           :colors-error="nativeColorStatus.error"
           @update:colors="setVolumeColors"

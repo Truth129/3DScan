@@ -398,6 +398,8 @@ second GPU copy of the CT.
   with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a boundary by
   a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong tissue.
 - **Color segments** tints the CT before lighting from a label union, largest structure first.
+- **Review** can show the CT volume, with masking, colouring and Cinematic heart off because they
+  would follow the candidate mask.
 
 Masking and colouring patch exact shader anchors through a factory local to one actor. That bridge
 checks the installed versions (Cornerstone3D 5.13.1, vtk.js 36.4.1) and throws on a mismatch.
