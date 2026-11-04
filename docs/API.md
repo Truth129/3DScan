@@ -284,10 +284,11 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
   with stage `Interrupted`. `stage` is display text.
 - `kind`: `process`, `segment`, `refine`, `correction`, `include_all` (only from
   `scan3d include-all`), `review_predict`, `review_accept`, `orthanc_import`, `orthanc_export`
-  (every SEG export, file-only included), `orthanc_view_export` or `dicom_seg_import`.
+  (every SEG export, file-only included), `orthanc_roi_export` (OsiriX ROIs), `orthanc_view_export`
+  or `dicom_seg_import`.
   [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists the lanes.
-- `revision_id`: the new revision once committed, or the exported one for `orthanc_export` and
-  `orthanc_view_export`.
+- `revision_id`: the new revision once committed, or the exported one for `orthanc_export`,
+  `orthanc_roi_export` and `orthanc_view_export`.
 - `delivery_started`: `true` once an export has started a send through Orthanc. Cancelling cannot
   then stop it.
 - `inference_path`: the [inference path](#inference-paths) frozen at queue time. `identity` is
@@ -391,7 +392,7 @@ Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 | `GET .../cinematic-reference`                      | Cardiac HU references            | No              |
 | `GET .../slicer.zip`                               | Slicer bundle                    | No              |
 | `GET`, `POST .../export.html`                      | Offline HTML viewer              | No              |
-| `GET`, `POST .../dicom-seg`                        | SEG export status and start      | No              |
+| `GET`, `POST .../dicom-seg`                        | SEG and OsiriX ROI export        | No              |
 | `GET .../dicom-seg/{export_id}/segment.dcm`        | Prepared SEG file                | No              |
 | `GET`, `POST .../dicom-view`                       | 3D view export status and start  | No              |
 
@@ -1074,14 +1075,16 @@ needs no AI segmentation or Orthanc connection, and sends nothing.
 archive-only export.
 
 **`GET .../dicom-seg`** returns `{available, reason?, destinations: [{id, name, aet}], exports:
-Job[], encoding_version, file: {available, reason?}}`. `available` and `reason` describe archive and
-send, and `file` the file route. `exports` lists this revision's SEG jobs, newest first. Without
+Job[], encoding_version, file: {available, reason?}, osirix_roi: {encoding_version}}`. `available`
+and `reason` describe archive and send, for SEG and OsiriX ROIs alike, and `file` the file route.
+`exports` lists this revision's SEG and OsiriX ROI jobs, newest first. Without
 archive access it contacts no Orthanc: `available` is false, `destinations` empty and `reason` is
 `Your account cannot use the archive. An administrator can turn it on in People.`
 
 **`POST .../dicom-seg`** takes `{structure_ids?, destination?, resend?, overlap_priority?,
-delivery?}` and returns an `orthanc_export` job. Export never changes review status, adds a revision
-or activates one.
+delivery?, format?}` and returns an `orthanc_export` job. `format` defaults to `seg`, and
+`osirix_roi` returns an `orthanc_roi_export` job [instead](#osirix-roi-export). Export never changes
+review status, adds a revision or activates one.
 
 - Omitted IDs select all nonempty masks. A null destination archives only.
 - `delivery` defaults to `orthanc`. `file` prepares the SEG here, takes no `destination` or
@@ -1140,6 +1143,36 @@ with no patient fields. `sent` is true only after an exact successful C-STORE co
 - Cancelling before delivery stops the export, but a SEG already uploaded stays in Orthanc, and its
   `result` still says `archived`.
 - After C-STORE has started, cancelling cannot stop the remote transfer, and the job says so.
+
+### OsiriX ROI export
+
+`format: "osirix_roi"` on `POST .../dicom-seg` writes the selected masks as native OsiriX MD brush
+ROIs instead of a SEG, and returns an `orthanc_roi_export` job. It takes the archive and send route
+only: `delivery: "file"` and `overlap_priority` are 400. This format is experimental.
+
+**Encoding.** One Basic Text SR, series description `OsiriX ROI SR` and series number 5002, for
+each source slice that any selected mask touches. It holds one brush ROI per mask on that slice,
+named and coloured as saved, and a mask's ROIs share one group across slices.
+
+- Brushes cover the slice's exact source pixels, mapped as for a SEG and never resampled. Overlaps
+  stay.
+- OsiriX tells ROIs apart by name, so selected masks that share a name are 400.
+- Patient and study elements come from the source slice, in UTF-8.
+- Limits, checked before upload: 1000 reports, 100,000 ROIs and 512 MiB.
+
+**Identity, retries and delivery** follow [DICOM SEG export](#dicom-seg-export), with their own
+encoding version, so a SEG send never counts as an ROI send. As for a
+[view](#dicom-view-export), Orthanc's patient ID for the source study must equal the reports', and
+every upload must land in the source study, or nothing is sent.
+
+- Once the first report is uploaded, a cancel waits until every report is stored, then stops before
+  sending.
+- If an upload fails partway, the job fails, says how many reports reached Orthanc, and a retry
+  stores the rest with the same instances.
+
+**Result.** `result.osirix_roi` has `export_id`, `encoding_version`, `archived`, `sent`,
+`segments_count` (masks), `structure_ids` and optional `destination` and `destination_id`, with no
+patient fields. Once the masks are encoded it adds `roi_count` and `instance_count` (reports).
 
 ## DICOM view export
 

@@ -22,7 +22,7 @@ from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
 from .errors import Conflict
 from .janitor import Janitor, empty_rebuildable, generation_locks, maintenance_lock, remove_tree
 from .orthanc_models import series_source
-from .store import LANES, Store, identifier, job_lane, now
+from .store import LANES, OUTBOUND_KINDS, Store, identifier, job_lane, now
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ class Service:
         self._orthanc = None
         self._orthanc_exports = None
         self._orthanc_view_exports = None
+        self._osirix_roi_exports = None
         self._lane_guard = threading.Lock()
         self._running_lanes = 0
         self._preparation_slots = None
@@ -90,6 +91,17 @@ class Service:
             self._orthanc_view_exports = OrthancViewExports(self)
         return self._orthanc_view_exports
 
+    @property
+    def osirix_roi_exports(self):
+        if self._osirix_roi_exports is None:
+            from .osirix_roi_exports import OsirixRoiExports
+
+            self._osirix_roi_exports = OsirixRoiExports(self)
+        return self._osirix_roi_exports
+
+    def _outbound(self, kind):
+        return {"orthanc_export": self.orthanc_exports, "orthanc_view_export": self.orthanc_view_exports, "orthanc_roi_export": self.osirix_roi_exports}[kind]
+
     def _interactive(self):
         if self.interactive_runtime is None:
             # The warm engine runs in a supervised child process that the
@@ -125,6 +137,7 @@ class Service:
         self.orthanc.recover()
         self.orthanc_exports.recover()
         self.orthanc_view_exports.recover()
+        self.osirix_roi_exports.recover()
         # Only a lane writes here, and none runs yet, so what is left came from a hard stop. It names no case.
         for leftover in (self.settings.data_dir / "orthanc-staging").glob("transfer-*"):
             try:
@@ -330,11 +343,10 @@ class Service:
         job = self.store.get("jobs", job_id)
         if job["kind"] == "orthanc_import":
             return self.orthanc.cancel(job_id)
-        if job["kind"] in ("orthanc_export", "orthanc_view_export"):
+        if job["kind"] in OUTBOUND_KINDS:
             # The generic path below would report a remote delivery as cancelled
             # while it may still run, and each kind words that in its own way.
-            manager = self.orthanc_exports if job["kind"] == "orthanc_export" else self.orthanc_view_exports
-            return manager.cancel(job_id)
+            return self._outbound(job["kind"]).cancel(job_id)
         if job["status"] in ("queued", "running"):
             changes = dict(cancel_requested=True)
             if job["status"] == "queued":
@@ -356,9 +368,7 @@ class Service:
                 log.exception("Could not stop job %s", job["id"])
                 continue
             # A send Orthanc has started finishes, and a queued one with a live receipt may too.
-            sending = job["kind"] in ("orthanc_export", "orthanc_view_export") and (
-                result["status"] == "failed" or (result.get("payload") or {}).get("delivery_state")
-            )
+            sending = job["kind"] in OUTBOUND_KINDS and (result["status"] == "failed" or (result.get("payload") or {}).get("delivery_state"))
             continuing += bool(sending)
             stopped += not sending
         return {"id": case_id, "jobs_stopped": stopped, "sends_continuing": continuing}
@@ -478,11 +488,8 @@ class Service:
             if job["kind"] == "orthanc_import":
                 self.orthanc.run(job)
                 return
-            elif job["kind"] == "orthanc_export":
-                self.orthanc_exports.run(job)
-                return
-            elif job["kind"] == "orthanc_view_export":
-                self.orthanc_view_exports.run(job)
+            elif job["kind"] in OUTBOUND_KINDS:
+                self._outbound(job["kind"]).run(job)
                 return
             elif job["kind"] == "process":
                 revision = self._process(job)

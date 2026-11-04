@@ -17,6 +17,7 @@ import time
 from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+import pydicom
 
 from .dicom_seg_jobs import prepared_digest, series_files
 from .errors import NotFound
@@ -183,6 +184,12 @@ def _encoded_order(structures, overlap_priority):
     return tuple(selected[key] for key in overlap_priority)
 
 
+def _patient_id(path):
+    value = pydicom.dcmread(path, stop_before_pixels=True, specific_tags=["PatientID"]).get("PatientID", "")
+    # A backslash is illegal in LO, but pydicom splits on it and Orthanc keeps the text.
+    return ("\\".join(value) if isinstance(value, pydicom.multival.MultiValue) else str(value)).strip()
+
+
 def _frozen_structure(structure):
     try:
         stamp = Path(structure["mask_file"]).lstat()
@@ -210,10 +217,19 @@ class OrthancExports:
     still_active_error = "An earlier Orthanc delivery may still be active. Check the destination or explicitly retry to check its status."
     lost_job_error = "Orthanc no longer has the delivery job, so the SEG may already have arrived. Check the destination before retrying; a retry sends the same SEG instances again."
     file_interrupted_error = "Export interrupted. Retry to reuse its exact SEG bytes."
+    # None words it from the label.
+    disabled_error = None
+    # For an export of several instances that stopped with only some stored; None keeps the texts above.
+    partial_error = None
     offers_file = True
 
     def __init__(self, service):
         self.service = service
+
+    @property
+    def noun(self):
+        """What texts call the exported instances, where a plural reads better than the label."""
+        return self.label
 
     def _directory(self, case_id, export_id):
         return self.service.store.case_dir(case_id) / "dicom-exports" / export_id
@@ -223,7 +239,7 @@ class OrthancExports:
         revision = store.revision(case_id, revision_id)
         case = store.get("cases", case_id)
         if archive and not self.service.settings.orthanc_url:
-            raise ExportUnavailable(f"Configure Orthanc before exporting {self.label}.")
+            raise ExportUnavailable(f"Configure Orthanc before exporting {self.noun}.")
         try:
             reference = reference_image(revision)
         except (KeyError, OSError, ValueError):
@@ -240,7 +256,7 @@ class OrthancExports:
         if not selected or len(selected) != len(set(selected)) or any(key not in structures for key in selected):
             raise ExportUnavailable("Select one or more distinct structures from this saved revision.")
         if any(not structures[key].get("voxel_count", 1) for key in selected):
-            raise ExportUnavailable("Empty masks cannot be exported as DICOM SEG.")
+            raise ExportUnavailable(f"Empty masks cannot be exported as {self.noun}.")
         selection = tuple(structures[key] for key in selected)
         if archive or "source_manifest_sha256" in reference["source"]:
             source, directory = self._source(case_id, case, reference, connect=archive)
@@ -303,11 +319,13 @@ class OrthancExports:
             ) from None
         return source, directory
 
-    def availability(self, case_id, revision_id, *, archive=True):
+    def availability(self, case_id, revision_id, *, archive=True, kinds=None):
+        """``kinds`` lets one dialog list the jobs of every format it offers, newest first."""
         # Resolve saved identity first: candidates and revisions from another
         # case are never treated as exportable snapshots.
         self.service.store.revision(case_id, revision_id)
-        exports = [public_job(job) for job in self.service.store.list("jobs", case_id) if job["kind"] == self.kind and job.get("revision_id") == revision_id]
+        kinds = kinds or (self.kind,)
+        exports = [public_job(job) for job in self.service.store.list("jobs", case_id) if job["kind"] in kinds and job.get("revision_id") == revision_id]
         try:
             if not archive:
                 raise ExportUnavailable(ARCHIVE_OFF)
@@ -338,15 +356,7 @@ class OrthancExports:
         if overlap_priority is not None and (len(overlap_priority) < 2 or sorted(overlap_priority) != [item["id"] for item in inputs.structures]):
             raise ExportUnavailable("Rank every selected structure exactly once to resolve overlaps.")
         display_name = self._destination(destination, resend)
-        identity = {
-            "revision_id": revision_id,
-            "reference_image_id": inputs.reference["id"],
-            "source_manifest_sha256": inputs.seg_source.manifest_sha256,
-            "structures": [_frozen_structure(item) for item in inputs.structures],
-        }
-        selection = {**identity, "structures": [{key: value for key, value in item.items() if key != "mask_stamp"} for item in identity["structures"]]}
-        selection_key = hashlib.sha256(json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        input_key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        identity, selection_key, input_key, changed_inputs = self._frozen_inputs(revision_id, inputs)
         encoding = {**identity, "encoding_version": EXPORT_ENCODING_VERSION}
         # A ranking changes the output, not the inputs. Keeping it out of the
         # selection and input keys lets the changed-mask guard compare it too.
@@ -355,17 +365,6 @@ class OrthancExports:
         artifact_key = hashlib.sha256(json.dumps(encoding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         # A destination cannot contain a colon, so a file never shares its key.
         export_key = hashlib.sha256((artifact_key + ":" + ("file:" if file_delivery else destination or "")).encode()).hexdigest()
-
-        def changed_inputs(previous):
-            # Encoding upgrades create fresh SOPs, but cannot make a changed
-            # saved mask look like the same immutable input. Legacy artifacts
-            # used their input hash directly as the artifact key.
-            if any(
-                job["payload"].get("selection_key") == selection_key and job["payload"].get("input_key", job["payload"]["artifact_key"]) != input_key
-                for job in previous
-            ):
-                raise ExportUnavailable("Saved masks changed since this revision's earlier export. Save a new revision before exporting those masks.")
-
         fields = {
             **identity,
             "encoding_version": EXPORT_ENCODING_VERSION,
@@ -397,6 +396,30 @@ class OrthancExports:
             return summary
 
         return self._enqueue(case_id, revision_id, fields, extras, destination, display_name, resend, summarize, guard=changed_inputs)
+
+    def _frozen_inputs(self, revision_id, inputs):
+        """The saved masks an export binds to, its keys, and the guard that refuses a mask changed since an earlier export."""
+        identity = {
+            "revision_id": revision_id,
+            "reference_image_id": inputs.reference["id"],
+            "source_manifest_sha256": inputs.seg_source.manifest_sha256,
+            "structures": [_frozen_structure(item) for item in inputs.structures],
+        }
+        selection = {**identity, "structures": [{key: value for key, value in item.items() if key != "mask_stamp"} for item in identity["structures"]]}
+        selection_key = hashlib.sha256(json.dumps(selection, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        input_key = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+        def changed_inputs(previous):
+            # Encoding upgrades create fresh SOPs, but cannot make a changed
+            # saved mask look like the same immutable input. Legacy artifacts
+            # used their input hash directly as the artifact key.
+            if any(
+                job["payload"].get("selection_key") == selection_key and job["payload"].get("input_key", job["payload"]["artifact_key"]) != input_key
+                for job in previous
+            ):
+                raise ExportUnavailable("Saved masks changed since this revision's earlier export. Save a new revision before exporting those masks.")
+
+        return identity, selection_key, input_key, changed_inputs
 
     def _destination(self, destination, resend):
         if resend and destination is None:
@@ -647,6 +670,24 @@ class OrthancExports:
         self._check_files(job, directory, artifact)
         return directory / "dicom" / artifact.files[0].path
 
+    def _check_study(self, inputs, path):
+        """Refuse before upload if the instance would not join the source study.
+
+        Orthanc derives a study's identity from the patient ID as it decodes it.
+        A source whose bytes disagree with its declared character set decodes
+        differently once rewritten as UTF-8, so the instance would open a second
+        patient and study while the upload still reports success.
+        """
+        snapshot = inputs.source.snapshot
+        patient_id = _patient_id(path)
+        try:
+            with self.service.orthanc.client() as client:
+                study = client.study(snapshot.study_id)
+        except NotFound:
+            raise ExportUnavailable("The original study is no longer in Orthanc. Nothing was stored.") from None
+        if study["study_uid"] != snapshot.study_uid or study["patient_id"].strip() != patient_id:
+            raise ExportUnavailable("Orthanc files the original study under a different patient ID from the source images. Nothing was stored.")
+
     def _check_upload(self, job, upload):
         """Runs after each upload, before its receipt is saved or any send starts."""
 
@@ -756,8 +797,15 @@ class OrthancExports:
             else:
                 receipt = _Receipt(job["payload"]["artifact_manifest_sha256"], {}, {})
             with self.service.orthanc.client() as client:
-                for item in artifact.files:
-                    self.service.stage(job, f"Archiving {self.label} in Orthanc")
+                for number, item in enumerate(artifact.files, 1):
+                    count = f" ({number} of {len(artifact.files)})" if len(artifact.files) > 1 else ""
+                    stage = f"Archiving {self.noun} in Orthanc{count}"
+                    if number > 1 and not self.service.stop_event.is_set():
+                        # Once one instance is stored, a cancel waits for the rest, so the archive
+                        # never keeps part of an export. The check after this loop still stops a send.
+                        self.service.store.update_job(job["id"], stage=stage)
+                    else:
+                        self.service.stage(job, stage)
                     # Orthanc may have been restored or changed independently.
                     # Reuploading identical SOP bytes is idempotent and verifies
                     # their readback before trusting a cached instance ID.
@@ -768,10 +816,10 @@ class OrthancExports:
                 self.service.check_cancel(job)
                 if destination:
                     if destination not in self.service.settings.orthanc_export_destinations:
-                        raise ExportUnavailable(f"The selected destination is no longer enabled. {self.label} remains archived.")
+                        raise ExportUnavailable(self.disabled_error or f"The selected destination is no longer enabled. {self.label} remains archived.")
                     delivery = receipt.destinations.get(destination)
                     if delivery is None or delivery.state != "success" or delivery.attempt_id != job["payload"]["delivery_attempt_id"]:
-                        self.service.stage(job, f"Sending {self.label} through Orthanc")
+                        self.service.stage(job, f"Sending {self.noun} through Orthanc")
                         if (
                             delivery is None
                             or not delivery.job_id
@@ -826,14 +874,22 @@ class OrthancExports:
             self.service.store.update_job(
                 job["id"],
                 status="completed",
-                stage=f"{self.label} sent" if destination else f"{self.label} archived",
+                stage=f"{self.noun} sent" if destination else f"{self.noun} archived",
                 error=None,
                 completed_at=now(),
                 result=self._result(artifact, receipt, destination, job["payload"]["destination_name"]),
             )
         except Exception as exc:
-            cancelled = isinstance(exc, InterruptedError) and not sending
-            error = str(exc) if isinstance(exc, ExportUnavailable) else (self.unconfirmed_error if sending else self.failed_error)
+            stored = len(set(receipt.uploaded) & {item.path for item in artifact.files}) if artifact and receipt else 0
+            # Only an export of several instances can stop with some of them in the archive. It must say so.
+            partial = self.partial_error is not None and 0 < stored < len(artifact.files)
+            cancelled = isinstance(exc, InterruptedError) and not sending and not partial
+            if isinstance(exc, ExportUnavailable):
+                error = str(exc)
+            elif sending:
+                error = self.unconfirmed_error
+            else:
+                error = self.partial_error.format(stored=stored, total=len(artifact.files)) if partial else self.failed_error
             if not cancelled:
                 log.warning("%s export %s failed (%s)", self.label, job["id"], type(exc).__name__)
             if sending and receipt and destination in receipt.destinations and receipt.destinations[destination].state == "starting":

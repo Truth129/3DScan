@@ -26,8 +26,8 @@ other service.
   Delete forever. An administrator adds people with a link.
 - **Viewer:** linked slices and 3D volume rendering.
 - **Measurements:** mask volumes and AI-agreement metrics.
-- **Exchange:** DICOM SEG import and export, 3D views as new DICOM series, 3D Slicer, PNG
-  and portable offline HTML.
+- **Exchange:** DICOM SEG import and export, native OsiriX ROIs, 3D views as new DICOM series, 3D
+  Slicer, PNG and portable offline HTML.
 
 ## Quick start
 

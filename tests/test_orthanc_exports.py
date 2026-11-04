@@ -223,6 +223,7 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
         "exports": [],
         "encoding_version": 3,
         "file": {"available": True},
+        "osirix_roi": {"encoding_version": 1},
     }
     job = start(rig)
     assert job["kind"] == "orthanc_export" and job["revision_id"] == rig.revision["id"]

@@ -154,15 +154,23 @@ def add_routes(app, service):
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
     def dicom_seg_availability(case_id: str, revision_id: str):
         # A file stays on this machine, so this still answers. Without the archive it stops short of Orthanc.
-        return service.orthanc_exports.availability(case_id, revision_id, archive=identity.current().archive_access)
+        # One dialog offers both formats, so it gets one history. ROIs need exactly what a SEG archive or send
+        # needs, so `available` and `reason` answer for both without asking Orthanc twice.
+        rois = service.osirix_roi_exports
+        result = service.orthanc_exports.availability(
+            case_id, revision_id, archive=identity.current().archive_access, kinds=(service.orthanc_exports.kind, rois.kind)
+        )
+        return {**result, "osirix_roi": {"encoding_version": rois.encoding_version}}
 
     @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
     def dicom_seg_export(case_id: str, revision_id: str, body: DicomSegExport):
         # The gate never reads a body, and a file stays on this machine, so only a send needs the archive.
         if body.delivery == "orthanc" and not identity.current().archive_access:
             raise HTTPException(403, ARCHIVE_REFUSED)
+        # ROIs refuse a file and a ranking themselves, before they reach Orthanc.
+        manager = service.osirix_roi_exports if body.format == "osirix_roi" else service.orthanc_exports
         return public_job(
-            service.orthanc_exports.start(
+            manager.start(
                 case_id, revision_id, body.structure_ids, body.destination, resend=body.resend, overlap_priority=body.overlap_priority, delivery=body.delivery
             )
         )

@@ -93,6 +93,7 @@ class DicomSegExport(Input):
     resend: bool = Field(False, strict=True)
     overlap_priority: list[Annotated[str, Field(strict=True, min_length=1, max_length=200)]] | None = Field(None, min_length=2, max_length=1000)
     delivery: Literal["orthanc", "file"] = "orthanc"
+    format: Literal["seg", "osirix_roi"] = "seg"
 
 
 class Process(Input):
