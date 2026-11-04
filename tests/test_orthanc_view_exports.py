@@ -157,8 +157,8 @@ def test_availability_has_the_dicom_seg_shape(view):
         "exports": [],
         "encoding_version": 1,
     }
-    # Only a SEG can be saved as a file.
-    assert set(available.json()) == set(view.http.get(view.url.replace("/dicom-view", "/dicom-seg")).json()) - {"file"}
+    # Only a SEG can be saved as a file, and only its dialog offers OsiriX ROIs.
+    assert set(available.json()) == set(view.http.get(view.url.replace("/dicom-view", "/dicom-seg")).json()) - {"file", "osirix_roi"}
     case = view.service.store.get("cases", view.case["id"])
     case["references"] = {}
     view.service.store.save("cases", case)

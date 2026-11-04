@@ -23,6 +23,8 @@ class ReviewConflict(ValueError):
 LANES = ("gpu", "cpu")
 # A reviewer is waiting on these; every other kind is queued batch work.
 INTERACTIVE_KINDS = frozenset({"review_predict", "review_accept"})
+# A send of these that Orthanc has started runs to its end, whatever happens here.
+OUTBOUND_KINDS = frozenset({"orthanc_export", "orthanc_view_export", "orthanc_roi_export"})
 
 
 def job_lane(job):
@@ -369,7 +371,7 @@ class Store:
             raise NotFound("Case not found")
         # Trash flagged it to stop, and a job that never started holds no file, so only a running one waits.
         running = con.execute("SELECT json_extract(data,'$.kind') AS kind FROM jobs WHERE case_id=? AND status='running' LIMIT 1", (case_id,)).fetchone()
-        if running and running["kind"] in ("orthanc_export", "orthanc_view_export"):
+        if running and running["kind"] in OUTBOUND_KINDS:
             # A send Orthanc has started finishes on purpose, which can take its upload and two more minutes.
             raise Conflict("A send to Orthanc is still finishing. Try again in a few minutes.")
         if running:

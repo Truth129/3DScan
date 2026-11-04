@@ -15,9 +15,7 @@ from typing import Annotated
 import uuid
 
 from pydantic import ConfigDict, Field, TypeAdapter
-import pydicom
 
-from .errors import NotFound
 from .fileio import atomic_json
 from .orthanc_exports import ExportUnavailable, OrthancExports, _hash, _Inputs
 from .orthanc_models import DicomUID, Digest, Positive
@@ -170,26 +168,6 @@ class OrthancViewExports(OrthancExports):
             raise ExportUnavailable("The retained view image is unavailable or changed. Capture the view again.")
         self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=lambda: self.service.cancelled(job))
         return inputs
-
-    def _check_study(self, inputs, path):
-        """Refuse before upload if the instance would not join the source study.
-
-        Orthanc derives a study's identity from the patient ID as it decodes it.
-        A source whose bytes disagree with its declared character set decodes
-        differently once rewritten as UTF-8, so the instance would open a second
-        patient and study while the upload still reports success.
-        """
-        snapshot = inputs.source.snapshot
-        value = pydicom.dcmread(path, stop_before_pixels=True, specific_tags=["PatientID"]).get("PatientID", "")
-        # A backslash is illegal in LO, but pydicom splits on it and Orthanc keeps the text.
-        patient_id = ("\\".join(value) if isinstance(value, pydicom.multival.MultiValue) else str(value)).strip()
-        try:
-            with self.service.orthanc.client() as client:
-                study = client.study(snapshot.study_id)
-        except NotFound:
-            raise ExportUnavailable("The original study is no longer in Orthanc. Nothing was stored.") from None
-        if study["study_uid"] != snapshot.study_uid or study["patient_id"].strip() != patient_id:
-            raise ExportUnavailable("Orthanc files the original study under a different patient ID from the source images. Nothing was stored.")
 
     def _artifact(self, job, directory):
         from .dicom_view import DicomViewError, export_view

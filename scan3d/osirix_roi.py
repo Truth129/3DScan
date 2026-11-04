@@ -1,4 +1,4 @@
-"""Experimental OsiriX MD 14.3 brush reports, without live API activation.
+"""Experimental OsiriX MD 14.3 brush reports, used by the app's Orthanc export.
 
 This compatibility profile comes from the returned synthetic SEG-derived
 brushes. Source pixel assignment is exact; receiver interpretation on other
