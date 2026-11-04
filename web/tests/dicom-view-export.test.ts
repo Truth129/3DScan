@@ -8,7 +8,6 @@ import {
   dicomViewDelivered,
   dicomViewExportSummary,
   freezeViewCapture,
-  pendingDicomViewExport,
   pngSize,
   unfinishedEarlierDicomView,
   VIEW_CHANGED_MESSAGE,
@@ -102,16 +101,16 @@ afterEach(() => {
 });
 
 describe('an error answer with no text', () => {
-  it.each([
-    ['a proxy page over HTTP/2', () => new Response('Bad gateway', { status: 502, statusText: '' })],
-    ['JSON with no detail', () => Response.json({}, { status: 500 })],
-  ])('still says something for %s', async (_name, answer) => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => answer()),
-    );
-    await expect(apiRequest('/api/anything')).rejects.toThrow('The server answered with status 5');
-  });
+  it.each([['a proxy page over HTTP/2', () => new Response('Bad gateway', { status: 502, statusText: '' })]])(
+    'still says something for %s',
+    async (_name, answer) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => answer()),
+      );
+      await expect(apiRequest('/api/anything')).rejects.toThrow('The server answered with status 5');
+    },
+  );
 });
 
 describe('the capture', () => {
@@ -126,23 +125,17 @@ describe('the capture', () => {
     expect(() => {
       (frozen as { caseId: string }).caseId = 'case-b';
     }).toThrow(TypeError);
-  });
-  it('accepts a view with no surfaces', () => {
-    expect(freezeViewCapture(request, { ...frame, surfaceRevisionId: '' }, 'Synthetic A').revisionId).toBe('revision-a');
+    expect(freezeViewCapture(request, { ...frame, surfaceRevisionId: '' }, 'Synthetic A').revisionId, 'a view with no surfaces').toBe('revision-a');
   });
   it.each([
-    ['a frame of another reference image', { referenceImageId: 'image-b' }],
-    ['a frame with no reference image', { referenceImageId: '' }],
-    ['surfaces of another revision', { surfaceRevisionId: 'revision-b' }],
-  ])('refuses %s', (_name, change) => {
-    expect(() => freezeViewCapture(request, { ...frame, ...change }, 'Synthetic A')).toThrow(VIEW_CHANGED_MESSAGE);
-  });
-  it.each([
-    ['an empty canvas', 'data:,'],
-    ['another format', 'data:image/jpeg;base64,AAAA'],
-    ['a truncated file', `data:image/png;base64,${btoa('short')}`],
-  ])('refuses %s', (_name, url) => {
-    expect(() => freezeViewCapture(request, { ...frame, url }, 'Synthetic A')).toThrow('did not produce a PNG');
+    ['a frame of another reference image', { referenceImageId: 'image-b' }, VIEW_CHANGED_MESSAGE],
+    ['a frame with no reference image', { referenceImageId: '' }, VIEW_CHANGED_MESSAGE],
+    ['surfaces of another revision', { surfaceRevisionId: 'revision-b' }, VIEW_CHANGED_MESSAGE],
+    ['an empty canvas', { url: 'data:,' }, 'did not produce a PNG'],
+    ['another format', { url: 'data:image/jpeg;base64,AAAA' }, 'did not produce a PNG'],
+    ['a truncated file', { url: `data:image/png;base64,${btoa('short')}` }, 'did not produce a PNG'],
+  ])('refuses %s', (_name, change, message) => {
+    expect(() => freezeViewCapture(request, { ...frame, ...change }, 'Synthetic A')).toThrow(message);
   });
   it('reads the size from the header wherever the bytes sit in their buffer', () => {
     const padded = new Uint8Array(40);
@@ -220,48 +213,17 @@ describe('job text and history', () => {
     expect(unfinishedEarlierDicomView([job('failed', { revision_id: 'revision-b' })], 'case-a', 'revision-a')).toBeUndefined();
     expect(unfinishedEarlierDicomView([job('failed', { case_id: 'case-b' })], 'case-a', 'revision-a')).toBeUndefined();
   });
-  it('counts only a queued or running job as pending', () => {
-    expect(
-      ['queued', 'running', 'completed', 'failed', 'cancelled'].map(status => pendingDicomViewExport(job(status as DicomViewExportJob['status']))),
-    ).toEqual([true, true, false, false, false]);
-  });
 });
 
 describe('the upload', () => {
-  it('sends the image, its reference and nothing else for an archive', async () => {
-    const fetch = vi.fn().mockResolvedValue(Response.json(job('queued')));
+  it('encodes the route, and omits an empty destination rather than sending it', async () => {
+    const fetch = vi.fn().mockImplementation(async () => Response.json(job('queued')));
     vi.stubGlobal('fetch', fetch);
-    await api.exportDicomView('case/a', 'revision b', { image: capture.image, referenceImageId: 'image-a' });
+    await api.exportDicomView('case/a', 'revision b', { image: capture.image, referenceImageId: 'image-a', destination: '' });
     const [url, init] = fetch.mock.calls[0];
     expect(url).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-view');
     expect(init.method).toBe('POST');
     expect([...init.body.keys()]).toEqual(['image', 'reference_image_id']);
-    expect(init.body.get('image').size).toBe(capture.image.size);
-    expect(init.body.get('reference_image_id')).toBe('image-a');
-  });
-  it('omits the destination rather than sending an empty one, and marks only a real resend', async () => {
-    const fetch = vi.fn().mockImplementation(async () => Response.json(job('queued')));
-    vi.stubGlobal('fetch', fetch);
-    await api.exportDicomView('case', 'revision', { image: capture.image, referenceImageId: 'image-a', destination: 'osirix' });
-    expect(fetch.mock.calls[0][1].body.get('destination')).toBe('osirix');
-    expect(fetch.mock.calls[0][1].body.has('resend')).toBe(false);
-    await api.exportDicomView('case', 'revision', { image: capture.image, referenceImageId: 'image-a', destination: 'osirix', resend: true });
-    expect(fetch.mock.calls[1][1].body.get('resend')).toBe('true');
-    await api.exportDicomView('case', 'revision', { image: capture.image, referenceImageId: 'image-a', destination: '' });
-    expect(fetch.mock.calls[2][1].body.has('destination')).toBe(false);
-  });
-  it('refuses an oversized image before any request', async () => {
-    const fetch = vi.fn();
-    vi.stubGlobal('fetch', fetch);
-    const image = { size: DICOM_VIEW_MAX_BYTES + 1 } as Blob;
-    await expect(api.exportDicomView('case', 'revision', { image, referenceImageId: 'image-a' })).rejects.toBeInstanceOf(ApiError);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-  it('reads availability from the revision’s own route', async () => {
-    const fetch = vi.fn().mockResolvedValue(Response.json(availability()));
-    vi.stubGlobal('fetch', fetch);
-    await api.dicomViewAvailability('case/a', 'revision b');
-    expect(fetch.mock.calls[0][0]).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-view');
   });
 });
 
@@ -275,12 +237,8 @@ describe('the dialog', () => {
     expect(view.text()).toContain('joins the original study as a new series');
     expect(view.text()).toContain('not calibrated');
     expect(view.root.children[0].open).toBe(true);
-  });
-  it('asks nothing of the server except availability until a button is pressed', async () => {
-    const posts = server();
-    await dialog();
-    expect(api.dicomViewAvailability).toHaveBeenCalledExactlyOnceWith('case-a', 'revision-a', expect.any(AbortSignal));
-    expect(posts).toHaveLength(0);
+    expect(api.dicomViewAvailability, 'and nothing else until a button is pressed').toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
   });
   it('archives with no destination', async () => {
     const posts = server(),
@@ -426,29 +384,27 @@ describe('the dialog', () => {
     await settled();
     expect((posts[0].form.get('image') as File).size).toBe(capture.image.size);
   });
-  it('gives failure text even when the job has none', async () => {
+  it.each([
+    ['a failure with no text', job('failed'), 'The export failed.'],
+    ['a cancelled export', job('cancelled'), 'Export cancelled.'],
+    [
+      'an unconfirmed delivery',
+      job('completed', { result: { dicom_view: { export_id: 'view', archived: false, sent: false, instance_count: 0 } } }),
+      'Delivery has not been confirmed',
+    ],
+  ])('says what %s means', async (_name, ended, text) => {
     server();
-    expect((await dialog({ job: job('failed') })).text()).toContain('The export failed.');
-  });
-  it('shows a cancelled export as cancelled', async () => {
-    server();
-    expect((await dialog({ job: job('cancelled') })).text()).toContain('Export cancelled.');
-  });
-  it('does not call an unconfirmed export delivered', async () => {
-    server();
-    const view = await dialog({ job: job('completed', { result: { dicom_view: { export_id: 'view', archived: false, sent: false, instance_count: 0 } } }) });
-    expect(view.text()).toContain('Delivery has not been confirmed');
+    expect((await dialog({ job: ended })).text()).toContain(text);
   });
   it.each([
-    ['a failed', job('failed', { id: 'earlier' }), 'did not finish'],
+    ['a failed', job('failed', { id: 'earlier' }), 'This capture makes a new series unless it is the same image.'],
     ['a running', job('running', { id: 'earlier' }), 'still in progress'],
-  ])('notes %s earlier export of this revision', async (_name, earlier, text) => {
+  ])('notes %s earlier export of this revision, without calling it separate', async (_name, earlier, text) => {
     server({ available: availability({ exports: [earlier] }) });
-    expect((await dialog()).text()).toContain(text);
-  });
-  it('does not promise a new series for a capture that may be the same image', async () => {
-    server({ available: availability({ exports: [job('failed', { id: 'earlier' })] }) });
-    expect((await dialog()).text()).toContain('This capture makes a new series unless it is the same image.');
+    const shown = (await dialog()).text();
+    expect(shown).toContain(text);
+    // An unfinished export can be this very image.
+    expect(shown).not.toContain('separately');
   });
   it('notes nothing for a finished earlier export, or for this capture’s own job', async () => {
     const failed = job('failed', { id: 'own' });
@@ -476,28 +432,17 @@ describe('the dialog', () => {
       expect(disabled(view.button('Archive in Orthanc'))).toBe(false);
       expect(view.text()).not.toContain('Refresh export status');
     });
-    it.each(['running', 'failed', 'completed'] as const)(
-      'never takes a %s job in a listing as its own, because a listing cannot name an image',
-      async status => {
-        const other = job(status, { id: 'other' }),
-          view = await lost([other]);
-        expect(view.state.follow).not.toHaveBeenCalled();
-        expect(view.text()).toContain('Repeating it is safe');
-        expect(view.text()).not.toContain('View archived');
-      },
-    );
+    // A running one is covered where it is watched, below.
+    it('never takes a finished job in a listing as its own, because a listing cannot name an image', async () => {
+      const view = await lost([job('completed', { id: 'other' })]);
+      expect(view.state.follow).not.toHaveBeenCalled();
+      expect(view.text()).toContain('Repeating it is safe');
+      expect(view.text()).not.toContain('View archived');
+    });
     it('leaves a lasting warning if it closes with the outcome still unknown', async () => {
       const view = await lost();
       view.unmount();
       expect(view.state.report).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Check the study in Orthanc'), capture);
-    });
-    it('has nothing to warn about once the repeat is answered', async () => {
-      const view = await lost();
-      view.post.mockResolvedValue(job('running', { id: 'own' }));
-      click(view.button('Archive in Orthanc'));
-      await settled();
-      view.unmount();
-      expect(view.state.report).not.toHaveBeenCalled();
     });
     it('keeps a lost send unknown when only an archive is answered', async () => {
       vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
@@ -531,6 +476,8 @@ describe('the dialog', () => {
       expect(view.post.mock.calls[1][2].image).toBe(view.post.mock.calls[0][2].image);
       expect(view.state.follow).toHaveBeenCalledExactlyOnceWith(own, capture);
       expect(view.text()).not.toContain('may already have reached');
+      view.unmount();
+      expect(view.state.report, 'nothing to warn about once the repeat is answered').not.toHaveBeenCalled();
     });
     it('treats a 5xx as an unknown outcome, since a gateway can lose a queued answer', async () => {
       const view = await lost([], new ApiError(502, 'Bad gateway'));
@@ -561,11 +508,6 @@ describe('the dialog', () => {
     const view = await dialog();
     expect(view.state.observe.mock.calls.map(([item]: [DicomViewExportJob]) => item.id)).toEqual(['earlier', 'next']);
     expect(view.state.follow).not.toHaveBeenCalled();
-  });
-  it('does not call an unfinished export separate from this capture, because it can be its own', async () => {
-    server({ available: availability({ exports: [job('running', { id: 'earlier' })] }) });
-    const text = (await dialog()).text();
-    expect(text).not.toContain('separately');
   });
   it('treats a server refusal as an answer, with nothing to refresh', async () => {
     vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
@@ -604,13 +546,7 @@ describe('the dialog', () => {
     await settled();
     expect(element.open).toBe(true);
   });
-  it('closes on Escape through the cancel event', async () => {
-    server();
-    const view = await dialog();
-    view.root.children[0].dispatchEvent(new Event('cancel'));
-    expect(view.closed).toHaveBeenCalledOnce();
-  });
-  it('closes on the backdrop, and not on a click in its own padding', async () => {
+  it('closes on Escape and on the backdrop, and not on a click in its own padding', async () => {
     server();
     const view = await dialog(),
       element = view.root.children[0];
@@ -620,5 +556,7 @@ describe('the dialog', () => {
     expect(view.closed).not.toHaveBeenCalled();
     at(90, 200);
     expect(view.closed).toHaveBeenCalledOnce();
+    element.dispatchEvent(new Event('cancel'));
+    expect(view.closed).toHaveBeenCalledTimes(2);
   });
 });

@@ -36,7 +36,6 @@ const props = withDefaults(
 );
 const emit = defineEmits<{
   point: [point: Point];
-  prompt: [point: Point];
   gesture: [prompt: InteractivePrompt];
   windowLevel: [value: [number, number]];
   volumeOwner: [owner: CornerstoneMPR | undefined];
@@ -62,7 +61,6 @@ watch(
     v-bind="core"
     :session="localSession"
     @point="emit('point', $event)"
-    @prompt="emit('prompt', $event)"
     @gesture="emit('gesture', $event)"
     @window-level="emit('windowLevel', $event)"
     @memory-unavailable="memoryError = $event"
@@ -84,7 +82,6 @@ watch(
         :local-ready="localReady"
         :full-resolution="fullResolution"
         @point="emit('point', $event)"
-        @prompt="emit('prompt', $event)"
         @gesture="emit('gesture', $event)"
         @window-level="emit('windowLevel', $event)"
       />

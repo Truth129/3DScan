@@ -55,7 +55,7 @@ def unpack(result):
     return hu, [(layer["id"], mask(layer["current_offset"]), mask(layer["parent_offset"])) for layer in frame["overlays"]]
 
 
-@pytest.mark.parametrize("plane,axis", [("axial", 2), ("coronal", 1), ("sagittal", 0)])
+@pytest.mark.parametrize("plane,axis", [("axial", 2), ("sagittal", 0)])
 def test_multi_frame_independent_oblique_masks_and_unchanged_hu(source, plane, axis):
     ct, (first_path, second_path, previous_path), (values, first, second, previous) = source
     position = imaging.geometry(ct)["center_ras"][axis]

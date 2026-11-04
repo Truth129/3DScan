@@ -39,15 +39,6 @@ def test_a_job_claimed_on_a_trashed_case_is_flagged_and_still_running(tmp_path):
     assert store.get("jobs", queued["id"])["cancel_requested"] is True
 
 
-def test_cross_case_revision_cannot_be_activated(tmp_path):
-    store = Store(tmp_path)
-    a, b = case(store), case(store)
-    revision = store.save("revisions", dict(id=identifier(), case_id=a["id"], structures=[]))
-    with pytest.raises(KeyError):
-        store.activate(b["id"], revision["id"])
-    assert store.get("cases", b["id"])["active_revision_id"] is None
-
-
 def test_restart_preserves_completed_records_and_marks_running_interrupted(tmp_path):
     store = Store(tmp_path)
     record = case(store)
@@ -70,14 +61,17 @@ def test_undo_restores_the_matching_series_and_contrast_phase(tmp_path):
         store.commit_revision(revision)
         revisions.append(revision)
     restored = store.activate(record["id"], revisions[0]["id"])
-    assert restored["phase"] == "arterial"
-    assert restored["selected_series_uid"] == "arterial-series"
+    assert restored["phase"] == "arterial" and restored["selected_series_uid"] == "arterial-series"
+    # A revision of another case is never activated.
+    other = case(store)
+    with pytest.raises(KeyError):
+        store.activate(other["id"], revisions[0]["id"])
+    assert store.get("cases", other["id"])["active_revision_id"] is None
 
 
 def test_public_records_do_not_expose_local_sources():
     record = dict(id="a", references={"a": "/private"}, source_dir="/private", series=[dict(uid="series", files=["/private/a.dcm"])])
-    assert "references" not in public_case(record)
-    assert "files" not in public_case(record)["series"][0]
+    assert "/private" not in json.dumps(public_case(record))
     revision = dict(
         id="b",
         ct_file="/private/ct",
@@ -85,10 +79,7 @@ def test_public_records_do_not_expose_local_sources():
         structures=[dict(id="total:liver", mask_file="/private/mask")],
         inference_manifest={"engine_version": "2.18.0", "tasks": [{"task": "total", "report": {"input": "/private/source"}}]},
     )
-    public = public_revision(revision)
-    assert "ct_file" not in public and "directory" not in public
-    assert "mask_file" not in public["structures"][0]
-    assert "/private" not in __import__("json").dumps(public)
+    assert "/private" not in json.dumps(public_revision(revision))
 
 
 def test_case_list_leaves_out_file_paths_and_follows_a_writer_that_skips_summaries(tmp_path):

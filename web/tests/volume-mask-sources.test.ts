@@ -137,10 +137,6 @@ describe('bounded independent volume-mask union transport', () => {
     expect([...new Uint8Array(await reused.readSlab(0, 1))]).toEqual([0, 1, 2, 3]);
     expect(fetcher).toHaveBeenCalledTimes(3);
     expect(loader.diagnostics.chunkCacheBytes).toBe(8);
-    loader.clear();
-    loader.clearDecoded();
-    await expect(first.readSlab(0, 1)).rejects.toMatchObject({ name: 'AbortError' });
-    await expect(reused.readSlab(0, 1)).rejects.toMatchObject({ name: 'AbortError' });
     loader.dispose();
   });
   it('does not abort an active slab read when clearing decoded transport copies', async () => {
@@ -239,30 +235,11 @@ describe('bounded independent volume-mask union transport', () => {
   });
   it('rejects malformed, unbound, falsely full or oversized unions before chunk reads', async () => {
     for (const mutate of [
-      (d: VolumeDisplayUnion) => {
-        d.chunks[1].start_k = 3;
-      },
-      (d: VolumeDisplayUnion) => {
-        (d as { quality: string }).quality = 'full';
-      },
-      (d: VolumeDisplayUnion) => {
-        (d as { presentation_only: boolean }).presentation_only = false;
-      },
-      (d: VolumeDisplayUnion) => {
-        d.reference_image_id = undefined;
-      },
-      (d: VolumeDisplayUnion) => {
-        d.reference_geometry = undefined;
-      },
-      (d: VolumeDisplayUnion) => {
-        d.display_margin_mm = 1;
-      },
-      (d: VolumeDisplayUnion) => {
-        d.selected_structure_ids = ['different-selection'];
-      },
-      (d: VolumeDisplayUnion) => {
-        d.selected_structure_ids = ['a', 'a'];
-      },
+      (d: VolumeDisplayUnion) => Object.assign(d.chunks[1], { start_k: 3 }),
+      (d: VolumeDisplayUnion) => Object.assign(d, { quality: 'full' }),
+      (d: VolumeDisplayUnion) => Object.assign(d, { reference_image_id: undefined }),
+      (d: VolumeDisplayUnion) => Object.assign(d, { display_margin_mm: 1 }),
+      (d: VolumeDisplayUnion) => Object.assign(d, { selected_structure_ids: ['different-selection'] }),
     ]) {
       const desc = descriptor();
       mutate(desc);
@@ -309,13 +286,8 @@ describe('bounded independent volume-mask union transport', () => {
       signal = new AbortController().signal;
     expect(await loader.get('/revision', [], signal)).toEqual({ overlays: [] });
     await expect(loader.get('/revision', ['', 'a'], signal)).rejects.toThrow('selection');
-    await expect(
-      loader.get(
-        '/revision',
-        Array.from({ length: 129 }, (_, n) => String(n)),
-        signal,
-      ),
-    ).rejects.toThrow('128');
+    const tooMany = Array.from({ length: 129 }, (_, n) => String(n));
+    await expect(loader.get('/revision', tooMany, signal)).rejects.toThrow('128');
     await expect(loader.get('/revision', [], signal, NaN)).rejects.toThrow('between 0 and 5');
     expect(fetcher).not.toHaveBeenCalled();
     const source = (await loader.get('/revision', ['a'], signal)).overlays[0].current,

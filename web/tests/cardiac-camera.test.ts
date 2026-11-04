@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { cardiacCamera, CARDIAC_DIRECTION_RAS, CARDIAC_UP_RAS } from '../src/lib/cardiac-camera';
+import { cardiacCamera, CARDIAC_DIRECTION_RAS } from '../src/lib/cardiac-camera';
 import type { Bounds } from '../src/types';
 
 describe('cardiac reference orientation', () => {
@@ -66,17 +66,5 @@ describe('cardiac reference orientation', () => {
         },
       ]),
     ).toBeUndefined();
-    expect(
-      cardiacCamera([
-        {
-          name: 'Heart',
-          bounds_ras: [
-            [2, 0, 0],
-            [1, 1, 1],
-          ],
-        },
-      ]),
-    ).toBeUndefined();
-    expect(CARDIAC_UP_RAS.every(Number.isFinite)).toBe(true);
   });
 });

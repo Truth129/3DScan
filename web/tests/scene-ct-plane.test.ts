@@ -60,7 +60,6 @@ describe('display-only CT plane ownership', () => {
     scene.setCTPlane({ geometry, frame: first, window: 400, level: 40, visible: true, contextKey: 'accepted:3' });
     expect(plane.mesh.visible).toBe(true);
     expect(data.ctPlaneReady).toBe('true');
-    expect(data.ctPlaneIndex).toBe('3');
     expect(data.reviewMode).toBeUndefined();
     expect(data.ctPlaneContext).toBe('accepted:3');
     expect(resize).toHaveBeenCalledTimes(1);

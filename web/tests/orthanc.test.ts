@@ -63,7 +63,7 @@ describe('Orthanc selected-series import', () => {
     expect(transport.wait).not.toHaveBeenCalled();
   });
 
-  it('rejects foreign job/case bindings and never opens stale data', async () => {
+  it('rejects foreign job and case bindings, and stops at failure or cancellation, never opening stale or partial data', async () => {
     for (const replacement of [job('completed', { id: 'other-job' }), job('completed', { case_id: 'other-case' })]) {
       const transport = reader();
       vi.mocked(transport.job).mockResolvedValue(replacement);
@@ -73,14 +73,11 @@ describe('Orthanc selected-series import', () => {
     const transport = reader();
     vi.mocked(transport.case).mockResolvedValue({ ...imported, id: 'other-case' });
     await expect(waitForOrthancImport(job('completed'), new AbortController().signal, transport, () => undefined)).rejects.toThrow('does not match');
-  });
-
-  it('stops at terminal failure/cancellation without opening a partially copied case', async () => {
     for (const terminal of [job('failed', { error: 'The series changed during import.' }), job('cancelled')]) {
-      const transport = reader();
-      await expect(waitForOrthancImport(terminal, new AbortController().signal, transport, () => undefined)).rejects.toThrow();
-      expect(transport.case).not.toHaveBeenCalled();
-      expect(transport.job).not.toHaveBeenCalled();
+      const ended = reader();
+      await expect(waitForOrthancImport(terminal, new AbortController().signal, ended, () => undefined)).rejects.toThrow();
+      expect(ended.case).not.toHaveBeenCalled();
+      expect(ended.job).not.toHaveBeenCalled();
     }
   });
 

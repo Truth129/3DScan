@@ -34,24 +34,23 @@ describe('floating controls during review', () => {
     await nextTick();
     expect(open.value).toBe(false);
     setOpen(true);
-    expect(open.value).toBe(true);
     review.value = false;
     await nextTick();
     expect(open.value).toBe(true);
     review.value = true;
     await nextTick();
     expect(open.value).toBe(false);
+    expect(controls(null, true).open.value, 'when the viewer mounts during a review').toBe(false);
   });
-
-  it('starts folded when the viewer mounts during a review', () => {
-    expect(controls(null, true).open.value).toBe(false);
-  });
-
-  it('never saves a choice made during review', async () => {
+  it('never saves a choice made during review, nor an error revealing the controls', async () => {
     const { open, setOpen, review, stored } = controls('false');
+    open.value = true;
+    expect(open.value).toBe(true);
+    open.value = false;
     review.value = true;
     await nextTick();
     setOpen(true);
+    open.value = true;
     expect(stored.get('key')).toBe('false');
     setOpen(false);
     review.value = false;
@@ -59,18 +58,6 @@ describe('floating controls during review', () => {
     expect(open.value).toBe(false);
     setOpen(true);
     expect(stored.get('key')).toBe('true');
-  });
-
-  it('lets an error reveal the controls in either mode without saving a choice', async () => {
-    const { open, review, stored } = controls('false');
-    open.value = true;
-    expect(open.value).toBe(true);
-    open.value = false;
-    review.value = true;
-    await nextTick();
-    open.value = true;
-    expect(open.value).toBe(true);
-    expect(stored.get('key')).toBe('false');
   });
 });
 
@@ -235,13 +222,10 @@ describe('expanded viewport lifecycle', () => {
     };
     return { ...expansion, button, header, held, state, press };
   }
-  it('leaves a held dialog usable, since showModal cannot lift inert from it', async () => {
-    const { header, held } = await expandedPage();
-    expect(header.inert).toBe(true);
-    expect(held.inert).toBe(false);
-  });
-  it('leaves Tab and Escape to a modal dialog, and takes them back when it closes', async () => {
+  it('leaves a held dialog usable, and Tab and Escape to it while modal', async () => {
     const page = await expandedPage();
+    expect(page.header.inert).toBe(true);
+    expect(page.held.inert, 'showModal cannot lift inert from it').toBe(false);
     page.button.focus.mockClear();
     page.state.modal = true;
     expect(page.press('Tab').preventDefault).not.toHaveBeenCalled();

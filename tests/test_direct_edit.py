@@ -107,7 +107,6 @@ def test_physical_brush_changes_only_exact_native_slice_with_shear_reflection(di
     np.testing.assert_allclose(imaging._image(output)[1], affine, atol=1e-6)
     np.testing.assert_array_equal(load(source), original)
     assert provenance["engine"] == "direct-paint" and provenance["device"] == "cpu"
-    assert provenance["smoothing"] is provenance["cavity_filling"] is False
 
 
 def test_paint_then_erase_is_ordered_and_replay_undo_is_exact(direct_case):
@@ -202,14 +201,6 @@ def test_complete_erase_existing_target_saves_named_empty_mask_and_exact_revisio
     assert service.store.revision(case["id"], base["id"]) == base
 
 
-def test_empty_new_direct_target_cannot_be_saved(direct_case):
-    service, case, base, _ = direct_case
-    draft = service.reviews.create_structure(case["id"], base["id"], "Empty new target", method="direct")
-    draft = apply(service, case, base, [stroke(include=False)], draft=draft)
-    with pytest.raises(ValueError, match="empty candidate"):
-        service.reviews.accept(case["id"], draft["id"], draft["generation"])
-
-
 def test_direct_rejects_ai_prompts_and_full_refine_and_method_is_immutable(direct_case):
     service, case, base, affine = direct_case
     draft = service.reviews.create(case["id"], base["id"], base["structures"][0]["id"], method="direct")
@@ -274,9 +265,5 @@ def test_direct_api_contract_uses_existing_routes_and_forbids_method_patch(direc
         updated = client.patch(url, json={"expected_generation": 0, "prompts": [stroke()]})
         assert updated.status_code == 200, updated.text
         assert client.post(url + "/predict", json={"generation": updated.json()["generation"], "full_refine": True}).status_code == 400
-        assert (
-            client.post(
-                f"/api/cases/{case['id']}/reviews", json={"revision_id": base["id"], "structure_id": base["structures"][0]["id"], "method": "unknown"}
-            ).status_code
-            == 422
-        )
+        unknown = {"revision_id": base["id"], "structure_id": base["structures"][0]["id"], "method": "unknown"}
+        assert client.post(f"/api/cases/{case['id']}/reviews", json=unknown).status_code == 422

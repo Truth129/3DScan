@@ -91,11 +91,8 @@ describe('borrowed native CT plane', () => {
     plane.setState(undefined);
     expect(plane.actor.getVisibility()).toBe(false);
     plane.dispose();
-    plane.dispose();
     expect(image.isDeleted()).toBe(false);
     expect(image.getPointData().getScalars().getData()).toBe(values);
-    image.getPointData().getScalars().delete();
-    image.delete();
   });
 
   it('rejects a foreign same-sized grid and out-of-range native slices', () => {
@@ -106,14 +103,10 @@ describe('borrowed native CT plane', () => {
     expect(() => plane.setState({ visible: true, axis: 2, index: 1, window: 0, level: 40 })).toThrow('presentation');
     image.setOrigin([0, 0, 0]);
     expect(() => new VTKCTPlane(image, descriptor)).toThrow('affine');
-    plane.dispose();
-    image.getPointData().getScalars().delete();
-    image.delete();
   });
 
   it('samples a Cornerstone geometry shell through its per-image voxel provider', () => {
     const { descriptor, image, values } = source();
-    const original = image.getPointData().getScalars();
     image.getPointData().removeAllArrays();
     expect(() => new VTKCTPlane(image, descriptor)).toThrow('voxel provider');
     const plane = new VTKCTPlane(image, descriptor, (i, j, k) => values[i + 5 * (j + 4 * k)]);
@@ -121,8 +114,6 @@ describe('borrowed native CT plane', () => {
     expect(plane.stats().sliceCPUBytes).toBe(5 * 3 * 4);
     expect(plane.stats().sampleReads).toBe(15);
     plane.dispose();
-    original.delete();
-    image.delete();
   });
 
   it('refuses an oversized plane before sampling or allocating its raster', () => {
@@ -140,9 +131,6 @@ describe('borrowed native CT plane', () => {
     expect(() => plane.setState({ visible: true, axis: 2, index: 0, window: 400, level: 40 })).toThrow('8 MiB');
     expect(samples).toBe(0);
     expect(plane.stats().sliceCPUBytes).toBe(0);
-    plane.dispose();
-    image.getPointData().getScalars().delete();
-    image.delete();
   });
 
   it('reserves before sampling and keeps hidden mapper storage alive and charged until disposal', () => {
@@ -182,11 +170,9 @@ describe('borrowed native CT plane', () => {
     expect(raster.isDeleted()).toBe(true);
     expect(charges.at(-1)).toBe(0);
     expect(image.isDeleted()).toBe(false);
-    image.getPointData().getScalars().delete();
-    image.delete();
   });
 
-  it('keeps the prior valid plane when replacement admission is denied', () => {
+  it('keeps the prior plane when admission is denied and releases an admitted raster whose source fails', () => {
     const { descriptor, image, values } = source();
     let reserved = 0,
       samples = 0;
@@ -211,28 +197,18 @@ describe('borrowed native CT plane', () => {
     expect(plane.stats().native).toEqual({ axis: 1, index: 0 });
     plane.dispose();
     expect(reserved).toBe(0);
-    image.getPointData().getScalars().delete();
-    image.delete();
-  });
-
-  it('releases an admitted raster if its source fails during sampling', () => {
-    const { descriptor, image } = source();
-    let reserved = 0,
-      samples = 0;
-    const plane = new VTKCTPlane(
+    let failing = 0;
+    const broken = new VTKCTPlane(
       image,
       descriptor,
-      () => (++samples === 4 ? NaN : 100),
+      () => (++failing === 4 ? NaN : 100),
       bytes => {
         reserved = bytes;
       },
     );
-    expect(() => plane.setState({ visible: true, axis: 1, index: 0, window: 400, level: 40 })).toThrow('invalid scalar');
+    expect(() => broken.setState({ visible: true, axis: 1, index: 0, window: 400, level: 40 })).toThrow('invalid scalar');
     expect(reserved).toBe(0);
-    expect(plane.stats().sliceCPUBytes).toBe(0);
-    expect(plane.actor.getVisibility()).toBe(false);
-    plane.dispose();
-    image.getPointData().getScalars().delete();
-    image.delete();
+    expect(broken.stats().sliceCPUBytes).toBe(0);
+    expect(broken.actor.getVisibility()).toBe(false);
   });
 });

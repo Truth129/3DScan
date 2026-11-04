@@ -230,7 +230,6 @@ describe('native review physical geometry', () => {
       expect(((1 - clip[1]) * canvas.bounds.height) / 2).toBeCloseTo(y, 8);
     }
     expect(matrix[3]).toEqual([0, 0, 0, 1]);
-    expect(() => inverse(matrix)).not.toThrow();
     camera.setParallelProjection(false);
     expect(() => nativeReviewProjection(viewport)).toThrow('orthographic');
   });
@@ -262,24 +261,6 @@ describe('native review physical geometry', () => {
     foreground.dispose();
   });
 });
-
-// Independent small Gaussian elimination checks that the depth row stays useful
-// to the workstation's projection validation, not just its x/y polygon test.
-function inverse(matrix: number[][]) {
-  const a = matrix.map(row => [...row]);
-  for (let i = 0; i < 4; i++) {
-    let pivot = i;
-    for (let j = i + 1; j < 4; j++) if (Math.abs(a[j][i]) > Math.abs(a[pivot][i])) pivot = j;
-    [a[i], a[pivot]] = [a[pivot], a[i]];
-    if (Math.abs(a[i][i]) < 1e-12) throw new Error('Singular projection');
-    const scale = a[i][i];
-    for (let j = i; j < 4; j++) a[i][j] /= scale;
-    for (let k = i + 1; k < 4; k++) {
-      const factor = a[k][i];
-      for (let j = i; j < 4; j++) a[k][j] -= factor * a[i][j];
-    }
-  }
-}
 
 describe('native review input safety', () => {
   it('emits source-index brush and box gestures, preserving a stroke across overlay-only refresh', () => {

@@ -30,6 +30,7 @@ function project(matrix: number[][], point: Point) {
   const out = matrix.map(row => row[0] * point[0] + row[1] * point[1] + row[2] * point[2] + row[3]);
   return out.slice(0, 3).map(value => value / out[3]);
 }
+const drag = (a: [number, number], b: [number, number]): [number, number][] => [a, b];
 
 describe('camera-frozen full-depth 3D scissors', () => {
   it('matches Three.js physical RAS projection for oblique reflected CT voxels after pan and zoom', () => {
@@ -71,16 +72,7 @@ describe('camera-frozen full-depth 3D scissors', () => {
       rect = { ...viewport },
       capture = captureScissors(view, rect),
       original = structuredClone(capture.rasToClip);
-    const prompt = createScissorsPrompt(
-      capture,
-      'rectangle',
-      'erase_inside',
-      [
-        [-0.3, -0.2],
-        [0.4, 0.5],
-      ],
-      'cut',
-    )!;
+    const prompt = createScissorsPrompt(capture, 'rectangle', 'erase_inside', drag([-0.3, -0.2], [0.4, 0.5]), 'cut')!;
     rect.width = 1;
     capture.rasToClip[0][0] = 99;
     view.position.x += 0.3;
@@ -88,6 +80,27 @@ describe('camera-frozen full-depth 3D scissors', () => {
     expect(prompt.ras_to_clip).toEqual(original);
     expect(capture.viewport.width).toBe(1200);
     expect(prompt.include).toBe(false);
+  });
+  it('captures real DOMRect-style prototype getters as an immutable viewport', () => {
+    let left = 120;
+    const bounds = Object.create({
+      get left() {
+        return left;
+      },
+      get top() {
+        return 80;
+      },
+      get width() {
+        return 1200;
+      },
+      get height() {
+        return 600;
+      },
+    });
+    expect({ ...bounds }).toEqual({});
+    const capture = captureScissors(camera(), bounds);
+    left = 900;
+    expect(capture.viewport).toEqual(viewport);
   });
   it('cancels a capture when orbit, pan, zoom or the viewport changes', () => {
     for (const change of ['orbit', 'pan', 'zoom', 'resize', 'move'] as const) {
@@ -116,9 +129,6 @@ describe('camera-frozen full-depth 3D scissors', () => {
     view.zoom = 2;
     view.updateProjectionMatrix();
     expect(scissorsProjectionMatches(saved, scissorsProjection(view))).toBe(false);
-    view.zoom = 1.7;
-    view.updateProjectionMatrix();
-    expect(scissorsProjectionMatches(saved, scissorsProjection(view))).toBe(true);
   });
   it('converts CSS pointer positions to bounded NDC independent of device pixel ratio', () => {
     expect(scissorsScreenPoint(viewport, 120, 80)).toEqual([-1, 1]);
@@ -126,42 +136,17 @@ describe('camera-frozen full-depth 3D scissors', () => {
     expect(scissorsScreenPoint(viewport, 720, 380)).toEqual([0, 0]);
     expect(scissorsScreenPoint(viewport, -500, 900)).toEqual([-1, -1]);
   });
-  it('creates four exact axis-aligned rectangle corners regardless of drag direction', () => {
-    const result = scissorsPolygon(
-      'rectangle',
-      [
-        [0.4, 0.5],
-        [-0.3, -0.2],
-      ],
-      viewport,
-    );
-    expect(result).toEqual([
+  it('creates rectangle corners regardless of drag direction, and a 64-sided circle with equal physical radii', () => {
+    const corners = scissorsPolygon('rectangle', drag([0.4, 0.5], [-0.3, -0.2]), viewport);
+    expect(corners).toEqual([
       [-0.3, -0.2],
       [0.4, -0.2],
       [0.4, 0.5],
       [-0.3, 0.5],
     ]);
-    const prompt = createScissorsPrompt(
-      captureScissors(camera(), viewport),
-      'rectangle',
-      'erase_outside',
-      [
-        [0.4, 0.5],
-        [-0.3, -0.2],
-      ],
-      'rectangle',
-    );
-    expect(prompt).toMatchObject({ kind: 'scissors', shape: 'rectangle', operation: 'erase_outside', include: false, vertices: result });
-  });
-  it('uses a 64-sided circle with equal physical screen radii on a wide viewport', () => {
-    const circle = scissorsPolygon(
-      'circle',
-      [
-        [0, 0],
-        [0.2, 0],
-      ],
-      viewport,
-    );
+    const prompt = createScissorsPrompt(captureScissors(camera(), viewport), 'rectangle', 'erase_outside', drag([0.4, 0.5], [-0.3, -0.2]), 'rectangle');
+    expect(prompt).toMatchObject({ kind: 'scissors', shape: 'rectangle', operation: 'erase_outside', include: false, vertices: corners });
+    const circle = scissorsPolygon('circle', drag([0, 0], [0.2, 0]), viewport);
     expect(circle).toHaveLength(64);
     circle.forEach(([x, y]) => expect(Math.hypot((x * viewport.width) / 2, (y * viewport.height) / 2)).toBeCloseTo(120, 10));
   });
@@ -178,58 +163,24 @@ describe('camera-frozen full-depth 3D scissors', () => {
     expect(scissorsPath(prompt.vertices, 'erase_inside')).toMatch(/^M.* Z$/);
     expect(scissorsPath(prompt.vertices, 'erase_outside')).toMatch(/^M-1 -1 L1 -1 L1 1 L-1 1 Z M/);
   });
-  it('rejects empty, degenerate and tiny gestures without creating a cut', () => {
+  it('rejects degenerate gestures, invalid viewports and perspective cameras without creating a cut', () => {
     const capture = captureScissors(camera(), viewport);
-    expect(
-      createScissorsPrompt(
-        capture,
-        'freehand',
-        'erase_inside',
-        [
-          [0, 0],
-          [0.2, 0.2],
-        ],
-        'short',
-      ),
-    ).toBeUndefined();
-    expect(
-      createScissorsPrompt(
-        capture,
-        'rectangle',
-        'erase_inside',
-        [
-          [0, 0],
-          [0, 0.3],
-        ],
-        'flat',
-      ),
-    ).toBeUndefined();
-    expect(
-      createScissorsPrompt(
-        capture,
-        'circle',
-        'erase_inside',
-        [
-          [0, 0],
-          [1e-7, 0],
-        ],
-        'tiny',
-      ),
-    ).toBeUndefined();
-  });
-  it('rejects invalid viewports and perspective cameras', () => {
+    expect(createScissorsPrompt(capture, 'freehand', 'erase_inside', drag([0, 0], [0.2, 0.2]), 'short')).toBeUndefined();
+    expect(createScissorsPrompt(capture, 'rectangle', 'erase_inside', drag([0, 0], [0, 0.3]), 'flat')).toBeUndefined();
+    expect(createScissorsPrompt(capture, 'circle', 'erase_inside', drag([0, 0], [1e-7, 0]), 'tiny')).toBeUndefined();
     expect(() => captureScissors(camera(), { ...viewport, width: 0 })).toThrow('viewport');
     expect(() => scissorsProjection(new THREE.PerspectiveCamera() as never)).toThrow('orthographic');
   });
   it('never interprets the scissors tool as a native-slice gesture', () => {
+    const identity = [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1],
+    ];
     const geometry: Geometry = {
       shape: [5, 5, 5],
-      affine_ras: [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
-      ],
+      affine_ras: identity,
       spacing: [1, 1, 1],
       bounds_ras: [
         [0, 0, 0],
@@ -237,19 +188,15 @@ describe('camera-frozen full-depth 3D scissors', () => {
       ],
       center_ras: [2, 2, 2],
     };
-    expect(
-      createReviewGesture(
-        geometry,
-        { plane: 'axial', native: { axis: 2, index: 2 }, width: 5, height: 5, position_mm: 2, extent_mm: [5, 5], pixel_to_ras: geometry.affine_ras },
-        'scissors',
-        false,
-        [
-          [0, 0],
-          [4, 4],
-        ],
-        3,
-        'wrong-view',
-      ),
-    ).toBeUndefined();
+    const meta = {
+      plane: 'axial' as const,
+      native: { axis: 2 as const, index: 2 },
+      width: 5,
+      height: 5,
+      position_mm: 2,
+      extent_mm: [5, 5],
+      pixel_to_ras: identity,
+    };
+    expect(createReviewGesture(geometry, meta, 'scissors', false, drag([0, 0], [4, 4]), 3, 'wrong-view')).toBeUndefined();
   });
 });

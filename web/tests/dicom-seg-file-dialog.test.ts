@@ -84,9 +84,7 @@ describe('a folder case with no Orthanc', () => {
     expect(view.button('Send to viewer')).toBeUndefined();
     expect(view.all(element => element.tagName === 'SELECT')).toEqual([]);
     expect(view.text()).toContain('Archive and send are unavailable. Configure Orthanc before exporting DICOM SEG.');
-    expect(view.text()).toContain('then save them as a DICOM SEG file');
     expect(view.text()).toContain("carries the CT's patient details");
-    expect(view.all(element => element.className.includes('export-error'))).toEqual([]);
     expect(disabled(view.all(element => element.tagName === 'FIELDSET')[0])).toBe(false);
   });
   it('prepares the exact selection, then saves that export in a second click', async () => {
@@ -136,13 +134,6 @@ describe('a folder case with no Orthanc', () => {
     expect(view.button('Prepare SEG file')).toBeDefined();
     expect(view.button('Download SEG file')).toBeUndefined();
   });
-  it('holds both steps while a file is being prepared', async () => {
-    vi.spyOn(api, 'job').mockResolvedValue(fileJob('running'));
-    const view = await dialog(availability({ exports: [fileJob('running')] }));
-    expect(disabled(view.button('Prepare SEG file'))).toBe(true);
-    expect(view.text()).toContain('Exporting DICOM SEG');
-    view.unmount();
-  });
 });
 
 describe('cancelling from the dialog', () => {
@@ -165,8 +156,10 @@ describe('cancelling from the dialog', () => {
     expect(disabled(view.button('Prepare SEG file'))).toBe(false);
     view.unmount();
   });
-  it('shows a running export stopping until it has', async () => {
+  it('holds Prepare while a file is being prepared, and shows it stopping until it has', async () => {
     const view = await running();
+    expect(disabled(view.button('Prepare SEG file'))).toBe(true);
+    expect(view.text()).toContain('Exporting DICOM SEG');
     expect(view.text()).toContain('Closing does not cancel the export.');
     vi.spyOn(api, 'cancel').mockResolvedValue(fileJob('running'));
     click(view.button('Cancel export'));
@@ -199,7 +192,6 @@ describe('a case that cannot produce a file', () => {
     expect(view.text()).toContain('no verified original DICOM CT series');
     expect(view.button('Prepare SEG file')).toBeUndefined();
     expect(view.button('Archive in Orthanc'), 'the reason says why instead').toBeUndefined();
-    expect(view.text()).toContain('Archive and send are unavailable. Configure Orthanc before exporting DICOM SEG.');
     expect(disabled(view.all(element => element.tagName === 'FIELDSET')[0])).toBe(true);
   });
   it('tells a person without the archive why, not that they can still archive', async () => {

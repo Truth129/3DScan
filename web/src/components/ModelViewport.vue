@@ -113,7 +113,6 @@ const emit = defineEmits<{
   exportView: [];
 }>();
 interface VolumePreview {
-  diagnostics(): Record<string, unknown>;
   capturePNG(): Promise<string>;
   captureExportPNG(expected: ViewCaptureRequest): Promise<ViewportCapture>;
   resetView(): void;
@@ -121,7 +120,6 @@ interface VolumePreview {
   retryMask(): Promise<void>;
   retryColors(): Promise<void>;
   prepareReviewPlane(): Promise<boolean>;
-  reviewPatientToCanvas(ras: Point): [number, number] | undefined;
 }
 const volumePreview = ref<VolumePreview>();
 const preferCornerstone =
@@ -1631,9 +1629,6 @@ defineExpose({
   captureView,
   showRefusal,
   exportSnapshot,
-  volumeDiagnostics: () => ({ renderer: vtkSelected.value ? 'vtk' : 'three', ...volumePreview.value?.diagnostics() }),
-  captureVolumePNG: () => volumePreview.value?.capturePNG(),
-  reviewPatientToCanvas: (ras: Point) => (vtkSelected.value ? volumePreview.value?.reviewPatientToCanvas(ras) : scene?.reviewPatientToCanvas(ras)),
 });
 </script>
 
@@ -2215,9 +2210,6 @@ defineExpose({
   font-size: 10px;
   margin-left: auto;
   white-space: nowrap;
-}
-.model-plane-toggle input {
-  accent-color: #8aabff;
 }
 .model-plane-navigation {
   margin-top: 7px;

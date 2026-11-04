@@ -31,9 +31,4 @@ describe('3D view toolbar', () => {
     expect(blocked).toMatch(/title="Wait for the current operation to finish before exporting\."[^>]*disabled/);
     expect(blocked).toMatch(PNG_ENABLED);
   });
-  it('is disabled during review, while PNG ↗ still works', async () => {
-    const html = tools(await viewport({ dicomViewBlockReason: '', reviewActive: true }));
-    expect(html).toMatch(/title="Leave review to export this view\."[^>]*disabled/);
-    expect(html).toMatch(PNG_ENABLED);
-  });
 });

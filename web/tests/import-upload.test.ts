@@ -90,27 +90,22 @@ describe('import upload batches', () => {
     expect(progress.every(value => value.bytes <= value.totalBytes && value.files <= value.totalFiles)).toBe(true);
   });
 
-  it('stops on a rejected batch without retrying and discards the staged upload', async () => {
+  it.each([
+    ['a rejected batch', () => new ApiError(400, 'Duplicate upload filename')],
+    // A 401 waits for a sign-in in the transport, so it never counts as an interrupted connection here.
+    ['an ended session', () => new ApiError(401, 'Sign in to continue')],
+    ['a cancel', (controller: AbortController) => (controller.abort(), new DOMException('Upload cancelled', 'AbortError'))],
+  ])('stops on %s without retrying and discards the staged upload', async (_name, failure) => {
+    const controller = new AbortController(),
+      reason = failure(controller);
     const { transport, calls } = rig(async () => {
-      throw new ApiError(400, 'Duplicate upload filename');
-    });
-    await expect(uploadImport([file('a', 1)], '', { signal: new AbortController().signal, onProgress: () => undefined, transport })).rejects.toThrow(
-      'Duplicate upload filename',
-    );
-    expect(calls).toEqual(['POST /api/imports', 'FORM /api/imports/u1/parts', 'DELETE /api/imports/u1']);
-    expect(transport.wait).not.toHaveBeenCalled();
-  });
-
-  it('cancels without retrying and discards the staged upload', async () => {
-    const controller = new AbortController();
-    const { transport, calls } = rig(async () => {
-      controller.abort();
-      throw new DOMException('Upload cancelled', 'AbortError');
+      throw reason;
     });
     await expect(
       uploadImport([file('a', 1), file('b', 1), file('c', 1)], '', { signal: controller.signal, onProgress: () => undefined, transport }),
-    ).rejects.toMatchObject({ name: 'AbortError' });
+    ).rejects.toBe(reason);
     expect(calls).toEqual(['POST /api/imports', 'FORM /api/imports/u1/parts', 'DELETE /api/imports/u1']);
+    expect(transport.wait).not.toHaveBeenCalled();
   });
 });
 
@@ -156,16 +151,8 @@ describe('a batch refused because the session ended', () => {
     await expect(answer).resolves.toEqual({ received: 1 });
     expect(sent).toEqual([body, body]);
   });
-  it('does not treat a 401 as an interrupted connection', async () => {
+  it('passes a 401 on when no sign-in can be waited for', async () => {
     requests(401);
     await expect(send(new FormData())).rejects.toMatchObject({ status: 401 });
-    const { transport, calls } = rig(async () => {
-      throw new ApiError(401, 'Sign in to continue');
-    });
-    await expect(uploadImport([file('a', 1)], '', { signal: new AbortController().signal, onProgress: () => undefined, transport })).rejects.toThrow(
-      'Sign in to continue',
-    );
-    expect(transport.wait).not.toHaveBeenCalled();
-    expect(calls).toEqual(['POST /api/imports', 'FORM /api/imports/u1/parts', 'DELETE /api/imports/u1']);
   });
 });

@@ -38,7 +38,6 @@ const props = withDefaults(
 );
 const emit = defineEmits<{
   point: [point: Point];
-  prompt: [point: Point];
   gesture: [prompt: InteractivePrompt];
   windowLevel: [value: [number, number]];
   memoryUnavailable: [reason: string];
@@ -340,15 +339,6 @@ onBeforeUnmount(() => {
   unsubscribeOverlay?.();
   unsubscribeBudget();
   release();
-});
-defineExpose({
-  diagnostics: () => ({ ...viewer?.stats(), memory: sharedVolumeMemoryBudget.stats }),
-  patientToCanvas: (plane: Plane, point: Point) => viewer?.rasToCanvas(plane, point),
-  canvasToPatient: (plane: Plane, point: [number, number]) => viewer?.canvasToRas(plane, point),
-  resetView: () => {
-    viewer?.reset();
-    configure();
-  },
 });
 </script>
 

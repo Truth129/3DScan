@@ -145,35 +145,31 @@ def test_another_users_upload_reads_as_absent(rig):
 
 
 @pytest.mark.parametrize("owner", [None, "local"])
-def test_an_upload_with_no_real_owner_is_for_admins_only(rig, owner):
+def test_an_upload_with_no_real_owner_is_for_admins_only_until_it_has_a_case(rig, owner):
     upload_id = start_upload(rig.owner)
     path = rig.service.settings.data_dir / "import-uploads" / upload_id / "state.json"
     path.write_text(json.dumps({**json.loads(path.read_text()), "owner_id": owner}))
     assert rig.member.delete(f"/api/imports/{upload_id}").status_code == 404
     assert rig.other.delete(f"/api/imports/{upload_id}").status_code == 200
-
-
-@pytest.mark.parametrize("owner", [None, "local"])
-def test_a_finished_upload_follows_its_case_for_everyone(rig, owner):
-    upload_id = start_upload(rig.owner)
-    path = rig.service.settings.data_dir / "import-uploads" / upload_id / "state.json"
+    finished = start_upload(rig.owner)
+    path = rig.service.settings.data_dir / "import-uploads" / finished / "state.json"
     path.write_text(json.dumps({**json.loads(path.read_text()), "owner_id": owner, "case_id": rig.case["id"]}))
-    assert rig.other.post(f"/api/imports/{upload_id}/finish").status_code == 200
+    assert rig.other.post(f"/api/imports/{finished}/finish").status_code == 200
 
 
 @pytest.mark.parametrize(
     "path, detail",
-    [("/api/cases/not-a-record", "Case not found"), (f"/api/cases/{'A' * 32}", "Case not found"), ("/api/jobs/1%20OR%201%3D1", "Job not found")],
+    [
+        ("/api/cases/not-a-record", "Case not found"),
+        (f"/api/cases/{'A' * 32}", "Case not found"),
+        ("/api/jobs/1%20OR%201%3D1", "Job not found"),
+        ("/api/imports/%2e%2e/finish", "Upload not found"),
+        (f"/api/imports/{'A' * 32}/finish", "Upload not found"),
+    ],
 )
 def test_a_malformed_id_is_absent_rather_than_an_error(rig, path, detail):
-    response = rig.owner.get(path)
+    response = rig.owner.request("POST" if path.endswith("/finish") else "GET", path)
     assert response.status_code == 404 and response.json() == {"detail": detail}
-
-
-@pytest.mark.parametrize("upload_id", ["%2e%2e", "not-a-record", "A" * 32])
-def test_a_malformed_upload_id_never_reaches_the_disk(rig, upload_id):
-    response = rig.owner.post(f"/api/imports/{upload_id}/finish")
-    assert response.status_code == 404 and response.json() == {"detail": "Upload not found"}
 
 
 def test_administrator_routes_refuse_a_member(rig):
@@ -317,21 +313,11 @@ def test_the_policy_refuses_what_it_cannot_decide(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="/api/gone"):
         check_policy(app.routes)
     monkeypatch.delitem(RULES, ("GET", "/api/gone"))
-    monkeypatch.setitem(RULES, ("GET", "/api/cases/{case_id}/images"), Rule("signed_in"))
-    with pytest.raises(RuntimeError, match="path parameters"):
-        check_policy(app.routes)
-
-
-def test_the_policy_refuses_a_trashed_rule_on_a_route_with_no_case_id(tmp_path, monkeypatch):
-    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
-    monkeypatch.setitem(RULES, ("GET", "/api/cases"), Rule("trashed"))
-    with pytest.raises(RuntimeError, match="path parameters"):
-        check_policy(app.routes)
-
-
-def test_every_kind_a_rule_names_is_one_the_gate_decides():
-    kinds = {"public", "off_only", "signed_in", "admin", "archive", "job", "upload", "case", "case_archive", "trashed", "trashed_admin"}
-    assert {rule.kind for rule in RULES.values()} == kinds
+    for rule in (("GET", "/api/cases/{case_id}/images", "signed_in"), ("GET", "/api/cases", "trashed")):
+        monkeypatch.setitem(RULES, rule[:2], Rule(rule[2]))
+        with pytest.raises(RuntimeError, match="path parameters"):
+            check_policy(app.routes)
+        monkeypatch.undo()
 
 
 def test_with_sign_in_off_everything_stays_open_and_audited_rules_still_write(tmp_path):

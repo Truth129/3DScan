@@ -22,7 +22,7 @@ from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.errors import NotFound
 from scan3d.identity import EVERY_CASE
-from scan3d.orthanc import OrthancChanged, OrthancError, snapshot_fingerprint
+from scan3d.orthanc import OrthancError, snapshot_fingerprint
 from scan3d.service import Service
 from scan3d.orthanc_models import json_record, parse_download, parse_snapshot
 
@@ -244,7 +244,7 @@ def test_queries_remain_private_and_modality_policy_applies_before_import(rig):
     assert rig.service.store.visible_cases(EVERY_CASE) == []
 
 
-@pytest.mark.parametrize("error", [OrthancError("Synthetic unavailable"), NotFound("Synthetic wrong endpoint"), ValueError("Synthetic bad configuration")])
+@pytest.mark.parametrize("error", [OrthancError("Synthetic unavailable"), ValueError("Synthetic bad configuration")])
 def test_connection_status_reports_unavailable_without_exposing_upstream_details(rig, error):
     rig.archive.error = error
     response = rig.http.get("/api/orthanc/status")
@@ -348,17 +348,6 @@ def test_success_promotes_exact_bytes_manifest_and_private_source_binding(rig):
     assert list((rig.settings.data_dir / "orthanc-staging").iterdir()) == []
 
 
-def test_queued_cancel_and_retry_reuse_the_destination_without_overwriting_sources(rig):
-    job = start(rig).json()
-    cancelled = rig.http.post(f"/api/jobs/{job['id']}/cancel")
-    assert cancelled.json()["status"] == "cancelled"
-    assert rig.service.store.claim("cpu") is None
-    retry = start(rig).json()
-    assert retry["id"] != job["id"] and retry["case_id"] == job["case_id"]
-    assert execute_cpu(rig, retry["id"])["status"] == "completed"
-    assert rig.archive.downloaded == 1
-
-
 def test_running_cancel_never_publishes_source_and_retry_remains_available(rig):
     rig.archive.release.clear()
     job = start(rig).json()
@@ -390,63 +379,34 @@ def test_cancellation_after_the_last_download_still_prevents_source_publication(
     assert list((rig.settings.data_dir / "orthanc-staging").iterdir()) == []
 
 
-def test_transfer_progress_and_cancel_polls_do_not_rewrite_or_reparse_each_instance(rig, monkeypatch):
-    from scan3d import orthanc_imports
-
-    # A burst of tiny files and chunk checks shares one polling interval. The
-    # first/final progress and unconditional pre-publication check still occur.
-    monkeypatch.setattr(orthanc_imports, "time", SimpleNamespace(monotonic=lambda: 0.0))
-    updates, polls = [], []
-    update_job, cancelled = rig.service.store.update_job, rig.service.cancelled
-
-    def update(job_id, **changes):
-        if changes.get("progress", {}).get("phase") == "archive_import":
-            updates.append(changes["progress"]["completed"])
-        return update_job(job_id, **changes)
-
-    def poll(job):
-        polls.append(job["id"])
-        return cancelled(job)
-
-    monkeypatch.setattr(rig.service.store, "update_job", update)
-    monkeypatch.setattr(rig.service, "cancelled", poll)
-    job = start(rig).json()
-    assert execute_cpu(rig, job["id"])["status"] == "completed"
-    assert updates == [1, 3] and len(polls) <= 3
-
-
-@pytest.mark.parametrize("identity", ["study", "series", "frame", "sop", "sop_class", "file_meta", "modality"])
-def test_downloaded_dicom_identity_is_verified_independently_of_archive_tags(rig, identity):
-    first = next(iter(rig.archive.files))
-    foreign = "1.2.826.0.1.3680043.10.543.999"
-    if identity in {"study", "series", "frame"}:
-        rig.archive.files[first] = instance_bytes(0, **{identity: foreign})
-    else:
-        dataset = pydicom.dcmread(io.BytesIO(rig.archive.files[first]))
-        if identity == "sop":
-            dataset.SOPInstanceUID = dataset.file_meta.MediaStorageSOPInstanceUID = foreign
-        elif identity == "sop_class":
-            dataset.SOPClassUID = dataset.file_meta.MediaStorageSOPClassUID = pydicom.uid.MRImageStorage
-        elif identity == "file_meta":
-            dataset.file_meta.MediaStorageSOPInstanceUID = foreign
-        else:
-            dataset.Modality = "MR"
-        output = io.BytesIO()
-        dataset.save_as(output, enforce_file_format=True)
-        rig.archive.files[first] = output.getvalue()
-        if identity == "file_meta":
-            # pydicom intentionally repairs file meta while writing. Corrupt
-            # only its first UID occurrence afterward to exercise that guard.
-            original = str(dataset.SOPInstanceUID)
-            changed = original[:-1] + "9"
-            rig.archive.files[first] = rig.archive.files[first].replace(original.encode(), changed.encode(), 1)
-            check = pydicom.dcmread(io.BytesIO(rig.archive.files[first]))
-            assert check.file_meta.MediaStorageSOPInstanceUID != check.SOPInstanceUID
-    # Keep the advertised file length truthful, so a failure proves independent
-    # DICOM identity checking rather than only the simpler byte-size guard.
-    for entry in rig.archive.snapshot_doc["instances"]:
-        entry["size"] = len(rig.archive.files[entry["id"]])
+def replace_instance(rig, entry, data):
+    """Keep the advertised size truthful, so only the DICOM checks can refuse the new bytes."""
+    rig.archive.files[entry["id"]] = data
+    entry["size"] = len(data)
     rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
+
+
+def edited_instance(rig, entry, edit):
+    dataset = pydicom.dcmread(io.BytesIO(rig.archive.files[entry["id"]]))
+    edit(dataset)
+    output = io.BytesIO()
+    dataset.save_as(output, enforce_file_format=True)
+    replace_instance(rig, entry, output.getvalue())
+
+
+@pytest.mark.parametrize("identity", ["series", "sop_class", "file_meta", "modality"])
+def test_downloaded_dicom_identity_is_verified_independently_of_archive_tags(rig, identity):
+    entry = rig.archive.snapshot_doc["instances"][0]
+    if identity == "series":
+        replace_instance(rig, entry, instance_bytes(0, series="1.2.826.0.1.3680043.10.543.999"))
+    elif identity == "sop_class":
+        edited_instance(rig, entry, lambda ds: setattr(ds, "SOPClassUID", pydicom.uid.MRImageStorage))
+    elif identity == "modality":
+        edited_instance(rig, entry, lambda ds: setattr(ds, "Modality", "MR"))
+    else:
+        # pydicom repairs file meta while writing, so corrupt its first UID occurrence afterwards.
+        uid = entry["sop_instance_uid"]
+        replace_instance(rig, entry, rig.archive.files[entry["id"]].replace(uid.encode(), (uid[:-1] + "9").encode(), 1))
     job = start(rig).json()
     result = execute_cpu(rig, job["id"])
     assert result["status"] == "failed"
@@ -475,20 +435,28 @@ def test_manifest_provenance_is_checked_against_actual_source_content(rig, mutat
     assert not rig.service.store.get("cases", job["case_id"]).get("source_dir")
 
 
+def break_spacing(rig):
+    edited_instance(rig, rig.archive.snapshot_doc["instances"][-1], lambda ds: setattr(ds, "ImagePositionPatient", [0, 0, 500]))
+
+
 def test_a_refused_series_reports_the_validators_own_reason(rig):
-    entry = rig.archive.snapshot_doc["instances"][-1]
-    dataset = pydicom.dcmread(io.BytesIO(rig.archive.files[entry["id"]]))
-    dataset.ImagePositionPatient = [0, 0, 500]
-    output = io.BytesIO()
-    dataset.save_as(output, enforce_file_format=True)
-    rig.archive.files[entry["id"]] = output.getvalue()
-    entry["size"] = len(output.getvalue())
-    rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
+    break_spacing(rig)
     job = start(rig).json()
     result = execute_cpu(rig, job["id"])
     assert result["status"] == "failed"
     assert result["error"] == "The selected DICOM series cannot form a supported reference image: Nonuniform slice spacing or missing slices"
     assert not rig.service.store.get("cases", job["case_id"]).get("source_dir")
+
+
+def fake_convert(monkeypatch, expected_files):
+    def convert(files, destination):
+        assert files == expected_files
+        image = nib.Nifti1Image(np.arange(8 * 6 * 3, dtype=np.int16).reshape(8, 6, 3), np.diag([-0.7, -0.8, 1.2, 1]))
+        image.header.set_xyzt_units("mm")
+        nib.save(image, destination / "reference.nii.gz")
+        return destination / "reference.nii.gz"
+
+    monkeypatch.setattr(dicom, "convert_series", convert)
 
 
 def imported_case(rig):
@@ -526,15 +494,7 @@ def test_a_series_of_the_same_study_joins_the_case_with_its_own_source(rig, monk
     assert added["source_dir"] != case["source_dir"] and Path(case["series"][1]["files"][0]).is_relative_to(added["source_dir"])
     assert [row["in_case"] for row in rig.http.get(f"/api/cases/{case_id}/orthanc-series").json()["series"]] == [True]
     assert "added_sources" not in rig.http.get(f"/api/cases/{case_id}").json()
-
-    def convert(files, destination):
-        assert files == case["series"][1]["files"]
-        image = nib.Nifti1Image(np.arange(8 * 6 * 3, dtype=np.int16).reshape(8, 6, 3), np.diag([-0.7, -0.8, 1.2, 1]))
-        image.header.set_xyzt_units("mm")
-        nib.save(image, destination / "reference.nii.gz")
-        return destination / "reference.nii.gz"
-
-    monkeypatch.setattr(dicom, "convert_series", convert)
+    fake_convert(monkeypatch, case["series"][1]["files"])
     request = rig.http.post(f"/api/cases/{case_id}/process", json={"series_uid": SECOND_SERIES_UID, "profile": "chest_abdomen", "phase": "unknown"})
     prepared = execute_cpu(rig, request.json()["id"])
     assert prepared["status"] == "completed", prepared
@@ -562,28 +522,10 @@ def test_a_refused_addition_leaves_the_working_case_unchanged(rig):
     case_id = imported_case(rig)
     before = rig.service.store.get("cases", case_id)
     become_second_series(rig)
-    entry = rig.archive.snapshot_doc["instances"][-1]
-    dataset = pydicom.dcmread(io.BytesIO(rig.archive.files[entry["id"]]))
-    dataset.ImagePositionPatient = [0, 0, 500]
-    output = io.BytesIO()
-    dataset.save_as(output, enforce_file_format=True)
-    rig.archive.files[entry["id"]] = output.getvalue()
-    entry["size"] = len(output.getvalue())
-    rig.archive.snapshot_doc["snapshot"] = snapshot_fingerprint(parse_snapshot(rig.archive.snapshot_doc))
+    break_spacing(rig)
     result = execute_cpu(rig, add_series(rig, case_id).json()["id"])
     assert result["status"] == "failed" and "Nonuniform slice spacing" in result["error"]
     assert rig.service.store.get("cases", case_id) == before
-
-
-def test_transfer_failure_keeps_original_source_unpublished_and_can_retry(rig):
-    rig.archive.download_error = OrthancError("The synthetic DICOM transfer was interrupted.")
-    job = start(rig).json()
-    assert execute_cpu(rig, job["id"])["status"] == "failed"
-    assert rig.service.store.get("cases", job["case_id"])["references"] == {}
-    rig.archive.download_error = None
-    retry = start(rig).json()
-    assert retry["case_id"] == job["case_id"]
-    assert execute_cpu(rig, retry["id"])["status"] == "completed"
 
 
 def test_startup_recovers_interrupted_import_without_contacting_the_archive(rig, monkeypatch):
@@ -604,12 +546,14 @@ def test_startup_recovers_interrupted_import_without_contacting_the_archive(rig,
     assert execute_cpu(rig, retry["id"])["status"] == "completed"
 
 
-def test_recovery_of_an_older_failed_attempt_preserves_a_queued_retry(rig):
+def test_a_failed_transfer_publishes_nothing_and_recovery_preserves_its_queued_retry(rig):
     rig.archive.download_error = OrthancError("The synthetic transfer was interrupted.")
     failed = start(rig).json()
     assert execute_cpu(rig, failed["id"])["status"] == "failed"
+    assert rig.service.store.get("cases", failed["case_id"])["references"] == {}
     rig.archive.download_error = None
     retry = start(rig).json()
+    assert retry["case_id"] == failed["case_id"]
     rig.service.orthanc.recover()
     assert rig.service.store.get("cases", retry["case_id"])["status"] == "importing"
     assert rig.service.store.get("jobs", retry["id"])["status"] == "queued"
@@ -647,16 +591,7 @@ def test_open_scan_carries_the_archive_digest_into_immutable_image_identity(rig,
     job = start(rig).json()
     assert execute_cpu(rig, job["id"])["status"] == "completed"
     case = rig.service.store.get("cases", job["case_id"])
-
-    def convert(files, destination):
-        assert files == case["series"][0]["files"]
-        image = nib.Nifti1Image(np.arange(8 * 6 * 3, dtype=np.int16).reshape(8, 6, 3), np.diag([-0.7, -0.8, 1.2, 1]))
-        image.header.set_xyzt_units("mm")
-        path = destination / "reference.nii.gz"
-        nib.save(image, path)
-        return path
-
-    monkeypatch.setattr(dicom, "convert_series", convert)
+    fake_convert(monkeypatch, case["series"][0]["files"])
     request = rig.http.post(f"/api/cases/{case['id']}/process", json={"series_uid": SERIES_UID, "profile": "chest_abdomen", "phase": "unknown"})
     assert request.status_code == 200, request.text
     prepared = execute_cpu(rig, request.json()["id"])

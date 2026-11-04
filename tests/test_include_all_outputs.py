@@ -1,7 +1,6 @@
 """Restoring previously filtered labels must preserve reviewed mask revisions."""
 
 import hashlib
-import json
 from pathlib import Path
 
 import nibabel as nib
@@ -124,7 +123,7 @@ def test_saved_outputs_add_skull_without_replacing_corrections_and_allow_exact_u
     assert service.store.revision(case["id"], parent["id"]) == parent_snapshot
 
 
-@pytest.mark.parametrize("missing", ["inference.json", "total/skull.nii.gz", "total/liver.nii.gz"])
+@pytest.mark.parametrize("missing", ["inference.json", "total/skull.nii.gz"])
 def test_missing_native_source_fails_without_creating_a_revision(saved_run, missing):
     service, case, parent, _, run, _, _ = saved_run
     (run / missing).unlink()

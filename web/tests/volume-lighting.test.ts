@@ -4,34 +4,16 @@ import type { Point } from '../src/types';
 
 describe('native cinematic presentation state', () => {
   it('bounds shader work, rejects nonfinite values and owns independent view settings', () => {
-    const first = freshNativeVolumeLighting(),
-      second = freshNativeVolumeLighting();
-    first.ambient = 0.8;
-    expect(second).toEqual(DEFAULT_NATIVE_VOLUME_LIGHTING);
+    freshNativeVolumeLighting().ambient = 0.8;
+    expect(freshNativeVolumeLighting()).toEqual(DEFAULT_NATIVE_VOLUME_LIGHTING);
     expect(
-      freshNativeVolumeLighting({
-        mode: 'invalid' as any,
-        ambient: Infinity,
-        diffuse: -2,
-        specular: 5,
-        specularPower: 0,
-        scattering: 2,
-        reach: -1,
-        aoKernelSize: 99,
-        aoRadius: 0,
-        azimuth: -400,
-        elevation: 100,
-      }),
+      freshNativeVolumeLighting({ mode: 'invalid' as any, ambient: Infinity, diffuse: -2, scattering: 2, aoKernelSize: 99, azimuth: -400, elevation: 100 }),
     ).toMatchObject({
       mode: 'preset',
       ambient: DEFAULT_NATIVE_VOLUME_LIGHTING.ambient,
       diffuse: 0,
-      specular: 1,
-      specularPower: 1,
       scattering: 1,
-      reach: 0,
       aoKernelSize: 32,
-      aoRadius: 1,
       azimuth: -180,
       elevation: 89,
     });

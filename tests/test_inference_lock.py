@@ -1,9 +1,5 @@
-"""Keep the NVIDIA lock honest without installing it.
-
-requirements/cuda-py314.lock is installed only on a workstation with an NVIDIA card, so nothing
-on CI would see it drift from the AMD stack, or see a child start importing a package it lacks.
-These read text and run a short child, so they need no torch and no AI package.
-"""
+"""Keep the NVIDIA lock honest without installing it: only an NVIDIA workstation installs it, so
+nothing on CI would see it drift from the AMD stack or a child start importing a package it lacks."""
 
 import json
 import os
@@ -143,6 +139,7 @@ def test_everything_a_child_imports_is_in_the_lock():
     # The packages the addendum names, so an empty result cannot pass.
     assert {"numpy", "scipy", "nibabel", "pydicom", "requests"} <= found.keys()
     assert unpinned(found) == {}
+    assert not pins(LOCK).keys() & set(GUARDED)  # A guarded package is one the lock really lacks.
 
 
 def test_the_closure_reports_an_import_the_lock_lacks():
@@ -150,29 +147,19 @@ def test_the_closure_reports_an_import_the_lock_lacks():
     assert unpinned(closure("pytest"))["pytest"] == ["pytest"]
 
 
-def test_a_guarded_package_is_one_the_lock_really_lacks():
-    assert not pins(LOCK).keys() & set(GUARDED)
-
-
 def test_every_pin_outside_the_gpu_family_equals_the_amd_lock():
-    amd = pins(AMD_LOCK)
-    assert {name: (version, amd.get(name)) for name, version in pins(LOCK).items() if name not in GPU_FAMILY and amd.get(name) != version} == {}
+    amd, locked = pins(AMD_LOCK), pins(LOCK)
+    assert GPU_FAMILY <= locked.keys()
+    assert {name: (version, amd.get(name)) for name, version in locked.items() if name not in GPU_FAMILY and amd.get(name) != version} == {}
 
 
-def test_the_gpu_family_lists_only_what_is_locked():
-    assert GPU_FAMILY <= pins(LOCK).keys()
-
-
-def test_no_pin_has_a_local_version_tag():
+def test_no_pin_has_a_local_version_tag_or_changes_resampling():
     # A +cu126 wheel also satisfies torch==2.14.0 and has no sm_120 code, and the hashes that
     # exclude it only mean something for a bare PyPI version.
     locked = pins(LOCK)
     assert locked["torch"] == "2.14.0"
     assert {name: version for name, version in locked.items() if "+" in version} == {}
-
-
-def test_nothing_locked_would_change_resampling():
-    assert [name for name in pins(LOCK) if name.startswith(("cupy", "cucim"))] == []
+    assert [name for name in locked if name.startswith(("cupy", "cucim"))] == []
 
 
 def test_every_pin_carries_a_hash():

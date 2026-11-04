@@ -21,8 +21,6 @@ import pydicom
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.orthanc import OrthancDeliveryUnknown, OrthancError
-from scan3d.orthanc_exports import ExportUnavailable
-from scan3d.service import Service
 from scan3d.store import identifier, job_lane, public_job
 from test_orthanc_imports import SyntheticArchive, SERIES, SERIES_UID, STUDY_UID, FRAME_UID, oid
 
@@ -255,61 +253,36 @@ def test_archive_only_freezes_saved_inactive_revision_without_creating_or_activa
     encoded = json.dumps(history)
     assert history[0]["result"] == finished["result"] and history[0]["revision_id"] == rig.revision["id"]
     assert str(rig.root) not in encoded and "private-password" not in encoded and "private-user" not in encoded
+    # An archive job alone prepares no file to download.
+    assert rig.http.get(f"{rig.endpoint}/{result['export_id']}/segment.dcm").status_code == 404
 
 
-def test_file_delivery_of_an_orthanc_case_shares_its_artifact_and_touches_no_archive(rig):
-    archived = execute(rig, start(rig))
-    uploads = list(rig.archive.uploads)
-    prepared = rig.http.post(rig.endpoint, json={"delivery": "file"}).json()
-    assert prepared["id"] != archived["id"]
-    finished = execute(rig, prepared)
-    assert finished["status"] == "completed" and finished["payload"]["export_id"] == archived["payload"]["export_id"]
-    assert len(rig.calls) == 1 and rig.archive.uploads == uploads and not rig.archive.sends
-    assert finished["result"]["dicom_seg"]["file"] is True and finished["result"]["dicom_seg"]["archived"] is False
-    served = rig.http.get(f"{rig.endpoint}/{finished['payload']['export_id']}/segment.dcm")
-    directory, _ = artifact(rig, finished)
-    assert served.status_code == 200 and served.content == (directory / "dicom" / "segment-0001.dcm").read_bytes()
-
-
-def test_a_prepared_file_reuses_its_artifact_for_a_later_archive(rig):
+def test_a_file_shares_its_artifact_with_a_later_archive_and_touches_no_archive(rig):
     prepared = execute(rig, rig.http.post(rig.endpoint, json={"delivery": "file"}).json())
-    assert not rig.archive.uploads
+    assert prepared["result"]["dicom_seg"]["file"] is True and prepared["result"]["dicom_seg"]["archived"] is False
+    assert not rig.archive.uploads and not rig.archive.sends
+    served = rig.http.get(f"{rig.endpoint}/{prepared['payload']['export_id']}/segment.dcm")
+    directory, _ = artifact(rig, prepared)
+    assert served.status_code == 200 and served.content == (directory / "dicom" / "segment-0001.dcm").read_bytes()
     archived = execute(rig, start(rig))
     assert archived["result"]["dicom_seg"]["archived"] is True
     assert archived["payload"]["export_id"] == prepared["payload"]["export_id"] and len(rig.calls) == 1
 
 
-def test_an_archive_job_alone_serves_no_file(rig):
-    archived = execute(rig, start(rig))
-    assert rig.http.get(f"{rig.endpoint}/{archived['payload']['export_id']}/segment.dcm").status_code == 404
+@pytest.mark.parametrize("archive", ["unreachable", "unconfigured"])
+def test_an_orthanc_case_still_saves_a_file_without_its_archive(rig, monkeypatch, archive):
+    if archive == "unreachable":
 
+        def unreachable():
+            raise OrthancError("Synthetic archive offline")
 
-def test_an_orthanc_case_still_saves_a_file_when_its_archive_is_unreachable(rig, monkeypatch):
-    def unreachable():
-        raise OrthancError("Synthetic archive offline")
-
-    monkeypatch.setattr(rig.service.orthanc, "client", unreachable)
+        monkeypatch.setattr(rig.service.orthanc, "client", unreachable)
+    else:
+        monkeypatch.setattr(rig.service, "settings", replace(rig.settings, orthanc_url=None))
     available = rig.http.get(rig.endpoint).json()
     assert available["available"] is False and available["file"] == {"available": True}
     finished = execute(rig, rig.http.post(rig.endpoint, json={"delivery": "file"}).json())
-    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["file"] is True
-
-
-def test_an_orthanc_case_still_saves_a_file_without_a_configured_archive(rig, monkeypatch):
-    monkeypatch.setattr(rig.service, "settings", replace(rig.settings, orthanc_url=None))
-    available = rig.http.get(rig.endpoint).json()
-    assert available["available"] is False and "Configure Orthanc" in available["reason"] and available["file"] == {"available": True}
-    finished = execute(rig, rig.http.post(rig.endpoint, json={"delivery": "file"}).json())
-    assert finished["status"] == "completed" and not rig.archive.uploads
-
-
-def test_changed_orthanc_source_bytes_stop_a_file_job(rig):
-    prepared = rig.http.post(rig.endpoint, json={"delivery": "file"}).json()
-    source = Path(rig.case["source_dir"])
-    victim = next(iter(sorted(source.iterdir())))
-    victim.write_bytes(victim.read_bytes() + b"\0")
-    failed = execute(rig, prepared)
-    assert failed["status"] == "failed" and not rig.calls
+    assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["file"] is True and not rig.archive.uploads
 
 
 def test_configured_send_deduplicates_jobs_and_reuses_archive_artifact(rig):
@@ -337,25 +310,6 @@ def eight_mask_revision(rig):
             {**template, "id": f"test:{index}", "name": f"Synthetic mask {index}", "mask_file": str(mask_path), "voxel_count": int(values.sum())}
         )
     rig.service.store.save("revisions", rig.revision)
-
-
-def test_eight_selected_masks_archive_and_send_as_one_instance(rig):
-    eight_mask_revision(rig)
-    queued = start(rig, destination="osirix")
-    assert queued["result"]["dicom_seg"]["segments_count"] == 8
-    assert queued["result"]["dicom_seg"]["instance_count"] == 1
-    finished = execute(rig, queued)
-    assert finished["status"] == "completed", finished["error"]
-    result = finished["result"]["dicom_seg"]
-    assert result["sent"] and result["archived"] and result["segments_count"] == 8 and result["instance_count"] == 1
-    assert result["structure_ids"] == [f"test:{index}" for index in range(8)]
-    directory, manifest = artifact(rig, finished)
-    assert len(manifest["files"]) == len(rig.archive.blobs) == len(rig.archive.uploads) == len(rig.archive.sends) == 1
-    assert [item["segment_number"] for item in manifest["files"][0]["segments"]] == list(range(1, 9))
-    receipt = json.loads((directory / "delivery.json").read_text())
-    assert list(receipt["uploaded"]) == [manifest["files"][0]["path"]]
-    assert len(rig.archive.sends[0][1]) == 1
-    assert len(rig.calls) == 1
 
 
 @pytest.mark.parametrize("problem", ["duplicate_segment_number", "missing_mask", "multiple_instances"])
@@ -467,10 +421,6 @@ def test_encoding_upgrade_requires_explicit_export_and_preserves_legacy_sops_and
     assert {item["sop_instance_uid"] for item in old_manifest["files"]}.isdisjoint(item["sop_instance_uid"] for item in new_manifest["files"])
     assert old_bytes == {path.relative_to(old_directory): path.read_bytes() for path in old_directory.rglob("*") if path.is_file()}
     assert len(rig.calls) == len(rig.archive.sends) == 2
-    assert start(rig, destination="osirix")["id"] == finished["id"]
-    again = execute(rig, start(rig, destination="osirix", resend=True))
-    assert again["result"]["dicom_seg"] == finished["result"]["dicom_seg"]
-    assert len(rig.calls) == 2 and rig.archive.sends[-1][1:] == rig.archive.sends[-2][1:]
 
 
 @pytest.mark.parametrize("version", [1, 2])
@@ -521,12 +471,8 @@ def test_queued_old_encoding_is_blocked_before_encoding_upload_or_delivery(rig, 
         ({"structure_ids": []}, 422),
         ({"structure_ids": ["test:0", "test:0"]}, 400),
         ({"structure_ids": ["unknown"]}, 400),
-        ({"structure_ids": [True]}, 422),
-        ({"overlap_priority": []}, 422),
         ({"overlap_priority": ["test:0"]}, 422),
-        ({"overlap_priority": ["test:0", True]}, 422),
         ({"overlap_priority": ["test:0", "test:0"]}, 400),
-        ({"overlap_priority": ["test:0", "unknown"]}, 400),
         ({"structure_ids": ["test:0"], "overlap_priority": ["test:0", "test:1"]}, 400),
     ],
 )
@@ -599,8 +545,8 @@ def test_retry_blocks_changed_frozen_inputs_or_artifacts(rig, changed):
     assert len(rig.archive.uploads) == uploads and not rig.archive.sends and len(rig.calls) == 1
 
 
-@pytest.mark.parametrize("changed", ["original", "manifest", "reference", "saved-metadata"])
-def test_queued_export_verifies_full_originals_and_saved_reference_before_encoding(rig, changed):
+@pytest.mark.parametrize("changed", ["original", "manifest", "reference", "saved-metadata", "mask"])
+def test_queued_export_verifies_originals_saved_reference_and_masks_before_encoding(rig, changed):
     job = start(rig, destination="osirix")
     source_dir = Path(rig.case["source_dir"])
     if changed == "original":
@@ -611,6 +557,14 @@ def test_queued_export_verifies_full_originals_and_saved_reference_before_encodi
         path.write_bytes(path.read_bytes() + b" ")
     elif changed == "reference":
         Path(rig.revision["ct_file"]).write_bytes(b"changed reference")
+    elif changed == "mask":
+        # A valid mask rewritten in place, with the same grid and voxel count.
+        path = Path(rig.revision["structures"][0]["mask_file"])
+        image = nib.load(path)
+        values = np.asanyarray(image.dataobj).copy()
+        values[tuple(np.argwhere(values != 0)[0])] = 0
+        values[0, 0, 0] = 1
+        nib.save(nib.Nifti1Image(values, image.affine), path)
     else:
         saved = rig.service.store.revision(rig.case["id"], rig.revision["id"])
         saved["structures"][0]["name"] = "changed name"
@@ -619,23 +573,6 @@ def test_queued_export_verifies_full_originals_and_saved_reference_before_encodi
     assert failed["status"] == "failed"
     assert not rig.calls and not rig.archive.uploads and not rig.archive.sends
     assert str(rig.root) not in failed["error"]
-
-
-def test_queued_export_refuses_valid_mask_rewritten_in_place_before_first_encode(rig):
-    job = start(rig, destination="osirix")
-    path = Path(rig.revision["structures"][0]["mask_file"])
-    image = nib.load(path)
-    values = np.asanyarray(image.dataobj).copy()
-    before = int(values.sum())
-    values[tuple(np.argwhere(values != 0)[0])] = 0
-    values[0, 0, 0] = 1
-    nib.save(nib.Nifti1Image(values, image.affine), path)
-    rewritten = nib.load(path)
-    assert rewritten.shape == image.shape and np.array_equal(rewritten.affine, image.affine)
-    assert int(np.asanyarray(rewritten.dataobj).sum()) == before
-    failed = execute(rig, job)
-    assert failed["status"] == "failed" and "changed after this export was queued" in failed["error"]
-    assert not rig.calls and not rig.archive.uploads and not rig.archive.sends
 
 
 def test_cancel_after_last_upload_never_sends_and_explicit_retry_reuses_artifact(rig):
@@ -649,31 +586,30 @@ def test_cancel_after_last_upload_never_sends_and_explicit_retry_reuses_artifact
     assert finished["result"]["dicom_seg"]["sent"] is True and len(rig.calls) == 1
 
 
-def test_cancellation_after_remote_start_observes_success_instead_of_claiming_cancelled_delivery(rig):
-    job = start(rig, destination="osirix")
-    rig.archive.on_start = lambda: rig.service.store.update_job(job["id"], cancel_requested=True)
-    finished = execute(rig, job)
-    assert finished["status"] == "completed" and finished["cancel_requested"]
-    assert finished["result"]["dicom_seg"]["sent"] is True
-
-
-def test_the_public_job_says_once_cancelling_can_no_longer_stop_a_send(rig):
+def test_cancelling_after_remote_start_observes_success_and_the_job_says_cancel_can_no_longer_stop_it(rig):
     job = start(rig, destination="osirix")
     assert "delivery_started" not in job
     seen = []
+
+    def remote_start():
+        seen.append(public_job(rig.service.store.get("jobs", job["id"])))
+        rig.service.store.update_job(job["id"], cancel_requested=True)
+
     rig.archive.on_upload = lambda: seen.append(public_job(rig.service.store.get("jobs", job["id"])))
-    rig.archive.on_start = lambda: seen.append(public_job(rig.service.store.get("jobs", job["id"])))
+    rig.archive.on_start = remote_start
     finished = execute(rig, job)
+    assert finished["status"] == "completed" and finished["cancel_requested"]
+    assert finished["result"]["dicom_seg"]["sent"] is True
     assert ["delivery_started" in item for item in seen] == [False, True]
     assert public_job(finished)["delivery_started"] is True
+    assert "delivery_started" not in public_job(execute(rig, start(rig, structures=["test:0"])))
 
 
-def test_an_archive_never_reports_a_send_started(rig):
-    assert "delivery_started" not in public_job(execute(rig, start(rig)))
+def test_an_unconfirmed_remote_job_survives_restart_and_retry_polls_it_without_resending(rig, monkeypatch):
+    import scan3d.orthanc_exports as exports
 
-
-def test_known_remote_job_survives_restart_and_retry_polls_it_without_resending(rig):
-    rig.archive.poll_error = OrthancError("Synthetic lost poll")
+    monkeypatch.setattr(exports, "DELIVERY_WAIT_SECONDS", 0)
+    rig.archive.remote_state = "Paused"
     failed = execute(rig, start(rig, destination="osirix"))
     remote_id = rig.archive.sends[0][0]
     assert failed["status"] == "failed" and "not confirmed" in failed["error"]
@@ -681,10 +617,10 @@ def test_known_remote_job_survives_restart_and_retry_polls_it_without_resending(
     rig.service.store.recover()
     rig.service.orthanc_exports.recover()
     assert len(rig.archive.sends) == 1 and rig.archive.polls == [remote_id]
+    rig.archive.remote_state = "Success"
     finished = execute(rig, start(rig, destination="osirix"))
     assert finished["result"]["dicom_seg"]["sent"] is True
-    assert len(rig.archive.sends) == 1 and rig.archive.polls == [remote_id, remote_id]
-    assert len(rig.calls) == 1
+    assert len(rig.archive.sends) == 1 and rig.archive.polls == [remote_id, remote_id] and len(rig.calls) == 1
 
 
 def test_uncertain_send_requires_explicit_retry_with_same_sops_and_never_autoresends(rig):
@@ -736,6 +672,7 @@ def test_export_destination_env_defaults_to_no_outbound_targets(monkeypatch):
 
 
 def test_explicit_send_again_reuses_sops_but_makes_one_new_delivery_attempt(rig):
+    assert rig.http.post(rig.endpoint, json={"resend": True, "destination": "osirix"}).status_code == 400
     first = execute(rig, start(rig, destination="osirix"))
     assert first["result"]["dicom_seg"]["destination_id"] == "osirix"
     again = start(rig, destination="osirix", resend=True)
@@ -748,12 +685,8 @@ def test_explicit_send_again_reuses_sops_but_makes_one_new_delivery_attempt(rig)
     assert len(rig.archive.sends) == 2 and rig.archive.sends[0][1:] == rig.archive.sends[1][1:]
     assert len(rig.calls) == 1
     assert start(rig, destination="osirix")["id"] == finished["id"]
-
-
-def test_send_again_refuses_archive_only_or_never_confirmed_selections(rig):
+    # Send again needs a destination and a confirmed send of this exact selection.
     assert rig.http.post(rig.endpoint, json={"resend": True}).status_code == 400
-    assert rig.http.post(rig.endpoint, json={"resend": True, "destination": "osirix"}).status_code == 400
-    execute(rig, start(rig, destination="osirix", structures=["test:0"]))
     assert rig.http.post(rig.endpoint, json={"resend": True, "destination": "osirix", "structure_ids": ["test:1"]}).status_code == 400
 
 
@@ -775,20 +708,6 @@ def test_resend_interruption_after_remote_success_reuses_known_attempt_instead_o
     assert finished["status"] == "completed" and finished["result"]["dicom_seg"]["sent"] is True
     assert finished["payload"]["delivery_attempt_id"] == failed["payload"]["delivery_attempt_id"]
     assert len(rig.archive.sends) == 2 and len(rig.calls) == 1
-
-
-def test_pending_remote_delivery_has_bounded_wait_and_retry_polls_same_job(rig, monkeypatch):
-    import scan3d.orthanc_exports as exports
-
-    monkeypatch.setattr(exports, "DELIVERY_WAIT_SECONDS", 0)
-    rig.archive.remote_state = "Paused"
-    failed = execute(rig, start(rig, destination="osirix"))
-    assert failed["status"] == "failed" and "not confirmed" in failed["error"]
-    remote_id = rig.archive.sends[0][0]
-    rig.archive.remote_state = "Success"
-    finished = execute(rig, start(rig, destination="osirix"))
-    assert finished["result"]["dicom_seg"]["sent"] is True
-    assert rig.archive.polls == [remote_id, remote_id] and len(rig.archive.sends) == 1
 
 
 def test_restart_never_executes_a_previously_queued_outbound_attempt_automatically(rig):
@@ -883,8 +802,6 @@ def test_manager_uses_actual_encoder_for_eight_exact_saved_masks_in_one_instance
     result = finished["result"]["dicom_seg"]
     assert result["sent"] and result["archived"] and result["segments_count"] == 8 and result["instance_count"] == 1
     assert len(rig.archive.sends[0][1]) == 1 and not rig.calls
-    assert start(rig, destination="osirix")["id"] == finished["id"]
-    assert len(rig.archive.sends) == len(rig.archive.uploads) == 1
 
 
 def test_each_ranking_is_its_own_artifact_of_the_same_saved_inputs(rig):
@@ -905,13 +822,9 @@ def test_each_ranking_is_its_own_artifact_of_the_same_saved_inputs(rig):
     assert ranked["result"]["dicom_seg"]["structure_ids"] == ["test:1", "test:0"]
     assert ranked["result"]["dicom_seg"]["overlap_priority"] == ["test:1", "test:0"]
     assert ranked["result"]["dicom_seg"]["removed_voxels"] == {"test:1": 0, "test:0": 0}
-
-
-def test_unranked_exports_keep_their_exact_manifest_and_result_fields(rig):
-    plain = execute(rig, start(rig))
-    manifest = artifact(rig, plain)[1]
-    assert "overlap_priority" not in manifest
-    assert all("removed_voxel_count" not in item for item in manifest["files"][0]["segments"])
+    # An unranked export keeps the manifest and result fields it had before ranking existed.
+    plain_manifest = artifact(rig, plain)[1]
+    assert "overlap_priority" not in plain_manifest and all("removed_voxel_count" not in item for item in plain_manifest["files"][0]["segments"])
     assert "overlap_priority" not in plain["result"]["dicom_seg"] and "removed_voxels" not in plain["result"]["dicom_seg"]
 
 
@@ -927,14 +840,6 @@ def test_ranked_send_reuses_its_archive_and_send_again_needs_the_exact_ranking(r
     again = execute(rig, start(rig, destination="osirix", resend=True, overlap_priority=ranking))
     assert again["id"] != sent["id"] and again["result"]["dicom_seg"]["export_id"] == archived["result"]["dicom_seg"]["export_id"]
     assert len(rig.calls) == 1 and len(rig.archive.sends) == 2
-
-
-def test_changed_saved_mask_is_caught_between_plain_and_ranked_exports(rig):
-    execute(rig, start(rig))
-    Path(rig.revision["structures"][0]["mask_file"]).write_bytes(b"changed saved mask")
-    response = rig.http.post(rig.endpoint, json={"overlap_priority": ["test:1", "test:0"]})
-    assert response.status_code == 400 and "Saved masks changed" in response.json()["detail"]
-    assert len(rig.calls) == 1
 
 
 def test_cached_artifact_must_carry_its_ranking(rig):

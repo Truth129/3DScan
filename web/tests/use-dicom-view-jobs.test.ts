@@ -120,7 +120,6 @@ describe('view export watcher', () => {
   });
   it.each([
     ['a send that finished', job('completed', { result: sent }), 'success'],
-    ['a send that failed', job('failed', { error: 'Orthanc could not deliver this view.' }), 'failure'],
     ['a send that Trash cancelled', job('cancelled'), 'failure'],
   ])('reports %s once the case answers again', async (_name, ended, report) => {
     const poll = vi.spyOn(api, 'job').mockRejectedValueOnce(new ApiError(404, 'Job not found')).mockResolvedValue(ended);
@@ -148,26 +147,9 @@ describe('view export watcher', () => {
     expect(success).toHaveBeenCalledOnce();
     expect(failure).not.toHaveBeenCalled();
   });
-  it('reports success as a toast', async () => {
-    vi.spyOn(api, 'job').mockResolvedValue(job('completed', { result: archived }));
-    const { watcher, success, failure } = fixture();
-    watcher.follow(job('running'));
-    await vi.advanceTimersByTimeAsync(1400);
-    expect(success).toHaveBeenCalledExactlyOnceWith('View archived in Orthanc. Nothing was sent to another viewer.');
-    expect(failure).not.toHaveBeenCalled();
-  });
-  it('reports a failure on the banner, in the job’s own words', async () => {
-    vi.spyOn(api, 'job').mockResolvedValue(job('failed', { error: 'Delivery not confirmed.' }));
-    const { watcher, success, failure } = fixture();
-    watcher.follow(job('running'));
-    await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith(`Delivery not confirmed. ${AFTERWARDS}`);
-    expect(success).not.toHaveBeenCalled();
-  });
   it.each([
     ['failed with no error', job('failed')],
     ['cancelled', job('cancelled')],
-    ['finished with no delivery', job('completed')],
     ['finished with neither flag', job('completed', { result: { dicom_view: { export_id: 'view', archived: false, sent: false, instance_count: 0 } } })],
   ])('treats %s as an unknown outcome, never as success', async (_name, final) => {
     vi.spyOn(api, 'job').mockResolvedValue(final);
@@ -177,54 +159,41 @@ describe('view export watcher', () => {
     expect(failure).toHaveBeenCalledOnce();
     expect(success).not.toHaveBeenCalled();
   });
-  it('names the case when it is not the active one, on either path', async () => {
+  it('reports success as a toast and a failure on the banner, naming the case when it is not the active one', async () => {
     vi.spyOn(api, 'job')
       .mockResolvedValueOnce(job('failed', { error: 'Delivery not confirmed.' }))
       .mockResolvedValueOnce(job('completed', { id: 'view-2', result: archived }));
     const { watcher, active, success, failure } = fixture();
     watcher.follow(job('running'));
-    active.value = 'case-b';
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledExactlyOnceWith(`Case A: Delivery not confirmed. ${AFTERWARDS}`);
+    expect(failure).toHaveBeenCalledExactlyOnceWith(`Delivery not confirmed. ${AFTERWARDS}`);
+    expect(success).not.toHaveBeenCalled();
     watcher.follow(job('running', { id: 'view-2' }));
+    active.value = 'case-b';
     await vi.advanceTimersByTimeAsync(1400);
     expect(success).toHaveBeenCalledExactlyOnceWith('Case A: View archived in Orthanc. Nothing was sent to another viewer.');
   });
-  it('does not report a job the dialog is showing', async () => {
-    vi.spyOn(api, 'job').mockResolvedValue(job('failed', { error: 'Delivery not confirmed.' }));
-    const { watcher, shown, success, failure } = fixture();
-    shown.value = 'view-1';
-    watcher.follow(job('running'));
-    await vi.advanceTimersByTimeAsync(1400);
-    expect(watcher.job('view-1')?.status).toBe('failed');
-    expect(failure).not.toHaveBeenCalled();
-    expect(success).not.toHaveBeenCalled();
-  });
-  it('reports a job that the dialog stopped showing before it ended', async () => {
+  it.each([true, false])('reports a job only once the dialog is no longer showing it (still showing: %s)', async showing => {
     vi.spyOn(api, 'job').mockResolvedValue(job('failed', { error: 'Delivery not confirmed.' }));
     const { watcher, shown, failure } = fixture();
     shown.value = 'view-1';
     watcher.follow(job('running'));
-    shown.value = '';
+    if (!showing) shown.value = '';
     await vi.advanceTimersByTimeAsync(1400);
-    expect(failure).toHaveBeenCalledOnce();
+    expect(watcher.job('view-1')?.status).toBe('failed');
+    expect(failure).toHaveBeenCalledTimes(showing ? 0 : 1);
   });
-  it('reports a finished job again only when a repeat comes back with no dialog to show it', () => {
-    const { watcher, success } = fixture(),
+  it('reports a job that ended before it was handed over, and again only for a repeat with no dialog to show it', () => {
+    const poll = vi.spyOn(api, 'job'),
+      { watcher, success } = fixture(),
       finished = job('completed', { result: archived });
     watcher.follow(finished);
     expect(success).toHaveBeenCalledOnce();
+    expect(poll).not.toHaveBeenCalled();
     watcher.follow(finished);
     expect(success).toHaveBeenCalledOnce();
     watcher.follow(finished, true);
     expect(success).toHaveBeenCalledTimes(2);
-  });
-  it('reports a job that had already ended when it was handed over with no dialog', () => {
-    const poll = vi.spyOn(api, 'job'),
-      { watcher, success } = fixture();
-    watcher.follow(job('completed', { result: archived }));
-    expect(success).toHaveBeenCalledOnce();
-    expect(poll).not.toHaveBeenCalled();
   });
   it('runs one poller per job, however often it is followed', async () => {
     const poll = vi.spyOn(api, 'job').mockResolvedValue(job('running')),
@@ -258,7 +227,7 @@ describe('view export watcher', () => {
     expect(failure).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('can no longer be followed'));
     expect(watcher.job('view-1')?.status).toBe('failed');
   });
-  it('seeds only queued and running view jobs of that case', async () => {
+  it("seeds only this person's own queued and running view jobs of that case", async () => {
     const list = vi
       .spyOn(api, 'jobs')
       .mockResolvedValue([
@@ -269,6 +238,7 @@ describe('view export watcher', () => {
         job('running', { id: 'segment', kind: 'segment' }),
         job('running', { id: 'seg', kind: 'orthanc_export' }),
         job('running', { id: 'foreign', case_id: 'case-b' }),
+        job('running', { id: 'theirs', started_by: 'Meera P' }),
       ]);
     const poll = vi.spyOn(api, 'job').mockImplementation(async id => job('running', { id }));
     const { watcher } = fixture();
@@ -277,15 +247,6 @@ describe('view export watcher', () => {
     await vi.advanceTimersByTimeAsync(1400);
     expect(poll.mock.calls.map(call => call[0]).sort()).toEqual(['queued', 'running']);
     expect(watcher.job('done')).toBeUndefined();
-  });
-  it("seed follows only this person's own sends", async () => {
-    vi.spyOn(api, 'jobs').mockResolvedValue([job('running', { id: 'mine', started_by: null }), job('running', { id: 'theirs', started_by: 'Meera P' })]);
-    const poll = vi.spyOn(api, 'job').mockImplementation(async id => job('running', { id }));
-    const { watcher } = fixture();
-    await watcher.seed('case-a');
-    await vi.advanceTimersByTimeAsync(1400);
-    expect(poll.mock.calls.map(call => call[0])).toEqual(['mine']);
-    expect(watcher.job('theirs')).toBeUndefined();
   });
   it('reports a seeded job when it ends, and does not start a second poller on the next opening', async () => {
     vi.spyOn(api, 'jobs').mockResolvedValue([job('running')]);

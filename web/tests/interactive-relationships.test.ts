@@ -183,27 +183,23 @@ describe('explicit segment relationships', () => {
     expect(controller.relationship).toEqual(subdivision());
   });
 
-  it('allows sibling-only and metadata-only previews to save, while rejecting empty or unchanged masks', () => {
+  it('saves sibling-only and metadata-only previews, and an empty mask only when reviewing an existing direct target', () => {
     const candidate = { ...ready().candidate!, summary };
-    expect(reviewCandidateHasChanges({ ...candidate, total_changed_voxels: 25 })).toBe(true);
-    expect(reviewCandidateHasChanges({ ...candidate, total_changed_voxels: 0, relationship_changed: true })).toBe(true);
-    expect(reviewCandidateHasChanges({ ...candidate, total_changed_voxels: 0 })).toBe(false);
-    expect(reviewCandidateHasChanges({ ...candidate, total_changed_voxels: 25, summary: { ...summary, after_voxels: 0 } })).toBe(false);
-  });
-
-  it('allows complete erasure only when explicitly reviewing an existing direct target', () => {
-    const empty = {
-      ...ready().candidate!,
+    const erased = {
+      ...candidate,
       total_changed_voxels: 100,
       summary: { ...summary, changed_voxels: 100, removed_voxels: 100, after_voxels: 0, after_volume_ml: 0 },
     };
-    expect(reviewCandidateHasChanges(empty)).toBe(false);
-    expect(reviewCandidateHasChanges(empty, true)).toBe(true);
-    expect(reviewCandidateHasChanges({ ...empty, total_changed_voxels: 0, summary: { ...empty.summary, changed_voxels: 0 } }, true)).toBe(false);
+    expect(reviewCandidateHasChanges({ ...candidate, total_changed_voxels: 25 })).toBe(true);
+    expect(reviewCandidateHasChanges({ ...candidate, total_changed_voxels: 0, relationship_changed: true })).toBe(true);
+    expect(reviewCandidateHasChanges({ ...candidate, total_changed_voxels: 0 })).toBe(false);
+    expect(reviewCandidateHasChanges(erased)).toBe(false);
+    expect(reviewCandidateHasChanges(erased, true)).toBe(true);
+    expect(reviewCandidateHasChanges({ ...erased, total_changed_voxels: 0, summary: { ...erased.summary, changed_voxels: 0 } }, true)).toBe(false);
     expect(reviewCandidateHasChanges(undefined, true)).toBe(false);
   });
 
-  it('sends an explicit direct method with both saved and new target creation', async () => {
+  it('creates saved and new custom targets through their endpoints with an explicit direct method', async () => {
     const fetch = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ ...ready(), method: 'direct' }), { status: 200 }),
     );
@@ -211,6 +207,7 @@ describe('explicit segment relationships', () => {
     await api.startInteractive('case', 'base', 'custom:one', undefined, 'direct');
     expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({ revision_id: 'base', structure_id: 'custom:one', method: 'direct' });
     await api.createInteractiveStructure('case', 'base', { name: 'Vessel', group: 'Custom', color: '#c18dff', method: 'direct' });
+    expect(fetch.mock.calls[1][0]).toBe('/api/cases/case/reviews/new-structure');
     expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toEqual({
       revision_id: 'base',
       name: 'Vessel',

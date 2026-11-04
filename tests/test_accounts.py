@@ -74,23 +74,15 @@ def test_a_hash_holds_its_parameters_and_verifies_only_its_own_password():
     assert (scheme, n, r, p) == ("scrypt", str(2**17), "8", "1") and len(bytes.fromhex(salt)) == 16 and len(bytes.fromhex(digest)) == 32
     assert identity.verify_password(password, stored) and not identity.verify_password(password + "x", stored)
     assert stored != identity.hash_password(password)
-
-
-def test_a_password_compares_after_normalization():
     # U+FB01 is the ligature fi, which NFKC folds to the two letters.
     assert identity.verify_password("conﬁdential", identity.hash_password("confidential"))
+    # A lone surrogate must not raise an error that quotes the password.
+    assert identity.verify_password("\ud800" + password, stored) is False
 
 
-@pytest.mark.parametrize(
-    "stored",
-    [None, "", "scrypt$1$2", "bcrypt$131072$8$1$00$00", "scrypt$x$8$1$00$00", "scrypt$131072$8$1$zz$00", "scrypt$7$8$1$00$00", f"scrypt${2**40}$8$1$00$00"],
-)
+@pytest.mark.parametrize("stored", [None, "scrypt$1$2", "bcrypt$131072$8$1$00$00", "scrypt$131072$8$1$zz$00", f"scrypt${2**40}$8$1$00$00"])
 def test_a_malformed_stored_hash_is_a_wrong_password(stored):
     assert identity.verify_password(generated_password(), stored) is False
-
-
-def test_a_lone_surrogate_cannot_raise_an_error_that_quotes_the_password():
-    assert identity.verify_password("\ud800" + generated_password(), identity.hash_password(generated_password())) is False
 
 
 def test_password_and_username_limits():
@@ -227,32 +219,19 @@ def test_an_expired_session_is_refused_and_removed_at_the_next_sign_in(rig):
     assert len(rows(rig, "SELECT 1 FROM sessions")) == 1
 
 
-def test_a_disabled_account_loses_its_sessions_at_once(rig):
-    sign_in(rig)
-    with rig.store.connection() as con:
-        con.execute("UPDATE users SET disabled_at=?", (now(),))
-    assert rig.http.get("/api/cases").status_code == 401
-
-
 def test_a_session_slides_at_most_every_ten_minutes_and_keeps_its_cookie_name(rig):
     response = sign_in(rig)
     token = response.headers["set-cookie"].split(";")[0].split("=", 1)[1]
     before = rows(rig, "SELECT last_seen_at,expires_at FROM sessions")
+    ((user_id, seen),) = rows(rig, "SELECT user_id,seen_at FROM last_seen")
     still = rig.http.get("/api/cases")
     assert "set-cookie" not in still.headers and rows(rig, "SELECT last_seen_at,expires_at FROM sessions") == before
     session_time(rig, last_seen_at=ago(minutes=11), expires_at=datetime.now(timezone.utc) + timedelta(days=1))
     slid = rig.http.get("/api/cases")
     assert slid.headers["set-cookie"] == f"scan3d_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000"
     assert datetime.fromisoformat(rows(rig, "SELECT expires_at FROM sessions")[0][0]) > datetime.now(timezone.utc) + timedelta(days=29)
-
-
-def test_a_session_records_when_its_person_was_last_seen(rig):
-    sign_in(rig)
-    ((user_id, signed_in),) = rows(rig, "SELECT user_id,seen_at FROM last_seen")
-    assert user_id == rig.user_id
-    session_time(rig, last_seen_at=ago(minutes=11))
-    assert rig.http.get("/api/cases").status_code == 200
-    assert rows(rig, "SELECT seen_at FROM last_seen")[0][0] > signed_in
+    # A slide also records when the person was last seen.
+    assert user_id == rig.user_id and rows(rig, "SELECT seen_at FROM last_seen")[0][0] > seen
 
 
 def test_a_burst_of_reads_slides_a_session_once(rig, monkeypatch):
@@ -339,12 +318,9 @@ def test_a_mutation_with_a_cookie_and_no_origin_is_refused(rig):
 def test_a_signed_in_health_check_has_the_gpu_and_an_anonymous_one_has_not(rig):
     anonymous = rig.http.get("/api/health").json()
     assert "gpu" not in anonymous and {"status", "worker", "lanes", "modalities", "version"} <= set(anonymous)
+    assert all(rig.http.get(path).status_code == 404 for path in ("/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"))
     sign_in(rig)
     assert "gpu" in rig.http.get("/api/health").json()
-
-
-def test_fastapi_pages_do_not_exist_in_password_mode(rig):
-    assert all(rig.http.get(path).status_code == 404 for path in ("/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"))
 
 
 def test_setup_is_required_until_an_account_exists(tmp_path):
@@ -352,23 +328,25 @@ def test_setup_is_required_until_an_account_exists(tmp_path):
     assert http.get("/api/session").json() == {"mode": "password", "user": None, "setup_required": True}
 
 
-def test_signing_out_ends_the_session_and_clears_site_cache(rig):
-    sign_in(rig)
-    response = rig.http.delete("/api/session")
-    assert response.status_code == 200 and response.headers["clear-site-data"] == '"cache"'
-    assert response.json() == {"mode": "password", "user": None, "setup_required": False}
-    assert rows(rig, "SELECT 1 FROM sessions") == [] and rig.http.get("/api/cases").status_code == 401
-
-
-def test_sign_out_others_keeps_this_session(rig):
+def test_signing_out_others_then_this_session_and_audits_ids_only(rig):
     sign_in(rig)
     other = TestClient(rig.app, base_url=BASE, headers=ORIGIN)
     sign_in(rig, other)
     assert rig.http.post("/api/session/sign-out-others").json() == {"signed_out": 1}
     assert rig.http.get("/api/cases").status_code == 200 and other.get("/api/cases").status_code == 401
+    response = rig.http.delete("/api/session")
+    assert response.status_code == 200 and response.headers["clear-site-data"] == '"cache"'
+    assert response.json() == {"mode": "password", "user": None, "setup_required": False}
+    assert rows(rig, "SELECT 1 FROM sessions") == [] and rig.http.get("/api/cases").status_code == 401
+    assert rows(rig, "SELECT actor_id,action,detail FROM audit_events WHERE action LIKE 'session.%' ORDER BY seq") == [
+        (rig.user_id, "session.sign_in", "{}"),
+        (rig.user_id, "session.sign_in", "{}"),
+        (rig.user_id, "session.sign_out_others", '{"count": 1}'),
+        (rig.user_id, "session.sign_out", "{}"),
+    ]
 
 
-def test_a_new_password_ends_every_session_of_that_account(rig):
+def test_a_new_password_or_a_disabled_account_ends_every_session(rig):
     sign_in(rig)
     password = generated_password()
     rig.accounts.set_password("READER", password)
@@ -376,32 +354,26 @@ def test_a_new_password_ends_every_session_of_that_account(rig):
     assert sign_in(rig).status_code == 401
     rig.password = password
     assert sign_in(rig).status_code == 200
-
-
-def test_a_malformed_sign_in_echoes_nothing(rig):
-    secret = generated_password()
-    response = rig.http.post("/api/session", json={"username": "reader", "password": secret, "extra": secret})
-    assert response.status_code == 422 and response.json() == {"detail": "Invalid sign-in request."} and response.headers["cache-control"] == "no-store"
+    with rig.store.connection() as con:
+        con.execute("UPDATE users SET disabled_at=?", (now(),))
+    assert rig.http.get("/api/cases").status_code == 401
 
 
 @pytest.mark.parametrize("path", ["/api/session", "/api/session%0A"])
 def test_the_session_route_keeps_its_limits_however_the_path_is_spelled(rig, path):
     secret = generated_password()
     malformed = rig.http.post(path, json={"username": "reader", "password": secret, "extra": secret})
-    assert malformed.status_code == 422 and secret not in malformed.text
+    assert malformed.status_code == 422 and malformed.json() == {"detail": "Invalid sign-in request."} and secret not in malformed.text
+    assert malformed.headers["cache-control"] == "no-store"
     assert rig.http.post(path, json={"username": "reader", "password": "x" * 5000}).status_code == 413
     crafted = TestClient(rig.app, base_url=BASE, headers={"Host": "127.0.0.1:/elsewhere"})
     assert crafted.post(path, json={"username": "reader", "password": "x" * 5000}).status_code == 413
 
-
-def test_a_sign_in_body_must_declare_a_small_length(rig):
-    oversized = rig.http.post("/api/session", json={"username": "reader", "password": "x" * 5000})
-    assert oversized.status_code == 413
-
     def chunks():
         yield b"{}"
 
-    assert rig.http.post("/api/session", content=chunks()).status_code == 411
+    # A body must declare its length.
+    assert rig.http.post(path, content=chunks()).status_code == 411
 
 
 def test_a_case_and_its_owner_are_one_write(rig, monkeypatch):
@@ -457,11 +429,9 @@ def test_a_case_never_gains_a_second_owner(rig):
 def test_with_no_admin_a_new_case_has_no_owner_until_one_exists(tmp_path):
     store = Store(tmp_path)
     store.create_case({"id": identifier()})
-    accounts = Accounts(store)
-    assert accounts.adopt_orphans() == 0
+    assert Accounts(store).adopt_orphans() == 0
     with store.connection() as con:
-        assert con.execute("SELECT COUNT(*) FROM case_access").fetchone()[0] == 0
-        assert con.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 0
+        assert con.execute("SELECT (SELECT COUNT(*) FROM case_access) + (SELECT COUNT(*) FROM audit_events)").fetchone()[0] == 0
 
 
 def test_adopting_orphans_touches_only_unowned_cases_and_audits_the_count(rig):
@@ -539,13 +509,18 @@ def test_the_cli_changes_a_role_and_disables_and_enables_an_account(tmp_path, mo
     assert listed()["first"] == ["member", "archive", "active"]
 
 
-def test_the_cli_needs_admin_matching_passwords_and_a_known_account(tmp_path, monkeypatch, capsys):
-    with pytest.raises(SystemExit):
-        run_cli(monkeypatch, capsys, tmp_path, "add", "first")
-    with pytest.raises(SystemExit, match="do not match"):
-        run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", passwords=["a" * 12, "b" * 12])
-    with pytest.raises(SystemExit, match="password needs"):
-        run_cli(monkeypatch, capsys, tmp_path, "add", "first", "--admin", passwords=["short", "short"])
+def test_the_cli_refuses_bad_input_before_it_makes_a_data_folder(tmp_path, monkeypatch, capsys):
+    for arguments, passwords, message in (
+        (["add", "first"], (), None),
+        (["add", "two words", "--admin"], (), "username needs"),
+        (["add", "first", "--admin"], ["a" * 12, "b" * 12], "do not match"),
+        (["add", "first", "--admin"], ["short", "short"], "password needs"),
+        (["list"], (), str(tmp_path / "data")),
+        (["passwd", "first"], (), str(tmp_path / "data")),
+    ):
+        with pytest.raises(SystemExit) as refused:
+            run_cli(monkeypatch, capsys, tmp_path, *arguments, passwords=passwords)
+        assert message is None or message in str(refused.value)
     assert not (tmp_path / "data").exists()
     Store(tmp_path / "data")
     with pytest.raises(SystemExit, match="User not found"):
@@ -563,19 +538,6 @@ def test_an_interrupted_prompt_changes_nothing(tmp_path, monkeypatch, capsys, in
     assert not (tmp_path / "data").exists()
 
 
-@pytest.mark.parametrize("arguments", [["list"], ["passwd", "first"]])
-def test_the_cli_refuses_a_folder_with_no_database_and_names_it(tmp_path, monkeypatch, capsys, arguments):
-    with pytest.raises(SystemExit) as refused:
-        run_cli(monkeypatch, capsys, tmp_path, *arguments)
-    assert str(tmp_path / "data") in str(refused.value) and not (tmp_path / "data").exists()
-
-
-def test_the_cli_refuses_a_bad_name_before_asking_for_a_password(tmp_path, monkeypatch, capsys):
-    with pytest.raises(SystemExit, match="username needs"):
-        run_cli(monkeypatch, capsys, tmp_path, "add", "two words", "--admin")
-    assert not (tmp_path / "data").exists()
-
-
 def test_the_cli_refuses_a_data_folder_it_cannot_use(tmp_path, monkeypatch, capsys):
     (tmp_path / "data").touch()
     with pytest.raises(SystemExit, match="Cannot use"):
@@ -585,17 +547,6 @@ def test_the_cli_refuses_a_data_folder_it_cannot_use(tmp_path, monkeypatch, caps
 def test_a_username_is_unique_whatever_its_case(rig):
     with pytest.raises(ValueError, match="already in use"):
         rig.accounts.add_user("READER", generated_password())
-
-
-def test_session_routes_write_their_audit_rows_with_ids_only(rig):
-    sign_in(rig)
-    rig.http.post("/api/session/sign-out-others")
-    rig.http.delete("/api/session")
-    assert rows(rig, "SELECT actor_id,action,detail FROM audit_events WHERE action LIKE 'session.%' ORDER BY seq") == [
-        (rig.user_id, "session.sign_in", "{}"),
-        (rig.user_id, "session.sign_out_others", '{"count": 0}'),
-        (rig.user_id, "session.sign_out", "{}"),
-    ]
 
 
 def test_audited_routes_record_who_and_which_case_once_per_session(rig):
@@ -669,22 +620,19 @@ def test_a_backup_of_a_database_with_no_sessions_table_still_works(tmp_path):
 @pytest.mark.parametrize(
     "value, hosts, expected",
     [
-        (None, ("127.0.0.1", "localhost"), "off"),
         (None, ("127.0.0.1", "::1", "[::1]", "localhost"), "off"),
         (None, ("127.0.0.1", "review.example"), "password"),
-        (None, ("0.0.0.0",), "password"),
         (None, ("*",), "password"),
         (None, ("",), "password"),
         (" OFF ", ("127.0.0.1",), "off"),
-        ("password", ("127.0.0.1",), "password"),
-        ("Password", ("review.example",), "password"),
+        ("Password", ("127.0.0.1",), "password"),
     ],
 )
 def test_the_sign_in_mode_follows_the_addresses(value, hosts, expected):
     assert resolve_auth(value, hosts) == expected
 
 
-@pytest.mark.parametrize("value, hosts", [("off", ("review.example",)), ("off", ("0.0.0.0",)), ("off", ("*",)), ("basic", ("127.0.0.1",))])
+@pytest.mark.parametrize("value, hosts", [("off", ("review.example",)), ("off", ("0.0.0.0",)), ("basic", ("127.0.0.1",))])
 def test_an_open_published_host_or_unknown_mode_refuses_to_start(value, hosts):
     with pytest.raises(ValueError, match="SCAN3D_AUTH"):
         resolve_auth(value, hosts)

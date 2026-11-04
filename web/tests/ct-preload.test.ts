@@ -29,29 +29,15 @@ describe('CT preload selection changes', () => {
     const setOverlay = vi.fn(async () => {
       throw new Error('Mask memory budget exceeded');
     });
-    expect(
-      await preloadCTSource(
-        { ready: Promise.resolve(), setOverlay },
-        () => ({ ids: ['huge'], compare: false }),
-        () => true,
-      ),
-    ).toBe(true);
-    expect(
-      await preloadCTSource(
-        { ready: Promise.resolve(), setOverlay },
-        () => ({ ids: [], compare: false }),
-        () => false,
-      ),
-    ).toBe(false);
+    const ready = Promise.resolve(),
+      huge = () => ({ ids: ['huge'], compare: false }),
+      none = () => ({ ids: [], compare: false });
+    expect(await preloadCTSource({ ready, setOverlay }, huge, () => true)).toBe(true);
+    expect(await preloadCTSource({ ready, setOverlay }, none, () => false)).toBe(false);
     const failure = new Error('Source download failed');
-    await expect(
-      preloadCTSource(
-        { ready: Promise.reject(failure), setOverlay },
-        () => ({ ids: [], compare: false }),
-        () => true,
-      ),
-    ).rejects.toBe(failure);
+    await expect(preloadCTSource({ ready: Promise.reject(failure), setOverlay }, none, () => true)).rejects.toBe(failure);
   });
+
   it('retains CT and finishes the newest multi-mask comparison after queue replacement', async () => {
     let selection = { ids: ['target'], compare: false };
     const setOverlay = vi.fn(async () => {
@@ -73,34 +59,20 @@ describe('CT preload selection changes', () => {
     ]);
   });
 
-  it('does not revive a superseded case or disposed preload', async () => {
+  it('does not revive a superseded case and does not retry an explicit failure', async () => {
     let active = true;
-    const setOverlay = vi.fn(async () => {
+    const superseded = vi.fn(async () => {
       active = false;
       throw new LocalCTSupersededError();
     });
-    expect(
-      await preloadCTSelection(
-        { ready: Promise.resolve(), setOverlay },
-        () => ({ ids: [], compare: false }),
-        () => active,
-      ),
-    ).toBe(false);
-    expect(setOverlay).toHaveBeenCalledTimes(1);
-  });
-
-  it('preserves explicit failures instead of retrying a broken allocation or network', async () => {
+    const selection = () => ({ ids: [], compare: false });
+    expect(await preloadCTSelection({ ready: Promise.resolve(), setOverlay: superseded }, selection, () => active)).toBe(false);
+    expect(superseded).toHaveBeenCalledTimes(1);
     const failure = new Error('Allocation failed');
-    const setOverlay = vi.fn(async () => {
+    const failing = vi.fn(async () => {
       throw failure;
     });
-    await expect(
-      preloadCTSelection(
-        { ready: Promise.resolve(), setOverlay },
-        () => ({ ids: [], compare: false }),
-        () => true,
-      ),
-    ).rejects.toBe(failure);
-    expect(setOverlay).toHaveBeenCalledTimes(1);
+    await expect(preloadCTSelection({ ready: Promise.resolve(), setOverlay: failing }, selection, () => true)).rejects.toBe(failure);
+    expect(failing).toHaveBeenCalledTimes(1);
   });
 });

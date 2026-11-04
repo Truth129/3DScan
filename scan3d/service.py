@@ -670,9 +670,6 @@ class Service:
         atomic_json(directory / "revision.json", result)
         return result
 
-    def build_image_revision(self, case_id, image_file, acquisition=None, **metadata):
-        return self.build_ct_revision(case_id, image_file, acquisition=acquisition, **metadata)
-
     def _segment(self, job):
         from . import segmentation
         from .segmentation_options import normalize_options, run_source

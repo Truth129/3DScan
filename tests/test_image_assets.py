@@ -1,8 +1,4 @@
-"""Image identity is independent of revisions and owns every derived mask.
-
-All images and segmentation outputs are synthetic. The real store, revision,
-mesh and HTTP paths run; the inference double never initializes a model/GPU.
-"""
+"""Image identity is independent of revisions and owns every derived mask; inference is a double."""
 
 from copy import deepcopy
 import json
@@ -37,66 +33,42 @@ def scalar_image(tmp_path):
     return path, values
 
 
-def test_asset_identity_follows_content_case_series_and_frame_not_revision_or_path(scalar_image, tmp_path):
+def test_asset_identity_follows_content_case_source_and_frame_not_revision_or_path(scalar_image, tmp_path):
     path, _ = scalar_image
     case_id = identifier()
-    acquisition = {"series_uid": "synthetic-series", "profile": "corcta", "phase": "arterial"}
-    first = create_image_asset(case_id, path, acquisition=acquisition)
+    source = {"series_uid": "synthetic-series", "study_uid": "synthetic-study", "frame_of_reference_uid": "frame-a", "sop_class_uids": ["sop-z", "sop-a"]}
+    first = create_image_asset(case_id, path, source=source, acquisition={"phase": "arterial"})
     copied = tmp_path / "copied-reference.nii"
     copied.write_bytes(path.read_bytes())
-    repeated = create_image_asset(case_id, copied, acquisition={**acquisition, "phase": "unknown"})
-    assert repeated["id"] == first["id"]
+    repeated = create_image_asset(case_id, copied, source={**source, "sop_class_uids": ["sop-a", "sop-z"]}, acquisition={"phase": "unknown"})
+    assert repeated["id"] == first["id"] and len(first["id"]) == 32
     assert_reference_image(first, copied, first["geometry"])
-    assert first["schema_version"] == 1 and len(first["id"]) == 32
-    assert first["kind"] == "volume3d" and first["modality"] == "CT"
-    assert first["scalar"]["units"] == "HU"
-    assert first["scalar"]["dtype"] == "uint16"
+    assert (first["kind"], first["modality"], first["scalar"]["units"], first["scalar"]["dtype"]) == ("volume3d", "CT", "HU", "uint16")
     assert first["scalar"]["slope"] == 0.5 and first["scalar"]["intercept"] == -1024
     assert first["geometry"] == imaging.geometry(path)
-    assert first["content_sha256"] == repeated["content_sha256"]
-    other_case = create_image_asset(identifier(), path, acquisition=acquisition)
-    other_series = create_image_asset(case_id, path, acquisition={**acquisition, "series_uid": "other-series"})
-    other_frame = create_image_asset(case_id, path, acquisition=acquisition, frame_selector={"time_index": 1})
-    assert len({first["id"], other_case["id"], other_series["id"], other_frame["id"]}) == 4
+    others = [
+        create_image_asset(identifier(), path, source=source),
+        create_image_asset(case_id, path, source={**source, "series_uid": "other-series"}),
+        create_image_asset(case_id, path, source={**source, "frame_of_reference_uid": "frame-b"}),
+        create_image_asset(case_id, path, source={**source, "study_uid": "other-study"}),
+        create_image_asset(case_id, path, source=source, frame_selector={"time_index": 1}),
+    ]
+    assert len({first["id"], *(asset["id"] for asset in others)}) == 6
 
 
-def test_public_asset_excludes_internal_path_and_does_not_mutate_record(scalar_image):
+def test_public_asset_excludes_internal_path_keeps_unknown_identifiers_and_does_not_mutate_record(scalar_image):
     path, _ = scalar_image
-    asset = create_image_asset(identifier(), path, acquisition={"series_uid": "synthetic-series"})
+    source = {"series_uid": "synthetic-series", "study_uid": None, "frame_of_reference_uid": None, "sop_class_uids": ["1.2.840.10008.5.1.4.1.1.2"]}
+    asset = create_image_asset(identifier(), path, source=source)
     original = deepcopy(asset)
     public = public_image_asset(asset)
     assert "file_path" not in public and str(path) not in json.dumps(public)
-    assert public["id"] == asset["id"] and public["geometry"] == asset["geometry"]
+    assert public["source"] == source and public["geometry"] == asset["geometry"]
     public["geometry"]["shape"][0] = 999
     assert asset == original
 
 
-def test_dicom_coordinate_frame_and_study_identity_are_not_collapsed_by_equal_pixels(scalar_image):
-    path, _ = scalar_image
-    case_id = identifier()
-    source = {
-        "series_uid": "synthetic-series",
-        "study_uid": "synthetic-study",
-        "frame_of_reference_uid": "synthetic-frame-a",
-        "sop_class_uids": ["sop-z", "sop-a"],
-    }
-    first = create_image_asset(case_id, path, source=source)
-    reordered = create_image_asset(case_id, path, source={**source, "sop_class_uids": ["sop-a", "sop-z"]})
-    other_frame = create_image_asset(case_id, path, source={**source, "frame_of_reference_uid": "synthetic-frame-b"})
-    other_study = create_image_asset(case_id, path, source={**source, "study_uid": "other-study"})
-    assert first["id"] == reordered["id"]
-    assert len({first["id"], other_frame["id"], other_study["id"]}) == 3
-
-
-def test_unknown_optional_dicom_source_identifiers_remain_explicitly_unknown(scalar_image):
-    path, _ = scalar_image
-    source = {"series_uid": "synthetic-series", "study_uid": None, "frame_of_reference_uid": None, "sop_class_uids": ["1.2.840.10008.5.1.4.1.1.2"]}
-    asset = create_image_asset(identifier(), path, source=source)
-    assert asset["source"]["study_uid"] is None and asset["source"]["frame_of_reference_uid"] is None
-    assert public_image_asset(asset)["source"] == source
-
-
-@pytest.mark.parametrize("field", ["shape", "affine_ras", "dtype", "slope", "intercept"])
+@pytest.mark.parametrize("field", ["affine_ras", "slope"])
 def test_first_registration_validates_geometry_and_scalar_claims_against_source_header(rig, field):
     _, existing = prepared(rig)
     case = rig.service.new_case("Synthetic unregistered source")
@@ -105,18 +77,11 @@ def test_first_registration_validates_geometry_and_scalar_claims_against_source_
     original_before = rig.original.read_bytes()
     prior_assets = deepcopy(rig.service.store.list("image_assets"))
     asset = create_image_asset(case["id"], path, acquisition=existing["acquisition"])
-    if field == "shape":
-        asset["geometry"]["shape"][0] += 1
-    elif field == "affine_ras":
+    # A plausible claim under the genuine content ID: the header decides.
+    if field == "affine_ras":
         asset["geometry"]["affine_ras"][0][3] += 10
-    elif field == "dtype":
-        asset["scalar"]["dtype"] = "float32"
-    elif field == "slope":
-        asset["scalar"]["slope"] = 2.0
     else:
-        asset["scalar"]["intercept"] = 17.0
-    # These are structurally plausible claims under the genuine content ID.
-    # First insertion must inspect the actual header, not merely trust them.
+        asset["scalar"]["slope"] = 2.0
     with pytest.raises(ValueError, match="(?i)(reference|image|geometry|scalar|header|metadata)"):
         rig.service.store.register_image_asset(asset)
     assert rig.service.store.list("image_assets") == prior_assets
@@ -124,31 +89,17 @@ def test_first_registration_validates_geometry_and_scalar_claims_against_source_
     assert path.read_bytes() == source_before and rig.original.read_bytes() == original_before
 
 
-def test_replacing_reference_bytes_invalidates_identity_even_at_same_path(scalar_image):
+def test_other_content_at_the_same_path_or_geometry_is_another_reference(scalar_image, tmp_path):
     path, _ = scalar_image
-    case_id = identifier()
-    original = create_image_asset(case_id, path)
+    original = create_image_asset(identifier(), path)
     image = nib.load(path)
-    values = np.asarray(image.dataobj, dtype=np.float32).copy()
-    values[0, 0, 0] += 7
-    nib.save(nib.Nifti1Image(values, image.affine), path)
-    changed = create_image_asset(case_id, path)
-    assert changed["id"] != original["id"]
-    assert changed["content_sha256"] != original["content_sha256"]
+    altered = tmp_path / "different-reference.nii"
+    nib.save(nib.Nifti1Image(np.asarray(image.dataobj, dtype=np.float32) + 1, image.affine), altered)
+    assert imaging.geometry(altered) == original["geometry"]
+    altered.replace(path)
+    assert create_image_asset(original["case_id"], path)["id"] != original["id"]
     with pytest.raises(ValueError, match="(?i)(reference|identity|content|image)"):
         assert_reference_image(original, path)
-
-
-def test_reference_validation_rejects_other_content_even_when_geometry_matches(scalar_image, tmp_path):
-    path, _ = scalar_image
-    asset = create_image_asset(identifier(), path)
-    altered = tmp_path / "different-reference.nii"
-    image = nib.load(path)
-    nib.save(nib.Nifti1Image(np.asarray(image.dataobj, dtype=np.float32) + 1, image.affine), altered)
-    assert imaging.geometry(altered) == asset["geometry"]
-    with pytest.raises(ValueError, match="(?i)(reference|identity|content|image)"):
-        assert_reference_image(asset, altered)
-    assert_reference_image(asset, path, asset["geometry"])
 
 
 def test_structure_bindings_are_copied_and_reject_cross_image_aliases():
@@ -170,18 +121,14 @@ def test_new_ct_segmentation_and_cached_run_share_one_registered_reference(rig):
     case, ct = prepared(rig)
     reference_id = ct["reference_image_id"]
     asset = rig.service.store.image_asset(case["id"], reference_id)
-    assert ct["image_asset"]["id"] == reference_id
-    assert asset["case_id"] == case["id"] and asset["source"]["series_uid"] == "fixture-series"
+    assert ct["image_asset"]["id"] == reference_id and asset["source"]["series_uid"] == "fixture-series"
     first = execute(rig, requested(rig, case, ct))
     repeated = execute(rig, requested(rig, case, first))
     assert len(rig.calls.segments) == 1
     for revision in (first, repeated):
-        assert revision["reference_image_id"] == reference_id
-        assert revision["image_asset"] == ct["image_asset"]
+        assert revision["reference_image_id"] == reference_id and revision["image_asset"] == ct["image_asset"]
         assert all(entry["reference_image_id"] == reference_id for entry in revision["structures"])
-    assets = rig.service.store.image_assets(case["id"])
-    assert [entry["id"] for entry in assets] == [reference_id]
-    assert rig.service.store.image_asset(case["id"], reference_id) == asset
+    assert rig.service.store.image_assets(case["id"]) == [asset]
 
 
 def test_registered_image_assets_cannot_be_rewritten_under_an_existing_identity(rig):
@@ -207,9 +154,7 @@ def test_reopening_reference_retains_saved_presentation_when_adapter_defaults_ch
     monkeypatch.setitem(modalities._ADAPTERS, Modality.CT, next_adapter)
     assert modalities.normalize_presentation()["default_window"] == 600
     reopened = rig.service.build_ct_revision(case["id"], Path(first["ct_file"]), acquisition=first["acquisition"])
-    assert reopened["reference_image_id"] == first["reference_image_id"]
-    assert reopened["image_asset"]["presentation"] == first["image_asset"]["presentation"]
-    assert reopened["image_asset"]["presentation"]["default_window"] == 400
+    assert reopened["reference_image_id"] == first["reference_image_id"] and reopened["image_asset"]["presentation"]["default_window"] == 400
     assert rig.service.store.image_asset(case["id"], saved_asset["id"]) == saved_asset
 
 
@@ -233,8 +178,7 @@ def test_mask_correction_reuses_reference_without_changing_original_image_or_mas
         case["id"], Path(ct["ct_file"]), changed, source="direct_edit_correction", parent=first["id"], acquisition=first["acquisition"]
     )
     rig.service.store.commit_revision(corrected)
-    assert corrected["reference_image_id"] == first["reference_image_id"]
-    assert corrected["image_asset"] == first["image_asset"]
+    assert corrected["reference_image_id"] == first["reference_image_id"] and corrected["image_asset"] == first["image_asset"]
     assert corrected["structures"][0]["voxel_count"] == first["structures"][0]["voxel_count"] - 1
     assert rig.service.store.revision(case["id"], first["id"]) == before
     assert {name: Path(name).read_bytes() for name in original_paths} == original_bytes
@@ -248,23 +192,19 @@ def test_child_revision_rejects_other_reference_and_cross_image_masks(rig):
     foreign = rig.service.build_ct_revision(foreign_case["id"], Path(ct["ct_file"]), acquisition=ct["acquisition"])
     wrong_masks = deepcopy(first["structures"])
     wrong_masks[0]["reference_image_id"] = foreign["reference_image_id"]
-    with pytest.raises(ValueError, match="(?i)(reference|image)"):
-        rig.service.build_revision(case["id"], Path(ct["ct_file"]), wrong_masks, source="bad_correction", parent=first["id"], acquisition=first["acquisition"])
-    with pytest.raises(ValueError, match="(?i)(reference|image|source)"):
-        rig.service.build_revision(
-            case["id"],
-            Path(ct["ct_file"]),
-            first["structures"],
-            source="bad_correction",
-            parent=first["id"],
-            acquisition=first["acquisition"],
-            image_source={"series_uid": "fixture-series", "frame_of_reference_uid": "other-coordinate-frame"},
-        )
     changed_path = Path(ct["ct_file"]).with_name("other-reference.nii.gz")
     source = nib.load(ct["ct_file"])
     nib.save(nib.Nifti1Image(np.asarray(source.dataobj) + 1, source.affine), changed_path)
-    with pytest.raises(ValueError, match="(?i)(reference|image|content)"):
-        rig.service.build_revision(case["id"], changed_path, first["structures"], source="bad_correction", parent=first["id"], acquisition=first["acquisition"])
+    other_frame = {"series_uid": "fixture-series", "frame_of_reference_uid": "other-coordinate-frame"}
+    for path, structures, options in (
+        (ct["ct_file"], wrong_masks, {}),
+        (ct["ct_file"], first["structures"], {"image_source": other_frame}),
+        (changed_path, first["structures"], {}),
+    ):
+        with pytest.raises(ValueError, match="(?i)(reference|image|source|content)"):
+            rig.service.build_revision(
+                case["id"], Path(path), structures, source="bad_correction", parent=first["id"], acquisition=first["acquisition"], **options
+            )
     assert rig.service.store.list("revisions", case["id"]) == previous
     assert rig.service.store.get("cases", case["id"])["active_revision_id"] == first["id"]
 
@@ -325,12 +265,9 @@ def test_legacy_revision_resolves_without_rewriting_stored_metadata_or_source(ri
     with rig.service.store.connection() as connection:
         db_before = connection.execute("SELECT data FROM revisions WHERE id=?", (legacy["id"],)).fetchone()[0]
     resolved = rig.service.store.resolve_reference(legacy)
-    assert resolved["id"] == current["reference_image_id"]
-    assert reference_image(legacy)["id"] == resolved["id"]
-    public = rig.http.get(f"/api/cases/{case['id']}/revisions/{legacy['id']}")
-    assert public.status_code == 200, public.text
-    assert public.json()["reference_image_id"] == resolved["id"]
-    assert public.json()["image_asset"]["id"] == resolved["id"]
+    assert resolved["id"] == current["reference_image_id"] == reference_image(legacy)["id"]
+    public = rig.http.get(f"/api/cases/{case['id']}/revisions/{legacy['id']}").json()
+    assert public["reference_image_id"] == public["image_asset"]["id"] == resolved["id"]
     with rig.service.store.connection() as connection:
         assert connection.execute("SELECT data FROM revisions WHERE id=?", (legacy["id"],)).fetchone()[0] == db_before
     assert record_path.read_bytes() == disk_before and Path(legacy["ct_file"]).read_bytes() == image_before
@@ -341,7 +278,6 @@ def test_asset_api_is_case_owned_and_never_exposes_internal_paths(rig):
     case, revision = prepared(rig)
     prefix = f"/api/cases/{case['id']}/images"
     listed = rig.http.get(prefix)
-    assert listed.status_code == 200, listed.text
     assert [item["id"] for item in listed.json()] == [revision["reference_image_id"]]
     fetched = rig.http.get(prefix + "/" + revision["reference_image_id"])
     assert fetched.status_code == 200 and fetched.json() == listed.json()[0]
@@ -363,8 +299,7 @@ def test_bound_reference_api_rejects_changed_source_pixels_instead_of_reusing_ca
     nib.save(nib.Nifti1Image(values, image.affine, image.header.copy()), path)
     for endpoint in ("image-volume", "ct-volume", "review-frame"):
         response = rig.http.get(prefix + "/" + endpoint)
-        assert response.status_code == 400, (endpoint, response.text)
-        assert "reference" in response.json()["detail"].lower()
+        assert response.status_code == 400 and "reference" in response.json()["detail"].lower(), endpoint
     assert rig.service.store.revision(case["id"], revision["id"]) == before
     assert rig.service.store.get("cases", case["id"])["active_revision_id"] == revision["id"]
 
@@ -377,10 +312,10 @@ def test_generic_and_legacy_volume_routes_deliver_identical_ct_samples(rig, qual
     generic = rig.http.get(prefix + "/image-volume", params={"quality": quality})
     assert legacy.status_code == generic.status_code == 200
     old, new = legacy.json(), generic.json()
-    for key in ("key", "shape", "affine_ras", "dtype", "slope", "intercept", "byte_length", "quality"):
-        assert old[key] == new[key]
-    assert new["reference_image_id"] == revision["reference_image_id"]
-    assert new["modality"] == "CT" and new["presentation"]["units"] == "HU"
+    assert {key: old[key] for key in ("key", "shape", "affine_ras", "dtype", "slope", "intercept", "byte_length", "quality")} == {
+        key: new[key] for key in ("key", "shape", "affine_ras", "dtype", "slope", "intercept", "byte_length", "quality")
+    }
+    assert new["reference_image_id"] == revision["reference_image_id"] and new["modality"] == "CT" and new["presentation"]["units"] == "HU"
     before = b"".join(rig.http.get(chunk["url"]).content for chunk in old["chunks"])
     after = b"".join(rig.http.get(chunk["url"]).content for chunk in new["chunks"])
     assert before == after

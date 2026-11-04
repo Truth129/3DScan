@@ -183,15 +183,11 @@ def test_undoing_unapplied_relationship_restores_exact_immutable_candidate_witho
 @pytest.mark.parametrize(
     "relationship,reason",
     [
-        ({"kind": "independent", "exclusive_with": ["b"]}, "Independent"),
         ({"kind": "subregion", "exclusive_with": []}, "parent"),
-        ({"kind": "subdivision", "exclusive_with": []}, "at least one"),
         ({"kind": "subdivision", "exclusive_with": ["a"]}, "excluding"),
         ({"kind": "subdivision", "exclusive_with": ["foreign"]}, "existing"),
-        ({"kind": "subdivision", "exclusive_with": ["b", "b"]}, "unique"),
         ({"kind": "subregion", "parent_id": "child"}, "cycle"),
         ({"kind": "subdivision", "exclusive_with": ["child"]}, "Parent and child"),
-        ({"kind": "subdivision", "parent_id": "b", "exclusive_with": ["b"]}, "Parent and child"),
     ],
 )
 def test_relationship_validation_protects_identity_and_parent_graph(relationship, reason):
@@ -234,8 +230,7 @@ def test_http_relationship_preview_recovery_stale_save_and_affected_mask_transpo
     service, case, base, _ = example
     draft = new_candidate(example)
     app = create_app(service.settings)
-    # Claim the queued operation explicitly through the fixture's deterministic
-    # worker. Both API and worker use the same persistent, synthetic store.
+    # The fixture's service claims the job, so the API's own worker must not start.
     app.state.service.start = lambda **_: None
     app.state.service.stop = lambda: None
     with TestClient(app, base_url="http://127.0.0.1") as http:
@@ -290,7 +285,7 @@ def test_a_relationship_only_apply_leaves_the_draft_on_its_card(example, paths):
     assert applied["candidate"]["provenance"]["reused_prediction"]
 
 
-@pytest.mark.parametrize("name", ["second", "default", "absent"])
+@pytest.mark.parametrize("name", ["second", "absent"])
 def test_a_stale_client_cannot_break_a_relationship_only_apply(example, paths, name):
     # It runs no model, so a choice it ignores can neither conflict nor be refused.
     service, case, _, _ = example

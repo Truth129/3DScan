@@ -40,7 +40,6 @@ const props = withDefaults(
 const modalityLabel = computed(() => props.modality ?? 'CT');
 const emit = defineEmits<{
   point: [point: Point];
-  prompt: [point: Point];
   gesture: [prompt: InteractivePrompt];
   error: [reason: string];
   windowLevel: [value: [number, number]];
@@ -404,12 +403,6 @@ onBeforeUnmount(() => {
   releaseViewer();
   unsubscribeOverlay?.();
   details.clear();
-});
-defineExpose({
-  patientToCanvas: (point: Point) => viewer?.rasToCanvas(point),
-  canvasToPatient: (point: [number, number]) => viewer?.canvasToRas(point),
-  resetView: () => viewer?.reset(),
-  diagnostics: () => ({ cacheEntries: viewer?.cacheEntries ?? 0, framePixels: viewer?.frame?.hu.length ?? 0 }),
 });
 </script>
 

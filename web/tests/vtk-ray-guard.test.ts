@@ -4,7 +4,6 @@ import type { Plugin, UserConfig } from 'vite';
 import volumeShader from '@kitware/vtk.js/Rendering/OpenGL/glsl/vtkVolumeFS.glsl.js';
 import { FIXED_KERNEL, GUARDED, guardVolumeShader, vtkRayGuard, vtkRayGuardOptimizer } from '../vite-vtk-ray-guard';
 import appConfig from '../vite.config';
-import fixtureConfig from '../vite.cornerstone-volume.config';
 import offlineConfig from '../vite.offline.config';
 
 const UNGUARDED = 'vec3 invDir = 1.0 / rayDirIS;';
@@ -13,17 +12,13 @@ const SHADER = `${UNGUARDED}\n${UNFILLED_KERNEL}`;
 const transform = (code: string, id: string) => (vtkRayGuard().transform as unknown as (code: string, id: string) => { code: string } | undefined)(code, id);
 
 describe('vtk ray direction guard', () => {
-  it('replaces the one unguarded inverse in the pinned vtk.js shader', () => {
+  it('replaces the one unguarded inverse and the unfilled occlusion kernel in the pinned vtk.js shader', () => {
     const guarded = guardVolumeShader(volumeShader);
     expect(guarded).not.toContain(UNGUARDED);
-    expect(guarded.split(GUARDED)).toHaveLength(2);
-    expect(guarded.length).toBe(volumeShader.length + GUARDED.length - UNGUARDED.length + FIXED_KERNEL.length - UNFILLED_KERNEL.length);
-  });
-
-  it('gives occlusion rays a fixed sequence instead of the kernel vtk.js never fills', () => {
-    const guarded = guardVolumeShader(volumeShader);
     expect(guarded).not.toContain(UNFILLED_KERNEL);
+    expect(guarded.split(GUARDED)).toHaveLength(2);
     expect(guarded.split(FIXED_KERNEL)).toHaveLength(2);
+    expect(guarded.length).toBe(volumeShader.length + GUARDED.length - UNGUARDED.length + FIXED_KERNEL.length - UNFILLED_KERNEL.length);
     expect(() => guardVolumeShader(UNGUARDED)).toThrow('occlusion kernel guard');
   });
 
@@ -67,28 +62,13 @@ describe('vtk ray direction guard', () => {
   });
 
   // Any config left out would ship the blank slices on the GPUs that reject the original line.
-  it.each([
-    ['app', appConfig as UserConfig],
-    ['offline viewer', offlineConfig as UserConfig],
-    ['volume fixture', fixtureConfig as UserConfig],
-  ])('is installed in the %s build', (_name, config) => {
-    expect((config.plugins as Plugin[]).flat().some(plugin => plugin?.name === 'scan3d-vtk-ray-guard')).toBe(true);
-  });
-
-  it.each([
-    ['app', appConfig as UserConfig],
-    ['volume fixture', fixtureConfig as UserConfig],
-  ])('is installed in the %s workers', (_name, config) => {
-    const plugins = config.worker?.plugins?.() as Plugin[];
-    expect(plugins.flat().some(plugin => plugin?.name === 'scan3d-vtk-ray-guard')).toBe(true);
-  });
-
-  it.each([
-    ['app', appConfig as UserConfig],
-    ['volume fixture', fixtureConfig as UserConfig],
-  ])('is installed in the %s dev server', (_name, config) => {
+  it('is installed in every build, its workers and the dev server optimizer', () => {
+    const installed = (plugins: unknown) => (plugins as Plugin[]).flat().some(plugin => plugin?.name === 'scan3d-vtk-ray-guard');
+    for (const config of [appConfig, offlineConfig] as UserConfig[]) expect(installed(config.plugins)).toBe(true);
+    const app = appConfig as UserConfig;
+    expect(installed(app.worker?.plugins?.())).toBe(true);
     // Editing the guard must refresh the optimizer cache, which is keyed on plugin names.
-    expect(config.optimizeDeps?.esbuildOptions?.plugins?.map(plugin => plugin.name)).toContain(vtkRayGuardOptimizer().name);
+    expect(app.optimizeDeps?.esbuildOptions?.plugins?.map(plugin => plugin.name)).toContain(vtkRayGuardOptimizer().name);
     expect(vtkRayGuardOptimizer().name).toContain(GUARDED);
     expect(vtkRayGuardOptimizer().name).toContain(FIXED_KERNEL);
   });

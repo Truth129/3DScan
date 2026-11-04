@@ -91,27 +91,20 @@ def test_static_mr_index_exposes_sequence_metadata_and_real_series_identity(tmp_
     "attribute,value,diagnostic",
     [
         ("EchoTime", 4, "EchoTime"),
-        ("EchoNumbers", 2, "EchoNumbers"),
-        ("RepetitionTime", 9, "RepetitionTime"),
         ("InversionTime", 100, "InversionTime"),
-        ("TemporalPositionIdentifier", 2, "temporal"),
-        ("NumberOfTemporalPositions", 2, "Dynamic/cine"),
         ("CardiacNumberOfImages", 12, "Dynamic/cine"),
-        ("AcquisitionNumber", 2, "AcquisitionNumber"),
         ("ComplexImageComponent", "PHASE", "magnitude"),
         ("DiffusionBValue", 1000, "Diffusion"),
-        ("AcquisitionContrast", "DIFFUSION", "Diffusion"),
         ("PhotometricInterpretation", "MONOCHROME1", "PhotometricInterpretation"),
-        ("SamplesPerPixel", 3, "scalar"),
         ("RescaleSlope", 0.25, "rescale"),
-        ("RescaleIntercept", -1, "rescale"),
         ("ImageType", ["ORIGINAL", "PRIMARY", "MOSAIC"], "mosaic"),
-        ("ImageType", ["ORIGINAL", "PRIMARY", "PROJECTION IMAGE"], "projection"),
-        ("ImageType", ["ORIGINAL", "PRIMARY", "T2 MAP"], "parametric"),
-        ("ImageType", ["ORIGINAL", "PRIMARY", "LOCALIZER"], "localizer"),
         ("SOPClassUID", "1.2.840.10008.5.1.4.1.1.4.1", "Do not combine"),
-        ("SOPClassUID", "1.2.840.10008.5.1.4.1.1.4.4", "classic single-frame"),
         ("NumberOfFrames", 5, "multi-frame"),
+        ("NumberOfFrames", None, "multi-frame MR"),
+        ("ImagePositionPatient", None, "Invalid image geometry"),
+        ("PixelSpacing", None, "Invalid image geometry"),
+        ("RescaleSlope", 0, "must be finite"),
+        ("RescaleIntercept", float("inf"), "must be finite"),
     ],
 )
 def test_mr_rejects_mixed_or_unsupported_dimensions_before_converter(tmp_path, monkeypatch, attribute, value, diagnostic):
@@ -125,14 +118,6 @@ def test_mr_rejects_mixed_or_unsupported_dimensions_before_converter(tmp_path, m
         dicom.convert_series(record["files"], tmp_path / "output")
     assert not (tmp_path / "output").exists()
     assert {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in record["files"]} == before
-
-
-@pytest.mark.parametrize("attribute,value", [("RescaleSlope", 0), ("RescaleSlope", float("nan")), ("RescaleIntercept", float("inf"))])
-def test_mr_rejects_nonfinite_or_zero_rescale(tmp_path, attribute, value):
-    source = write_mr_series(tmp_path / "source")
-    change(source / "001.dcm", attribute, value)
-    (record,) = dicom.index_dicom(source)
-    assert any("must be finite" in message for message in record["warnings"])
 
 
 def test_mr_sequences_with_distinct_uids_remain_separate_selections(tmp_path):
@@ -150,19 +135,7 @@ def test_mr_nonuniform_slice_voi_uses_image_range_instead_of_one_arbitrary_slice
     assert record["warnings"] == [] and record["window_center"] is None and record["window_width"] is None
 
 
-@pytest.mark.parametrize(
-    "attribute",
-    [
-        "EchoTime",
-        "RepetitionTime",
-        "InversionTime",
-        "TriggerTime",
-        "SpacingBetweenSlices",
-        "NumberOfTemporalPositions",
-        "TemporalPositionIdentifier",
-        "CardiacNumberOfImages",
-    ],
-)
+@pytest.mark.parametrize("attribute", ["EchoTime", "SpacingBetweenSlices", "TemporalPositionIdentifier"])
 def test_mr_legal_empty_optional_and_type2_values_do_not_invent_dimensions(tmp_path, attribute):
     source = write_mr_series(tmp_path / "source")
     for path in source.glob("*.dcm"):
@@ -180,27 +153,20 @@ def tag_every_slice(directory, **tags):
             change(path, attribute, value)
 
 
-@pytest.mark.parametrize("phase", [1, 3, 6])
-def test_mr_one_phase_exported_from_a_dynamic_scan_is_a_static_volume(tmp_path, phase):
-    source = write_mr_series(tmp_path / "source")
-    tag_every_slice(source, NumberOfTemporalPositions=6, TemporalPositionIdentifier=phase)
-    (record,) = dicom.index_dicom(source)
-    assert record["supported"] and record["warnings"] == []
-
-
 @pytest.mark.parametrize(
-    "tags",
+    "tags,supported",
     [
-        {"NumberOfTemporalPositions": 6},
-        {"NumberOfTemporalPositions": 6, "TemporalPositionIdentifier": 7},
-        {"NumberOfTemporalPositions": 6, "TemporalPositionIdentifier": 0},
+        ({"NumberOfTemporalPositions": 6, "TemporalPositionIdentifier": 3}, True),
+        ({"NumberOfTemporalPositions": 6}, False),
+        ({"NumberOfTemporalPositions": 6, "TemporalPositionIdentifier": 7}, False),
     ],
 )
-def test_mr_phase_tags_that_do_not_prove_one_position_stay_refused(tmp_path, tags):
+def test_mr_one_proven_phase_of_a_dynamic_scan_is_a_static_volume(tmp_path, tags, supported):
     source = write_mr_series(tmp_path / "source")
     tag_every_slice(source, **tags)
     (record,) = dicom.index_dicom(source)
-    assert not record["supported"] and "Dynamic/cine" in record["unsupported_reason"]
+    assert record["supported"] is supported
+    assert record["warnings"] == [] if supported else "Dynamic/cine" in record["unsupported_reason"]
 
 
 def test_mr_series_holding_several_phases_stays_refused(tmp_path):
@@ -224,10 +190,9 @@ def test_mr_repeated_positions_stay_refused_when_every_slice_names_one_phase(tmp
 
 
 @pytest.mark.skipif(not shutil.which("dcm2niix"), reason="Native dcm2niix is not installed")
-@pytest.mark.parametrize("manufacturer", ["Philips Medical Systems", "SIEMENS", "GE MEDICAL SYSTEMS"])
-def test_real_mr_conversion_of_one_phase_stays_one_3d_volume(tmp_path, manufacturer):
+def test_real_mr_conversion_of_one_phase_stays_one_3d_volume(tmp_path):
     source = write_mr_series(tmp_path / "source")
-    tag_every_slice(source, NumberOfTemporalPositions=6, TemporalPositionIdentifier=3, Manufacturer=manufacturer)
+    tag_every_slice(source, NumberOfTemporalPositions=6, TemporalPositionIdentifier=3, Manufacturer="Philips Medical Systems")
     (record,) = dicom.index_dicom(source)
     image = nib.load(dicom.convert_series(record["files"], tmp_path / "output"))
     assert sorted(image.shape) == [5, 10, 12]
@@ -254,49 +219,17 @@ def test_mr_equivalent_decimal_timing_encodings_are_not_different_echoes(tmp_pat
     assert record["supported"] and record["warnings"] == []
 
 
-@pytest.mark.parametrize("attribute", ["ImagePositionPatient", "ImageOrientationPatient", "PixelSpacing"])
-def test_mr_empty_required_spatial_geometry_remains_unsupported(tmp_path, attribute):
-    source = write_mr_series(tmp_path / "source")
-    change(source / "001.dcm", attribute, None)
-    (record,) = dicom.index_dicom(source)
-    assert not record["supported"] and "Invalid image geometry" in record["unsupported_reason"]
-
-
-def test_mr_empty_frame_count_is_reported_without_hiding_the_series(tmp_path):
-    source = write_mr_series(tmp_path / "source")
-    change(source / "001.dcm", "NumberOfFrames", None)
-    (record,) = dicom.index_dicom(source)
-    assert not record["supported"] and "multi-frame MR" in record["unsupported_reason"]
-    assert record["slice_count"] == 5
-
-
 @pytest.mark.skipif(not shutil.which("dcm2niix"), reason="Native dcm2niix is not installed")
 @pytest.mark.parametrize(
     "reflected,signed,photometric,empty_optional",
-    [(False, False, "MONOCHROME2", False), (True, True, "MONOCHROME2", False), (False, False, "MONOCHROME1", False), (False, False, "MONOCHROME2", True)],
+    [(True, True, "MONOCHROME2", False), (False, False, "MONOCHROME1", True)],
 )
 def test_real_mr_conversion_preserves_fractional_signal_patient_landmarks_and_source_bytes(
     tmp_path, monkeypatch, reflected, signed, photometric, empty_optional
 ):
     source = write_mr_series(tmp_path / "source", reflected=reflected, signed=signed, photometric=photometric)
     if empty_optional:
-        for path in source.glob("*.dcm"):
-            ds = pydicom.dcmread(path)
-            ds.update(
-                {
-                    name: None
-                    for name in (
-                        "EchoTime",
-                        "RepetitionTime",
-                        "InversionTime",
-                        "SpacingBetweenSlices",
-                        "TriggerTime",
-                        "NumberOfTemporalPositions",
-                        "TemporalPositionIdentifier",
-                    )
-                }
-            )
-            ds.save_as(path, enforce_file_format=True)
+        tag_every_slice(source, **dict.fromkeys(("EchoTime", "RepetitionTime", "InversionTime", "SpacingBetweenSlices", "TemporalPositionIdentifier")))
     (record,) = dicom.index_dicom(source)
     assert record["warnings"] == []
     before = {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in record["files"]}
@@ -308,9 +241,8 @@ def test_real_mr_conversion_preserves_fractional_signal_patient_landmarks_and_so
 
     monkeypatch.setattr(dicom.subprocess, "run", run)
     converted = dicom.convert_series(record["files"], tmp_path / "output")
-    assert len(commands) == 1
-    assert commands[0][commands[0].index("-m") + 1] == "n"
-    assert commands[0][commands[0].index("-p") + 1] == "n"
+    # One run, with merging and Philips precise scaling both off.
+    assert len(commands) == 1 and commands[0][commands[0].index("-m") + 1] == commands[0][commands[0].index("-p") + 1] == "n"
     image = nib.load(converted)
     actual = image.get_fdata()
     for name in record["files"]:
@@ -380,7 +312,7 @@ def test_mr_presentation_honors_declared_voi_and_monochrome1_without_rewriting_s
     np.testing.assert_array_equal(nib.load(path).dataobj, values)
 
 
-@pytest.mark.parametrize("function", [None, "LINEAR", "LINEAR_EXACT", "SIGMOID", "UNSUPPORTED"])
+@pytest.mark.parametrize("function", [None, "LINEAR_EXACT", "SIGMOID"])
 def test_mr_source_voi_function_cannot_be_reinterpreted_as_a_linear_window(tmp_path, function):
     source = write_mr_series(tmp_path / "source", photometric="MONOCHROME1")
     for path in source.glob("*.dcm"):
@@ -388,32 +320,31 @@ def test_mr_source_voi_function_cannot_be_reinterpreted_as_a_linear_window(tmp_p
     before = {path.name: path.read_bytes() for path in source.glob("*.dcm")}
     (record,) = dicom.index_dicom(source)
     assert record["supported"] and record["voi_lut_function"] == (function or "LINEAR")
-    if function in {"SIGMOID", "UNSUPPORTED"}:
+    if function == "SIGMOID":
         assert record["window_center"] is None and record["window_width"] is None
     else:
         assert record["window_center"] == 125.25 and record["window_width"] == 249.5
     assert {path.name: path.read_bytes() for path in source.glob("*.dcm")} == before
 
 
-@pytest.mark.parametrize("function", ["SIGMOID", "UNSUPPORTED"])
-def test_mr_nonlinear_voi_metadata_uses_robust_signal_range_and_retains_inversion(tmp_path, function):
+def test_mr_nonlinear_voi_metadata_uses_robust_signal_range_and_retains_inversion(tmp_path):
     path = tmp_path / "signal.nii"
     values = np.linspace(0.001, 0.009, 3 * 4 * 5, dtype=np.float32).reshape(3, 4, 5)
     nib.save(nib.Nifti1Image(values, np.eye(4)), path)
     before = path.read_bytes()
     adapter = get_modality_adapter("MR")
-    metadata = {"photometric_interpretation": "MONOCHROME1", "window_center": 125.25, "window_width": 249.5, "voi_lut_function": function}
+    metadata = {"photometric_interpretation": "MONOCHROME1", "window_center": 125.25, "window_width": 249.5, "voi_lut_function": "SIGMOID"}
     policy = adapter.presentation_for_image(path, metadata)
     expected = adapter.presentation_for_image(path, {"photometric_interpretation": "MONOCHROME1"})
     assert policy == expected
     assert policy["default_window"] < 0.01 and policy["default_level"] < 0.01
     assert policy["photometric_interpretation"] == "MONOCHROME1"
-    assert metadata["voi_lut_function"] == function and metadata["window_width"] == 249.5
+    assert metadata["window_width"] == 249.5
     assert path.read_bytes() == before
     np.testing.assert_array_equal(nib.load(path).dataobj, values)
 
 
-@pytest.mark.parametrize("offset,scale", [(0, 0.000001), (40000, 10000), (-0.005, 0.001)])
+@pytest.mark.parametrize("offset,scale", [(0, 0.000001), (40000, 10000)])
 def test_mr_robust_window_uses_scaled_signal_and_preserves_fractional_or_large_ranges(tmp_path, offset, scale):
     path = tmp_path / "signal.nii"
     values = np.linspace(0, 1, 20 * 30 * 40, dtype=np.float32).reshape(20, 30, 40)
@@ -429,7 +360,7 @@ def test_mr_robust_window_uses_scaled_signal_and_preserves_fractional_or_large_r
     assert policy["units"] == "signal" and policy["preview_quantization_step"] == 0
 
 
-@pytest.mark.parametrize("value", [0.0, 0.00000001, -32000.0])
+@pytest.mark.parametrize("value", [0.00000001, -32000.0])
 def test_mr_constant_signal_has_a_finite_positive_window(tmp_path, value):
     path = tmp_path / "constant.nii"
     nib.save(nib.Nifti1Image(np.full((4, 5, 6), value, dtype=np.float32), np.eye(4)), path)

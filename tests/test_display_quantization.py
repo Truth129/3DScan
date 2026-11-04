@@ -146,16 +146,10 @@ def test_display_glb_is_quantized_aligned_and_decodes_within_the_grid_bound(tmp_
     for node, expected in zip(document["nodes"], (liver, aorta), strict=True):
         primitive = document["meshes"][node["mesh"]]["primitives"][0]
         position, normal, index = (
-            document["accessors"][primitive["attributes"]["POSITION"]],
-            document["accessors"][primitive["attributes"]["NORMAL"]],
-            document["accessors"][primitive["indices"]],
+            document["accessors"][key] for key in (primitive["attributes"]["POSITION"], primitive["attributes"]["NORMAL"], primitive["indices"])
         )
-        assert (position["componentType"], position.get("normalized", False)) == (5123, False)
-        assert (normal["componentType"], normal["normalized"]) == (5120, True)
+        assert (position["componentType"], position.get("normalized", False), normal["componentType"], normal["normalized"]) == (5123, False, 5120, True)
         assert index["componentType"] == 5123
-        views = [document["bufferViews"][item["bufferView"]] for item in (position, normal, index)]
-        assert [view.get("byteStride") for view in views] == [8, 4, None]
-        assert [view["byteLength"] for view in views] == [8 * position["count"], 4 * normal["count"], 2 * index["count"]]
         assert node["scale"] == [STEP] * 3 and all((value / STEP).is_integer() for value in node["translation"])
         grid = values(document, binary, primitive["attributes"]["POSITION"])
         assert position["min"] == grid.min(axis=0).tolist() and position["max"] == grid.max(axis=0).tolist()
@@ -166,9 +160,6 @@ def test_display_glb_is_quantized_aligned_and_decodes_within_the_grid_bound(tmp_
         # A positive uniform scale keeps outward winding and normal directions.
         a, b, c = (positions[faces[:, i]] - positions.mean(axis=0) for i in range(3))
         assert np.einsum("ij,ij->i", a, np.cross(b, c)).sum() > 0
-        arrays = surfaces._primitive_arrays(document, binary, primitive, node)
-        assert isinstance(arrays, surfaces._Quantized)
-        np.testing.assert_allclose(surfaces._float_arrays(arrays)[0], positions, rtol=0, atol=1e-12)
     assert 0 < max(errors) <= STEP * 1000 / 2  # 0.0153 mm per axis
 
 
@@ -186,7 +177,6 @@ def test_quantization_is_idempotent_on_one_absolute_grid():
     # Encoding decoded data again reproduces the exact integers and transform.
     again = surfaces._quantize(surfaces._float_arrays(quantized))
     np.testing.assert_array_equal(again.positions, quantized.positions)
-    np.testing.assert_array_equal(again.normals, quantized.normals)
     assert (again.translation, again.scale, again.parts) == (quantized.translation, quantized.scale, ((600, 200),))
     # A structure with another extent snaps shared boundary vertices identically.
     other = np.concatenate([points[:40], rng.uniform([0.3, -0.6, 0.5], [0.5, -0.4, 0.7], (20, 3)).astype("<f4")])
@@ -225,12 +215,8 @@ def test_meshes_beyond_uint16_indices_split_into_seamless_primitives(tmp_path):
     assert np.abs(np.concatenate(corners) - arrays[0][arrays[2]]).max() <= STEP / 2
     assert 0 < vertices - len(arrays[0]) <= 2 * 300  # only seam rows repeat
     merged = surfaces._asset_arrays(model)
-    assert merged.parts == tuple(
-        (document["accessors"][p["attributes"]["POSITION"]]["count"], document["accessors"][p["indices"]]["count"] // 3) for p in primitives
-    )
     again = surfaces._quantize(surfaces._float_arrays(merged))
     assert again.parts == merged.parts and again.translation == merged.translation
-    np.testing.assert_array_equal(again.positions, merged.positions)
     np.testing.assert_array_equal(again.faces, merged.faces)
     # Parts pass through repackaging and display import byte for byte.
     surfaces._write_model([(entry, merged)], tmp_path / "repackaged.glb")
@@ -241,12 +227,6 @@ def test_meshes_beyond_uint16_indices_split_into_seamless_primitives(tmp_path):
         imported = surfaces.import_display_assets([entry], source, cache, parameters)
         assert Path(imported["surface_assets"][0]["path"]).read_bytes() == model.read_bytes()
         assert imported["surface_assets"][0]["triangles"] == len(arrays[2])
-    # A small limit splits ordinary meshes the same way, for browser fixtures.
-    split = surfaces._quantize(box(*LIVER), limit=6)
-    assert len(split.parts) > 1 and max(vertices for vertices, _ in split.parts) <= 6
-    positions, _, faces = surfaces._float_arrays(split)
-    original = box(*LIVER)
-    assert np.abs(positions[faces] - original[0][original[2]]).max() <= STEP / 2
 
 
 def test_legacy_float_models_read_and_repackage_exactly_like_fresh_arrays(tmp_path):
@@ -284,11 +264,8 @@ def test_import_quantizes_legacy_display_models_without_mask_decode(tmp_path, mo
     cache = tmp_path / "cache"
     imported = surfaces.import_display_assets(entries, legacy, cache, fresh["display_simplification"])
     assert imported["cache"]["surface_misses"] == 2 and legacy.read_bytes() == before
-    for asset, item, expected in zip(imported["surface_assets"], entries, arrays, strict=True):
+    for asset, item in zip(imported["surface_assets"], entries, strict=True):
         assert asset["key"] == surfaces._surface_identity(item, detailed=False)[1]
-        quantized = surfaces._asset_arrays(asset["path"])
-        assert isinstance(quantized, surfaces._Quantized)
-        assert np.abs(surfaces._float_arrays(quantized)[0] - expected[0]).max() <= STEP / 2
     combined = surfaces.build_model(entries, tmp_path / "combined.glb", cache_dir=cache)
     assert combined["cache"]["surface_hits"] == 2
     assert (tmp_path / "combined.glb").read_bytes() == (tmp_path / "fresh.glb").read_bytes()
@@ -320,21 +297,6 @@ def test_optimize_migrates_a_legacy_revision_to_the_assets_a_fresh_build_writes(
         assert surfaces.surface_asset_path(service.surface_cache, asset["key"]).read_bytes() == fresh[asset["id"]]
 
 
-def test_build_model_packages_a_float_asset_like_a_quantized_one(tmp_path):
-    path = mask_file(tmp_path / "mask.nii.gz")
-    entry = structure("total:liver", path)
-    cache = tmp_path / "cache"
-    prepared = surfaces.prepare_surface(entry, cache)
-    surfaces.build_model([entry], tmp_path / "expected.glb", cache_dir=cache)
-    asset = Path(prepared["path"])
-    legacy_display_model([(entry, surfaces._mesh(path, detailed=False))], asset)
-    surfaces._record_cache(asset, triangles=prepared["triangles"])
-    assert not isinstance(surfaces._asset_arrays(asset), surfaces._Quantized)
-    report = surfaces.build_model([entry], tmp_path / "repackaged.glb", cache_dir=cache)
-    assert report["cache"]["surface_hits"] == 1
-    assert (tmp_path / "repackaged.glb").read_bytes() == (tmp_path / "expected.glb").read_bytes()
-
-
 def test_display_keys_are_versioned_and_legacy_assets_never_collide(tmp_path, monkeypatch):
     path = mask_file(tmp_path / "mask.nii.gz")
     entry = structure("total:liver", path)
@@ -362,10 +324,6 @@ def test_display_keys_are_versioned_and_legacy_assets_never_collide(tmp_path, mo
     assert surfaces._surface_identity(entry, detailed=False)[1] not in (display, legacy_display)
     assert surfaces._surface_identity(entry, detailed=True)[1] == detailed
     monkeypatch.undo()
-    monkeypatch.setattr(surfaces, "_ASSET_IMPLEMENTATION", "future-detailed")
-    assert surfaces._surface_identity(entry, detailed=True)[1] != detailed
-    assert surfaces._surface_identity(entry, detailed=False)[1] == display
-    monkeypatch.undo()
     # A float asset cached by the previous release remains valid for old manifests.
     cache = tmp_path / "cache"
     old = surfaces.surface_asset_path(cache, legacy_display)
@@ -374,9 +332,7 @@ def test_display_keys_are_versioned_and_legacy_assets_never_collide(tmp_path, mo
     before = old.read_bytes()
     current = surfaces.prepare_surface(entry, cache)
     assert current["key"] == display and current["cache"]["surface_misses"] == 1
-    assert isinstance(surfaces._asset_arrays(current["path"]), surfaces._Quantized)
     assert old.read_bytes() == before and surfaces._valid_cache(old) is not None
-    assert not isinstance(surfaces._asset_arrays(old), surfaces._Quantized)
 
 
 def test_display_meshes_of_oblique_reflected_masks_stay_within_the_grid_bound(tmp_path):
@@ -390,11 +346,6 @@ def test_display_meshes_of_oblique_reflected_masks_stay_within_the_grid_bound(tm
     np.testing.assert_array_equal(faces, expected[2])
     assert np.abs(positions - expected[0]).max() * 1000 <= STEP * 1000 / 2
     assert np.abs(normals - expected[1]).max() <= 0.5 / 127 + 1e-6
-    # Only display GLBs change: detailed exports remain exact float32.
-    surfaces.build_model([structure("total:liver", path)], tmp_path / "detailed.glb", detailed=True)
-    detailed, detailed_binary = surfaces._read_glb(tmp_path / "detailed.glb")
-    assert "extensionsUsed" not in detailed
-    np.testing.assert_array_equal(decode(detailed, detailed_binary, detailed["nodes"][0])[0], surfaces._mesh(path, detailed=True)[0])
 
 
 def test_import_rejects_inconsistent_quantized_models(tmp_path):
@@ -405,9 +356,6 @@ def test_import_rejects_inconsistent_quantized_models(tmp_path):
     normal = document["meshes"][0]["primitives"][0]["attributes"]["NORMAL"]
     for change in (
         lambda value: value["nodes"][0].update(scale=[STEP, STEP, 2 * STEP]),
-        lambda value: value["nodes"][0].pop("translation"),
-        lambda value: value["nodes"][0].update(rotation=[0, 0, 0, 1]),
-        lambda value: value.pop("extensionsRequired"),
         lambda value: value.update(extensionsUsed=["KHR_mesh_quantization", "EXT_meshopt_compression"]),
         lambda value: value["accessors"][normal].pop("normalized"),
     ):

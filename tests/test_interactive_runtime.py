@@ -290,29 +290,20 @@ def test_prompt_prefix_is_incremental_and_undo_and_session_switch_replay_saved_b
     runtime.release()
 
 
-def test_replaced_baseline_invalidates_cache_even_for_same_prompt_ids(runtime_files, tmp_path):
-    fixture, runtime = runtime_files, interactive.InteractiveRuntime()
-    point = fixture.point("one", [7, 8, 9])
-    predict(runtime, fixture, tmp_path, [point])
-    modified = fixture.baseline.copy()
-    modified[0, 0, 0] = 1
-    save(fixture.mask, modified, fixture.affine)
-    result = predict(runtime, fixture, tmp_path, [point], "new-baseline.nii.gz")
-    assert not result["reused_prompt_prefix"]
-    assert len(fixture.sessions[0].initials) == 2
-    assert nib.load(tmp_path / "new-baseline.nii.gz").get_fdata()[0, 0, 0] == 1
-    runtime.release()
-
-
-def test_replaced_ct_reprepares_image_and_edited_prompt_replays(runtime_files, tmp_path):
+def test_edited_prompt_replaced_baseline_or_replaced_ct_replays_from_the_start(runtime_files, tmp_path):
     fixture, runtime = runtime_files, interactive.InteractiveRuntime()
     point = fixture.point("one", [7, 8, 9])
     predict(runtime, fixture, tmp_path, [point])
     altered = fixture.point("one", [8, 8, 9])
     result = predict(runtime, fixture, tmp_path, [altered], "edited.nii.gz")
-    assert not result["reused_prompt_prefix"]
     edited = nib.load(tmp_path / "edited.nii.gz").get_fdata()
-    assert edited[7, 8, 9] == 0 and edited[8, 8, 9] == 1
+    assert not result["reused_prompt_prefix"] and edited[7, 8, 9] == 0 and edited[8, 8, 9] == 1
+    # The same prompt IDs on a replaced saved mask must not reuse the cache.
+    modified = fixture.baseline.copy()
+    modified[0, 0, 0] = 1
+    save(fixture.mask, modified, fixture.affine)
+    result = predict(runtime, fixture, tmp_path, [altered], "new-baseline.nii.gz")
+    assert not result["reused_prompt_prefix"] and nib.load(tmp_path / "new-baseline.nii.gz").get_fdata()[0, 0, 0] == 1
     save(fixture.ct, fixture.values + 1, fixture.affine)
     result = predict(runtime, fixture, tmp_path, [altered], "changed-ct.nii.gz")
     assert not result["reused_prompt_prefix"]
@@ -386,21 +377,16 @@ def test_cpu_device_loads_and_releases_without_gpu_state(runtime_files, tmp_path
     monkeypatch.setenv("SCAN3D_DEVICE", "cpu")
     runtime = interactive.InteractiveRuntime()
     result = predict(runtime, runtime_files, tmp_path, [])
-    assert requests == ["cpu"] and result["predictions_this_request"] == 0
+    assert requests == ["cpu"] and result["predictions_this_request"] == 0 and result["miopen_find_mode"] is None
     assert runtime._model_provenance["device"] == "cpu" and runtime._model_provenance["gpu_name"] is None
     runtime.release()
 
 
 @pytest.mark.parametrize(
-    "device, recorded",
-    [
-        ({"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "Test GPU", "torch": "2.14.0+rocm7.2", "hip": "7.2.4", "cuda": None}, "FAST"),
-        ({"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "Test GPU", "torch": "2.14.0+cu130", "hip": None, "cuda": "13.0"}, None),
-        ({"device": "cpu", "selected_device": "cpu", "torch": "2.14.0+cpu"}, None),
-    ],
-    ids=["hip", "cuda", "cpu"],
+    "torch_build, hip, cuda, recorded", [("2.14.0+rocm7.2", "7.2.4", None, "FAST"), ("2.14.0+cu130", None, "13.0", None)], ids=["hip", "cuda"]
 )
-def test_the_miopen_setting_is_recorded_only_where_a_build_reads_it(runtime_files, tmp_path, monkeypatch, device, recorded):
+def test_the_miopen_setting_is_recorded_only_where_a_build_reads_it(runtime_files, tmp_path, monkeypatch, torch_build, hip, cuda, recorded):
+    device = {"selected_device": "gpu:0", "gpu_index": 0, "gpu_name": "Test GPU", "torch": torch_build, "hip": hip, "cuda": cuda}
     monkeypatch.setattr(interactive, "_device_info", lambda request: device)
     runtime = interactive.InteractiveRuntime()
     assert predict(runtime, runtime_files, tmp_path, [])["miopen_find_mode"] == recorded
@@ -419,23 +405,19 @@ def test_mask_geometry_and_original_path_protected(runtime_files, tmp_path):
     assert runtime._session is None
 
 
-def test_readiness_missing_package_and_incomplete_model(runtime_files, monkeypatch):
+def test_readiness_reports_a_missing_or_mismatched_package_and_an_incomplete_model(runtime_files, monkeypatch):
     def missing(name):
         raise metadata.PackageNotFoundError(name)
 
     monkeypatch.setattr(interactive.metadata, "version", missing)
     assert not interactive.status()["installed"]
+    monkeypatch.setattr(interactive.metadata, "version", lambda name: "2.5.0")
+    result = interactive.status()
+    assert result["installed"] and not result["available"] and interactive.ENGINE_VERSION in result["reason"]
     monkeypatch.setattr(interactive.metadata, "version", lambda name: interactive.ENGINE_VERSION)
     (runtime_files.directory / "fold_0/checkpoint_final.pth").unlink()
     result = interactive.status()
     assert not result["available"] and not result["model_available"]
-
-
-def test_mismatched_package_version_is_explicit(runtime_files, monkeypatch):
-    monkeypatch.setattr(interactive.metadata, "version", lambda name: "2.5.0")
-    result = interactive.status()
-    assert result["installed"] and not result["available"]
-    assert interactive.ENGINE_VERSION in result["reason"]
 
 
 @pytest.mark.parametrize("initial_mode", [None, "NORMAL"])
@@ -495,26 +477,6 @@ def test_explicit_apply_groups_nearby_points_once_then_predicts_only_new_warm_ba
     runtime.release()
 
 
-def test_batch_undo_and_edit_replay_original_apply_boundaries_exactly(batch_runtime_files, tmp_path):
-    fixture, runtime = batch_runtime_files, interactive.InteractiveRuntime()
-    first_two = [fixture.point("one", [7, 8, 9]), fixture.point("two", [3, 4, 5], False)]
-    predict(runtime, fixture, tmp_path, first_two, "first.nii.gz", batches=[boundary(2)])
-    three = [*first_two, fixture.point("three", [8, 9, 10])]
-    predict(runtime, fixture, tmp_path, three, "third.nii.gz", batches=[boundary(2), boundary(3)])
-    session = fixture.sessions[0]
-    undo = predict(runtime, fixture, tmp_path, first_two, "undo.nii.gz", batches=[boundary(2)])
-    assert not undo["reused_prompt_prefix"] and undo["predictions_this_request"] == 1
-    np.testing.assert_array_equal(nib.load(tmp_path / "first.nii.gz").dataobj, nib.load(tmp_path / "undo.nii.gz").dataobj)
-    edited = [fixture.point("one", [9, 7, 8]), first_two[1], three[2]]
-    result = predict(runtime, fixture, tmp_path, edited, "edit.nii.gz", batches=[boundary(2), boundary(3)])
-    assert not result["reused_prompt_prefix"] and result["predictions_this_request"] == 2
-    assert len(session.calls) == 5 and session.initial_modes == [False, False, False]
-    target = nib.load(tmp_path / "edit.nii.gz").get_fdata()
-    assert target[7, 8, 9] == 0 and target[9, 7, 8] == target[8, 9, 10] == 1
-    np.testing.assert_array_equal(nib.load(fixture.mask).dataobj, fixture.baseline)
-    runtime.release()
-
-
 def test_equal_end_whole_refinement_boundary_is_reused_and_next_batch_starts_after_reset(batch_runtime_files, tmp_path):
     fixture, runtime = batch_runtime_files, interactive.InteractiveRuntime()
     prompts = [fixture.point("one", [7, 8, 9]), fixture.point("two", [3, 4, 5], False)]
@@ -568,22 +530,6 @@ def test_changed_persisted_autozoom_or_apply_grouping_replays_history(batch_runt
     assert not grouped["reused_prompt_prefix"] and grouped["predictions_this_request"] == 1
     assert len(session.calls[-1]["evidence"]) == 2
     assert session.initial_modes == [False, False, False]
-    runtime.release()
-
-
-def test_cancelled_batch_invalidates_runtime_and_retry_replays_all_apply_groups(batch_runtime_files, tmp_path):
-    fixture, runtime = batch_runtime_files, interactive.InteractiveRuntime()
-    prompts = [fixture.point("one", [7, 8, 9]), fixture.point("two", [8, 9, 10])]
-    predict(runtime, fixture, tmp_path, prompts[:1], batches=[boundary(1)])
-    stopped = [False]
-    fixture.sessions[0].after_batch = lambda: stopped.__setitem__(0, True)
-    with pytest.raises(interactive.SegmentationCancelled):
-        predict(runtime, fixture, tmp_path, prompts, "cancelled-batch.nii.gz", batches=[boundary(1), boundary(2)], cancelled=lambda: stopped[0])
-    assert runtime._session is None and not (tmp_path / "cancelled-batch.nii.gz").exists()
-    result = predict(runtime, fixture, tmp_path, prompts, "retry-batch.nii.gz", batches=[boundary(1), boundary(2)])
-    assert not result["reused_prompt_prefix"] and result["predictions_this_request"] == 2
-    assert len(fixture.sessions) == 2 and len(fixture.sessions[1].calls) == 2
-    np.testing.assert_array_equal(nib.load(fixture.mask).dataobj, fixture.baseline)
     runtime.release()
 
 

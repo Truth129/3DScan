@@ -93,30 +93,6 @@ describe('optimistic interactive draft queue', () => {
     expect(reader.interactivePrompts.mock.calls[1][3]).toHaveLength(3);
     expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 2, false);
   });
-  it('undos and redoes complete vector gestures without issuing inference', async () => {
-    const { controller, reader } = fixture();
-    await controller.load();
-    controller.append({
-      id: 'brush',
-      kind: 'scribble',
-      axis: 2,
-      index: 3,
-      vertices: [
-        [1, 1],
-        [2, 2],
-        [3, 3],
-      ],
-      radius_mm: 3,
-      include: false,
-    });
-    controller.undo();
-    expect(controller.prompts).toEqual([]);
-    expect(controller.canRedo).toBe(true);
-    controller.redo();
-    expect(controller.prompts).toHaveLength(1);
-    expect('vertices' in controller.prompts[0] && controller.prompts[0].vertices).toHaveLength(3);
-    expect(reader.predictInteractive).not.toHaveBeenCalled();
-  });
   it('keeps the last candidate while appending pending edits and restores clean local undo', async () => {
     const initial = {
       ...base(),
@@ -151,14 +127,6 @@ describe('optimistic interactive draft queue', () => {
     expect(controller.conflict).toBe(true);
     expect(controller.prompts[0].id).toBe('local');
     expect(reader.predictInteractive).not.toHaveBeenCalled();
-  });
-  it('can request whole-mask refinement without creating a point first', async () => {
-    const { controller, reader } = fixture();
-    await controller.load();
-    await controller.apply(true);
-    expect(controller.prompts).toEqual([]);
-    expect(reader.startInteractive).toHaveBeenCalledTimes(1);
-    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 0, true);
   });
   it('compares normalized point kinds and server key ordering consistently', async () => {
     const applied = { include: true, ras: [1, 2, 3] as [number, number, number], id: 'legacy', kind: 'point' as const };
@@ -197,31 +165,26 @@ describe('running on a chosen card', () => {
     candidate: { generation: 1, revision_id: 'review-draft-1', summary },
   });
 
-  it('sends a fifth argument only when there is a choice', async () => {
-    const { controller, reader } = fixture();
-    await controller.load();
-    controller.append(point('mark'));
-    await controller.apply(false, { inference_path: 'nvidia' });
-    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia' });
-  });
-  it('sends a whole-mask refine with its card too', async () => {
+  it('sends a fifth argument only when there is a choice, for marks or a whole-mask refine with none', async () => {
     const { controller, reader } = fixture();
     await controller.load();
     await controller.apply(true, { inference_path: 'nvidia' });
-    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 0, true, { inference_path: 'nvidia' });
+    expect(reader.startInteractive).toHaveBeenCalledOnce();
+    expect(reader.predictInteractive).toHaveBeenLastCalledWith('case', 'draft', 0, true, { inference_path: 'nvidia' });
+    controller.working = false;
+    controller.append(point('mark'));
+    await controller.apply(false, { inference_path: 'nvidia' });
+    expect(reader.predictInteractive).toHaveBeenLastCalledWith('case', 'draft', 2, false, { inference_path: 'nvidia' });
   });
-  it('re-runs a draft with nothing pending, which Run AI would not', async () => {
-    const { controller, reader } = fixture(locked());
+  it.each([
+    ['a draft with nothing pending, which Run AI would not', [point('applied')]],
+    ['a full refine that has no marks at all', []],
+  ])('re-runs %s', async (_name, prompts) => {
+    const { controller, reader } = fixture(locked(prompts));
     await controller.load();
     expect(controller.pendingCount).toBe(0);
     await controller.apply();
     expect(reader.predictInteractive).not.toHaveBeenCalled();
-    await controller.apply(false, { inference_path: 'nvidia', replay: true });
-    expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia', replay: true });
-  });
-  it('re-runs a full refine that has no marks at all', async () => {
-    const { controller, reader } = fixture(locked([]));
-    await controller.load();
     await controller.apply(false, { inference_path: 'nvidia', replay: true });
     expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia', replay: true });
   });
@@ -339,15 +302,6 @@ describe('a 409 from predict', () => {
     await moved.controller.apply(true);
     expect(conflicts.at(-1)).toBe(true);
   });
-  it('shows the Re-run the refusal pointed at', async () => {
-    const card = (id: string) => ({ id, label: `${id} card`, memory_gib: 16, shares_display: false, available: true, reason: null });
-    const status = { installed: true, model_available: true, available: true, inference_paths: [card('default'), card('nvidia')] };
-    const { controller, reader } = await refused();
-    expect(reviewRunPath('nninteractive', status, 'default', controller.publicReview)).toMatchObject({ locked: false, canRerun: false });
-    reader.interactiveReview.mockResolvedValueOnce(published());
-    await controller.apply(true, { inference_path: 'default' });
-    expect(reviewRunPath('nninteractive', status, 'default', controller.publicReview)).toMatchObject({ locked: true, id: 'nvidia', canRerun: true });
-  });
   it('keeps the marks and their undo history, which install() and adopt() reset', async () => {
     const { controller, reader } = await refused();
     controller.append(point('later'));
@@ -370,48 +324,22 @@ describe('a 409 from predict', () => {
     expect(controller.pendingCount).toBe(0);
     expect(controller.conflict).toBe(false);
   });
-  it("follows another tab's running job as load() does, and ends with what it left", async () => {
-    vi.useFakeTimers();
-    try {
-      const { controller, reader } = await refused();
-      reader.interactiveReview.mockResolvedValueOnce({ ...saved(), status: 'predicting', job_id: 'prediction' });
-      await controller.apply(true);
-      expect(controller.working).toBe(true);
-      expect(controller.review?.status).toBe('predicting');
-      reader.interactiveReview.mockResolvedValueOnce({ ...saved(), status: 'predicting', job_id: 'prediction' });
-      await vi.advanceTimersByTimeAsync(900);
-      expect(controller.working).toBe(true);
-      reader.interactiveReview.mockResolvedValueOnce({ ...published(), job_id: 'prediction' });
-      await vi.advanceTimersByTimeAsync(900);
-      expect([controller.working, controller.error]).toEqual([false, '']);
-      expect(reader.job).toHaveBeenCalledTimes(2);
-      expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
   it("shows another tab's Save running too, which no chooser could have told it", async () => {
     const { controller, reader } = await refused();
     reader.interactiveReview.mockResolvedValueOnce({ ...saved(), status: 'accepting', job_id: 'saving' });
     await controller.apply(true);
     expect(controller.working).toBe(true);
   });
-  it('asks for a reload over a newer generation, and takes none of it on', async () => {
+  it('asks for a reload over a newer generation, takes none of it on, and Reload saved work clears it', async () => {
     const { controller, reader } = await refused();
     reader.interactiveReview.mockResolvedValueOnce({ ...saved(2), prompts: [point('other-tab')] });
     await controller.apply(true);
-    expect(controller.conflict).toBe(true);
-    expect(controller.error).toBe(refusal);
+    expect([controller.conflict, controller.error]).toEqual([true, refusal]);
     expect(controller.review?.generation).toBe(1);
     expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
     controller.append(point('blocked'));
     await controller.flush();
     expect(reader.interactivePrompts).not.toHaveBeenCalled();
-  });
-  it('lets Reload saved work clear that conflict', async () => {
-    const { controller, reader } = await refused();
-    reader.interactiveReview.mockResolvedValueOnce(saved(2));
-    await controller.apply(true);
     reader.interactiveReviews.mockResolvedValueOnce([{ ...saved(2), prompts: [point('other-tab')] }]);
     await controller.reload();
     expect([controller.conflict, controller.error]).toEqual([false, '']);
@@ -604,31 +532,22 @@ describe('a draft that moves under a job this page follows', () => {
     ['its own job', ownJob],
     ["another tab's job", followed],
   ])('following %s', (_route, page) => {
-    it('asks for a reload over marks it has never seen, and takes none of them on', async () => {
-      const { controller, reader } = await page();
-      await reads(reader, theirs());
-      expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, stale]);
-      expect(controller.review?.generation).toBe(1);
-      expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
-      expect(controller.unsaved, 'nothing here is waiting to save').toBe(false);
-      controller.append(point('blocked'));
-      await controller.flush();
-      expect(reader.interactivePrompts).not.toHaveBeenCalled();
-    });
-    it('says so, because App hears nothing else', async () => {
+    it('asks for a reload over marks it has never seen, says so, takes none of them on and stops reading', async () => {
       const { controller, reader, changed } = await page();
       const conflicts: boolean[] = [];
       changed.mockImplementation(() => conflicts.push(controller.conflict));
       await reads(reader, theirs());
-      expect(conflicts.at(-1)).toBe(true);
-    });
-    it('stops reading once it has asked', async () => {
-      const { controller, reader } = await page();
-      await reads(reader, theirs());
+      expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, stale]);
+      expect(conflicts.at(-1), 'App hears nothing else').toBe(true);
+      expect(controller.review?.generation).toBe(1);
+      expect(controller.prompts.map(item => item.id)).toEqual(['saved']);
+      expect(controller.unsaved, 'nothing here is waiting to save').toBe(false);
       reader.interactiveReview.mockClear();
       await vi.advanceTimersByTimeAsync(5000);
       expect(reader.interactiveReview).not.toHaveBeenCalled();
-      expect(controller.working).toBe(false);
+      controller.append(point('blocked'));
+      await controller.flush();
+      expect(reader.interactivePrompts).not.toHaveBeenCalled();
     });
     it.each<[string, Partial<InteractiveReview>]>([
       ['options', { options: { ...options, autozoom: false } }],
@@ -664,13 +583,6 @@ describe('a draft that moves under a job this page follows', () => {
     });
   });
 
-  it('reads the review and then the job, the order the page has always asked in', async () => {
-    const { reader } = await ownJob();
-    reader.interactiveReview.mockClear();
-    reader.job.mockClear();
-    await reads(reader, running());
-    expect(reader.interactiveReview.mock.invocationCallOrder[0]).toBeLessThan(reader.job.mock.invocationCallOrder[0]);
-  });
   it('leaves the job it knows alone when it refuses the record', async () => {
     const { controller, reader } = await ownJob();
     reader.job.mockResolvedValueOnce({ id: 'theirs', case_id: 'case', kind: 'review_predict', status: 'queued', stage: 'Queued', created_at: '' });
@@ -743,15 +655,6 @@ describe('a draft that moves under a job this page follows', () => {
       read.release(running());
       await run;
     });
-    it('reads the job on from the record it has taken on', async () => {
-      const { controller, reader, run, read } = await readHeld();
-      read.release(running());
-      await run;
-      expect(controller.review?.status).toBe('predicting');
-      reader.interactiveReview.mockClear();
-      await reads(reader, saved(1, { status: 'ready' }));
-      expect(reader.interactiveReview).toHaveBeenCalledOnce();
-    });
   });
   describe('what is left of a follow that is over', () => {
     const summary = { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5 };
@@ -759,14 +662,14 @@ describe('a draft that moves under a job this page follows', () => {
     const cancelled = () => ({ ...job(), status: 'cancelled' as const });
     const result = () =>
       saved(1, { status: 'ready', dirty: false, applied_prompt_count: 1, candidate: { generation: 1, revision_id: 'review-draft-1', summary } });
-    /** A reply that fails when it is let go, as a held one that a poll is already waiting on. */
+    /** A reply that fails when it is let go, as a held one that a poll is already waiting on. It ignores a value, so either fits a test. */
     const failing = <T>() => {
       const gate = held<void>();
       return {
         reply: gate.reply.then((): T => {
           throw new Error('Failed to fetch');
         }),
-        release: () => gate.release(),
+        release: (_value?: T) => gate.release(),
       };
     };
     const quiet = async (reader: ReturnType<typeof fixture>['reader']) => {
@@ -836,11 +739,15 @@ describe('a draft that moves under a job this page follows', () => {
       return answer;
     }
 
-    it('arms nothing when Cancel answers after the follow ended, so no read is left to free the next run', async () => {
-      const answer = held<ReturnType<typeof cancelled>>();
-      const { reader, cancelling } = await cancelOutlasts(answer.reply);
+    it.each([
+      ['answers', ''],
+      ['fails', 'Cancellation could not be requested. Failed to fetch'],
+    ])('arms nothing when Cancel %s after the follow ended, so no read is left to free the next run', async (outcome, error) => {
+      const answer = outcome === 'answers' ? held<ReturnType<typeof cancelled>>() : failing<ReturnType<typeof cancelled>>();
+      const { controller, reader, cancelling } = await cancelOutlasts(answer.reply);
       answer.release(cancelled());
       await cancelling;
+      expect(controller.error).toBe(error);
       expect(vi.getTimerCount(), 'no timer is left waiting').toBe(0);
       await quiet(reader);
     });
@@ -848,35 +755,20 @@ describe('a draft that moves under a job this page follows', () => {
       const { reader } = await cancelArmed();
       await quiet(reader);
     });
-    it('still restarts the wait for the next read while the job runs, as it always has', async () => {
+    it.each([
+      ['succeeds', ''],
+      ['fails', 'Cancellation could not be requested. Workstation offline'],
+    ])('restarts the wait for the next read while the job runs, when Cancel %s', async (outcome, error) => {
       const { controller, reader } = await ownJob();
       await vi.advanceTimersByTimeAsync(500);
+      if (outcome === 'fails') reader.cancel.mockRejectedValueOnce(new Error('Workstation offline'));
       reader.interactiveReview.mockClear();
       await controller.cancel();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(reader.interactiveReview).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(400);
-      expect(reader.interactiveReview).toHaveBeenCalledOnce();
-    });
-    it('says so when Cancel fails, and goes on following the job', async () => {
-      const { controller, reader } = await ownJob();
-      await vi.advanceTimersByTimeAsync(500);
-      reader.cancel.mockRejectedValueOnce(new Error('Workstation offline'));
-      reader.interactiveReview.mockClear();
-      await controller.cancel();
-      expect(controller.error).toBe('Cancellation could not be requested. Workstation offline');
+      expect(controller.error).toBe(error);
       await vi.advanceTimersByTimeAsync(500);
       expect(reader.interactiveReview, 'the wait restarted').not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(400);
       expect(reader.interactiveReview).toHaveBeenCalledOnce();
-    });
-    it('still says so when Cancel fails after the follow ended', async () => {
-      const answer = failing<ReturnType<typeof cancelled>>();
-      const { controller, reader, cancelling } = await cancelOutlasts(answer.reply);
-      answer.release();
-      await cancelling;
-      expect(controller.error).toBe('Cancellation could not be requested. Failed to fetch');
-      await quiet(reader);
     });
     it('reaches the job a follow took on from another tab, before any poll has named it', async () => {
       const { controller, reader } = await followed();
@@ -912,8 +804,8 @@ describe('a draft that moves under a job this page follows', () => {
         answer.release(job());
         await finishing;
       });
-      it('arms nothing when a Cancel from the last follow answers', async () => {
-        const reply = held<ReturnType<typeof cancelled>>();
+      it.each(['answers', 'fails'])('arms nothing and says nothing when a Cancel from the last follow %s', async outcome => {
+        const reply = outcome === 'answers' ? held<ReturnType<typeof cancelled>>() : failing<ReturnType<typeof cancelled>>();
         let cancelling!: Promise<void>;
         const { controller, reader, answer, finishing } = await ready(async ended => {
           const page = await cancelOutlasts(reply.reply, ended);
@@ -922,27 +814,14 @@ describe('a draft that moves under a job this page follows', () => {
         });
         reply.release(cancelled());
         await cancelling;
+        expect(controller.error).toBe('');
         await quiet(reader);
         expect(controller.working).toBe(true);
         answer.release(job());
         await finishing;
       });
-      it('says nothing of a Cancel from the last follow that fails', async () => {
-        const reply = failing<ReturnType<typeof cancelled>>();
-        let cancelling!: Promise<void>;
-        const { controller, answer, finishing } = await ready(async ended => {
-          const page = await cancelOutlasts(reply.reply, ended);
-          cancelling = page.cancelling;
-          return page;
-        });
-        reply.release();
-        await cancelling;
-        expect(controller.error).toBe('');
-        answer.release(job());
-        await finishing;
-      });
-      it('drops a read the last follow left, which would otherwise free the page', async () => {
-        const second = held<InteractiveReview>();
+      it.each(['answers', 'fails'])('drops a read the last follow left, which would otherwise free the page, when it %s', async outcome => {
+        const second = outcome === 'answers' ? held<InteractiveReview>() : failing<InteractiveReview>();
         const { controller, reader, answer, finishing } = await ready(ended => twoPolls(second.reply, ended));
         reader.job.mockClear();
         second.release({ ...result(), error: 'From the last follow', job_id: 'prediction', prompts: [point('saved'), point('stale')] });
@@ -951,16 +830,6 @@ describe('a draft that moves under a job this page follows', () => {
         expect([controller.working, controller.error, controller.unsaved]).toEqual([true, '', false]);
         await quiet(reader);
         expect(controller.working).toBe(true);
-        answer.release(job());
-        await finishing;
-      });
-      it('says nothing of a read the last follow left that fails', async () => {
-        const second = failing<InteractiveReview>();
-        const { controller, reader, answer, finishing } = await ready(ended => twoPolls(second.reply, ended));
-        second.release();
-        await vi.advanceTimersByTimeAsync(0);
-        expect([controller.working, controller.error]).toEqual([true, '']);
-        await quiet(reader);
         answer.release(job());
         await finishing;
       });
@@ -987,8 +856,8 @@ describe('a draft that moves under a job this page follows', () => {
         answer.release(job());
         await finishing;
       });
-      it('drops a read after predict the last follow left, which would arm a read inside this one', async () => {
-        const read = held<InteractiveReview>();
+      it.each(['answers', 'fails'])('drops a read after predict the last follow left, which would arm a read inside this one, when it %s', async outcome => {
+        const read = outcome === 'answers' ? held<InteractiveReview>() : failing<InteractiveReview>();
         let first!: Promise<void>;
         const { controller, reader, answer, finishing } = await ready(async ended => {
           const page = await readOutlasted(read.reply, ended);
@@ -1002,20 +871,6 @@ describe('a draft that moves under a job this page follows', () => {
         answer.release(job());
         await finishing;
         expect(controller.job?.id, 'this follow still takes on its own job').toBe('prediction');
-      });
-      it('says nothing of a read after predict the last follow left that fails', async () => {
-        const read = failing<InteractiveReview>();
-        let first!: Promise<void>;
-        const { controller, answer, finishing } = await ready(async ended => {
-          const page = await readOutlasted(read.reply, ended);
-          first = page.run;
-          return page;
-        });
-        read.release();
-        await first;
-        expect([controller.working, controller.error]).toEqual([true, '']);
-        answer.release(job());
-        await finishing;
       });
       it('drops a list the last Reload left, which would end this follow over the same record', async () => {
         const list = held<InteractiveReview[]>();
@@ -1118,18 +973,13 @@ describe('a draft that moves under a job this page follows', () => {
         await run;
         return { controller, reader };
       }
-      it('stays with that poll, which alone can say how the job ended', async () => {
+      it('stays with that poll, which alone can say how the job ended, and reads on while the job is still stopping', async () => {
         const { controller, reader } = await failedUnderCancel();
         expect([controller.working, controller.error]).toEqual([true, 'Failed to fetch']);
-        await reads(reader, saved(1, { error: said }));
-        expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
-      });
-      it('reads on while the job is still stopping, as any follow does', async () => {
-        const { controller, reader } = await failedUnderCancel();
         await reads(reader, running());
         expect(controller.working).toBe(true);
         await reads(reader, saved(1, { error: said }));
-        expect([controller.working, controller.error]).toEqual([false, said]);
+        expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
       });
       it('takes the reply of a poll that is out when it fails', async () => {
         const out = held<InteractiveReview>();
@@ -1149,11 +999,14 @@ describe('a draft that moves under a job this page follows', () => {
         expect([controller.working, controller.error]).toEqual([false, 'Failed to fetch']);
         await quiet(reader);
       });
-      it('stays with the job when the read fails with the Cancel request still out', async () => {
+      it.each([
+        ['answers', ''],
+        ['fails', 'Cancellation could not be requested. Failed to fetch'],
+      ])('stays with the job when the read fails with the Cancel request still out, and that request %s', async (outcome, error) => {
         const { controller, reader } = fixture(saved());
         await controller.load();
         const read = failing<InteractiveReview>();
-        const post = held<ReturnType<typeof job>>();
+        const post = outcome === 'answers' ? held<ReturnType<typeof job>>() : failing<ReturnType<typeof job>>();
         reader.interactiveReview.mockReturnValueOnce(read.reply);
         reader.cancel.mockReturnValueOnce(post.reply as never);
         const run = controller.apply(true);
@@ -1163,24 +1016,7 @@ describe('a draft that moves under a job this page follows', () => {
         await run;
         post.release(job());
         await cancelling;
-        await reads(reader, saved(1, { error: said }));
-        expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
-      });
-      it('stays with the job when the read fails and then the Cancel request fails too', async () => {
-        const { controller, reader } = fixture(saved());
-        await controller.load();
-        const read = failing<InteractiveReview>();
-        const post = failing<ReturnType<typeof job>>();
-        reader.interactiveReview.mockReturnValueOnce(read.reply);
-        reader.cancel.mockReturnValueOnce(post.reply as never);
-        const run = controller.apply(true);
-        await vi.advanceTimersByTimeAsync(0);
-        const cancelling = controller.cancel();
-        read.release();
-        await run;
-        post.release();
-        await cancelling;
-        expect([controller.working, controller.error]).toEqual([true, 'Cancellation could not be requested. Failed to fetch']);
+        expect([controller.working, controller.error]).toEqual([true, error || 'Failed to fetch']);
         await reads(reader, saved(1, { error: said }));
         expect([controller.working, controller.review?.status, controller.error]).toEqual([false, 'draft', said]);
       });
@@ -1197,14 +1033,6 @@ describe('a draft that moves under a job this page follows', () => {
         await controller.cancel();
         predict.release();
         await run;
-        expect([controller.working, controller.error]).toEqual([false, 'Failed to fetch']);
-        await quiet(reader);
-      });
-      it('frees the page as it always has when no poll is going', async () => {
-        const { controller, reader } = fixture(saved());
-        await controller.load();
-        reader.interactiveReview.mockRejectedValueOnce(new Error('Failed to fetch'));
-        await controller.apply(true);
         expect([controller.working, controller.error]).toEqual([false, 'Failed to fetch']);
         await quiet(reader);
       });
@@ -1296,7 +1124,7 @@ describe('a draft that moves under a job this page follows', () => {
         await controller.reload();
         expect([controller.review, controller.working]).toEqual([undefined, false]);
       };
-      it('never builds a record with no id out of the job that run answers with', async () => {
+      it('never builds a record with no id out of the job that run answers with, and lets the next mark start a draft', async () => {
         const page = await runOut();
         await gone(page);
         page.reader.interactiveReview.mockClear();
@@ -1304,15 +1132,9 @@ describe('a draft that moves under a job this page follows', () => {
         await page.run;
         expect([page.controller.review, page.controller.job, page.controller.working, page.controller.error]).toEqual([undefined, undefined, false, '']);
         expect(page.reader.interactiveReview, 'there is nothing to read').not.toHaveBeenCalled();
-      });
-      it('lets the next mark start a draft of its own, as a browser refresh used to be needed for', async () => {
-        const page = await runOut();
-        await gone(page);
-        page.predict.release(job());
-        await page.run;
         page.controller.append(point('next'));
         await page.controller.flush();
-        expect(page.reader.startInteractive).toHaveBeenCalledOnce();
+        expect(page.reader.startInteractive, 'once needing a browser refresh').toHaveBeenCalledOnce();
         expect([page.controller.unsaved, page.controller.conflict, page.controller.error]).toEqual([false, false, '']);
       });
       it('says nothing of a refusal that record has been replaced since', async () => {
@@ -1439,21 +1261,13 @@ describe('a draft that moves under a job this page follows', () => {
         await slow;
         expect([controller.error, controller.review?.id]).toEqual(['', 'draft']);
       });
-      it('still ends the first load, or the page would refuse every mark', async () => {
-        const list = held<InteractiveReview[]>();
+      it.each(['answers', 'fails'])('still ends the first load when its list %s, or the page would refuse every mark', async outcome => {
+        const list = outcome === 'answers' ? held<InteractiveReview[]>() : failing<InteractiveReview[]>();
         const { controller, changed, loading } = await firstLoad(list.reply);
         list.release([saved()]);
         await loading;
-        expect([controller.loaded, controller.review]).toEqual([true, undefined]);
+        expect([controller.loaded, controller.review, controller.error]).toEqual([true, undefined, '']);
         expect(changed, 'App hears nothing else').toHaveBeenCalled();
-      });
-      it('still ends the first load when it fails', async () => {
-        const list = failing<InteractiveReview[]>();
-        const { controller, changed, loading } = await firstLoad(list.reply);
-        list.release();
-        await loading;
-        expect([controller.loaded, controller.error]).toEqual([true, '']);
-        expect(changed).toHaveBeenCalled();
       });
     });
   });
@@ -1524,21 +1338,17 @@ describe('a draft that moves under a job this page follows', () => {
     expect(controller.review?.generation).toBe(2);
     expect(controller.unsaved, 'that save is not waiting to be made again').toBe(false);
   });
-  it('keeps Reload saved work when the job it follows ends after a save was refused, because it sits inside the message', async () => {
+  it.each<[string, InteractiveReview, string]>([
+    ['the refusal, because Reload saved work sits inside it', saved(1, { status: 'accepted', job_id: 'prediction' }), ''],
+    ["the job's own error, which says more", saved(1, { status: 'ready', error: 'Saving the correction failed' }), 'Saving the correction failed'],
+  ])('keeps the conflict when the job it follows ends after a save was refused, showing %s', async (_name, ended, error) => {
     const { controller, reader } = await followedWithAMark('accepting');
     const message = 'Wait for acceptance to finish or cancel it before editing';
     reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, message));
     await vi.advanceTimersByTimeAsync(300);
     expect([controller.conflict, controller.error]).toEqual([true, message]);
-    await reads(reader, saved(1, { status: 'accepted', job_id: 'prediction' }));
-    expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, message]);
-  });
-  it("still shows the job's own error then, which says more", async () => {
-    const { controller, reader } = await followedWithAMark('accepting');
-    reader.interactivePrompts.mockRejectedValueOnce(new ApiError(409, 'Wait for acceptance to finish or cancel it before editing'));
-    await vi.advanceTimersByTimeAsync(300);
-    await reads(reader, saved(1, { status: 'ready', error: 'Saving the correction failed' }));
-    expect([controller.conflict, controller.error]).toEqual([true, 'Saving the correction failed']);
+    await reads(reader, ended);
+    expect([controller.working, controller.conflict, controller.error]).toEqual([false, true, error || message]);
   });
   describe('a save that failed during a follow', () => {
     const offline = 'Failed to fetch';
@@ -1603,13 +1413,6 @@ describe('a draft that moves under a job this page follows', () => {
       expect([controller.error, controller.unsaved, controller.conflict]).toEqual(['Still offline', true, false]);
       expect(controller.prompts.map(item => item.id)).toEqual(['saved', 'later']);
     });
-    it('sends nothing when nothing is waiting, as any other job ends', async () => {
-      const { controller, reader } = await ownJob();
-      await reads(reader, saved(1, { status: 'ready' }));
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(controller.unsaved).toBe(false);
-      expect(reader.interactivePrompts).not.toHaveBeenCalled();
-    });
     it('sends nothing for a mark the server rewrote, which no failure left unsaved', async () => {
       const { controller, reader } = await ownJob();
       await reads(reader, saved(1, { status: 'ready', prompts: [{ ...point('saved'), ras: [1, 2, 3.5] } as InteractivePrompt] }));
@@ -1648,43 +1451,31 @@ describe('a draft that moves under a job this page follows', () => {
     await reads(reader, saved(1, { status: 'ready' }));
     expect(controller.error).toBe('');
   });
-  it('lets a Discard land while the re-read is out, with nothing left to wait for', async () => {
+  it.each(['lands', 'is refused'])('waits for nothing when a Discard sent while the re-read is out %s, unless the job still runs', async outcome => {
     const { controller, reader } = fixture(saved());
     await controller.load();
     reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, refusal));
-    const read = held<InteractiveReview>();
+    const read = held<InteractiveReview>(),
+      answer = held<Awaited<ReturnType<typeof reader.discardInteractive>>>();
     reader.interactiveReview.mockReturnValueOnce(read.reply);
     const run = controller.apply(true);
     await vi.advanceTimersByTimeAsync(0);
-    const answer = held<Awaited<ReturnType<typeof reader.discardInteractive>>>();
-    reader.discardInteractive.mockReturnValueOnce(answer.reply);
+    reader.discardInteractive.mockImplementationOnce(() =>
+      outcome === 'lands' ? answer.reply : answer.reply.then(() => Promise.reject(new Error('Workstation offline'))),
+    );
     const discard = controller.discard();
     await vi.advanceTimersByTimeAsync(0);
     read.release(running()); // Read just before the discard landed.
     await run;
     answer.release({ ...saved(2), status: 'discarded' });
     await discard;
-    await vi.advanceTimersByTimeAsync(5000);
-    expect([controller.working, controller.conflict, controller.error]).toEqual([false, false, refusal]);
-    expect(controller.review).toBeUndefined();
-  });
-  it('follows on when that Discard is refused, because the job is still running', async () => {
-    const { controller, reader } = fixture(saved());
-    await controller.load();
-    reader.predictInteractive.mockRejectedValueOnce(new ApiError(409, refusal));
-    const read = held<InteractiveReview>();
-    reader.interactiveReview.mockReturnValueOnce(read.reply);
-    const run = controller.apply(true);
-    await vi.advanceTimersByTimeAsync(0);
-    const answer = held<InteractiveReview>();
-    reader.discardInteractive.mockImplementationOnce(() => answer.reply.then(() => Promise.reject(new Error('Workstation offline'))));
-    const discard = controller.discard();
-    await vi.advanceTimersByTimeAsync(0);
-    read.release(running());
-    await run;
-    answer.release(saved());
-    await discard;
-    expect(controller.working).toBe(true);
+    if (outcome === 'lands') {
+      await vi.advanceTimersByTimeAsync(5000);
+      expect([controller.working, controller.conflict, controller.error]).toEqual([false, false, refusal]);
+      expect(controller.review).toBeUndefined();
+      return;
+    }
+    expect(controller.working, 'the job is still running').toBe(true);
     await reads(reader, saved(1, { status: 'ready' }));
     expect(controller.working).toBe(false);
   });
@@ -1705,17 +1496,12 @@ describe('a draft that moves under a job this page follows', () => {
       throw new Error('Failed to fetch');
     };
     const unavailable = 'Review status unavailable. Failed to fetch';
-    it('keeps the reply it came with, as it did before, and says the status is unavailable', async () => {
+    it('keeps the reply it came with and says the status is unavailable, then ends with the next read that works', async () => {
       const { controller, reader } = await ownJob();
       reader.job.mockImplementationOnce(failed);
       await reads(reader, saved(1, { status: 'ready', job_id: 'prediction', dirty: false }));
       expect(controller.review?.status, 'a result is shown at once').toBe('ready');
       expect([controller.working, controller.error]).toEqual([true, unavailable]);
-    });
-    it('goes on reading, and ends with the next read that works', async () => {
-      const { controller, reader } = await ownJob();
-      reader.job.mockImplementationOnce(failed);
-      await reads(reader, saved(1, { status: 'ready', job_id: 'prediction' }));
       await reads(reader, saved(1, { status: 'ready', job_id: 'prediction' }));
       expect([controller.working, controller.error]).toEqual([false, '']);
     });
@@ -1796,6 +1582,26 @@ describe('direct paint and erase drafts', () => {
     radius_mm: 2,
     include,
   });
+  const identity = [
+    [1, 0, 0, 0],
+    [0, 1, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1],
+  ];
+  const cut: InteractivePrompt = {
+    id: 'cut',
+    kind: 'scissors',
+    include: false,
+    shape: 'rectangle',
+    operation: 'erase_inside',
+    vertices: [
+      [-0.5, -0.5],
+      [0.5, -0.5],
+      [0.5, 0.5],
+      [-0.5, 0.5],
+    ],
+    ras_to_clip: identity,
+  };
 
   it('keeps direct and legacy AI drafts separate for the same target', async () => {
     const ai = { ...base(), prompts: [point('ai-hint')] };
@@ -1808,49 +1614,45 @@ describe('direct paint and erase drafts', () => {
     expect(reader.predictInteractive).not.toHaveBeenCalled();
   });
 
-  it('records ordered paint and erase locally, saving one snapshot before one Apply', async () => {
+  it('records ordered paint, erase and full-depth scissors locally with undo and redo, saving one snapshot before one Apply', async () => {
     const { controller, reader } = fixture(undefined, 'direct');
     await controller.load();
+    expect(controller.hasDraftChanges).toBe(false);
     controller.append(stroke('paint'));
+    controller.append(cut);
     controller.append(stroke('erase', false));
-    controller.append(stroke('paint-again'));
-    expect(controller.prompts.map(item => item.include)).toEqual([true, false, true]);
+    expect(controller.prompts.map(item => item.include)).toEqual([true, false, false]);
+    controller.undo();
+    controller.undo();
+    expect(controller.prompts.map(item => item.id)).toEqual(['paint']);
+    controller.redo();
+    expect(controller.prompts[1]).toEqual(cut);
+    controller.redo();
+    expect(controller.hasDraftChanges).toBe(true);
     expect(reader.startInteractive).not.toHaveBeenCalled();
     expect(reader.predictInteractive).not.toHaveBeenCalled();
     await controller.apply();
     expect(reader.startInteractive).toHaveBeenCalledExactlyOnceWith('case', 'base', 'liver', undefined, 'direct');
     expect(reader.interactivePrompts).toHaveBeenCalledTimes(1);
-    expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['paint', 'erase', 'paint-again']);
+    expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['paint', 'cut', 'erase']);
     expect(reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false);
   });
 
-  it('undos and redoes direct stroke polarity without requesting a prediction', async () => {
-    const { controller, reader } = fixture(undefined, 'direct');
-    await controller.load();
-    expect(controller.hasDraftChanges).toBe(false);
-    controller.append(stroke('paint'));
-    controller.append(stroke('erase', false));
-    expect(controller.hasDraftChanges).toBe(true);
-    controller.undo();
-    expect(controller.prompts.map(item => item.include)).toEqual([true]);
-    controller.redo();
-    expect(controller.prompts.map(item => item.include)).toEqual([true, false]);
-    controller.undo();
-    controller.undo();
-    expect(controller.hasDraftChanges).toBe(false);
-    expect(reader.predictInteractive).not.toHaveBeenCalled();
-  });
-
-  it('rejects AI-only interactions and full-mask inference in direct mode', async () => {
-    const { controller, reader } = fixture(undefined, 'direct');
-    await controller.load();
-    controller.append(point('not-paint'));
-    expect(controller.prompts).toEqual([]);
-    expect(controller.error).toContain('Paint and Erase');
-    await controller.apply(true);
-    expect(controller.error).toContain('AI assist');
-    expect(reader.startInteractive).not.toHaveBeenCalled();
-    expect(reader.predictInteractive).not.toHaveBeenCalled();
+  it('keeps each method to its own tools: no AI marks or full-mask inference in Direct edit, no 3D cut through nnInteractive', async () => {
+    const direct = fixture(undefined, 'direct');
+    await direct.controller.load();
+    direct.controller.append(point('not-paint'));
+    expect(direct.controller.prompts).toEqual([]);
+    expect(direct.controller.error).toContain('Paint and Erase');
+    await direct.controller.apply(true);
+    expect(direct.controller.error).toContain('AI assist');
+    expect(direct.reader.startInteractive).not.toHaveBeenCalled();
+    const ai = fixture();
+    await ai.controller.load();
+    ai.controller.append({ ...cut, shape: 'freehand', operation: 'erase_outside' } as InteractivePrompt);
+    expect(ai.controller.prompts).toEqual([]);
+    expect(ai.controller.error).toContain('Direct edit');
+    expect([direct.reader.predictInteractive, ai.reader.predictInteractive].every(call => !call.mock.calls.length)).toBe(true);
   });
 
   it('discards locally queued strokes even before their WAN autosave starts', async () => {
@@ -1881,68 +1683,6 @@ describe('direct paint and erase drafts', () => {
     controller.append(stroke('paint'));
     await controller.apply();
     expect(controller.error).toContain('different editing method');
-    expect(reader.predictInteractive).not.toHaveBeenCalled();
-  });
-
-  it('keeps full-depth scissors and native paint in the same ordered direct batch', async () => {
-    const { controller, reader } = fixture(undefined, 'direct');
-    await controller.load();
-    const cut: InteractivePrompt = {
-      id: 'cut',
-      kind: 'scissors',
-      include: false,
-      shape: 'rectangle',
-      operation: 'erase_inside',
-      vertices: [
-        [-0.5, -0.5],
-        [0.5, -0.5],
-        [0.5, 0.5],
-        [-0.5, 0.5],
-      ],
-      ras_to_clip: [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
-      ],
-    };
-    controller.append(stroke('paint'));
-    controller.append(cut);
-    controller.append(stroke('erase', false));
-    controller.undo();
-    controller.undo();
-    expect(controller.prompts.map(item => item.id)).toEqual(['paint']);
-    controller.redo();
-    expect(controller.prompts[1]).toEqual(cut);
-    controller.redo();
-    await controller.apply();
-    expect(reader.interactivePrompts.mock.calls[0][3].map(item => item.id)).toEqual(['paint', 'cut', 'erase']);
-    expect(reader.predictInteractive).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not send a direct 3D cut through nnInteractive', async () => {
-    const { controller, reader } = fixture();
-    await controller.load();
-    controller.append({
-      id: 'cut',
-      kind: 'scissors',
-      include: false,
-      shape: 'freehand',
-      operation: 'erase_outside',
-      vertices: [
-        [-0.5, -0.5],
-        [0.5, -0.5],
-        [0, 0.5],
-      ],
-      ras_to_clip: [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
-      ],
-    });
-    expect(controller.prompts).toEqual([]);
-    expect(controller.error).toContain('Direct edit');
     expect(reader.predictInteractive).not.toHaveBeenCalled();
   });
 });

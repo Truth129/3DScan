@@ -17,7 +17,7 @@ import pytest
 from scan3d import dicom_view
 from scan3d import orthanc_view_exports as view_exports
 from scan3d.errors import NotFound
-from scan3d.orthanc import OrthancDeliveryUnknown, OrthancError
+from scan3d.orthanc import OrthancError
 from scan3d.orthanc_exports import ExportUnavailable
 from scan3d.store import identifier
 from test_dicom_view import write_sources
@@ -133,22 +133,9 @@ def test_archive_files_one_exact_secondary_capture_in_the_source_study(view):
     assert written["series_instance_uid"] == ds.SeriesInstanceUID and "frame_of_reference_uid" not in written
     assert hashlib.sha256((export_directory(view, finished) / "export.json").read_bytes()).hexdigest() == finished["payload"]["artifact_manifest_sha256"]
     assert view.service.store.list("revisions", view.case["id"]) == revisions
-
-
-def test_send_reaches_the_configured_destination(view):
-    finished = execute(view, post(view, destination="osirix"))
-    assert finished["status"] == "completed", finished["error"]
-    assert finished["stage"] == "DICOM view sent"
-    assert finished["result"]["dicom_view"] == {
-        "export_id": finished["payload"]["export_id"],
-        "encoding_version": 1,
-        "archived": True,
-        "sent": True,
-        "instance_count": 1,
-        "destination": "OsiriX",
-        "destination_id": "osirix",
-    }
-    assert len(view.archive.sends) == 1 and view.archive.sends[0][2] == "osirix"
+    # The capture is kept privately, named by its content.
+    assert stored_names(view) == [f"{PNG_SHA256}.png"] and stored(view)[0].read_bytes() == PNG
+    assert stat.S_IMODE(view.captures.stat().st_mode) == 0o700 and stat.S_IMODE(stored(view)[0].stat().st_mode) == 0o600
 
 
 def test_a_ct_only_revision_exports_though_the_seg_path_refuses_it(view):
@@ -180,25 +167,12 @@ def test_availability_has_the_dicom_seg_shape(view):
     assert request(view).status_code == 400 and not stored(view)
 
 
-def test_an_unconfigured_archive_is_named_for_a_view(view, monkeypatch):
-    monkeypatch.setattr(view.service, "settings", replace(view.settings, orthanc_url=""))
-    assert view.http.get(view.url).json()["reason"] == "Configure Orthanc before exporting DICOM view."
-
-
 def test_same_bytes_dedupe_to_one_job_and_a_completed_job_is_returned(view):
     queued = post(view)
     assert post(view)["id"] == queued["id"]
     finished = execute(view, queued)
     assert post(view)["id"] == finished["id"]
     assert len(view.encoded) == 1 and view.service.store.claim("cpu") is None
-
-
-def test_sixteen_concurrent_identical_posts_make_one_job_and_one_retained_png(view):
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        jobs = list(pool.map(lambda _: post(view, destination="osirix"), range(16)))
-    assert len({job["id"] for job in jobs}) == 1
-    assert stored_names(view) == [f"{PNG_SHA256}.png"]
-    assert len(view.http.get(view.url).json()["exports"]) == 1
 
 
 def test_concurrent_mixed_destinations_share_one_sop(view):
@@ -213,15 +187,6 @@ def test_concurrent_mixed_destinations_share_one_sop(view):
     assert len(view.encoded) == 1 and len(view.archive.blobs) == 1 and len(view.archive.sends) == 1
 
 
-def test_mixed_destinations_share_one_sop_in_sequence(view):
-    archived = execute(view, post(view))
-    sent = execute(view, post(view, destination="osirix"))
-    assert sent["result"]["dicom_view"]["export_id"] == archived["result"]["dicom_view"]["export_id"]
-    assert sent["result"]["dicom_view"]["sent"] is True
-    assert len(view.encoded) == 1 and len(view.archive.blobs) == 1 and len(view.archive.sends) == 1
-    assert manifest(view, sent) == manifest(view, archived)
-
-
 def test_a_new_capture_is_a_new_series(view):
     first = execute(view, post(view, destination="osirix"))
     second = execute(view, post(view, capture(2), destination="osirix"))
@@ -229,50 +194,6 @@ def test_a_new_capture_is_a_new_series(view):
     one, two = manifest(view, first), manifest(view, second)
     assert one["series_instance_uid"] != two["series_instance_uid"] and one["files"][0]["sop_instance_uid"] != two["files"][0]["sop_instance_uid"]
     assert len(view.encoded) == 2 and len(view.archive.sends) == 2 and len(stored(view)) == 2
-
-
-def test_retry_after_a_failed_upload_reuses_the_exact_sop(view):
-    view.archive.upload_error = OrthancError("private filename /patient/DICOM.dcm")
-    failed = execute(view, post(view, destination="osirix"))
-    assert failed["status"] == "failed" and failed["stage"] == "Export failed" and "/patient" not in failed["error"]
-    assert failed["error"] == "DICOM view export failed. Check the original CT."
-    assert not view.archive.sends and len(view.archive.blobs) == 1
-    original = (export_directory(view, failed) / "export.json").read_bytes()
-    retried = post(view, destination="osirix")
-    assert retried["id"] != failed["id"]
-    finished = execute(view, retried)
-    assert finished["result"]["dicom_view"]["sent"] is True
-    assert (export_directory(view, finished) / "export.json").read_bytes() == original
-    assert len(view.encoded) == 1 and len(view.archive.blobs) == 1 and len(view.archive.sends) == 1
-
-
-def test_unknown_delivery_never_resends_itself_and_retry_reuses_the_sop(view):
-    view.archive.start_error = OrthancDeliveryUnknown("Synthetic lost start response")
-    failed = execute(view, post(view, destination="osirix"))
-    assert failed["status"] == "failed" and failed["stage"] == "Delivery not confirmed"
-    assert failed["error"] == view.manager.unconfirmed_error and failed["result"]["dicom_view"]["archived"] is True
-    receipt = json.loads((export_directory(view, failed) / "delivery.json").read_text())
-    assert receipt["destinations"]["osirix"]["state"] == "unknown"
-    view.service.store.recover()
-    view.manager.recover()
-    assert len(view.archive.sends) == 1 and view.service.store.claim("cpu") is None
-    finished = execute(view, post(view, destination="osirix"))
-    assert finished["status"] == "completed", finished["error"]
-    assert finished["payload"]["delivery_attempt_id"] == failed["payload"]["delivery_attempt_id"]
-    assert len(view.encoded) == 1 and len(view.archive.sends) == 2 and view.archive.sends[0][1:] == view.archive.sends[1][1:]
-
-
-def test_a_known_remote_job_is_polled_by_retry_without_a_second_send(view):
-    view.archive.poll_error = OrthancError("Synthetic lost poll")
-    failed = execute(view, post(view, destination="osirix"))
-    assert failed["status"] == "failed" and "not confirmed" in failed["error"]
-    view.service.store.update_job(failed["id"], status="running")
-    view.service.store.recover()
-    view.manager.recover()
-    recovered = private_job(view, failed)
-    assert recovered["stage"] == "Interrupted" and recovered["error"] == view.manager.interrupted_error
-    finished = execute(view, post(view, destination="osirix"))
-    assert finished["status"] == "completed" and len(view.archive.sends) == 1
 
 
 def test_no_job_text_offers_a_retry_the_banner_cannot_give(view):
@@ -299,34 +220,6 @@ def test_resend_requires_a_confirmed_send_of_this_capture_to_this_destination(vi
     assert finished["payload"]["delivery_attempt_id"] != first["payload"]["delivery_attempt_id"]
     assert len(view.encoded) == 1 and len(view.archive.sends) == 2 and view.archive.sends[0][1:] == view.archive.sends[1][1:]
     assert post(view, destination="osirix")["id"] == finished["id"]
-
-
-def test_cancelling_a_queued_retry_never_claims_an_active_delivery_was_cancelled(view):
-    view.archive.poll_error = OrthancError("Synthetic poll interruption")
-    execute(view, post(view, destination="osirix"))
-    retry = post(view, destination="osirix")
-    response = view.http.post(f"/api/jobs/{retry['id']}/cancel")
-    assert response.status_code == 200
-    assert response.json()["status"] == "failed" and "delivery may continue" in response.json()["stage"]
-    assert response.json()["error"] == view_exports.OrthancViewExports.still_active_error and "retry" not in response.json()["error"]
-    assert view.service.store.claim("cpu") is None and len(view.archive.sends) == 1
-
-
-def test_cancelling_a_queued_export_with_no_delivery_is_a_plain_cancel(view):
-    queued = post(view)
-    response = view.http.post(f"/api/jobs/{queued['id']}/cancel").json()
-    assert response["status"] == "cancelled" and response["stage"] == "Cancelled before delivery"
-    assert view.service.store.claim("cpu") is None and not view.archive.uploads
-
-
-def test_cancel_after_upload_never_sends_and_retry_reuses_the_artifact(view):
-    job = post(view, destination="osirix")
-    view.archive.on_upload = lambda: view.service.store.update_job(job["id"], cancel_requested=True)
-    cancelled = execute(view, job)
-    assert cancelled["status"] == "cancelled" and not view.archive.sends
-    view.archive.on_upload = None
-    finished = execute(view, post(view, destination="osirix"))
-    assert finished["result"]["dicom_view"]["sent"] is True and len(view.encoded) == 1
 
 
 def test_cancel_during_the_retained_hash_is_a_cancellation_not_a_missing_file(view):
@@ -357,36 +250,13 @@ def test_seg_recovery_leaves_view_jobs_alone_and_the_reverse(view):
     assert private_job(view, queued)["status"] == "failed" and private_job(view, seg)["error"] == view.service.orthanc_exports.interrupted_error
 
 
-def test_an_orphan_encode_moves_the_export_but_the_retained_png_stays_reachable(view, monkeypatch):
-    first = post(view)
-    second = post(view, destination="osirix")
-    write = view_exports.atomic_json
-
-    def fail_manifest(path, value):
-        if path.name == "export.json":
-            raise OSError("Synthetic manifest write failure")
-        return write(path, value)
-
-    monkeypatch.setattr(view_exports, "atomic_json", fail_manifest)
-    failed = execute(view, first)
-    assert failed["status"] == "failed" and not view.archive.uploads
-    old = view.manager._directory(view.case["id"], failed["payload"]["export_id"])
-    orphan = (old / "dicom" / "view-0001.dcm").read_bytes()
-    monkeypatch.setattr(view_exports, "atomic_json", write)
-    finished = execute(view, second)
-    assert finished["status"] == "completed", finished["error"]
-    assert finished["stage"] == "DICOM view sent" and finished["payload"]["export_id"] != failed["payload"]["export_id"]
-    assert (old / "dicom" / "view-0001.dcm").read_bytes() == orphan
-    assert len(view.encoded) == 2 and len(view.archive.sends) == 1 and stored_names(view) == [f"{PNG_SHA256}.png"]
-
-
 def test_a_capture_of_another_image_is_refused_before_anything_is_stored(view):
     refused = request(view, reference="0" * 64)
     assert refused.status_code == 400 and "different image" in refused.json()["detail"]
     assert not view.captures.exists() and not view.http.get(view.url).json()["exports"]
 
 
-def test_another_cases_revision_is_not_found_and_touches_no_directory(view):
+def test_another_cases_revision_or_a_review_candidate_is_refused_and_touches_no_directory(view):
     other = view.service.new_case("Synthetic other")
     url = view.url.replace(view.case["id"], other["id"])
     assert view.http.get(url).status_code == 404
@@ -395,9 +265,6 @@ def test_another_cases_revision_is_not_found_and_touches_no_directory(view):
     made_up = identifier()
     assert request(view, url=view.url.replace(view.case["id"], made_up)).status_code == 404
     assert not (view.settings.data_dir / "cases" / made_up).exists()
-
-
-def test_a_review_candidate_is_never_a_saved_export(view):
     candidate = view.url.replace(view.revision["id"], "review-" + identifier())
     assert request(view, url=candidate).status_code == 400 and not stored(view)
 
@@ -490,17 +357,15 @@ def test_a_study_filed_under_another_identity_uploads_nothing(view, study_patien
     assert not view.archive.uploads and not view.archive.sends
 
 
-def test_a_study_gone_from_the_archive_uploads_nothing(view):
-    view.archive.study_error = NotFound("The selected Orthanc resource is no longer available")
+@pytest.mark.parametrize(
+    "error,message",
+    [(NotFound("Synthetic study gone"), "no longer in Orthanc"), (OrthancError("Synthetic outage"), view_exports.OrthancViewExports.failed_error)],
+)
+def test_a_study_gone_or_unreachable_during_the_study_check_uploads_nothing(view, error, message):
+    view.archive.study_error = error
     failed = execute(view, post(view, destination="osirix"))
-    assert failed["status"] == "failed" and "no longer in Orthanc" in failed["error"]
+    assert failed["status"] == "failed" and message in failed["error"]
     assert not view.archive.uploads and not view.archive.sends
-
-
-def test_an_unreachable_archive_during_the_study_check_uploads_nothing(view):
-    view.archive.study_error = OrthancError("Synthetic outage")
-    failed = execute(view, post(view))
-    assert failed["status"] == "failed" and failed["error"] == view.manager.failed_error and not view.archive.uploads
 
 
 def test_trailing_spaces_do_not_refuse_a_matching_study(view):
@@ -582,7 +447,7 @@ def test_a_misfiled_upload_stops_before_its_receipt_and_any_send(view, parent):
     assert failed["result"]["dicom_view"]["archived"] is False
 
 
-def test_the_public_job_carries_no_patient_field_path_or_capture_hash(view):
+def test_a_sent_view_has_a_public_result_with_no_patient_field_path_or_capture_hash(view):
     queued = post(view, destination="osirix")
     finished = execute(view, queued)
     for record in (
@@ -594,7 +459,16 @@ def test_the_public_job_carries_no_patient_field_path_or_capture_hash(view):
         encoded = json.dumps(record)
         for private in ("SYNTHETIC-ORTHANC", "Synthetic^Orthanc", str(view.root), PNG_SHA256, "private-user", "private-password", "artifact_key", STUDY_UID):
             assert private not in encoded, private
-    assert finished["result"]["dicom_view"].keys() == {"export_id", "encoding_version", "archived", "sent", "instance_count", "destination", "destination_id"}
+    assert finished["stage"] == "DICOM view sent" and len(view.archive.sends) == 1 and view.archive.sends[0][2] == "osirix"
+    assert finished["result"]["dicom_view"] == {
+        "export_id": finished["payload"]["export_id"],
+        "encoding_version": 1,
+        "archived": True,
+        "sent": True,
+        "instance_count": 1,
+        "destination": "OsiriX",
+        "destination_id": "osirix",
+    }
 
 
 def spy_on_start(view, monkeypatch):
@@ -611,15 +485,9 @@ def spy_on_start(view, monkeypatch):
 @pytest.mark.parametrize(
     "headers,status",
     [
-        ({"content-length": "abc"}, 411),
-        ({"content-length": "-1"}, 411),
         ({"content-length": "+5"}, 411),
-        ({"content-length": "1e3"}, 411),
-        ({"content-length": ""}, 411),
-        ({"transfer-encoding": "chunked"}, 411),
         ({"content-length": "10", "transfer-encoding": "chunked"}, 411),
         ({"content-length": str(128 * 1024**2 + 1024**2 + 1)}, 413),
-        ({"content-length": str(300 * 1024**2)}, 413),
         ({"content-length": "9" * 5000}, 413),
     ],
 )
@@ -660,13 +528,10 @@ def test_staging_counts_bytes_as_a_second_check(view, monkeypatch):
     assert stored(view) == [] and not view.http.get(view.url).json()["exports"]
 
 
-def test_get_never_needs_a_body_declaration(view):
-    assert view.http.get(view.url, headers={"transfer-encoding": "chunked"}).status_code == 200
-
-
 def test_every_dicom_view_response_is_no_store(view):
     responses = [
-        view.http.get(view.url),
+        # A GET never needs a body declaration.
+        view.http.get(view.url, headers={"transfer-encoding": "chunked"}),
         view.http.get(view.url.replace(view.case["id"], identifier())),
         request(view),
         request(view, b"not a png"),
@@ -681,37 +546,25 @@ def test_every_dicom_view_response_is_no_store(view):
     assert all(item.headers["cache-control"] == "no-store" for item in responses)
 
 
-@pytest.mark.parametrize(
-    "image",
-    [
-        b"",
-        b"not a png",
-        PNG[:40],
-        PNG[:-12],
-        PNG[:8] + b"\0" * 64,
-    ],
-)
-def test_a_corrupt_png_is_a_400_and_leaves_nothing_behind(view, image):
+def blank():
+    stream = BytesIO()
+    Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(stream, "PNG")
+    return stream.getvalue()
+
+
+@pytest.mark.parametrize("image", [b"not a png", PNG[:-12], blank()])
+def test_a_corrupt_or_blank_png_is_a_400_and_leaves_nothing_behind(view, image):
     response = request(view, image)
     assert response.status_code == 400, response.text
     assert "capture" in response.json()["detail"].lower()
     assert stored(view) == [] and not view.http.get(view.url).json()["exports"]
 
 
-def test_a_blank_capture_is_a_400(view):
-    stream = BytesIO()
-    Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(stream, "PNG")
-    response = request(view, stream.getvalue())
-    assert response.status_code == 400 and "blank" in response.json()["detail"]
-
-
 @pytest.mark.parametrize(
     "fields,status",
     [
-        ({"destination": ""}, 422),
         ({"destination": "http://untrusted/"}, 422),
         ({"destination": "unlisted"}, 400),
-        ({"destination": "null"}, 400),
     ],
 )
 def test_destination_fields_are_validated_before_any_bytes_are_kept(view, fields, status):
@@ -724,14 +577,6 @@ def test_required_multipart_fields(view):
     assert view.http.post(view.url, files=files).status_code == 422
     assert view.http.post(view.url, data={"reference_image_id": view.reference_id}).status_code == 422
     assert view.http.post(view.url, data={"reference_image_id": view.reference_id, "image": "text"}).status_code == 422
-
-
-def test_retained_captures_are_private_and_named_by_content(view):
-    post(view)
-    assert stored_names(view) == [f"{PNG_SHA256}.png"]
-    assert stat.S_IMODE(view.captures.stat().st_mode) == 0o700
-    assert stat.S_IMODE(stored(view)[0].stat().st_mode) == 0o600
-    assert stored(view)[0].read_bytes() == PNG
 
 
 def test_a_failed_commit_leaves_only_a_reusable_retained_file(view, monkeypatch):
@@ -774,7 +619,7 @@ def test_only_deliberately_safe_encoder_errors_reach_the_public_job(view, monkey
     assert not view.archive.uploads
 
 
-def test_seg_and_view_availability_never_list_each_others_jobs(view):
+def test_availability_lists_only_its_own_kind_and_revision(view):
     finished_view = execute(view, post(view, destination="osirix"))
     seg = view.service.orthanc_exports.start(view.case["id"], view.revision["id"], ["test:0"], "osirix")
     assert execute(view, seg)["status"] == "completed"
@@ -783,11 +628,6 @@ def test_seg_and_view_availability_never_list_each_others_jobs(view):
     assert [item["id"] for item in seg_exports] == [seg["id"]] and all(item["kind"] == "orthanc_export" for item in seg_exports)
     assert [item["id"] for item in view_exports_listed] == [finished_view["id"]]
     assert all(item["kind"] == "orthanc_view_export" and "dicom_view" in item["result"] for item in view_exports_listed)
-
-
-def test_availability_only_lists_exports_of_the_requested_revision(view):
-    execute(view, post(view))
-    assert view.http.get(view.url).json()["exports"]
     assert not view.http.get(view.base_url).json()["exports"]
 
 

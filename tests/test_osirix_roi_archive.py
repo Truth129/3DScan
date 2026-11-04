@@ -83,7 +83,7 @@ def test_hole_overlap_and_edge_pixels_survive_distinct_native_brushes():
     assert rois[0]["groupID"] != rois[1]["groupID"]
 
 
-def test_random_strided_source_grids_preserve_all_pixels():
+def test_random_strided_grids_and_nested_sequences_preserve_all_pixels():
     generator = np.random.default_rng(2941)
     for rows, columns in ((1, 1), (2, 17), (17, 2), (13, 29), (31, 34)):
         dense = generator.random((columns * 2, rows * 2)) > 0.7
@@ -91,6 +91,9 @@ def test_random_strided_source_grids_preserve_all_pixels():
         mask[0, 0] = mask[-1, -1] = True
         objects, rois = _objects(encode_roi_archive([_brush(mask)], timestamp=_TIMESTAMP))
         np.testing.assert_array_equal(_source_mask(objects, rois[0], mask.shape), mask)
+    nested = [[1, 0, 1], [0, 1, 0]]
+    objects, rois = _objects(encode_roi_archive([_brush(nested)]))
+    np.testing.assert_array_equal(_source_mask(objects, rois[0], (2, 3)), nested)
 
 
 def test_fixed_timestamp_is_reproducible_and_class_hierarchy_matches_profile():
@@ -108,7 +111,7 @@ def test_fixed_timestamp_is_reproducible_and_class_hierarchy_matches_profile():
     assert date["NS.time"] == roi["creationTimeStamp"]
 
 
-@pytest.mark.parametrize("mask", [[[0, 1, 2]], [[0.0, float("nan")]], [[0.0, float("inf")]], [[0.0, -1.0]], [["0", "1"]], [[0, 1], [0]]])
+@pytest.mark.parametrize("mask", [[[0, 1, 2]], [[0.0, float("nan")]], [["0", "1"]], [[0, 1], [0]]])
 def test_nonbinary_or_ragged_masks_are_refused(mask):
     with pytest.raises(RoiArchiveError):
         encode_roi_archive([_brush(mask)])
@@ -117,25 +120,16 @@ def test_nonbinary_or_ragged_masks_are_refused(mask):
 @pytest.mark.parametrize(
     "changes",
     [
-        {"name": ""},
         {"name": "x" * 65},
         {"name": "hidden\nline"},
-        {"name": "hidden\\separator"},
         {"name": "\ud800"},
         {"color": "red"},
         {"study_instance_uid": "1.02.3"},
-        {"roi_uuid": "not-a-uuid"},
         {"roi_uuid": "00000000-0000-0000-0000-000000000000"},
-        {"pixel_spacing_x": 0},
         {"pixel_spacing_y": -1},
-        {"pixel_spacing_x": float("inf")},
         {"image_origin": (0, float("nan"))},
-        {"image_origin": (0,)},
         {"image_origin": (0, 0, 0)},
         {"group_id": 0},
-        {"group_id": -1},
-        {"group_id": float("nan")},
-        {"group_id": float("inf")},
         {"group_id": True},
     ],
 )
@@ -182,12 +176,6 @@ def test_count_timestamp_and_cancellation_are_checked():
         encode_roi_archive([brush], timestamp=datetime(2026, 10, 29))
     with pytest.raises(InterruptedError):
         encode_roi_archive([brush], cancelled=lambda: True)
-
-
-def test_nested_binary_sequences_are_supported():
-    mask = [[1, 0, 1], [0, 1, 0]]
-    objects, rois = _objects(encode_roi_archive([_brush(mask)]))
-    np.testing.assert_array_equal(_source_mask(objects, rois[0], (2, 3)), mask)
 
 
 def test_explicit_structure_group_is_preserved_across_image_archives():

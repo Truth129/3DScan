@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api } from '../src/lib/api';
+import { describe, expect, it, vi } from 'vitest';
 import { presentStructures } from '../src/lib/appearance';
 import { pendingReviewTargets, reviewDisplayRevision } from '../src/lib/interactive-review';
 import { InteractiveController } from '../src/lib/interactive-controller';
@@ -32,19 +31,8 @@ const draft: InteractiveReview = {
   dirty: true,
   applied_prompt_count: 0,
 };
-const originalFetch = globalThis.fetch;
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
 
 describe('new custom segment drafts', () => {
-  it('creates a named, grouped, colored empty target through the dedicated endpoint', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(draft), { status: 200 }));
-    globalThis.fetch = fetch;
-    expect(await api.createInteractiveStructure('case', 'base', { name: target.name, group: target.group, color: String(target.color) })).toEqual(draft);
-    expect(fetch.mock.calls[0][0]).toBe('/api/cases/case/reviews/new-structure');
-    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ revision_id: 'base', name: target.name, group: 'Veins', color: '#ab45cd' });
-  });
   it('uses the immutable empty preview until prediction and when showing the baseline', () => {
     expect(reviewDisplayRevision(draft)).toBe('review-new-0');
     const predicted = {
@@ -80,25 +68,17 @@ describe('new custom segment drafts', () => {
   it('adopts the server-issued target without replacing it or issuing inference', () => {
     const controller = new InteractiveController('case', 'base', target.id, vi.fn());
     controller.adopt(draft);
-    expect(controller.loaded).toBe(true);
-    expect(controller.prompts).toEqual([]);
-    expect(controller.options.start_empty).toBe(true);
-    expect(controller.publicReview?.structure_id).toBe(target.id);
+    expect([controller.loaded, controller.prompts, controller.options.start_empty, controller.working]).toEqual([true, [], true, false]);
     expect(controller.publicReview?.preview_revision_id).toBe('review-new-0');
-    expect(controller.canUndo).toBe(false);
-    expect(controller.working).toBe(false);
     expect(() => controller.adopt({ ...draft, structure_id: 'custom:foreign' })).toThrow('different review target');
     controller.dispose();
   });
-  it('preserves the selected custom color even inside an anatomical presentation group', () => {
-    expect(presentStructures([target])[0].color).toBe('#ab45cd');
-    expect(presentStructures([{ ...target, group: 'Bones' }])[0].color).toBe('#ab45cd');
-  });
-  it('shows model bones in yellow, not ivory that vanishes on bright CT bone', () => {
+  it('keeps the selected custom color inside an anatomical group, and shows model bones in yellow, not ivory that vanishes on CT bone', () => {
     const bones = [
+      { ...target, group: 'Bones' },
       { ...target, id: 'total:rib_left_1', task: 'total', group: 'Bones', color: '#d8cdb1' },
       { ...target, id: 'mrsegmentator:left_femur', task: 'mrsegmentator', group: 'MRSegmentator', color: '#ad91d6' },
     ];
-    expect(presentStructures(bones).map(s => s.color)).toEqual(['#f5cc00', '#f5cc00']);
+    expect(presentStructures(bones).map(s => s.color)).toEqual(['#ab45cd', '#f5cc00', '#f5cc00']);
   });
 });

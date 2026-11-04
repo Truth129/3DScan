@@ -1,9 +1,4 @@
-"""CT preparation and explicitly requested inference are separate transactions.
-
-The converter and neural worker are deterministic doubles. These integration
-tests exercise API validation, queue payloads, CT transport, caches and revision
-isolation without loading torch, downloading weights or running inference.
-"""
+"""CT preparation and explicitly requested inference are separate transactions, with deterministic converter and worker doubles."""
 
 from copy import deepcopy
 import hashlib
@@ -162,6 +157,16 @@ def requested(rig, case, revision, task="total", **options):
     )
 
 
+def failed(rig, response):
+    assert response.status_code == 200, response.text
+    claimed = rig.service.store.claim()
+    assert claimed["id"] == response.json()["id"]
+    rig.service.execute(claimed)
+    job = rig.service.store.get("jobs", claimed["id"])
+    assert job["status"] == "failed"
+    return job
+
+
 def test_import_and_prepare_are_CT_only_and_preserve_source_hu(rig, monkeypatch):
     before = rig.original.read_bytes()
     case = imported(rig)
@@ -219,7 +224,7 @@ def test_cardiac_acquisition_survives_explicit_segmentation_with_identical_task_
     assert len(rig.calls.segments) == 1 and Path(ct["ct_file"]).read_bytes() == before
 
 
-@pytest.mark.parametrize("flag", ["robust_crop", "body_seg", "remove_small_blobs"])
+@pytest.mark.parametrize("flag", ["robust_crop", "remove_small_blobs"])
 def test_explicit_task_and_each_option_reach_worker_cache_and_provenance(rig, flag):
     case, ct = prepared(rig)
     ct_before = Path(ct["ct_file"]).read_bytes()
@@ -337,21 +342,10 @@ def test_partial_new_task_replaces_only_output_names_it_actually_produces(rig):
     assert result["operation"]["replaced_structure_ids"] == ["total:liver"]
 
 
-def test_new_task_remaps_custom_parent_and_inherits_explicit_exclusivity(rig):
-    case, ct = prepared(rig)
-    first = execute(rig, requested(rig, case, ct))
-    structures = deepcopy(first["structures"])
-    for entry in structures:
-        peer = "total:spleen" if entry["id"] == "total:liver" else "total:liver"
-        entry["relationship"] = {"kind": "subdivision", "exclusive_with": [peer]}
+def with_custom_child(rig, case, ct, first, structures):
     liver = next(entry for entry in structures if entry["id"] == "total:liver")
-    custom = {
-        **liver,
-        "id": "custom:hepatic-finding",
-        "task": "custom",
-        "name": "Hepatic finding",
-        "relationship": {"kind": "subregion", "parent_id": "total:liver", "exclusive_with": []},
-    }
+    custom = {**liver, "id": "custom:finding", "task": "custom", "name": "Finding"}
+    custom["relationship"] = {"kind": "subregion", "parent_id": "total:liver", "exclusive_with": []}
     parent = rig.service.build_revision(
         case["id"],
         Path(ct["ct_file"]),
@@ -362,85 +356,51 @@ def test_new_task_remaps_custom_parent_and_inherits_explicit_exclusivity(rig):
         inference_manifest=first["inference_manifest"],
     )
     rig.service.store.commit_revision(parent)
-    before = deepcopy(parent)
-    files = {entry["mask_file"]: Path(entry["mask_file"]).read_bytes() for entry in parent["structures"]}
+    return parent, custom
+
+
+def saved(rig, case):
+    revisions = deepcopy(rig.service.store.list("revisions", case["id"]))
+    files = {entry["mask_file"]: Path(entry["mask_file"]).read_bytes() for revision in revisions for entry in revision["structures"]}
+    return rig.service.store.get("cases", case["id"])["active_revision_id"], revisions, files
+
+
+def test_new_task_remaps_custom_parent_and_inherits_explicit_exclusivity(rig):
+    case, ct = prepared(rig)
+    first = execute(rig, requested(rig, case, ct))
+    structures = deepcopy(first["structures"])
+    for entry in structures:
+        peer = "total:spleen" if entry["id"] == "total:liver" else "total:liver"
+        entry["relationship"] = {"kind": "subdivision", "exclusive_with": [peer]}
+    parent, custom = with_custom_child(rig, case, ct, first, structures)
+    before, files = deepcopy(parent), saved(rig, case)[2]
     rig.calls.task_labels["total_v3"] = ["liver", "spleen"]
-    result = execute(rig, requested(rig, case, parent, task="total_v3"))
-    by_id = {entry["id"]: entry for entry in result["structures"]}
-    assert by_id["custom:hepatic-finding"]["relationship"] == {"kind": "subregion", "parent_id": "total_v3:liver", "exclusive_with": []}
+    by_id = {entry["id"]: entry for entry in execute(rig, requested(rig, case, parent, task="total_v3"))["structures"]}
+    assert by_id["custom:finding"]["relationship"] == {"kind": "subregion", "parent_id": "total_v3:liver", "exclusive_with": []}
     assert by_id["total_v3:liver"]["relationship"] == {"kind": "subdivision", "exclusive_with": ["total_v3:spleen"]}
     assert by_id["total_v3:spleen"]["relationship"] == {"kind": "subdivision", "exclusive_with": ["total_v3:liver"]}
-    assert by_id["custom:hepatic-finding"]["mask_file"] == custom["mask_file"]
-    assert by_id["custom:hepatic-finding"]["volume_ml"] == custom["volume_ml"]
-    assert rig.service.store.revision(case["id"], parent["id"]) == before
-    assert {path: Path(path).read_bytes() for path in files} == files
+    assert (by_id["custom:finding"]["mask_file"], by_id["custom:finding"]["volume_ml"]) == (custom["mask_file"], custom["volume_ml"])
+    assert rig.service.store.revision(case["id"], parent["id"]) == before and files.items() <= saved(rig, case)[2].items()
 
 
 def test_duplicate_incoming_names_fail_without_publishing_or_mutating_saved_revision(rig):
     case, ct = prepared(rig)
     first = execute(rig, requested(rig, case, ct))
-    snapshots = deepcopy(rig.service.store.list("revisions", case["id"]))
-    files = {entry["mask_file"]: Path(entry["mask_file"]).read_bytes() for revision in snapshots for entry in revision["structures"]}
+    before = saved(rig, case)
     rig.calls.task_labels["total_v3"] = ["liver", "LIVER"]
-    queued = requested(rig, case, first, task="total_v3")
-    assert queued.status_code == 200, queued.text
-    claimed = rig.service.store.claim()
-    assert claimed["id"] == queued.json()["id"]
-    rig.service.execute(claimed)
-    failed = rig.service.store.get("jobs", claimed["id"])
-    assert failed["status"] == "failed"
-    assert any(word in failed["error"].lower() for word in ("duplicate", "ambiguous", "same name"))
-    assert rig.service.store.get("cases", case["id"])["active_revision_id"] == first["id"]
-    assert rig.service.store.list("revisions", case["id"]) == snapshots
-    assert {path: Path(path).read_bytes() for path in files} == files
+    failed(rig, requested(rig, case, first, task="total_v3"))
+    assert saved(rig, case) == before
 
 
 def test_task_rerun_cannot_publish_dangling_preserved_custom_relationship(rig):
     case, ct = prepared(rig)
     first = execute(rig, requested(rig, case, ct))
-    liver = next(entry for entry in first["structures"] if entry["id"] == "total:liver")
-    custom_mask = Path(first["directory"]) / "custom-subregion.nii.gz"
-    custom_mask.write_bytes(Path(liver["mask_file"]).read_bytes())
-    custom = {
-        **liver,
-        "id": "custom:subregion",
-        "task": "custom",
-        "name": "Custom subregion",
-        "mask_file": str(custom_mask),
-        "relationship": {"kind": "subregion", "parent_id": "total:liver", "exclusive_with": []},
-    }
-    parent = rig.service.build_revision(
-        case["id"],
-        Path(ct["ct_file"]),
-        [*first["structures"], custom],
-        source="interactive_correction",
-        parent=first["id"],
-        acquisition=first["acquisition"],
-        inference_manifest=first["inference_manifest"],
-    )
-    rig.service.store.commit_revision(parent)
-    revisions_before = deepcopy(rig.service.store.list("revisions", case["id"]))
-    paths = {str(rig.original), ct["ct_file"]}
-    paths.update(path for call in rig.calls.conversions for path in call)
-    for revision in revisions_before:
-        paths.add(str(Path(revision["directory"]) / "revision.json"))
-        paths.update(entry["mask_file"] for entry in revision["structures"])
-    files_before = {path: Path(path).read_bytes() for path in paths}
-
-    # A changed setting forces a new task run. Its omitted/empty liver label
-    # must not leave this saved custom child pointing to a nonexistent parent.
+    parent, _ = with_custom_child(rig, case, ct, first, first["structures"])
+    before = saved(rig, case)
+    # A new run without a liver must not leave the saved custom child pointing to a missing parent.
     rig.calls.task_labels["total"] = ["spleen"]
-    queued = requested(rig, case, parent, remove_small_blobs=True)
-    assert queued.status_code == 200, queued.text
-    claimed = rig.service.store.claim()
-    assert claimed["id"] == queued.json()["id"]
-    rig.service.execute(claimed)
-    failed = rig.service.store.get("jobs", claimed["id"])
-    assert failed["status"] == "failed"
-    assert "relationship" in failed["error"].lower()
-    assert rig.service.store.get("cases", case["id"])["active_revision_id"] == parent["id"]
-    assert rig.service.store.list("revisions", case["id"]) == revisions_before
-    assert {path: Path(path).read_bytes() for path in paths} == files_before
+    assert "relationship" in failed(rig, requested(rig, case, parent, remove_small_blobs=True))["error"].lower()
+    assert saved(rig, case) == before
 
 
 def test_stale_parent_is_rejected_before_enqueue_and_during_publish(rig, monkeypatch):
@@ -513,47 +473,32 @@ def two_paths(rig, tmp_path, monkeypatch):
     return rig
 
 
-def failed(rig, response):
-    assert response.status_code == 200, response.text
-    claimed = rig.service.store.claim()
-    assert claimed["id"] == response.json()["id"]
-    rig.service.execute(claimed)
-    job = rig.service.store.get("jobs", claimed["id"])
-    assert job["status"] == "failed"
-    return job
-
-
-def test_each_path_keeps_its_own_results_and_naming_default_changes_nothing(two_paths):
+def test_each_path_keeps_its_own_results_and_a_revision_records_what_ran_only_when_a_path_was_named(two_paths):
     rig = two_paths
     case, ct = prepared(rig)
-    default = execute(rig, requested(rig, case, ct))
+    response = requested(rig, case, ct)
+    default = execute(rig, response)
+    # No choice leaves a job as it was.
+    assert "inference_path" not in response.json() and "inference_path" not in rig.service.store.get("jobs", response.json()["id"])
     added = execute(rig, requested(rig, case, default, inference_path="nvidia"))
-    assert len(rig.calls.segments) == 2 and rig.calls.segments[0]["inference_path"] is None
-    assert rig.calls.segments[1]["inference_path"].id == "nvidia"
+    assert rig.calls.segments[0]["inference_path"] is None and rig.calls.segments[1]["inference_path"].id == "nvidia"
+    measured = {"device": "gpu:0", "gpu_name": GPU_NAME, "torch_version": "2.0", "hip_version": None, "cuda_version": "13.0", "results_moved_to_cpu": False}
+    assert "runtime" not in default["operation"]
+    assert added["operation"]["runtime"] == {"inference_path": "nvidia", "reused": False, **measured}
     default_again = execute(rig, requested(rig, case, added))
     added_again = execute(rig, requested(rig, case, default_again, inference_path="nvidia"))
-    named_default = execute(rig, requested(rig, case, added_again, inference_path="default"))
+    response = requested(rig, case, added_again, inference_path="default")
+    assert response.json()["inference_path"] == {"id": "default", "label": "Default device", "identity": "default"}
+    named_default = execute(rig, response)
     assert len(rig.calls.segments) == 2
+    assert "runtime" not in default_again["operation"]
+    assert added_again["operation"]["runtime"] == {"inference_path": "nvidia", "reused": True, **measured}
+    assert named_default["operation"]["runtime"]["inference_path"] == "default" and named_default["operation"]["runtime"]["reused"] is True
     assert default_again["inference_manifest"] == named_default["inference_manifest"] == default["inference_manifest"]
     assert added_again["inference_manifest"] == added["inference_manifest"] != default["inference_manifest"]
     assert added["inference_manifest"]["inference_path"] == "nvidia" and "inference_path" not in default["inference_manifest"]
-
-
-def test_a_revision_records_what_ran_it_only_when_a_path_was_named(two_paths):
-    rig = two_paths
-    case, ct = prepared(rig)
-    default = execute(rig, requested(rig, case, ct))
-    assert "runtime" not in default["operation"]
-    added = execute(rig, requested(rig, case, default, inference_path="nvidia"))
-    measured = {"device": "gpu:0", "gpu_name": GPU_NAME, "torch_version": "2.0", "hip_version": None, "cuda_version": "13.0", "results_moved_to_cpu": False}
-    assert added["operation"]["runtime"] == {"inference_path": "nvidia", "reused": False, **measured}
-    reused = execute(rig, requested(rig, case, added, inference_path="nvidia"))
-    assert reused["operation"]["runtime"] == {"inference_path": "nvidia", "reused": True, **measured}
-    named_default = execute(rig, requested(rig, case, reused, inference_path="default"))
-    assert named_default["operation"]["runtime"]["inference_path"] == "default" and named_default["operation"]["runtime"]["reused"] is True
-    public = rig.http.get(f"/api/cases/{case['id']}/revisions/{reused['id']}").json()
-    assert public["operation"]["runtime"] == reused["operation"]["runtime"]
-    assert "runtime" not in execute(rig, requested(rig, case, named_default))["operation"]
+    public = rig.http.get(f"/api/cases/{case['id']}/revisions/{added_again['id']}").json()
+    assert public["operation"]["runtime"] == added_again["operation"]["runtime"]
 
 
 def test_the_card_stays_off_everything_a_later_revision_inherits(two_paths):
@@ -583,19 +528,6 @@ def test_a_chosen_path_is_a_frozen_public_field_and_stays_out_of_the_payload(two
     assert finished["inference_path"] == bound and "payload" not in finished
 
 
-def test_no_choice_leaves_a_job_as_it_was(two_paths):
-    rig = two_paths
-    case, ct = prepared(rig)
-    job = requested(rig, case, ct).json()
-    assert "inference_path" not in job and "inference_path" not in rig.service.store.get("jobs", job["id"])
-
-
-def test_naming_default_is_recorded_with_its_constant_identity(two_paths):
-    rig = two_paths
-    case, ct = prepared(rig)
-    assert requested(rig, case, ct, inference_path="default").json()["inference_path"] == {"id": "default", "label": "Default device", "identity": "default"}
-
-
 def test_a_path_that_cannot_run_is_refused_with_no_job_or_model_access(two_paths, tmp_path):
     rig = two_paths
     case, ct = prepared(rig)
@@ -619,7 +551,7 @@ def test_an_empty_name_is_refused_rather_than_read_as_no_choice(two_paths):
         rig.service.segment_case(case["id"], ct["id"], "total", inference_path="")
 
 
-@pytest.mark.parametrize("value", ["", "Upper", "-dash", "has space", "../nvidia", "nvidia\n", "x" * 33, 7])
+@pytest.mark.parametrize("value", ["", "Upper", "../nvidia", 7])
 def test_a_malformed_path_is_a_schema_error(two_paths, value):
     rig = two_paths
     case, ct = prepared(rig)

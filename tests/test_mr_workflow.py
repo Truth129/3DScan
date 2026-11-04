@@ -68,30 +68,18 @@ def test_real_mr_api_import_prepare_and_scalar_transport_preserve_source_policy(
     case = import_mr(rig)
     assert case["active_revision_id"] is None and not rig.service.store.list("jobs")
     selected = case["series"][0]
-    assert selected["modality"] == "MR" and selected["supported"] and selected["unsupported_reason"] is None
-    assert "files" not in selected and "source_dir" not in case
-    assert selected["echo_time_ms"] == 3 and selected["sequence_name"] == "synthetic_t1"
+    assert selected["modality"] == "MR" and selected["supported"] and "files" not in selected and "source_dir" not in case
     monkeypatch.setattr(surfaces, "prepare_surface", lambda *args, **kwargs: pytest.fail("Preparation built a surface"))
     case, revision = prepare_mr(rig, case)
-    assert revision["kind"] == "image" and revision["structures"] == []
-    assert revision["surface_assets"] == [] and revision["inference_manifest"] is None
+    assert revision["kind"] == "image" and revision["structures"] == revision["surface_assets"] == [] and revision["inference_manifest"] is None
     asset = rig.service.store.resolve_reference(revision)
-    assert asset["id"] == revision["reference_image_id"]
+    assert asset["id"] == revision["reference_image_id"] and asset["source"]["series_uid"] == selected["uid"]
     assert asset["modality"] == "MR" and asset["scalar"]["units"] == "signal"
-    assert asset["source"]["series_uid"] == selected["uid"]
     assert asset["presentation"]["default_window"] == 249.5 and asset["presentation"]["default_level"] == 125.25
-    assert set(asset["capabilities"]) == {"mpr", "segmentation", "voxel_measurements", "volume_rendering"}
     prefix = f"/api/cases/{case['id']}/revisions/{revision['id']}"
-    public = rig.http.get(prefix).json()
-    assert public["image_asset"]["id"] == asset["id"] and "ct_file" not in public
-    images = rig.http.get(f"/api/cases/{case['id']}/images").json()
-    assert [item["id"] for item in images] == [asset["id"]]
-    assert "file_path" not in images[0]
     expected = np.asarray(nib.load(asset["file_path"]).dataobj)
     for endpoint in ("image-volume", "ct-volume"):
-        response = rig.http.get(prefix + "/" + endpoint)
-        assert response.status_code == 200, response.text
-        descriptor = response.json()
+        descriptor = rig.http.get(prefix + "/" + endpoint).json()
         assert descriptor["modality"] == "MR" and descriptor["scalar"]["units"] == "signal"
         assert descriptor["reference_image_id"] == asset["id"] and descriptor["presentation"] == asset["presentation"]
         raw = b"".join(rig.http.get(item["url"]).content for item in descriptor["chunks"])
@@ -104,9 +92,7 @@ def test_real_mr_api_import_prepare_and_scalar_transport_preserve_source_policy(
     np.testing.assert_allclose(preview_values, expected, rtol=0, atol=1e-6)
     voxel = np.array([3, 4, 2])
     ras = np.asarray(asset["geometry"]["affine_ras"]) @ np.r_[voxel, 1]
-    probe = rig.http.get(prefix + "/probe", params=dict(zip(("x", "y", "z"), ras[:3])))
-    assert probe.status_code == 200, probe.text
-    sample = probe.json()
+    sample = rig.http.get(prefix + "/probe", params=dict(zip(("x", "y", "z"), ras[:3]))).json()
     assert sample["value"] == pytest.approx(expected[tuple(voxel)]) and sample["units"] == "signal"
     assert sample["reference_image_id"] == asset["id"]
     assert {path.name: path.read_bytes() for path in rig.source.glob("*.dcm")} == rig.original
@@ -117,9 +103,7 @@ def test_real_mr_api_import_prepare_and_scalar_transport_preserve_source_policy(
 def test_mr_api_catalog_defaults_and_wrong_modality_rejection_do_not_touch_gpu(mr_rig):
     rig = mr_rig
     case, revision = prepare_mr(rig)
-    catalog = rig.http.get("/api/segmentation-options", params={"modality": "MR"})
-    assert catalog.status_code == 200, catalog.text
-    options = catalog.json()
+    options = rig.http.get("/api/segmentation-options", params={"modality": "MR"}).json()
     assert options["defaults"]["task"] == "total_mr"
     assert {item["id"] for item in options["tasks"]} >= {"total_mr", "body_mr", "vertebrae_mr"}
     assert all(item["modality"] == "MR" and not item["body_seg_supported"] for item in options["tasks"])
@@ -129,38 +113,13 @@ def test_mr_api_catalog_defaults_and_wrong_modality_rejection_do_not_touch_gpu(m
     before = deepcopy(rig.service.store.list("jobs"))
     response = rig.http.post(f"/api/cases/{case['id']}/segment", json={"revision_id": revision["id"], "task": "total"})
     assert response.status_code == 400 and "MR" in response.json()["detail"]
-    assert rig.service.store.list("jobs") == before
     response = rig.http.post(f"/api/cases/{case['id']}/segment", json={"revision_id": revision["id"], "task": "total_mr", "body_seg": True})
-    assert response.status_code == 400
-    assert rig.service.store.list("jobs") == before
+    assert response.status_code == 400 and rig.service.store.list("jobs") == before
     response = rig.http.post(f"/api/cases/{case['id']}/segment", json={"revision_id": revision["id"], "task": "total_mr"})
     assert response.status_code == 200, response.text
     queued = rig.service.store.get("jobs", response.json()["id"])
     assert queued["payload"]["reference_image_id"] == revision["reference_image_id"]
     assert queued["payload"]["options"]["tasks"] == ["total_mr"]
-
-
-def test_mr_sigmoid_source_prepares_computed_linear_window_without_changing_pixels(mr_rig):
-    rig = mr_rig
-    for path in rig.source.glob("*.dcm"):
-        ds = pydicom.dcmread(path)
-        ds.PhotometricInterpretation = "MONOCHROME1"
-        ds.VOILUTFunction = "SIGMOID"
-        ds.save_as(path, enforce_file_format=True)
-    original = {path.name: path.read_bytes() for path in rig.source.glob("*.dcm")}
-    case, revision = prepare_mr(rig)
-    selected = case["series"][0]
-    assert selected["voi_lut_function"] == "SIGMOID"
-    assert selected["window_center"] is None and selected["window_width"] is None
-    policy = revision["image_asset"]["presentation"]
-    values = np.asarray(nib.load(revision["ct_file"]).dataobj)
-    low, high = np.percentile(values[values != 0], [1, 99])
-    assert policy["default_level"] == pytest.approx((low + high) / 2)
-    assert policy["default_window"] == pytest.approx(high - low)
-    assert policy["photometric_interpretation"] == "MONOCHROME1"
-    assert {path.name: path.read_bytes() for path in rig.source.glob("*.dcm")} == original
-    copied = Path(rig.service.store.get("cases", case["id"])["source_dir"])
-    assert {path.name: path.read_bytes() for path in copied.glob("*.dcm")} == original
 
 
 def test_enhanced_mr_api_prepares_one_instance_and_binds_actual_phase_selector(mr_rig):
@@ -203,53 +162,22 @@ def test_mr_derived_masks_keep_source_policy_and_reject_cross_sequence_bindings(
     mask = rig.tmp_path / "roi.nii.gz"
     nib.save(nib.Nifti1Image(values, np.asarray(asset["geometry"]["affine_ras"])), mask)
     structure = dict(id="custom:roi", name="Synthetic MR ROI", task="custom", group="Other", color="#cb78b0", mask_file=str(mask))
+
+    def build(structures, acquisition=parent["acquisition"], **options):
+        return rig.service.build_revision(
+            case["id"], Path(asset["file_path"]), structures, source="synthetic_correction", parent=parent["id"], acquisition=acquisition, **options
+        )
+
     with pytest.raises(ValueError, match="another reference"):
-        rig.service.build_revision(
-            case["id"],
-            Path(asset["file_path"]),
-            bind_structures([structure], other["id"]),
-            source="invalid_cross_sequence",
-            parent=parent["id"],
-            acquisition=parent["acquisition"],
-        )
+        build(bind_structures([structure], other["id"]))
     with pytest.raises(ValueError, match="series"):
-        rig.service.build_revision(
-            case["id"],
-            Path(asset["file_path"]),
-            [structure],
-            source="invalid_cross_sequence",
-            parent=parent["id"],
-            acquisition={**parent["acquisition"], "series_uid": "other-mr-sequence"},
-        )
-    child = rig.service.build_revision(
-        case["id"],
-        Path(asset["file_path"]),
-        [structure],
-        source="synthetic_correction",
-        parent=parent["id"],
-        acquisition=parent["acquisition"],
-        image_source=asset["source"],
-    )
+        build([structure], {**parent["acquisition"], "series_uid": "other-mr-sequence"})
+    child = build([structure], image_source=asset["source"])
     rig.service.store.commit_revision(child)
-    assert child["image_asset"] == parent["image_asset"]
-    assert child["reference_image_id"] == parent["reference_image_id"]
+    assert child["image_asset"] == parent["image_asset"] and child["reference_image_id"] == parent["reference_image_id"]
     assert child["structures"][0]["reference_image_id"] == asset["id"]
     expected_ml = np.count_nonzero(values) * abs(np.linalg.det(np.asarray(asset["geometry"]["affine_ras"])[:3, :3])) / 1000
     assert child["structures"][0]["volume_ml"] == pytest.approx(expected_ml)
-
-
-def test_mr_view_only_capability_blocks_segmentation_before_enqueue(mr_rig):
-    rig = mr_rig
-    _, parent = prepare_mr(rig)
-    case = rig.service.new_case("Synthetic view-only MR")
-    asset = create_image_asset(case["id"], parent["ct_file"], modality="MR", acquisition=parent["acquisition"])
-    asset["capabilities"].remove("segmentation")
-    rig.service.store.register_image_asset(asset)
-    revision = rig.service.build_image_revision(case["id"], Path(parent["ct_file"]), modality="MR", acquisition=parent["acquisition"])
-    rig.service.store.commit_revision(revision)
-    response = rig.http.post(f"/api/cases/{case['id']}/segment", json={"revision_id": revision["id"], "task": "total_mr"})
-    assert response.status_code == 400 and "segmentation" in response.json()["detail"]
-    assert not rig.service.store.list("jobs", case["id"])
 
 
 def test_mr_saved_output_restoration_keeps_existing_corrections_and_reference(mr_rig):

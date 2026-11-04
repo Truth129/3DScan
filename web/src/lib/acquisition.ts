@@ -74,7 +74,7 @@ const phases: Readonly<Record<string, string>> = Object.fromEntries(CONTRAST_PHA
 const cardiac: Readonly<Record<string, string>> = Object.fromEntries(CARDIAC_PHASE_OPTIONS.map(item => [item.id, item.label]));
 export const isCardiacRegion = (profile: string) => profile === 'corcta' || profile === 'cardiac';
 export const regionLabel = (profile: string) => regions[profile] ?? profile.replaceAll('_', ' ');
-export const contrastPhaseLabel = (phase: string) => phases[phase] ?? `Saved phase: ${phase}`;
+const contrastPhaseLabel = (phase: string) => phases[phase] ?? `Saved phase: ${phase}`;
 
 /** Restore recorded choices without interpreting a series name or R–R percentage. */
 export function acquisitionSelection(value?: Partial<Acquisition>, fallbackPhase = ''): AcquisitionSelection {

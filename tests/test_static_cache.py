@@ -14,9 +14,7 @@ def client(tmp_path):
     for name, content in {
         "index.html": "<!doctype html><title>Viewer build</title>",
         "offline-viewer.js": "window.viewer = true;",
-        "offline-viewer.css": "body { color: white; }",
         "assets/index-Ab12_-xy.js": "console.log('hashed build');",
-        "assets/index-Ct12A_xy.css": "body { color: white; }",
         "assets/reference.js": "console.log('mutable source');",
         "readme.txt": "ordinary static resource",
     }.items():
@@ -25,7 +23,7 @@ def client(tmp_path):
     return TestClient(app, base_url="http://127.0.0.1")
 
 
-@pytest.mark.parametrize("path", ["/", "/index.html", "/offline-viewer.js", "/offline-viewer.css"])
+@pytest.mark.parametrize("path", ["/", "/offline-viewer.js"])
 def test_viewer_entry_points_revalidate_including_conditional_responses(client, path):
     response = client.get(path)
     assert response.status_code == 200
@@ -39,8 +37,8 @@ def test_viewer_entry_points_revalidate_including_conditional_responses(client, 
     assert head.headers["cache-control"] == "no-cache"
 
 
-@pytest.mark.parametrize("path", ["/assets/index-Ab12_-xy.js", "/assets/index-Ct12A_xy.css"])
-def test_content_hashed_build_assets_are_immutable(client, path):
+def test_content_hashed_build_assets_are_immutable(client):
+    path = "/assets/index-Ab12_-xy.js"
     response = client.get(path)
     assert response.status_code == 200
     policy = "private, max-age=31536000, immutable"

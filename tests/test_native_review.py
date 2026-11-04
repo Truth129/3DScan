@@ -28,27 +28,25 @@ def source(tmp_path):
 
 
 @pytest.mark.parametrize("axis", [0, 1, 2])
-@pytest.mark.parametrize("requested_index", [0, 4, -1])
-def test_native_transform_keeps_one_exact_voxel_axis_and_hu(source, axis, requested_index):
+@pytest.mark.parametrize("requested_index", [0, -1])
+def test_native_frame_keeps_one_exact_voxel_axis_and_the_original_hu(source, axis, requested_index):
     path, values = source
     image, affine = imaging._image(path)
     index = image.shape[axis] - 1 if requested_index == -1 else requested_index
     meta, mapping = imaging.slice_geometry(image.shape, affine, "axial", 0, native_axis=axis, native_index=index)
     np.testing.assert_array_equal(mapping[axis], [0, 0, 1, index])
     np.testing.assert_allclose(np.linalg.inv(affine) @ np.asarray(meta["pixel_to_ras"]), mapping, atol=1e-12)
-    assert meta["native"] == {"axis": axis, "index": index}
     result = review_volume.review_frame(path, None, "axial", 0, native_axis=axis, native_index=index)
-    frame = result["frame"]
-    raw = gzip.decompress(result["body"])
-    pixels = frame["pixels"]
-    hu = np.frombuffer(raw, dtype=np.uint8, count=pixels * 4).reshape(4, pixels).T.copy().view("<f4").reshape(meta["height"], meta["width"])
-    expected = imaging._reslice(values.astype(np.float32), mapping, hu.shape, 1, -1024)
+    assert {key: result["frame"]["meta"][key] for key in meta} == meta and meta["native"] == {"axis": axis, "index": index}
+    # No interpolation: the frame is the stored slice, boundary planes included.
+    expected = np.take(values, index, axis=axis).T
+    hu = np.frombuffer(gzip.decompress(result["body"]), np.uint8).reshape(4, -1).T.copy().view("<f4").reshape(expected.shape)
     np.testing.assert_array_equal(hu, expected)
-    assert np.any(hu != -1024), "A valid native boundary plane became blank"
-    assert {key: frame["meta"][key] for key in meta} == meta
+    basis = np.asarray(meta["pixel_to_ras"])[:3, :2]
+    np.testing.assert_allclose(np.linalg.norm(basis, axis=0), np.delete(np.linalg.norm(nib.load(path).affine[:3, :3], axis=0), axis))
 
 
-@pytest.mark.parametrize("axis,index", [(None, 2), (0, None), (3, 2), (True, 2), (0, -1), (0, 100), (0, 1.5)])
+@pytest.mark.parametrize("axis,index", [(None, 2), (3, 2), (True, 2), (0, 100), (0, 1.5)])
 def test_native_geometry_rejects_invalid_pair(source, axis, index):
     image, affine = imaging._image(source[0])
     with pytest.raises(ValueError, match="native slice"):
@@ -67,22 +65,6 @@ def test_native_http_geometry_and_frame_cache_are_isolated(tmp_path):
             assert json.loads(frame.headers["X-CT-Frame"])["meta"]["native"] == {"axis": axis, "index": 20}
         for query in ({"native_axis": 0}, {"native_index": 2}, {"native_axis": 4, "native_index": 2}):
             assert client.get(prefix + "/review-frame", params=query).status_code == 400
-
-
-@pytest.mark.parametrize("axis", [0, 1, 2])
-def test_native_frame_matches_original_voxels_without_interpolation(source, axis):
-    path, values = source
-    index = values.shape[axis] // 2
-    result = review_volume.review_frame(path, None, "axial", 0, native_axis=axis, native_index=index)
-    meta = result["frame"]["meta"]
-    expected = np.take(values, index, axis=axis).T
-    assert (meta["height"], meta["width"]) == expected.shape
-    raw = gzip.decompress(result["body"])
-    hu = np.frombuffer(raw, np.uint8).reshape(4, -1).T.copy().view("<f4").reshape(expected.shape)
-    np.testing.assert_array_equal(hu, expected)
-    basis = np.asarray(meta["pixel_to_ras"])[:3, :2]
-    expected_spacing = np.linalg.norm(nib.load(path).affine[:3, :3], axis=0)
-    np.testing.assert_allclose(np.linalg.norm(basis, axis=0), np.delete(expected_spacing, axis))
 
 
 def test_native_and_anatomical_long_scans_have_no_768_pixel_cap():

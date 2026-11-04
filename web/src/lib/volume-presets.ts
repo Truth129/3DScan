@@ -17,7 +17,7 @@ export interface SignalWindow {
   level: number;
   invert: boolean;
 }
-export const DEFAULT_SIGNAL_WINDOW: Readonly<SignalWindow> = { window: 400, level: 40, invert: false };
+const DEFAULT_SIGNAL_WINDOW: Readonly<SignalWindow> = { window: 400, level: 40, invert: false };
 export const CINEMATIC_HEART_PRESET = 'CT-Cinematic-Heart' as const;
 export type CTVolumePresetId = SlicerVolumePresetId | keyof typeof VOLUME_PRESET_ALIASES | typeof CINEMATIC_HEART_PRESET | typeof MR_SIGNAL_PRESET;
 export interface CTVolumeCinematicSettings {
@@ -118,7 +118,7 @@ export const VOLUME_PRESET_GROUPS = [
 ] as const;
 
 /** Relative HU/color recipe from the supplied slicer_cinematic_heart.py. */
-export function cinematicHeartPreset(settings: CTVolumeCinematicSettings): CTVolumePreset {
+function cinematicHeartPreset(settings: CTVolumeCinematicSettings): CTVolumePreset {
   const reference = freshCinematicSettings(settings),
     myocardium = reference.myocardiumHU,
     blood = reference.bloodHU;
@@ -155,7 +155,7 @@ export function cinematicHeartPreset(settings: CTVolumeCinematicSettings): CTVol
     specularPower: 25,
   };
 }
-export function signalWindowPreset(input: SignalWindow): CTVolumePreset {
+function signalWindowPreset(input: SignalWindow): CTVolumePreset {
   const { window, level, invert } = freshSignalWindow(input),
     low = level - window / 2,
     high = level + window / 2;
@@ -183,7 +183,7 @@ export function signalWindowPreset(input: SignalWindow): CTVolumePreset {
     specularPower: 1,
   };
 }
-export function freshSignalWindow(input?: Partial<SignalWindow>): SignalWindow {
+function freshSignalWindow(input?: Partial<SignalWindow>): SignalWindow {
   return {
     window: Number.isFinite(input?.window) && input!.window! > 0 ? input!.window! : DEFAULT_SIGNAL_WINDOW.window,
     level: Number.isFinite(input?.level) ? input!.level! : DEFAULT_SIGNAL_WINDOW.level,

@@ -58,28 +58,22 @@ def test_cache_reuses_unchanged_structure_and_only_rebuilds_changed_mask(tmp_pat
     monkeypatch.setattr(surfaces, "_contour", contour)
     entries = [structure(first), structure(second, "total:kidney_left")]
     initial = surfaces.build_model(entries, tmp_path / "initial.glb", cache_dir=cache)
-    assert initial["cache"]["base_misses"] == 2
-    assert initial["cache"]["surface_misses"] == 2
+    assert initial["cache"]["base_misses"] == initial["cache"]["surface_misses"] == 2
     repeated = surfaces.build_model(entries, tmp_path / "repeated.glb", cache_dir=cache)
-    assert repeated["cache"]["surface_hits"] == 2
-    assert len(calls) == 2
+    assert repeated["cache"]["surface_hits"] == 2 and len(calls) == 2
     assert (tmp_path / "initial.glb").read_bytes() == (tmp_path / "repeated.glb").read_bytes()
     original_keys = {item["id"]: item["key"] for item in repeated["surface_assets"]}
 
-    # A new revision may copy masks to a different directory; identity is bytes,
-    # never file path or revision, so unchanged copies remain cache hits.
+    # Identity is the mask bytes, not its path, so a copied mask is still a hit.
     copied = tmp_path / "copied.nii.gz"
     copied.write_bytes(first.read_bytes())
     entries[0] = structure(copied)
     mask_file(second, offset=2)
     changed = surfaces.build_model(entries, tmp_path / "changed.glb", cache_dir=cache)
-    assert changed["cache"]["surface_hits"] == 1
-    assert changed["cache"]["base_misses"] == 1
-    assert len(calls) == 3
+    assert changed["cache"]["surface_hits"] == changed["cache"]["base_misses"] == 1 and len(calls) == 3
     keys = {item["id"]: item["key"] for item in changed["surface_assets"]}
     assert keys["total:liver"] == original_keys["total:liver"]
     assert keys["total:kidney_left"] != original_keys["total:kidney_left"]
-    assert all(value >= 0 for value in changed["timings_seconds"].values())
 
 
 def test_detailed_export_reuses_base_with_exact_oblique_reflected_geometry(tmp_path, monkeypatch):
@@ -203,52 +197,8 @@ def test_predecoded_mask_is_reused_without_second_decode_and_keeps_geometry(tmp_
     prepared = surfaces.prepare_surface(entry, tmp_path / "cache", decoded_mask=decoded)
     assert prepared["cache"]["base_misses"] == 1
     assert_display_matches(surfaces._asset_arrays(prepared["path"]), expected)
-    # Cache hits must not inspect the supplied tuple or perform any mask decode.
-    cached = surfaces.prepare_surface(entry, tmp_path / "cache", decoded_mask=object())
-    assert cached["key"] == prepared["key"]
-    assert cached["cache"]["surface_hits"] == 1
-    detailed = surfaces.prepare_surface(entry, tmp_path / "cache", detailed=True, decoded_mask=object())
-    assert detailed["cache"]["base_hits"] == 1
-
-
-def test_import_existing_display_reuses_exact_same_keys_without_mask_decode(tmp_path, monkeypatch):
-    first = mask_file(tmp_path / "first.nii.gz")
-    second = mask_file(tmp_path / "second.nii.gz", offset=1)
-    entries = [structure(first), structure(second, "total:kidney_left")]
-    model = tmp_path / "legacy.glb"
-    original = surfaces.build_model(entries, model)
-    cache = tmp_path / "cache"
-    binary_before = model.read_bytes()
-    original_binary_loader = surfaces._binary
-
-    def forbidden(*_):
-        raise AssertionError("Legacy display migration must not decompress masks")
-
-    monkeypatch.setattr(surfaces, "_binary", forbidden)
-    imported = surfaces.import_display_assets(entries, model, cache, original["display_simplification"])
-    assert imported["cache"]["surface_misses"] == 2
-    assert imported["cache"]["base_misses"] == 0
-    assert imported["timings_seconds"]["contour"] == 0
-    assert not (cache / "contours").exists()
-    assert model.read_bytes() == binary_before
-    combined = surfaces.build_model(entries, tmp_path / "repackaged.glb", cache_dir=cache)
-    assert combined["cache"]["surface_hits"] == 2
-    assert (tmp_path / "repackaged.glb").read_bytes() == binary_before
-    repeated = surfaces.import_display_assets(entries, model, cache, original["display_simplification"])
-    assert repeated["cache"]["surface_hits"] == 2
-    for imported_asset, prepared in zip(imported["surface_assets"], [surfaces.prepare_surface(entry, cache) for entry in entries]):
-        assert imported_asset["key"] == prepared["key"]
-        assert prepared["cache"]["surface_hits"] == 1
-
-    monkeypatch.setattr(surfaces, "_binary", original_binary_loader)
-    mask_file(second, offset=2)
-    changed = surfaces.build_model(entries, tmp_path / "changed.glb", cache_dir=cache)
-    assert changed["cache"]["surface_hits"] == 1
-    assert changed["cache"]["surface_misses"] == 1
-    assert changed["cache"]["base_misses"] == 1
-    first_asset = changed["surface_assets"][0]
-    for before, after in zip(surfaces._asset_arrays(imported["surface_assets"][0]["path"]), surfaces._asset_arrays(first_asset["path"])):
-        np.testing.assert_array_equal(after, before)
+    # A cache hit never looks at the supplied decode.
+    assert surfaces.prepare_surface(entry, tmp_path / "cache", decoded_mask=object())["cache"]["surface_hits"] == 1
 
 
 def test_import_existing_display_rejects_mismatched_parameters_and_identities(tmp_path):

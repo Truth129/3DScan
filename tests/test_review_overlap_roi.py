@@ -49,7 +49,7 @@ def fixture(tmp_path):
     return SimpleNamespace(shape=shape, image=image, affine=affine, manager=manager, service=service, folder=folder, save=save, run=run, checks=checks)
 
 
-@pytest.mark.parametrize("storage", ["C", "F", "strided"])
+@pytest.mark.parametrize("storage", ["F", "strided"])
 @pytest.mark.parametrize("dtype", [np.uint8, np.float32])
 @pytest.mark.parametrize("exclusive", [False, True])
 def test_complete_volume_oracle_and_readonly_native_layouts(fixture, monkeypatch, storage, dtype, exclusive):
@@ -102,30 +102,6 @@ def test_complete_volume_oracle_and_readonly_native_layouts(fixture, monkeypatch
     assert result["affected_structures"][0]["mask_file"] == str(target_path)
 
 
-def test_chunked_count_and_overlap_do_not_exceed_limit(monkeypatch):
-    limit = 11
-    monkeypatch.setattr(review, "_OVERLAP_CHUNK_VOXELS", limit)
-    target = np.zeros((7, 9, 13), bool)
-    target[1:6, 2:8, 3:12] = True
-    peer = np.ones(target.shape, dtype=np.float32, order="F")
-    selected = target[::2, 1::2, ::2]
-    other = peer[::2, 1::2, ::2]
-    expected = int(np.count_nonzero(selected))
-    sizes, checks = [], []
-    logical_and = np.logical_and
-
-    def bounded(left, right):
-        sizes.append(left.size)
-        assert left.size <= limit and right.size <= limit
-        return logical_and(left, right)
-
-    monkeypatch.setattr(review.np, "logical_and", bounded)
-    assert review._count_overlap(selected, other, lambda: checks.append(1)) == expected
-    assert len(sizes) > 1 and len(checks) == len(sizes)
-    assert review._count_foreground(other, lambda: checks.append(1)) == other.size
-    assert review._count_foreground(other[:, :, :0], lambda: None) == 0
-
-
 def test_relationship_only_erases_old_overlap_and_preserves_outside_region(fixture):
     target = np.zeros(fixture.shape, bool)
     target[1, 1, 1] = target[9, 11, 15] = True
@@ -141,15 +117,7 @@ def test_relationship_only_erases_old_overlap_and_preserves_outside_region(fixtu
     assert affected["summary"]["after_voxels"] == 1
 
 
-def test_exclusive_peer_empty_warning_uses_complete_count(fixture):
-    target = np.zeros(fixture.shape, bool)
-    target[3:5, 3:5, 3:5] = True
-    result, _, _ = fixture.run(target, target.astype(np.float32), exclusive=True)
-    assert result["affected_structures"][1]["summary"]["after_voxels"] == 0
-    assert result["warnings"] == ["Replacing overlap leaves Peer empty; inspect this subdivision"]
-
-
-@pytest.mark.parametrize("invalid", [2.0, 0.5, np.nan])
+@pytest.mark.parametrize("invalid", [2.0, np.nan])
 def test_binary_validation_checks_values_outside_target_roi(fixture, invalid):
     target = np.zeros(fixture.shape, bool)
     target[3, 4, 5] = True

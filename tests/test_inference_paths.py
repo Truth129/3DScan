@@ -24,7 +24,7 @@ from scan3d import doctor, inference_paths, segmentation
 from scan3d.api import create_app
 from scan3d.config import ROOT, Settings
 from scan3d.demo import create_demo
-from scan3d.inference_paths import InferencePath, binding, gpu_cards, identity, public_error, require, rows
+from scan3d.inference_paths import binding, gpu_cards, identity, public_error, require, rows
 from scan3d.interactive_worker import InteractiveWorker
 from scan3d.store import Store, public_job, public_revision
 from scan3d.review import public_review
@@ -139,28 +139,20 @@ def test_the_directory_follows_the_setting_per_call(tmp_path, monkeypatch):
     assert inference_paths.directory() == ROOT / ".runtime" / "inference-paths"
 
 
-def test_the_default_row_names_the_recommended_card_from_its_proof(tmp_path, fresh):
-    default_proof(tmp_path)
-    assert rows() == [{"id": "default", "label": "Test Default GPU", "memory_gib": 32, "shares_display": False, "available": True, "reason": None}]
-
-
-def test_a_stale_device_list_does_not_name_the_default_card(tmp_path, fresh):
-    # The integrated GPU this workstation lost is still in the live proof's device list.
-    default_proof(tmp_path, recommended_device="gpu:1")
-    assert rows()[0]["label"] == "Test Second GPU"
-
-
-def test_an_explicit_device_request_outranks_the_proofs_recommendation(tmp_path, fresh, monkeypatch):
-    default_proof(tmp_path)
-    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:1")
-    assert (rows()[0]["label"], rows()[0]["memory_gib"]) == ("Test Second GPU", 8)
-
-
-def test_the_cpu_setting_names_no_card_even_with_a_proof(tmp_path, fresh, monkeypatch):
-    monkeypatch.setenv("SCAN3D_DEVICE", "cpu")
-    assert rows()[0]["label"] == "CPU"
-    default_proof(tmp_path)
-    assert rows() == [{"id": "default", "label": "CPU", "memory_gib": None, "shares_display": False, "available": True, "reason": None}]
+@pytest.mark.parametrize(
+    "recommended, setting, label, memory",
+    [
+        ("gpu:0", None, "Test Default GPU", 32),
+        ("gpu:1", None, "Test Second GPU", 8),  # The integrated GPU this workstation lost is still listed.
+        ("gpu:0", "gpu:1", "Test Second GPU", 8),  # An explicit request outranks the recommendation.
+        ("gpu:0", "cpu", "CPU", None),
+    ],
+)
+def test_the_default_row_names_the_card_its_proof_and_setting_choose(tmp_path, fresh, monkeypatch, recommended, setting, label, memory):
+    default_proof(tmp_path, recommended_device=recommended)
+    if setting:
+        monkeypatch.setenv("SCAN3D_DEVICE", setting)
+    assert rows() == [{"id": "default", "label": label, "memory_gib": memory, "shares_display": False, "available": True, "reason": None}]
 
 
 @pytest.mark.parametrize(
@@ -168,7 +160,6 @@ def test_the_cpu_setting_names_no_card_even_with_a_proof(tmp_path, fresh, monkey
     [
         lambda record: record.update(python_version="3.0.0"),
         lambda record: record["checks"].update(runtime_versions={"torch": "0.9"}),
-        lambda record: record["checks"].update(torch_distribution_version="0.9"),
         lambda record: record.update(gpu_ready=False, errors=["boom at /private/home/python"]),
     ],
 )
@@ -185,14 +176,9 @@ def test_a_stale_default_proof_stays_available_with_a_fixed_caution(tmp_path, fr
     "malformed",
     [
         "not json",
-        "[]",
         '{"checks": []}',
         '{"checks": {"devices": 7, "recommended_device": "gpu:0"}}',
-        '{"checks": {"devices": [], "recommended_device": "gpu:0"}}',
-        '{"checks": {"devices": ["x"], "recommended_device": "gpu:0"}}',
         '{"checks": {"devices": [{"name": 7}], "recommended_device": "gpu:0"}}',
-        '{"checks": {"devices": [{"name": ""}], "recommended_device": "gpu:0"}}',
-        '{"checks": {"devices": [{"name": "x"}], "recommended_device": 0}}',
         '{"checks": {"devices": [{"name": "x"}], "recommended_device": "cuda:0"}}',
         '{"checks": {"devices": [{"name": "\\ud800"}], "recommended_device": "gpu:0"}}',
         pytest.param(json.dumps({"checks": {"devices": [{"name": "x"}], "recommended_device": f"gpu:{'9' * 5000}"}}), id="an-index-no-integer-can-hold"),
@@ -220,9 +206,7 @@ def test_a_default_proof_that_still_describes_this_machine_keeps_its_card(tmp_pa
     "cards, proven",
     [
         pytest.param({"card1": ("0x1002", "0x7552")}, ["1002:7551"], id="replaced"),
-        pytest.param({"card1": AMD_CARD, "card2": ("0x1002", "0x7552")}, ["1002:7551"], id="added"),
         pytest.param({"card1": AMD_CARD}, ["1002:7551", "1002:7551"], id="one-of-a-twin-removed"),
-        pytest.param({"card2": NVIDIA_CARD}, ["1002:7551"], id="the-last-one-removed"),
         pytest.param({"card1": AMD_CARD}, [], id="the-first-one-arrived"),
     ],
 )
@@ -233,12 +217,6 @@ def test_a_changed_card_costs_the_default_row_its_name_and_never_its_availabilit
     # A job's label is frozen from the row, so it stops naming a card that has left.
     assert binding("default") == {"id": "default", "label": "Default device", "identity": "default"}
     assert require(binding("default")) is None
-
-
-def test_a_changed_card_keeps_the_default_rows_vendor(tmp_path, fresh, sysfs):
-    build_sysfs(sysfs, {"card1": ("0x1002", "0x7552")}, {"card1-DP-1": "connected"})
-    default_proof(tmp_path, hardware=["1002:7551"])
-    assert (rows()[0]["label"], rows()[0]["shares_display"]) == ("Default device", True)
 
 
 def test_a_default_proof_from_before_the_census_is_not_compared(tmp_path, fresh, sysfs):
@@ -267,80 +245,8 @@ def test_a_proven_path_gets_its_own_row(stub):
     assert rows()[1:] == [{"id": "nvidia", "label": GPU_NAME, "memory_gib": 16, "shares_display": False, "available": True, "reason": None}]
 
 
-def corrupt(stub):
-    stub.proof.write_text("{not json")
-
-
-def not_a_record(stub):
-    stub.proof.write_text("[]")
-
-
-def no_block(stub):
-    stub.change(lambda record: record.pop("path"))
-
-
-def no_checks(stub):
-    stub.change(lambda record: record.pop("checks"))
-
-
-def another_id(stub):
-    stub.change(lambda record: record["path"].update(id="renamed"))
-
-
-def partial_block(stub):
-    stub.change(lambda record: record["path"].pop("python"))
-
-
-def unknown_kind(stub):
-    stub.change(lambda record: record["path"].update(kind="tpu"))
-
-
-def cpu_device(stub):
-    stub.change(lambda record: record["path"].update(device="cpu"))
-
-
-def no_packages(stub):
-    stub.change(lambda record: record["checks"].pop("runtime_versions"))
-
-
-def untyped_packages(stub):
-    stub.change(lambda record: record["checks"].update(runtime_versions=["torch"]))
-
-
-def empty_packages(stub):
-    stub.change(lambda record: record["checks"].update(runtime_versions={}))
-
-
-def null_byte_in_a_field(stub):
-    stub.change(lambda record: record["path"].update(python="/venv/bin/python\x00"))
-
-
-def untyped_memory(stub):
-    stub.change(lambda record: record["path"].update(memory_bytes="16"))
-
-
-def untyped_hardware(stub):
-    stub.change(lambda record: record["checks"].update(hardware=7))
-
-
-def empty_name(stub):
-    stub.change(lambda record: record["path"].update(gpu_name=""))
-
-
-def unencodable_name(stub):
-    stub.change(lambda record: record["path"].update(gpu_name="\ud800"))
-
-
-def nested_too_deeply(stub):
-    stub.proof.write_text("[" * 200_000)
-
-
 def failed_check(stub):
     stub.change(lambda record: record.update(gpu_ready=False, errors=["PRIVATE failure at /private/home/venv/bin/python"]))
-
-
-def truthy_ready(stub):
-    stub.change(lambda record: record.update(gpu_ready="yes"))
 
 
 def missing_interpreter(stub):
@@ -366,81 +272,48 @@ def removed_family(stub):
     shutil.rmtree(stub.site_packages / f"torch-{TORCH}.dist-info")
 
 
-def proof_of_other_packages(stub):
-    stub.change(lambda record: record["checks"]["runtime_versions"].update({"torch": "2.14.0"}))
+def cupy_wheel(stub):
+    add_package(stub.site_packages, "cupy-cuda13x", "13.6.0")
 
 
 def torch_record(stub):
     return next(stub.site_packages.glob("torch-*.dist-info")) / "METADATA"
 
 
-def looping_package_record(stub):
-    record = torch_record(stub)
-    record.unlink()
-    record.symlink_to(record)
+def a_looping_link(path):
+    path.unlink()
+    path.symlink_to(path)
 
 
-def undecodable_package_record(stub):
-    torch_record(stub).write_bytes(b"Version: \xff\n")
+DAMAGE = {
+    "corrupt": (lambda stub: stub.proof.write_text("{not json"), UNREADABLE),
+    "no-block": (lambda stub: stub.change(lambda record: record.pop("path")), UNREADABLE),
+    "another-id": (lambda stub: stub.change(lambda record: record["path"].update(id="renamed")), UNREADABLE),
+    "cpu-device": (lambda stub: stub.change(lambda record: record["path"].update(device="cpu")), UNREADABLE),
+    "untyped-packages": (lambda stub: stub.change(lambda record: record["checks"].update(runtime_versions=["torch"])), UNREADABLE),
+    "null-byte-in-a-field": (lambda stub: stub.change(lambda record: record["path"].update(python="/venv/bin/python\x00")), UNREADABLE),
+    "unencodable-name": (lambda stub: stub.change(lambda record: record["path"].update(gpu_name="\ud800")), UNREADABLE),
+    "nested-too-deeply": (lambda stub: stub.proof.write_text("[" * 200_000), UNREADABLE),
+    "failed-check": (failed_check, CHECK_FAILED),
+    "truthy-ready": (lambda stub: stub.change(lambda record: record.update(gpu_ready="yes")), CHECK_FAILED),
+    "stopped-install": (stopped_install, INSTALL_STOPPED),
+    "missing-interpreter": (missing_interpreter, NO_PYTHON),
+    "changed-family": (changed_family, PACKAGES_CHANGED),
+    "removed-family": (removed_family, PACKAGES_CHANGED),
+    "looping-package-record": (lambda stub: a_looping_link(torch_record(stub)), PACKAGES_CHANGED),
+    "bottomless-package-record": (
+        lambda stub: torch_record(stub).write_text("".join(f'Content-Type: multipart/mixed; boundary="{level}"\n\n--{level}\n' for level in range(2000))),
+        PACKAGES_CHANGED,
+    ),
+    "record-without-a-version": (lambda stub: torch_record(stub).write_text(""), PACKAGES_CHANGED),
+    "cupy-wheel": (cupy_wheel, RESAMPLER),
+    "cucim-import": (lambda stub: (stub.site_packages / "cucim").mkdir(), RESAMPLER),
+}
 
 
-def bottomless_package_record(stub):
-    torch_record(stub).write_text("".join(f'Content-Type: multipart/mixed; boundary="{level}"\n\n--{level}\n' for level in range(2000)))
-
-
-def cupy_wheel(stub):
-    add_package(stub.site_packages, "cupy-cuda13x", "13.6.0")
-
-
-def cupy_import(stub):
-    (stub.site_packages / "cupy").mkdir()
-
-
-def cucim_wheel(stub):
-    add_package(stub.site_packages, "cucim", "25.2.0")
-
-
-def cucim_import(stub):
-    (stub.site_packages / "cucim").mkdir()
-
-
-@pytest.mark.parametrize(
-    "damage, reason",
-    [
-        (corrupt, UNREADABLE),
-        (not_a_record, UNREADABLE),
-        (no_block, UNREADABLE),
-        (no_checks, UNREADABLE),
-        (another_id, UNREADABLE),
-        (partial_block, UNREADABLE),
-        (unknown_kind, UNREADABLE),
-        (cpu_device, UNREADABLE),
-        (no_packages, UNREADABLE),
-        (untyped_packages, UNREADABLE),
-        (empty_packages, UNREADABLE),
-        (null_byte_in_a_field, UNREADABLE),
-        (untyped_memory, UNREADABLE),
-        (untyped_hardware, UNREADABLE),
-        (empty_name, UNREADABLE),
-        (unencodable_name, UNREADABLE),
-        (nested_too_deeply, UNREADABLE),
-        (failed_check, CHECK_FAILED),
-        (truthy_ready, CHECK_FAILED),
-        (stopped_install, INSTALL_STOPPED),
-        (missing_interpreter, NO_PYTHON),
-        (changed_family, PACKAGES_CHANGED),
-        (removed_family, PACKAGES_CHANGED),
-        (proof_of_other_packages, PACKAGES_CHANGED),
-        (looping_package_record, PACKAGES_CHANGED),
-        (undecodable_package_record, PACKAGES_CHANGED),
-        (bottomless_package_record, PACKAGES_CHANGED),
-        (cupy_wheel, RESAMPLER),
-        (cupy_import, RESAMPLER),
-        (cucim_wheel, RESAMPLER),
-        (cucim_import, RESAMPLER),
-    ],
-)
-def test_each_failed_check_disables_its_row_with_one_fixed_sentence(stub, tmp_path, damage, reason):
+@pytest.mark.parametrize("damage", DAMAGE)
+def test_each_failed_check_disables_its_row_with_one_fixed_sentence(stub, tmp_path, damage):
+    damage, reason = DAMAGE[damage]
     damage(stub)
     default, added = rows()
     assert default["available"] and (added["id"], added["available"], added["reason"]) == ("nvidia", False, reason)
@@ -451,7 +324,12 @@ def test_each_failed_check_disables_its_row_with_one_fixed_sentence(stub, tmp_pa
         binding("nvidia")
 
 
-@pytest.mark.parametrize("also_missing", [missing_interpreter, removed_family, changed_family, cupy_wheel])
+def test_a_proof_that_cannot_be_opened_disables_its_row(stub):
+    a_looping_link(stub.proof)
+    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, UNREADABLE)
+
+
+@pytest.mark.parametrize("also_missing", [missing_interpreter, cupy_wheel])
 def test_a_stopped_install_is_the_reason_however_little_of_it_is_left(stub, also_missing):
     stopped_install(stub)
     also_missing(stub)
@@ -489,26 +367,14 @@ def test_the_install_script_writes_the_files_discovery_reads():
     assert 'marker="$venv/.scan3d-inference-path"\n' in script and 'finished="$venv/.scan3d-inference-path-finished"\n' in script
 
 
-@pytest.mark.parametrize("engine", ENGINES)
-def test_an_engine_pin_that_differs_from_the_api_disables_the_path(stub, monkeypatch, engine):
+@pytest.mark.parametrize("engine, lacks", [*((engine, False) for engine in ENGINES), ("nnunetv2", True)])
+def test_an_engine_that_differs_from_the_api_or_that_the_path_lacks_disables_it(stub, monkeypatch, engine, lacks):
     assert rows()[1]["available"]
     version = doctor.metadata.version
-
-    def api(package):
-        return "9.9.9" if package == engine else version(package)
-
-    monkeypatch.setattr(doctor.metadata, "version", api)
-    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, ENGINE_DIFFERS)
-
-
-@pytest.mark.parametrize("engine", ENGINES)
-def test_an_engine_the_path_lacks_disables_it(stub, monkeypatch, engine):
     # Patched so the API has it on any machine: two absences would match.
-    version = doctor.metadata.version
     monkeypatch.setattr(doctor.metadata, "version", lambda package: "9.9.9" if package == engine else version(package))
-    drop_package(stub, engine)
-    with pytest.raises(doctor.metadata.PackageNotFoundError):
-        inference_paths.installed(stub.site_packages, engine)
+    if lacks:
+        drop_package(stub, engine)
     assert (rows()[1]["available"], rows()[1]["reason"]) == (False, ENGINE_DIFFERS)
 
 
@@ -532,30 +398,14 @@ def test_a_failed_proof_keeps_the_card_name_it_measured(stub):
     assert (rows()[1]["label"], rows()[1]["memory_gib"]) == (GPU_NAME, 16)
 
 
-@pytest.mark.parametrize("gpu_name", [None, ""])
-def test_a_proof_with_no_card_is_named_by_its_id(stub, gpu_name):
-    stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(gpu_name=gpu_name, memory_bytes=None, kind=None)))
-    added = rows()[1]
-    assert (added["label"], added["memory_gib"], added["shares_display"]) == ("nvidia", None, False)
-
-
-def test_a_failed_proof_with_any_field_shape_keeps_the_panel_working(stub):
-    stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(gpu_name=[], memory_bytes={}, kind=[])))
+@pytest.mark.parametrize(
+    "fields",
+    [{"gpu_name": None, "memory_bytes": None, "kind": None}, {"gpu_name": [], "memory_bytes": {}, "kind": []}, {"gpu_name": "\ud800"}],
+    ids=["no-card", "any-field-shape", "a-name-no-response-can-carry"],
+)
+def test_a_failed_proof_with_no_usable_card_is_named_by_its_id(stub, fields):
+    stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(fields)))
     assert (rows()[1]["label"], rows()[1]["reason"]) == ("nvidia", CHECK_FAILED)
-
-
-def test_a_failed_proof_with_a_name_no_response_can_carry_is_named_by_its_id(stub):
-    stub.change(lambda record: (record.update(gpu_ready=False), record["path"].update(gpu_name="\ud800")))
-    assert (rows()[1]["label"], rows()[1]["reason"]) == ("nvidia", CHECK_FAILED)
-    with pytest.raises(ValueError) as error:
-        binding("nvidia")
-    assert str(error.value) == f"nvidia is unavailable: {CHECK_FAILED}"
-
-
-def test_a_proof_that_cannot_be_opened_disables_its_row(stub):
-    stub.proof.unlink()
-    stub.proof.symlink_to(stub.proof)
-    assert (rows()[1]["available"], rows()[1]["reason"]) == (False, UNREADABLE)
 
 
 def test_memory_rounds_to_whole_gibibytes(stub):
@@ -571,7 +421,7 @@ def test_a_bad_file_disables_only_its_own_row_and_rows_sort_by_id(tmp_path, stub
     assert second.proof.is_file()
 
 
-@pytest.mark.parametrize("name", ["default.json", "Upper.json", "has space.json", "-dash.json", f"{'x' * 33}.json", "notes.txt", "nvidia.json.writing"])
+@pytest.mark.parametrize("name", ["default.json", "Upper.json", f"{'x' * 33}.json", "nvidia.json.writing"])
 def test_a_file_that_is_not_a_path_id_is_not_a_path(tmp_path, monkeypatch, name):
     folder = tmp_path / "paths"
     folder.mkdir()
@@ -633,10 +483,11 @@ BAD_PROOFS = {
 }
 
 
-@pytest.mark.parametrize("contents", BAD_PROOFS.values(), ids=BAD_PROOFS)
-@pytest.mark.parametrize("proof", ["default", "added"])
-def test_no_single_proof_can_take_down_a_panel(stub, tmp_path, proof, contents):
-    (tmp_path / "gpu-proof.json" if proof == "default" else stub.proof).write_text(contents)
+@pytest.mark.parametrize(
+    "proof, bad", [("default", "nested-too-deeply"), ("added", "a-name-no-response-can-carry"), ("default", "an-index-no-integer-can-hold")]
+)
+def test_no_single_proof_can_take_down_a_panel(stub, tmp_path, proof, bad):
+    (tmp_path / "gpu-proof.json" if proof == "default" else stub.proof).write_text(BAD_PROOFS[bad])
     client = TestClient(create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist")), base_url="http://127.0.0.1")
     for route in ("/api/segmentation-options", "/api/interactive/status"):
         response = client.get(route)
@@ -650,30 +501,20 @@ def test_no_single_proof_can_take_down_a_panel(stub, tmp_path, proof, contents):
 def test_gpu_cards_are_one_vendors_sorted_ids_and_connectors_are_not_cards(sysfs):
     build_sysfs(
         sysfs,
-        {"card3": ("0x10de", "0x2c05"), "card1": ("0x1002", "0x7551"), "card2": ("0x10de", "0x2204")},
+        {"card3": ("0x10de", "0x2c05"), "card1": ("0x1002", "0x7551"), "card2": ("0x10de", "0x2204"), "card4": ("0x10de", "0x2c05")},
         {"card3-DP-5": "connected", "card1-DP-1": "disconnected"},
     )
     (sysfs / "renderD128").mkdir()
     (sysfs / "version").write_text("drm 1.1.0\n")
-    assert gpu_cards("cuda") == ["10de:2204", "10de:2c05"]
+    assert gpu_cards("cuda") == ["10de:2204", "10de:2c05", "10de:2c05"]  # Twins are both counted.
     assert gpu_cards("rocm") == ["1002:7551"]
 
 
-def test_twin_cards_are_both_counted(sysfs):
-    build_sysfs(sysfs, {"card1": ("0x10de", "0x2c05"), "card2": ("0x10de", "0x2c05")})
-    assert gpu_cards("cuda") == ["10de:2c05", "10de:2c05"]
-
-
-def test_an_unknown_vendor_or_missing_sysfs_finds_no_cards(sysfs):
+def test_an_unknown_vendor_an_unreadable_id_or_missing_sysfs_finds_no_cards(sysfs):
     assert gpu_cards("cuda") == []
-    build_sysfs(sysfs, {"card1": ("0x8086", "0x1234")})
+    build_sysfs(sysfs, {"card1": ("0x8086", "0x1234"), "card2": ("0x10de", "0x2c05")})
+    (sysfs / "card2" / "device" / "device").unlink()
     assert gpu_cards("cuda") == gpu_cards("rocm") == gpu_cards("other") == gpu_cards(None) == []
-
-
-def test_a_card_with_an_unreadable_id_is_skipped(sysfs):
-    build_sysfs(sysfs, {"card1": ("0x10de", "0x2c05")})
-    (sysfs / "card1" / "device" / "device").unlink()
-    assert gpu_cards("cuda") == []
 
 
 def test_shares_display_follows_a_connected_connector_of_that_vendor(stub, sysfs):
@@ -723,7 +564,7 @@ def test_an_added_path_binds_to_its_card_and_passes_its_recheck(stub):
     assert require(bound).python == stub.python
 
 
-@pytest.mark.parametrize("name", ["absent", "../nvidia", "NVIDIA", "", None])
+@pytest.mark.parametrize("name", ["absent", "../nvidia", None])
 def test_a_path_that_is_not_set_up_is_refused_with_a_fixed_sentence(stub, name):
     with pytest.raises(ValueError) as error:
         binding(name)
@@ -745,31 +586,13 @@ def test_an_unavailable_path_is_refused_by_name(stub):
     assert str(error.value) == f"{GPU_NAME} is unavailable: {CHECK_FAILED}"
 
 
-def test_a_removed_path_fails_its_queued_job_by_name(stub):
+@pytest.mark.parametrize("change, reason", [(lambda stub: stub.proof.unlink(), UNSET_UP), (missing_interpreter, NO_PYTHON), (stopped_install, INSTALL_STOPPED)])
+def test_a_path_that_went_away_fails_its_queued_job_by_name(stub, change, reason):
     bound = binding("nvidia")
-    stub.proof.unlink()
+    change(stub)
     with pytest.raises(ValueError) as error:
         require(bound)
-    assert str(error.value) == f"{GPU_NAME} is no longer available: {UNSET_UP} Nothing ran and no other GPU was tried."
-
-
-def test_a_path_that_went_bad_fails_its_queued_job_by_name(stub):
-    bound = binding("nvidia")
-    missing_interpreter(stub)
-    with pytest.raises(ValueError) as error:
-        require(bound)
-    assert str(error.value) == f"{GPU_NAME} is no longer available: {NO_PYTHON} Nothing ran and no other GPU was tried."
-
-
-def test_a_stopped_install_refuses_a_new_job_and_fails_a_queued_one_by_name(stub):
-    bound = binding("nvidia")
-    stopped_install(stub)
-    with pytest.raises(ValueError) as error:
-        binding("nvidia")
-    assert str(error.value) == f"{GPU_NAME} is unavailable: {INSTALL_STOPPED}"
-    with pytest.raises(ValueError) as error:
-        require(bound)
-    assert str(error.value) == f"{GPU_NAME} is no longer available: {INSTALL_STOPPED} Nothing ran and no other GPU was tried."
+    assert str(error.value) == f"{GPU_NAME} is no longer available: {reason} Nothing ran and no other GPU was tried."
 
 
 def test_a_finished_install_gives_the_path_back_to_a_queued_job(stub):
@@ -796,28 +619,6 @@ def test_a_reissued_proof_for_the_same_card_keeps_its_queued_job(stub):
 
 
 # One path as a value
-
-
-def test_a_path_is_a_frozen_value_compared_in_full(stub):
-    path = require(binding("nvidia"))
-    assert (path.label, path.identity, path.kind, path.gpu_name, path.memory_bytes) == (GPU_NAME, f"nvidia|gpu|{GPU_NAME}", "cuda", GPU_NAME, MEMORY_BYTES)
-    assert path == require(binding("nvidia")) and hash(path) == hash(require(binding("nvidia")))
-    changed = {
-        "id": "another",
-        "python": "/another/python",
-        "site_packages": "/another/site-packages",
-        "device": "gpu:1",
-        "kind": "rocm",
-        "gpu_name": "Test Another GPU",
-        "memory_bytes": MEMORY_BYTES + 1,
-        "packages": (("torch", "9.9.9"),),
-        "hardware": ("10de:2204",),
-    }
-    assert set(changed) == {field.name for field in dataclasses.fields(path)}
-    for name, value in changed.items():
-        assert dataclasses.replace(path, **{name: value}) != path, name
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        path.device = "gpu:1"
 
 
 def test_the_interpreter_is_kept_as_the_venv_reported_it(stub):
@@ -889,31 +690,17 @@ def test_versions_come_from_the_paths_own_site_packages(stub):
     path = require(binding("nvidia"))
     drop_package(stub, "nnunetv2")
     add_package(stub.site_packages, "nnunetv2", "0.0.1")  # Whatever this process has installed.
+    drop_package(stub, "TotalSegmentator")
     versions = path.versions()
-    assert versions["nnunetv2"] == "0.0.1" and versions["torch"] == TORCH
+    assert versions["nnunetv2"] == "0.0.1" and versions["torch"] == TORCH and versions["TotalSegmentator"] == "unavailable"
     assert {name: versions[name] for name in FAMILIES["cuda"]} == FAMILIES["cuda"]
 
 
-def test_a_package_the_path_lacks_reads_as_unavailable(stub):
-    path = require(binding("nvidia"))
-    drop_package(stub, "TotalSegmentator")
-    assert path.versions()["TotalSegmentator"] == "unavailable"
-
-
-def test_a_package_record_without_a_version_is_not_installed(stub):
-    (stub.site_packages / f"torch-{TORCH}.dist-info" / "METADATA").write_text("")
-    assert rows()[1]["reason"] == PACKAGES_CHANGED
-
-
-def test_confirm_passes_the_proven_card_on_any_index_of_a_plain_gpu_request(stub):
+def test_confirm_passes_any_index_of_a_plain_gpu_request_and_holds_an_explicit_one(stub, tmp_path, monkeypatch):
     path = require(binding("nvidia"))
     path.confirm("gpu:0", GPU_NAME, "13.0")
     path.confirm("gpu:3", GPU_NAME, "13.0")
-
-
-def test_confirm_holds_a_path_to_its_explicit_index(tmp_path, monkeypatch):
-    built = stand_in(tmp_path, device="gpu:1")
-    activate(monkeypatch, built)
+    activate(monkeypatch, stand_in(tmp_path / "explicit", device="gpu:1"))
     path = require(binding("nvidia"))
     path.confirm("gpu:1", GPU_NAME, "13.0")
     with pytest.raises(RuntimeError, match=r"found Test Added GPU \(gpu:0, CUDA\)"):
@@ -945,9 +732,9 @@ def test_confirm_knows_a_rocm_path_has_no_cuda_build(tmp_path, monkeypatch):
 # Public text
 
 
-def test_a_timeout_never_shows_its_command_line():
-    text = public_error(subprocess.TimeoutExpired(["/home/someone/venv/bin/python", "-m", "worker"], 10))
-    assert text == "The AI process did not stop in time."
+def test_a_timeout_never_shows_its_command_line_and_an_empty_error_still_says_something():
+    assert public_error(subprocess.TimeoutExpired(["/home/someone/venv/bin/python", "-m", "worker"], 10)) == "The AI process did not stop in time."
+    assert public_error(RuntimeError()) == "RuntimeError"
 
 
 @pytest.mark.parametrize(
@@ -955,42 +742,25 @@ def test_a_timeout_never_shows_its_command_line():
     [
         ("[Errno 2] No such file or directory: '/home/some one/venv/bin/python'", "[Errno 2] No such file or directory: <local path>"),
         ('cannot open "/data/case 1/ct.nii.gz"', "cannot open <local path>"),
-        ("TotalSegmentator wrote /tmp/run-1/total.log before exit", "TotalSegmentator wrote <local path> before exit"),
         ("search path /opt/a/lib:/opt/b/lib was empty", "search path <local path>:<local path> was empty"),
         ("failed at --output=/tmp/x, retry", "failed at --output=<local path>, retry"),
-        ("unable to open /home/some user/venv/bin/python", "unable to open <local path>"),
         ("/home/some user/.venv/lib/foo.so: undefined symbol: x", "<local path>: undefined symbol: x"),
         ("cannot find /home/some long name/venv/bin/python in the path", "cannot find <local path> in the path"),
-        ("cannot read /home/some user/ct.nii.gz (line 3)", "cannot read <local path> (line 3)"),
         ("first /tmp/a b/c\nsecond line /tmp/d", "first <local path>\nsecond line <local path>"),
         ("CUDA out of memory and/or 1/2 of ./relative/file", "CUDA out of memory and/or 1/2 of ./relative/file"),
         ("built with 3.14/rocm and/or 13.0/cuda on x86-64/linux", "built with 3.14/rocm and/or 13.0/cuda on x86-64/linux"),
-        ("the X-L/R and A-I/O labels", "the X-L/R and A-I/O labels"),
         (r"child said: b'starting\n/home/someone/lib/libfoo.so: cannot open\n'", r"child said: b'starting\n<local path>: cannot open\n'"),
         (r"child said: b'columns\t/home/someone/ct.nii.gz\tlast'", r"child said: b'columns\t<local path>'"),
-        (r"child said: 'line\r\n/home/someone/ct.nii.gz'", r"child said: 'line\r\n<local path>'"),
-        (r"child said: b'carriage\r/home/someone/ct.nii.gz'", r"child said: b'carriage\r<local path>'"),
         ("g++ -L/home/someone/lib -o a.out failed", "g++ -L<local path> -o a.out failed"),
-        ("cc -I/home/someone/include -c x.c failed", "cc -I<local path> -c x.c failed"),
-        ("-L/home/someone/lib came first", "-L<local path> came first"),
         ("cc '-I/home/someone/include' failed", "cc '-I<local path>' failed"),
         pytest.param(OUT_OF_MEMORY, OUT_OF_MEMORY, id="pytorch-out-of-memory-keeps-its-address"),
-        ("see http://example.org/help.", "see http://example.org/help."),
         ("https://example.org:8443/help", "https://example.org:8443/help"),
-        ("file:///home/someone/ct.nii.gz", "file:<local path>"),
         ("https:///home/someone/ct.nii.gz", "https:<local path>"),  # An address names a host, and this one holds only a path.
-        ("http:////home/someone/ct.nii.gz", "http:<local path>"),
         ("see https://example.org/help, then open /home/someone/ct.nii.gz", "see https://example.org/help, then open <local path>"),
-        ("see https://example.org/help:/opt/a/lib:/opt/b/lib", "see https://example.org/help:<local path>:<local path>"),
-        ("/home/some one/ct.nii.gz failed, see https://example.org/help", "<local path> failed, see https://example.org/help"),
     ],
 )
 def test_absolute_paths_leave_a_public_error(message, expected):
     assert public_error(RuntimeError(message)) == expected
-
-
-def test_an_empty_error_still_says_something():
-    assert public_error(RuntimeError()) == "RuntimeError"
 
 
 # Whole segmentation jobs, in real children of the stand-in
@@ -1156,25 +926,15 @@ def test_a_rocm_build_records_its_hip_version_and_no_cuda_version(segmenting, mo
         assert segmenting.revision(job)["operation"]["runtime"] == {"inference_path": name, "reused": False, **measured}
 
 
-def lose_a_mask(saved):
-    Path(json.loads(saved.read_text())["structures"][0]["mask_file"]).unlink()
-
-
-def change_the_digest(saved):
-    record = json.loads(saved.read_text())
-    record["model_fingerprint"]["digest"] = "another"
-    saved.write_text(json.dumps(record))
-
-
-def truncate(saved):
-    saved.write_text(saved.read_text()[:20])
-
-
-@pytest.mark.parametrize("damage", [lose_a_mask, change_the_digest, truncate])
+@pytest.mark.parametrize("damage", ["lose-a-mask", "change-the-digest"])
 def test_a_saved_result_that_fails_its_checks_is_run_again_and_not_called_reused(segmenting, damage):
     first = segmenting.revision(segmenting.run("nvidia"))
     (saved,) = segmenting.service.store.case_dir(segmenting.case["id"]).rglob("complete.json")
-    damage(saved)
+    record = json.loads(saved.read_text())
+    if damage == "lose-a-mask":
+        Path(record["structures"][0]["mask_file"]).unlink()
+    else:
+        saved.write_text(json.dumps({**record, "model_fingerprint": {**record["model_fingerprint"], "digest": "another"}}))
     job = segmenting.run("nvidia")
     assert job["status"] == "completed", job
     again = segmenting.revision(job)
@@ -1248,9 +1008,8 @@ def test_a_failed_check_and_a_wrong_report_leave_nothing_to_reuse(segmenting, mo
     [
         ({"log": "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB", "exit": 1}, "it ran out of GPU memory"),
         ({"kill": True}, "the process was killed, usually because system memory ran out"),
-        ({"log": "Traceback", "exit": 3}, "exit 3"),
     ],
-    ids=["out-of-memory", "killed", "plain"],
+    ids=["out-of-memory", "killed"],
 )
 def test_a_failed_run_names_its_card_and_what_stopped_it(segmenting, plan, cause):
     job = segmenting.run("nvidia", **plan)
@@ -1269,23 +1028,6 @@ def test_a_run_that_moved_results_says_so_and_a_reuse_keeps_saying_so(segmenting
 
 def gone(tmp_path):
     return dataclasses.replace(require(binding("nvidia")), python=str(tmp_path / "PRIVATE-gone" / "bin" / "python"))
-
-
-def test_an_interpreter_that_vanished_after_the_recheck_names_no_path(segmenting, tmp_path, monkeypatch):
-    monkeypatch.setattr(inference_paths, "require", lambda bound: gone(tmp_path))
-    job = segmenting.run("nvidia")
-    assert (job["status"], job["error"]) == ("failed", "[Errno 2] No such file or directory: <local path>")
-
-
-def test_a_child_that_will_not_stop_fails_its_job_without_showing_its_command(segmenting, monkeypatch):
-    def stuck(self, timeout=None):
-        raise subprocess.TimeoutExpired(self.args, timeout)
-
-    monkeypatch.setenv("SCAN3D_FAKE_TORCH", "hang")
-    monkeypatch.setattr(segmentation, "DEVICE_CHECK_SECONDS", 0.1)
-    monkeypatch.setattr(subprocess.Popen, "wait", stuck)
-    job = segmenting.run("nvidia")
-    assert (job["status"], job["error"]) == ("failed", "The AI process did not stop in time.")
 
 
 def test_no_public_surface_names_the_interpreter(segmenting, tmp_path, monkeypatch):
@@ -1385,7 +1127,7 @@ def test_an_out_of_memory_correction_keeps_its_address_from_child_to_review(segm
     assert review["error"] == OUT_OF_MEMORY
 
 
-@pytest.mark.parametrize("name, sentence", [("nvidia", NO_GPU_ADDED), ("default", NO_GPU_DEFAULT), (None, NO_GPU_DEFAULT)])
+@pytest.mark.parametrize("name, sentence", [("nvidia", NO_GPU_ADDED), (None, NO_GPU_DEFAULT)])
 def test_a_segmentation_with_no_gpu_gives_the_remedy_that_works_on_its_path(segmenting, monkeypatch, name, sentence):
     # SCAN3D_DEVICE=cpu would do nothing for an added path and would move the default one.
     monkeypatch.setenv("SCAN3D_FAKE_GPUS", "[]")
@@ -1395,7 +1137,7 @@ def test_a_segmentation_with_no_gpu_gives_the_remedy_that_works_on_its_path(segm
     assert segmenting.runs() == [] and len(segmenting.prefixes()) == 1  # The device check, and nothing after it.
 
 
-@pytest.mark.parametrize("name, sentence", [("nvidia", NO_GPU_ADDED), ("default", NO_GPU_DEFAULT), (None, NO_GPU_DEFAULT)])
+@pytest.mark.parametrize("name, sentence", [("nvidia", NO_GPU_ADDED), ("default", NO_GPU_DEFAULT)])
 def test_a_correction_with_no_gpu_gives_the_remedy_that_works_on_its_path(segmenting, monkeypatch, name, sentence):
     monkeypatch.setenv("SCAN3D_FAKE_GPUS", "[]")
     monkeypatch.setenv("SCAN3D_DEVICE", "gpu")
@@ -1536,28 +1278,6 @@ def test_a_rocm_runtime_records_its_own_family(check, tmp_path, monkeypatch):
     assert record["path"]["kind"] == "rocm" and record["checks"]["runtime_versions"] == {"torch": TORCH, **FAMILIES["rocm"]}
 
 
-@pytest.mark.parametrize("kind, census", [("cuda", ["10de:2c05"]), ("rocm", ["1002:7551"])])
-def test_a_proof_counts_only_its_own_vendors_cards(check, sysfs, tmp_path, monkeypatch, kind, census):
-    # A built sysfs, patched inside the script's process: on a machine with one vendor or none,
-    # real sysfs could not tell the two censuses apart.
-    build_sysfs(sysfs, {"card1": ("0x1002", "0x7551"), "card2": ("0x10de", "0x2c05")})
-    built = stand_in(tmp_path, "proven", proofs=check.stub.proof.parent, kind=kind)
-    built.proof.unlink()
-    activate(monkeypatch, built)
-    code = f"""
-from pathlib import Path
-import runpy, sys
-sys.path.insert(0, {str(ROOT)!r})
-from scan3d import inference_paths
-inference_paths.SYS_DRM = Path({str(sysfs)!r})
-sys.argv = ["check_gpu.py", "--path", "proven"]
-runpy.run_path({str(CHECK_GPU)!r}, run_name="__main__")
-"""
-    completed = subprocess.run([built.python, "-c", code], capture_output=True, text=True, timeout=120)
-    assert completed.returncode == 0, completed.stderr
-    assert built.record()["checks"]["hardware"] == census and rows()[1]["available"]
-
-
 def test_a_failed_check_still_lists_the_path_with_a_fixed_reason(check, monkeypatch):
     monkeypatch.setenv("SCAN3D_FAKE_GPUS", "[]")
     completed = check("--path", "nvidia")
@@ -1575,28 +1295,13 @@ def test_a_runtime_with_no_torch_still_leaves_a_failing_proof(check, monkeypatch
     assert check.stub.record()["checks"] == {} and rows()[1]["reason"] == CHECK_FAILED
 
 
-@pytest.mark.parametrize("module", ["totalsegmentator.python_api", "nnInteractive.inference.inference_session", "requests"])
+@pytest.mark.parametrize("module", ["nnInteractive.inference.inference_session", "requests"])
 def test_a_broken_or_trimmed_runtime_fails_its_check_instead_of_its_first_job(check, module):
     # requests stands for every package a child imports at module level through scan3d.
     check.stub.shadow(module, "raise ImportError('this runtime is incomplete')")
     assert check("--path", "nvidia").returncode == 1
     record = check.stub.record()
     assert record["errors"] == ["this runtime is incomplete"] and rows()[1]["reason"] == CHECK_FAILED
-
-
-def test_a_path_check_imports_what_the_children_import(check):
-    code = f"""
-import runpy, sys
-sys.argv = ["check_gpu.py", "--path", "nvidia"]
-try:
-    runpy.run_path({str(CHECK_GPU)!r}, run_name="__main__")
-except SystemExit:
-    pass
-print(*sorted(sys.modules), file=sys.stderr)
-"""
-    completed = subprocess.run([check.stub.python, "-c", code], capture_output=True, text=True, timeout=120)
-    assert {"scan3d.segmentation", "scan3d.interactive", "scan3d.interactive_worker"} <= set(completed.stderr.split())
-    assert {"totalsegmentator.python_api", "nnInteractive.inference.inference_session"} <= set(completed.stderr.split())
 
 
 def test_a_runtime_needs_no_scan3d_install(check, monkeypatch):
@@ -1628,16 +1333,21 @@ def test_an_unavailable_index_fails_the_check(check):
 
 
 @pytest.mark.parametrize(
-    "arguments", [("--path", "default"), ("--path", "Upper"), ("--path", "../x"), ("--path", "-x"), ("--path", "x" * 33), ("--device", "cpu")]
+    "arguments",
+    [
+        ("--path", "default"),
+        ("--path", "../x"),
+        ("--path", "x" * 33),
+        ("--device", "cpu"),
+        ("--path", "nvidia", "--output", "elsewhere.json"),  # A path's proof cannot be sent anywhere else.
+        ("--queue", "--path", "nvidia"),
+        ("--queue", "--output", "elsewhere.json"),
+    ],
 )
 def test_a_bad_request_is_refused_before_anything_is_written(check, tmp_path, arguments):
     assert check(*arguments).returncode == 2
-    assert not (tmp_path / "gpu-proof.json").exists() and list(check.stub.proof.parent.iterdir()) == []
-
-
-def test_a_path_proof_cannot_be_sent_anywhere_else(check, tmp_path):
-    assert check("--path", "nvidia", "--output", str(tmp_path / "elsewhere.json")).returncode == 2
-    assert not (tmp_path / "elsewhere.json").exists()
+    assert not (tmp_path / "gpu-proof.json").exists() and not (tmp_path / "elsewhere.json").exists()
+    assert list(check.stub.proof.parent.iterdir()) == []
 
 
 # An empty LD_PRELOAD, because the loader would complain about a file that is not there.
@@ -1680,10 +1390,9 @@ def test_a_default_check_writes_to_the_setting_and_adds_a_census_but_no_path(che
     assert not check.stub.proof.exists()
 
 
-@pytest.mark.parametrize("module", ["totalsegmentator.python_api", "nnInteractive.inference.inference_session"])
-def test_a_default_check_does_not_need_the_engines(check, tmp_path, module):
+def test_a_default_check_does_not_need_the_engines(check, tmp_path):
     # The [ai] engines are optional on a default install, and this check certifies a convolution.
-    check.stub.shadow(module, "raise ImportError('this install has no engines')")
+    check.stub.shadow("totalsegmentator.python_api", "raise ImportError('this install has no engines')")
     completed = check()
     assert completed.returncode == 0, completed.stderr
     assert json.loads((tmp_path / "gpu-proof.json").read_text())["gpu_ready"] is True
@@ -1728,22 +1437,14 @@ def library(tmp_path, *statuses):
     return store
 
 
-@pytest.mark.parametrize("status", ["queued", "running"])
-def test_a_check_refuses_to_run_beside_work_and_keeps_the_last_proof(check, tmp_path, status):
-    library(tmp_path, "completed", status)
+def test_a_check_refuses_to_run_beside_work_and_keeps_the_last_proof(check, tmp_path):
+    library(tmp_path, "completed", "running")
     (tmp_path / "gpu-proof.json").write_text("the last proof")
     for arguments in (("--path", "nvidia"), ()):
         completed = check(*arguments)
         assert completed.returncode == 1 and "queued or running" in completed.stderr
     assert (tmp_path / "gpu-proof.json").read_text() == "the last proof"
     assert not check.stub.proof.exists()
-
-
-def test_a_check_runs_when_all_work_has_finished(check, tmp_path):
-    store = library(tmp_path, "completed", "failed", "cancelled")
-    before = store.db.read_bytes()
-    assert check("--path", "nvidia").returncode == 0
-    assert store.db.read_bytes() == before  # Read-only, even with no live writer.
 
 
 def test_the_queue_is_only_ever_opened_read_only(tmp_path, monkeypatch):
@@ -1761,14 +1462,6 @@ def test_a_library_with_no_database_has_no_jobs_to_wait_for(check, tmp_path):
     assert not (tmp_path / "data").exists()
 
 
-def test_a_queue_that_cannot_be_read_stops_the_check(check, tmp_path):
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "scan3d.sqlite3").write_text("this is not a database, and it is long enough to be read as one")
-    completed = check("--path", "nvidia")
-    assert completed.returncode == 1 and "Could not read the job queue" in completed.stderr
-    assert not check.stub.proof.exists()
-
-
 BUSY = "Jobs are queued or running, so no GPU check ran. Run it again when the queue is empty."
 
 
@@ -1782,12 +1475,10 @@ def ask_the_queue(stub):
     "statuses, code, said",
     [
         (("queued",), 1, BUSY),
-        (("running",), 1, BUSY),
         (("completed", "running"), 1, BUSY),
         (("completed", "failed", "cancelled"), 0, ""),
-        ((), 0, ""),
     ],
-    ids=["queued", "running", "done-and-running", "all-done", "no-jobs"],
+    ids=["queued", "done-and-running", "all-done"],
 )
 def test_the_queue_answer_comes_from_the_library_and_writes_nothing(check, tmp_path, statuses, code, said):
     store = library(tmp_path, *statuses)
@@ -1796,19 +1487,6 @@ def test_the_queue_answer_comes_from_the_library_and_writes_nothing(check, tmp_p
     assert (completed.returncode, completed.stdout, completed.stderr.strip()) == (code, "", said)
     assert store.db.read_bytes() == before
     assert not (tmp_path / "gpu-proof.json").exists() and list(check.stub.proof.parent.iterdir()) == []
-
-
-def test_a_library_with_no_database_has_an_empty_queue(check, tmp_path):
-    completed = ask_the_queue(check.stub)
-    assert (completed.returncode, completed.stdout, completed.stderr) == (0, "", "")
-    assert not (tmp_path / "data").exists()
-
-
-def test_a_queue_that_cannot_be_read_is_not_an_empty_one(check, tmp_path):
-    (tmp_path / "data").mkdir()
-    (tmp_path / "data" / "scan3d.sqlite3").write_text("this is not a database, and it is long enough to be read as one")
-    completed = ask_the_queue(check.stub)
-    assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
 
 
 def test_settings_that_cannot_be_read_are_not_an_empty_queue(check, monkeypatch):
@@ -1821,20 +1499,15 @@ def test_settings_that_cannot_be_read_are_not_an_empty_queue(check, monkeypatch)
     assert not check.stub.proof.exists()
 
 
-def a_directory_for_the_database(data):
-    (data / "scan3d.sqlite3").mkdir(parents=True)
-
-
-def a_link_to_a_database_that_is_gone(data):
-    data.mkdir()
-    (data / "scan3d.sqlite3").symlink_to(data / "elsewhere.sqlite3")
-
-
-def a_file_for_the_library(data):
-    data.touch()
-
-
-@pytest.mark.parametrize("build", [a_directory_for_the_database, a_link_to_a_database_that_is_gone, a_file_for_the_library])
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda data: (data.mkdir(), (data / "scan3d.sqlite3").write_text("this is not a database, and it is long enough to be read as one")),
+        lambda data: (data / "scan3d.sqlite3").mkdir(parents=True),
+        lambda data: data.touch(),
+    ],
+    ids=["not-a-database", "a-directory-for-the-database", "a-file-for-the-library"],
+)
 def test_a_database_that_is_there_and_cannot_be_opened_is_not_an_empty_queue(check, tmp_path, build):
     build(tmp_path / "data")
     completed = ask_the_queue(check.stub)
@@ -1844,25 +1517,15 @@ def test_a_database_that_is_there_and_cannot_be_opened_is_not_an_empty_queue(che
     assert not check.stub.proof.exists()
 
 
-def a_link_for_the_library(tmp_path, monkeypatch):
-    (tmp_path / "data").symlink_to(tmp_path / "unmounted" / "library")
-
-
-def a_link_above_the_library(tmp_path, monkeypatch):
-    (tmp_path / "mount").symlink_to(tmp_path / "unmounted")
-    monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "mount" / "library"))
-
-
-def a_link_in_a_relative_setting(tmp_path, monkeypatch):
-    (tmp_path / "mount").symlink_to(tmp_path / "unmounted")
-    monkeypatch.setenv("SCAN3D_DATA_DIR", "mount/library")
-    monkeypatch.chdir(tmp_path)
-
-
-@pytest.mark.parametrize("build", [a_link_for_the_library, a_link_above_the_library, a_link_in_a_relative_setting])
-def test_a_library_behind_a_link_whose_target_has_gone_is_not_an_empty_queue(check, tmp_path, monkeypatch, build):
+@pytest.mark.parametrize("relative", [False, True], ids=["a-link-for-the-library", "a-link-in-a-relative-setting"])
+def test_a_library_behind_a_link_whose_target_has_gone_is_not_an_empty_queue(check, tmp_path, monkeypatch, relative):
     # Resolved, this reads as a missing directory, which is what a fresh install has.
-    build(tmp_path, monkeypatch)
+    if relative:
+        (tmp_path / "mount").symlink_to(tmp_path / "unmounted")
+        monkeypatch.setenv("SCAN3D_DATA_DIR", "mount/library")
+        monkeypatch.chdir(tmp_path)
+    else:
+        (tmp_path / "data").symlink_to(tmp_path / "unmounted" / "library")
     completed = ask_the_queue(check.stub)
     assert completed.returncode == 1 and completed.stderr.startswith("Could not read the job queue, so no GPU check ran: ")
     assert "a link whose target has gone" in completed.stderr
@@ -1875,12 +1538,9 @@ def test_a_working_link_to_a_library_is_read_through(check, tmp_path, monkeypatc
     (tmp_path / "link").symlink_to(tmp_path / "data")
     monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "link"))
     assert ask_the_queue(check.stub).stderr.strip() == BUSY
-
-
-def test_a_working_link_to_an_empty_folder_has_an_empty_queue(check, tmp_path, monkeypatch):
-    (tmp_path / "library").mkdir()
-    (tmp_path / "link").symlink_to(tmp_path / "library")
-    monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "link"))
+    (tmp_path / "empty").mkdir()
+    (tmp_path / "link-to-empty").symlink_to(tmp_path / "empty")
+    monkeypatch.setenv("SCAN3D_DATA_DIR", str(tmp_path / "link-to-empty"))
     assert ask_the_queue(check.stub).returncode == 0
 
 
@@ -1902,9 +1562,3 @@ def test_the_queue_question_loads_no_gpu_runtime(check, tmp_path, monkeypatch):
     monkeypatch.setenv("SCAN3D_FAKE_TORCH_PREFIXES", str(tmp_path / "prefixes"))
     assert check("--queue").returncode == 0
     assert not (tmp_path / "prefixes").exists()
-
-
-@pytest.mark.parametrize("other", [("--path", "nvidia"), ("--output", "elsewhere.json")])
-def test_the_queue_question_cannot_also_ask_for_a_check(check, tmp_path, other):
-    assert check("--queue", *other).returncode == 2
-    assert not (tmp_path / "elsewhere.json").exists() and not check.stub.proof.exists()

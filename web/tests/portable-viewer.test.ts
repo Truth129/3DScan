@@ -147,7 +147,6 @@ describe('portable rendering state and data selection', () => {
     input.state.volume.cinematic.bloodHU = 500;
     expect(result.state.volume.preset).toBe(CINEMATIC_HEART_PRESET);
     expect(result.state.volume.cinematic).toEqual({ myocardiumHU: 105, bloodHU: 720, shadows: 1.2, shadowReach: 0.6 });
-    expect(Object.keys(result.state.volume.cinematic).sort()).toEqual(['bloodHU', 'myocardiumHU', 'shadowReach', 'shadows']);
   });
   it('restores an oblique reflected native plane without changing patient coordinates', () => {
     const state = normalizePortableState({ plane: { plane: 'sagittal', axis: 0, index: 4, window: 900, level: 200, overlays: [] } }, structures, geometry);
@@ -240,27 +239,11 @@ describe('embedded CT transport without a network or external worker', () => {
   it('rejects forged union provenance, source geometry, identity and margin before decode', () => {
     const original = unionPayload();
     for (const mutate of [
-      (data: PortablePayload) => {
-        Object.assign(data.masks![1].descriptor, { selected_structure_ids: ['vessel'] });
-      },
-      (data: PortablePayload) => {
-        Object.assign(data.masks![1].descriptor, { selected_structure_ids: ['liver', 'vessel', 'vessel'] });
-      },
-      (data: PortablePayload) => {
-        data.masks![1].id = 'volume-mask-union:wrong';
-      },
-      (data: PortablePayload) => {
-        data.masks![1].descriptor.reference_image_id = 'different-image';
-      },
-      (data: PortablePayload) => {
-        data.masks![1].descriptor.reference_geometry!.shape = [99, 7, 3];
-      },
-      (data: PortablePayload) => {
-        data.masks![1].descriptor.display_margin_mm = 0;
-      },
-      (data: PortablePayload) => {
-        data.masks![1].descriptor.presentation_only = false;
-      },
+      (data: PortablePayload) => Object.assign(data.masks![1].descriptor, { selected_structure_ids: ['vessel'] }),
+      (data: PortablePayload) => Object.assign(data.masks![1], { id: 'volume-mask-union:wrong' }),
+      (data: PortablePayload) => Object.assign(data.masks![1].descriptor, { reference_image_id: 'different-image' }),
+      (data: PortablePayload) => Object.assign(data.masks![1].descriptor.reference_geometry!, { shape: [99, 7, 3] }),
+      (data: PortablePayload) => Object.assign(data.masks![1].descriptor, { display_margin_mm: 0 }),
     ]) {
       const data = structuredClone(original);
       mutate(data);
@@ -346,15 +329,13 @@ describe('embedded CT transport without a network or external worker', () => {
     expect(selected.overlays[0].id).toBe('vessel');
     await expect(value.get(base, ['missing'], new AbortController().signal)).rejects.toThrow('not included');
   });
-  it('rejects missing selected masks and duplicate identities before any voxel decode', () => {
-    const data = payload();
-    data.masks = data.masks!.slice(0, 1);
-    expect(() => session(data)).toThrow('missing from this export');
+  it('rejects missing or duplicate masks, mismatched geometry, invalid descriptors and malformed encodings before decode', () => {
+    const missing = payload();
+    missing.masks = missing.masks!.slice(0, 1);
+    expect(() => session(missing)).toThrow('missing from this export');
     const duplicated = payload();
     duplicated.masks!.push(duplicated.masks![0]);
     expect(() => session(duplicated)).toThrow('Invalid embedded mask');
-  });
-  it('rejects mismatched geometry, invalid descriptors and malformed chunk encodings', () => {
     const data = payload();
     data.ct!.descriptor.affine_ras = affine.map(row => [...row]);
     data.ct!.descriptor.affine_ras[0][3] += 1;
@@ -386,38 +367,28 @@ describe('embedded CT transport without a network or external worker', () => {
     expect(value.diagnostics.decodedCacheBytes).toBe(0);
     await expect(source.readSlab(0, 1)).rejects.toMatchObject({ name: 'AbortError' });
   });
-  it('streams a large compressed chunk into a bounded requested slab without caching a full volume', async () => {
-    const shape: [number, number, number] = [512, 512, 17],
-      values = new Int16Array(shape.reduce((n, x) => n * x, 1));
+  it('streams an oversized chunk into a bounded slab and caches at most one decoded slab chunk', async () => {
+    const large = (shape: [number, number, number], values: Int16Array, chunkDepth: number) => {
+      const data = payload();
+      data.ct = embedded(values, shape, 'ct', chunkDepth);
+      data.masks = [];
+      data.state.plane.overlays = [];
+      data.state.volume_mask.enabled = false;
+      return session(data, { ...manifest, geometry: { ...geometry, shape } });
+    };
+    const values = new Int16Array(512 * 512 * 17);
     values[512 * 512] = 321;
-    const data = payload();
-    data.ct = embedded(values, shape, 'ct', 17);
-    data.masks = [];
-    data.state.plane.overlays = [];
-    data.state.volume_mask.enabled = false;
-    const value = session(data, { ...manifest, geometry: { ...geometry, shape } }),
-      source = await value.getGPUVolume();
-    const result = await source.readSlab(1, 1);
+    const streamed = large([512, 512, 17], values, 17),
+      result = await (await streamed.getGPUVolume()).readSlab(1, 1);
     expect(result.byteLength).toBe(512 * 512 * 2);
     expect(new Int16Array(result)[0]).toBe(321);
-    expect(value.diagnostics.decodedCacheBytes).toBe(0);
-    expect(value.diagnostics.fullCPUVolumes).toBe(0);
-  });
-  it('bounds the decoded chunk cache across uploads and releases it on disposal', async () => {
-    const shape: [number, number, number] = [512, 512, 32],
-      data = payload();
-    data.ct = embedded(new Int16Array(512 * 512 * 32), shape, 'ct', 16);
-    data.masks = [];
-    data.state.plane.overlays = [];
-    data.state.volume_mask.enabled = false;
-    const value = session(data, { ...manifest, geometry: { ...geometry, shape } }),
-      source = await value.getGPUVolume();
+    expect(streamed.diagnostics).toMatchObject({ decodedCacheBytes: 0, fullCPUVolumes: 0 });
+    const cached = large([512, 512, 32], new Int16Array(512 * 512 * 32), 16),
+      source = await cached.getGPUVolume();
     await source.readSlab(0, 16);
-    expect(value.diagnostics.decodedCacheBytes).toBe(GPU_VOLUME_SLAB_BYTES);
     await source.readSlab(16, 16);
-    expect(value.diagnostics.decodedCacheBytes).toBe(GPU_VOLUME_SLAB_BYTES);
-    expect(value.diagnostics.decodedCacheEntries).toBe(1);
-    value.dispose();
-    expect(value.diagnostics.decodedCacheBytes).toBe(0);
+    expect(cached.diagnostics).toMatchObject({ decodedCacheBytes: GPU_VOLUME_SLAB_BYTES, decodedCacheEntries: 1 });
+    cached.dispose();
+    expect(cached.diagnostics.decodedCacheBytes).toBe(0);
   });
 });

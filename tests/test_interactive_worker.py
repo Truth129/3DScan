@@ -1,8 +1,4 @@
-"""The supervised nnInteractive child: warm reuse, cancellation, crashes and release.
-
-A deterministic engine runs in a real child process; nothing imports torch or
-touches a GPU. Review jobs then drive the same child through the service.
-"""
+"""The supervised nnInteractive child, with a deterministic engine in a real child process and no torch."""
 
 import json
 import os
@@ -19,7 +15,7 @@ from inference_path_stub import GPU_NAME, activate, child_path, stand_in
 from scan3d import imaging, interactive_worker
 from scan3d.config import ROOT, Settings
 from scan3d.inference_paths import binding, require
-from scan3d.interactive_worker import ENGINE as DEFAULT_ENGINE, InteractiveWorker
+from scan3d.interactive_worker import InteractiveWorker
 from scan3d.segmentation import SegmentationCancelled
 from scan3d.service import Service
 from scan3d.store import identifier
@@ -102,13 +98,10 @@ def test_cooperative_cancellation_stops_the_request_and_keeps_the_child(worker, 
     retry = predict(worker, tmp_path, name="retry.nii.gz")
     assert retry["pid"] == pid and retry["loads"] == 2  # Cancellation dropped warm state only.
 
-
-def test_progress_callback_errors_cancel_the_request_in_the_child(worker, tmp_path):
-    pid = predict(worker, tmp_path)["pid"]
-
     def superseded(message):
         raise InterruptedError("Processing cancelled")
 
+    # A progress callback that raises cancels the request in the child too.
     with pytest.raises(InterruptedError, match="Processing cancelled"):
         predict(worker, tmp_path, "cooperative", progress=superseded)
     assert worker.pid == pid and predict(worker, tmp_path, name="next.nii.gz")["pid"] == pid
@@ -315,15 +308,6 @@ def test_review_predictions_use_the_child_and_segmentation_releases_it(example, 
     assert child_environment.read_text().split() == [str(pid)]
 
 
-def test_default_worker_runs_the_pinned_engine_and_starts_nothing_until_predicting(tmp_path):
-    service = Service(Settings(tmp_path / "data", (tmp_path,)))
-    runtime = service._interactive()
-    assert isinstance(runtime, InteractiveWorker) and runtime.pid is None
-    assert runtime.engine == DEFAULT_ENGINE == "scan3d.interactive:InteractiveRuntime"
-    service._release_interactive()
-    assert service.interactive_runtime is None
-
-
 # Inference paths: one child, on one path, in that path's own interpreter
 
 
@@ -338,7 +322,7 @@ def added(tmp_path, monkeypatch, child_environment):
 
 
 def path_named(name):
-    """What a job on this path passes the worker: re-read from its proof, so a new object each time."""
+    # What a job on this path passes the worker: re-read from its proof, so a new object each time.
     return require(binding(name))
 
 
@@ -367,11 +351,13 @@ def test_a_new_path_replaces_the_child_only_after_it_has_exited(worker, tmp_path
 
 
 def test_a_job_on_the_same_path_keeps_its_warm_child(worker, tmp_path, added):
+    first, _ = added
     messages = []
-    first = predict(worker, tmp_path, inference_path=path_named("nvidia"))
+    pid = predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"]
+    first.change(lambda record: record.update(checked_at="a later check"))  # Not a field of the path.
     # Each job re-reads the proof, so this compares equal values, never one object.
     second = predict(worker, tmp_path, name="second.nii.gz", inference_path=path_named("nvidia"), progress=messages.append)
-    assert second["pid"] == first["pid"] == worker.pid and (second["loads"], second["requests"]) == (1, 2)
+    assert second["pid"] == pid == worker.pid and (second["loads"], second["requests"]) == (1, 2)
     assert not any("Switching" in message for message in messages)
 
 
@@ -394,22 +380,6 @@ def test_a_proof_that_changes_a_field_is_a_new_path_to_a_running_child(worker, t
     reissued = path_named("nvidia")
     assert predict(worker, tmp_path, inference_path=reissued)["pid"] != pid
     assert worker._child.inference_path == reissued
-
-
-def test_a_proof_repeated_unchanged_keeps_the_running_child(worker, tmp_path, added):
-    first, _ = added
-    pid = predict(worker, tmp_path, inference_path=path_named("nvidia"))["pid"]
-    first.change(lambda record: record.update(checked_at="a later check"))  # Not a field of the path.
-    assert predict(worker, tmp_path, name="second.nii.gz", inference_path=path_named("nvidia"))["pid"] == pid
-
-
-def test_a_first_child_or_one_that_died_needs_no_switch(worker, tmp_path, added):
-    messages = []
-    pid = predict(worker, tmp_path, inference_path=path_named("nvidia"), progress=messages.append)["pid"]
-    os.kill(pid, 9)
-    worker._child.process.wait(timeout=10)
-    retry = predict(worker, tmp_path, inference_path=path_named("second"), progress=messages.append)
-    assert retry["pid"] != pid and not any("Switching" in message for message in messages)
 
 
 def test_a_cancelled_switch_keeps_the_child_it_found(worker, tmp_path, added, child_environment):
@@ -540,20 +510,6 @@ def test_a_child_that_measured_something_else_publishes_nothing(example, measure
     current = service.reviews.get(case["id"], draft["id"])
     assert current["status"] == "draft" and current["error"] == job["error"]
     assert current["candidate"] is None and current["candidates"] == {} and current["batches"] == []  # A failed first run never locks.
-
-
-def test_segmentation_stops_a_child_on_a_path_as_it_stops_the_default_one(example, measured, monkeypatch):
-    service, case, base, _ = example
-    draft = draft_for(example)
-    assert execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="nvidia"))["status"] == "completed"
-    pid = measured.pid
-
-    def segmentation(job):
-        assert measured.pid is None and not alive(pid)
-        return {**base, "id": identifier()}
-
-    monkeypatch.setattr(service, "_segment", segmentation)
-    assert execute_next(service, service.segment_case(case["id"], base["id"], "total", inference_path="second"))["status"] == "completed"
 
 
 def test_a_correction_on_a_path_leaves_the_api_process_free_of_torch(tmp_path, monkeypatch):

@@ -2,7 +2,7 @@ import { computed, onScopeDispose, ref, watch } from 'vue';
 import { api, ApiError } from './api';
 import type { Job } from '../types';
 
-export const MAX_DICOM_SEG_FILES = 64;
+const MAX_DICOM_SEG_FILES = 64;
 export const MAX_DICOM_SEG_IMPORT_BYTES = 512 * 1024 ** 2;
 
 export function dicomSegSelectionError(files: readonly Pick<File, 'size'>[]): string {

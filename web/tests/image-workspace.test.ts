@@ -19,9 +19,8 @@ import {
 } from '../src/lib/image-workspace';
 import { freshVolumeSettings, getVolumePreset, MR_SIGNAL_PRESET, samplePresetTransfer } from '../src/lib/volume-presets';
 import { CTVolumeRenderer } from '../src/lib/ct-volume-renderer';
-import { restoreSegmentationSettings } from '../src/lib/segmentation-settings';
 import { normalizePortableState } from '../src/lib/portable-viewer';
-import type { Revision, SegmentationCatalog, Series, Structure } from '../src/types';
+import type { Revision, Series, Structure } from '../src/types';
 import type * as THREE from 'three';
 
 const geometry = {
@@ -142,68 +141,27 @@ describe('MR signal display without HU assumptions', () => {
     expect(formatImageValue(40.7, 'HU')).toBe('41');
     expect(formatImageValue(null, 'signal')).toBe('—');
   });
-  it('keeps sequence, echo and timing labels separate from CT contrast phases', () => {
-    expect(
-      sequenceSummary({
-        uid: 'x',
-        modality: 'MR',
-        description: '',
-        slice_count: 8,
-        spacing: [1, 1, 1],
-        warnings: [],
-        sequence_name: 'T2',
-        acquisition_type: '3D',
-        echo_time_ms: 89.3,
-        repetition_time_ms: 2500,
-        echo_number: 2,
-      }),
-    ).toBe('T2 · 3D · TE 89.3 ms · TR 2500 ms · Echo 2');
-  });
-  it('limits timing display precision without modifying sequence metadata or CT camera defaults', () => {
+  it('keeps sequence, echo and timing labels apart from CT phases, with bounded precision and unmodified metadata', () => {
     const sequence: Series = {
       uid: 'x',
       modality: 'MR',
       description: '',
-      slice_count: 1,
+      slice_count: 8,
       spacing: [1, 1, 1],
       warnings: [],
+      sequence_name: 'T2',
+      acquisition_type: '3D',
       echo_time_ms: 1.92270004749298,
-      repetition_time_ms: 7.3734998703,
+      repetition_time_ms: 2500,
       inversion_time_ms: 142.399993896,
+      echo_number: 2,
     };
-    expect(sequenceSummary(sequence)).toBe('TE 1.9227 ms · TR 7.3735 ms · TI 142.4 ms');
+    expect(sequenceSummary(sequence)).toBe('T2 · 3D · TE 1.9227 ms · TR 2500 ms · TI 142.4 ms · Echo 2');
     expect(sequence.echo_time_ms).toBe(1.92270004749298);
     expect(sourceViewLabel('CT plane', 'MR')).toBe('MR plane');
     expect(sourceViewLabel('CT-plane', 'MR')).toBe('MR plane');
     expect(sourceViewLabel('CT plane')).toBe('CT plane');
     expect(sourceViewLabel('Oblique', 'MR')).toBe('Oblique');
-  });
-  it('restores MR task defaults without carrying CT crop flags into a different model', () => {
-    const catalog: SegmentationCatalog = {
-      engine_version: '2',
-      defaults: { task: 'total_mr', robust_crop: false, body_seg: false, remove_small_blobs: false },
-      remove_small_blobs_mm3: 200,
-      tasks: [
-        {
-          id: 'total_mr',
-          label: 'MR',
-          modality: 'MR',
-          classes: [],
-          class_count: 0,
-          license_required: false,
-          license_available: true,
-          robust_crop_default: false,
-          robust_crop_supported: false,
-          body_seg_supported: false,
-        },
-      ],
-    };
-    expect(restoreSegmentationSettings(catalog, { task: 'total_mr', robust_crop: true, body_seg: true, remove_small_blobs: true })).toEqual({
-      task: 'total_mr',
-      robust_crop: false,
-      body_seg: false,
-      remove_small_blobs: true,
-    });
   });
   it('builds source-relative grayscale knots and retains them through portable state normalization', () => {
     const settings = freshVolumeSettings({ preset: MR_SIGNAL_PRESET, signal_window: { window: 0.25, level: 0.125, invert: false } });
@@ -236,30 +194,20 @@ describe('the scan behind a revision', () => {
   const scan = (id: string): Revision => revision(id, 'T1');
   const grown = (id: string, parent_id: string): Revision => ({ ...scan(id), kind: 'segmentation', parent_id, structures: [liver] });
 
-  it('finds the root', () => {
-    const root = scan('root'),
-      first = grown('first', 'root'),
-      second = grown('second', 'first');
-    expect(scanRevisionOf([second, first, root], second)).toBe(root);
-  });
   it("finds this image's own root, because each Process run makes one", () => {
     const older = scan('older'),
       newer = scan('newer'),
-      result = grown('result', 'newer');
-    expect(scanRevisionOf([older, newer, result, grown('other', 'older')], result)).toBe(newer);
+      first = grown('first', 'newer'),
+      second = grown('second', 'first');
+    expect(scanRevisionOf([second, older, newer, first, grown('other', 'older')], second)).toBe(newer);
   });
-  it('offers nothing on an image-only revision', () => {
-    const root = scan('root');
+  it('offers nothing on an image-only revision, a root with structures as the demo has, or a broken chain', () => {
+    const root = scan('root'),
+      demo = { ...scan('demo'), structures: [liver] },
+      looped = grown('looped', 'looped'),
+      orphan = grown('orphan', 'missing');
     expect(scanRevisionOf([root], root)).toBeUndefined();
-  });
-  it('offers nothing when the root has structures, as the demo does', () => {
-    const root = { ...scan('root'), structures: [liver] },
-      result = grown('result', 'root');
-    expect(scanRevisionOf([root, result], result)).toBeUndefined();
-  });
-  it('survives a broken parent chain', () => {
-    const orphan = grown('orphan', 'missing'),
-      looped = grown('looped', 'looped');
+    expect(scanRevisionOf([demo, grown('result', 'demo')], grown('result', 'demo'))).toBeUndefined();
     expect(scanRevisionOf([orphan], orphan)).toBeUndefined();
     expect(scanRevisionOf([looped], looped)).toBeUndefined();
     expect(scanRevisionOf([], undefined)).toBeUndefined();

@@ -29,6 +29,7 @@ const catalog: SegmentationCatalog = {
     task('licensed', { license_required: true, license_available: false }),
     task('compared', { comparison: true, remove_small_blobs_supported: false }),
     task('uninstalled', { comparison: true, available: false, description: 'Run the download script.' }),
+    task('total_mr', { modality: 'MR', robust_crop_supported: false, body_seg_supported: false }),
   ],
 };
 
@@ -39,24 +40,25 @@ describe('restore segmentation settings', () => {
     expect(restoreSegmentationSettings(undefined, saved)).toEqual(expected);
     expect(restoreSegmentationSettings(catalog, saved)).toEqual(expected);
   });
-  it('falls back from a model without weights and clears options a model lacks', () => {
-    expect(restoreSegmentationSettings(catalog, { tasks: ['uninstalled'] }).task).toBe('total');
-    expect(restoreSegmentationSettings(catalog, { tasks: ['compared'], remove_small_blobs: true }).remove_small_blobs).toBe(false);
-  });
-  it('resets CT-only or another case without recorded settings to defaults', () => {
-    const changed = restoreSegmentationSettings(catalog, { task: 'lung_vessels', remove_small_blobs: true });
-    expect(changed.task).toBe('lung_vessels');
+  it('resets a case without recorded settings to the defaults', () => {
     expect(restoreSegmentationSettings(catalog)).toEqual(catalog.defaults);
   });
-  it('forces required crop and clears options unsupported by the selected task', () => {
+  it('forces required crop and clears options the selected model lacks, as CT crop flags on an MR model', () => {
     expect(restoreSegmentationSettings(catalog, { tasks: ['required'], robust_crop: false, body_seg: true })).toEqual({
       task: 'required',
       robust_crop: true,
       body_seg: false,
       remove_small_blobs: false,
     });
+    expect(restoreSegmentationSettings(catalog, { tasks: ['compared'], remove_small_blobs: true }).remove_small_blobs).toBe(false);
+    expect(restoreSegmentationSettings(catalog, { task: 'total_mr', robust_crop: true, body_seg: true, remove_small_blobs: true })).toEqual({
+      task: 'total_mr',
+      robust_crop: false,
+      body_seg: false,
+      remove_small_blobs: true,
+    });
   });
-  it.each(['licensed', 'removed-task'])('falls back safely from unavailable task %s', id => {
+  it.each(['uninstalled', 'licensed', 'removed-task'])('falls back safely from unavailable task %s', id => {
     expect(restoreSegmentationSettings(catalog, { tasks: [id], robust_crop: true, body_seg: true, remove_small_blobs: true })).toEqual(catalog.defaults);
   });
 });

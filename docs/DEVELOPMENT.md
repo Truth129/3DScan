@@ -59,10 +59,34 @@ cd web
 npx vite build --outDir /tmp/scan3d-stage/dist --emptyOutDir
 ```
 
-Read each script's `--help` first:
+All render with SwiftShader; where offered, `--native` uses a GPU. Read each script's `--help`
+first.
 
-- Some use software rendering by default, and `--native` uses a GPU.
-- Others need a Vulkan-capable GPU unless they offer `--software`.
+| Gate                               | Covers                                                    |
+| ---------------------------------- | --------------------------------------------------------- |
+| `cornerstone_primary_app_smoke.py` | The primary app                                           |
+| `native_review_smoke.py`           | Review in 3D, through the next three scripts              |
+| `direct_edit_smoke.py`             | Direct edits, with the saved voxels checked               |
+| `interactive_tools_smoke.py`       | AI assist and mixed gestures, on slices or in 3D          |
+| `scissors_smoke.py`                | 3D scissors, with the saved voxels checked                |
+| `custom_segment_smoke.py`          | Custom segments                                           |
+| `main_plane_smoke.py`              | The CT plane in the main viewer                           |
+| `browser_smoke.py`                 | CT slices, refine and undo, phone layout, portable export |
+| `mri_workspace_smoke.py`           | MR import and the MR workspace                            |
+| `inference_path_smoke.py`          | Choosing the card under **Run on**                        |
+| `sign_in_smoke.py`                 | Sign-in, a lost session, a member link, sign-out          |
+| `library_smoke.py`                 | Library, rename, Trash, restore, delete forever           |
+| `dicom_seg_import_smoke.py`        | DICOM SEG import                                          |
+| `dicom_seg_export_smoke.py`        | The DICOM SEG export dialog                               |
+| `dicom_view_export_smoke.py`       | 3D view export to Orthanc                                 |
+
+- Gates that take `--stage` start their own server and chromedriver on that build, under `/tmp`.
+- The others take `--base-url` and `--driver-url`. Start chromedriver and
+  `uvicorn web.tests.interactive_test_server:create_test_app --factory --port 9012`, with
+  `SCAN3D_DATA_DIR` set to a temporary directory and `SCAN3D_TEST_WEB_DIR` to the build.
+  `native_review_smoke.py` shows the full environment. `mri_workspace_smoke.py` also needs
+  `SCAN3D_MODALITIES=CT,MR`.
+- `dicom_seg_export_smoke.py` loads its page from a Vite dev server in `web/` on port 9034.
 - `dicom_view_export_smoke.py` needs `--orthanc-binary`, a `--scratch` directory and `dcm2niix` on
   `PATH`.
 - `sign_in_smoke.py` and `library_smoke.py` need a `--stage` under `/tmp`, and the repository and

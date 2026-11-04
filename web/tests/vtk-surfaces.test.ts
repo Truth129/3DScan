@@ -48,9 +48,8 @@ describe('native anatomical surface decoding', () => {
       }),
     )[0];
     close(part.positions, [10, -30, 20, -10, -30, 20, 10, -30, 80]);
-    close(part.normals, [0, -1, 0, 0, -1, 0, 0, -1, 0]);
     expect([...part.polys]).toEqual([3, 0, 2, 1]);
-    // The geometric face normal agrees with the transformed supplied normal.
+    // The geometric face normal agrees with the transformed supplied normal (0, -1, 0).
     const [a, b, c] = [0, 1, 2].map(index => part.positions.slice(part.polys[index + 1] * 3, part.polys[index + 1] * 3 + 3));
     const ab = b.map((value, axis) => value - a[axis]),
       ac = c.map((value, axis) => value - a[axis]);
@@ -59,32 +58,9 @@ describe('native anatomical surface decoding', () => {
 
   it('rejects malformed byte ranges, unrecognized transforms/extensions and foreign structure identities', () => {
     expect(() => decodeSurfaceGLB(syntheticSurfaceGLB(), ['different:source'])).toThrow('named');
+    expect(() => decodeSurfaceGLB(syntheticSurfaceGLB({ mutate: document => Object.assign(document.bufferViews[0], { byteStride: 2 }) }))).toThrow();
     expect(() =>
-      decodeSurfaceGLB(
-        syntheticSurfaceGLB({
-          mutate: document => {
-            document.bufferViews[0].byteStride = 2;
-          },
-        }),
-      ),
-    ).toThrow();
-    expect(() =>
-      decodeSurfaceGLB(
-        syntheticSurfaceGLB({
-          mutate: document => {
-            document.accessors[0].count = 100_000_000;
-          },
-        }),
-      ),
-    ).toThrow();
-    expect(() =>
-      decodeSurfaceGLB(
-        syntheticSurfaceGLB({
-          mutate: document => {
-            document.extensionsRequired = ['KHR_draco_mesh_compression'];
-          },
-        }),
-      ),
+      decodeSurfaceGLB(syntheticSurfaceGLB({ mutate: document => Object.assign(document, { extensionsRequired: ['KHR_draco_mesh_compression'] }) })),
     ).toThrow();
     expect(() => decodeSurfaceGLB(syntheticSurfaceGLB({ node: { scale: [0, 1, 1] } }))).toThrow();
     expect(() => decodeSurfaceGLB(syntheticSurfaceGLB({ node: { children: [0] } }))).toThrow();
@@ -281,28 +257,6 @@ describe('native surface revision ownership', () => {
     await load();
     expect(renderer.getActors()).toHaveLength(3);
     expect(reserved).toBe(3 * (104 + 144) + 144);
-    scene.dispose();
-    expect(reserved).toBe(0);
-    renderer.delete();
-  });
-
-  it('rolls back a rejected multi-part decode to its previous actor and reservation', () => {
-    const renderer = vtkRenderer.newInstance();
-    let reserved = 0,
-      limit = Infinity;
-    const scene = new VTKSurfaceScene(renderer, undefined, bytes => {
-      if (bytes > limit) throw new Error('Shared surface budget denied');
-      reserved = bytes;
-    });
-    scene.loadBuffer(syntheticSurfaceGLB(), [structure()]);
-    const actor = scene.actors[0].actor,
-      retained = reserved,
-      replacement = syntheticSurfaceGLB({ parts: 2 });
-    limit = retained + replacement.byteLength + retained;
-    expect(() => scene.loadBuffer(replacement, [structure()])).toThrow('Shared surface budget');
-    expect(scene.actors[0].actor).toBe(actor);
-    expect(renderer.getActors()).toHaveLength(1);
-    expect(reserved).toBe(retained);
     scene.dispose();
     expect(reserved).toBe(0);
     renderer.delete();

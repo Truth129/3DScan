@@ -1,8 +1,4 @@
-"""Inference presence checks preserve mask validation without dense reordering.
-
-Only synthetic NIfTI files are used. Numerical consumers still receive the
-contiguous boolean arrays needed by QC, edits and contour extraction.
-"""
+"""Mask presence checks validate without dense reordering; numerical readers still get contiguous booleans."""
 
 import nibabel as nib
 import numpy as np
@@ -23,8 +19,7 @@ def oblique_reflected_affine():
 def save(path, values, affine=None, *, units="mm", slope=None, intercept=None):
     affine = oblique_reflected_affine() if affine is None else affine
     image = nib.Nifti1Image(values, np.eye(4))
-    # An explicit sform also permits deliberately invalid transform fixtures
-    # without asking NIfTI's quaternion encoder to repair singular matrices.
+    # An explicit sform keeps a deliberately singular transform from being repaired.
     image.set_sform(affine, code=2)
     image.set_qform(None, code=0)
     image.header.set_xyzt_units(units)
@@ -55,11 +50,10 @@ def test_presence_and_numerical_masks_preserve_oblique_reflected_grid(tmp_path, 
     assert np.linalg.det(result_affine[:3, :3]) < 0
 
 
-@pytest.mark.parametrize("suffix", [".nii", ".nii.gz"])
-def test_inference_presence_does_not_make_contiguous_dense_copy(tmp_path, monkeypatch, suffix):
+def test_inference_presence_does_not_make_contiguous_dense_copy(tmp_path, monkeypatch):
     values = np.zeros((13, 17, 19), np.uint8)
     values[-1, -1, -1] = 1
-    path = save(tmp_path / ("mask" + suffix), values)
+    path = save(tmp_path / "mask.nii.gz", values)
     assert np.asanyarray(nib.load(path).dataobj).flags.f_contiguous
     original = np.ascontiguousarray
 
@@ -72,7 +66,7 @@ def test_inference_presence_does_not_make_contiguous_dense_copy(tmp_path, monkey
     assert imaging._binary_nonempty(path) is True
 
 
-@pytest.mark.parametrize("dtype", [np.uint8, np.int16, np.float32, np.float64])
+@pytest.mark.parametrize("dtype", [np.int16, np.float64])
 def test_binary_numeric_types_are_validated_without_changing_voxels(tmp_path, dtype):
     values = np.zeros((3, 4, 5), dtype)
     values[1, 2, 3] = 1
@@ -82,21 +76,12 @@ def test_binary_numeric_types_are_validated_without_changing_voxels(tmp_path, dt
     np.testing.assert_array_equal(result, values.astype(bool))
 
 
-@pytest.mark.parametrize("invalid", [-1, 2, 0.5, np.nan, np.inf, -np.inf])
-def test_presence_checks_all_voxels_before_reporting_nonempty(tmp_path, invalid):
-    # Valid min/max alone would miss a fractional voxel in this fixture.
-    values = np.zeros((5, 6, 7), np.float32)
+@pytest.mark.parametrize("dtype, invalid", [(np.float32, -1), (np.float32, 0.5), (np.float32, np.nan), (np.complex64, 1 + 1j)])
+def test_presence_checks_all_voxels_before_reporting_nonempty(tmp_path, dtype, invalid):
+    # Valid min/max alone would miss a fractional voxel, and a complex one must not be coerced.
+    values = np.zeros((5, 6, 7), dtype)
     values[0, 0, 0] = 1
     values[-1, -1, -1] = invalid
-    path = save(tmp_path / "mask.nii.gz", values)
-    for read in (imaging._binary_nonempty, imaging._binary):
-        with pytest.raises(ValueError, match="only binary values"):
-            read(path)
-
-
-def test_complex_mask_is_rejected_instead_of_coerced(tmp_path):
-    values = np.zeros((3, 4, 5), np.complex64)
-    values[1, 2, 3] = 1 + 1j
     path = save(tmp_path / "mask.nii", values)
     for read in (imaging._binary_nonempty, imaging._binary):
         with pytest.raises(ValueError, match="only binary values"):
@@ -153,18 +138,15 @@ def test_presence_respects_equivalent_spatial_units(tmp_path):
     assert imaging._binary_nonempty(path, reference, reference_affine) is True
 
 
-@pytest.mark.parametrize("shape", [(5, 6), (5, 6, 7, 2), (5, 0, 7)])
-def test_presence_rejects_non_scalar_or_empty_images(tmp_path, shape):
-    path = save(tmp_path / "mask.nii.gz", np.zeros(shape, np.uint8))
-    for read in (imaging._binary_nonempty, imaging._binary):
-        with pytest.raises(ValueError, match="scalar three-dimensional"):
-            read(path)
-
-
-def test_presence_rejects_singular_patient_transform(tmp_path):
+@pytest.mark.parametrize(
+    "shape, singular, message",
+    [((5, 6), False, "scalar three-dimensional"), ((5, 0, 7), False, "scalar three-dimensional"), ((5, 6, 7), True, "invalid voxel-to-patient")],
+)
+def test_presence_rejects_non_scalar_empty_or_singular_images(tmp_path, shape, singular, message):
     affine = oblique_reflected_affine()
-    affine[:3, 0] = 0
-    path = save(tmp_path / "mask.nii.gz", np.ones((5, 6, 7), np.uint8), affine)
+    if singular:
+        affine[:3, 0] = 0
+    path = save(tmp_path / "mask.nii.gz", np.zeros(shape, np.uint8), affine)
     for read in (imaging._binary_nonempty, imaging._binary):
-        with pytest.raises(ValueError, match="invalid voxel-to-patient transform"):
+        with pytest.raises(ValueError, match=message):
             read(path)

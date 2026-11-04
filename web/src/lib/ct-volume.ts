@@ -22,8 +22,6 @@ export interface LocalCTOptions {
   onError?: (error: Error) => void;
   /** Mask failures do not invalidate or release the resident source image. */
   onOverlayError?: (error: LocalCTOverlayError | null) => void;
-  /** Primarily useful for a constrained device or a deterministic browser fixture. */
-  maxCTBytes?: number;
   maxOverlayBytes?: number;
   /** Start with the small overview; a second session can preload the full CT. */
   quality?: 'preview' | 'full';
@@ -505,7 +503,7 @@ export class LocalCTSession {
       return;
     }
     const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-    const budget = this.options.maxCTBytes ?? localCTBudget(memory);
+    const budget = localCTBudget(memory);
     if (descriptor.byte_length > budget)
       throw new LocalCTUnsupportedError(
         `This CT needs ${Math.ceil(descriptor.byte_length / 1024 ** 2)} MiB, above this device’s ${Math.floor(budget / 1024 ** 2)} MiB local CT budget.`,

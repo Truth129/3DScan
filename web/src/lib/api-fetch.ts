@@ -3,20 +3,9 @@
  * someone signs in again. The exceptions are the two downloads the browser follows itself, the
  * Slicer bundle and a saved SEG file, which check the session first through `startDownload`.
  */
-type StatusObserver = (status: number) => void;
 type Reauthentication = () => Promise<void>;
 
-let observer: StatusObserver = () => {};
 let reauthenticate: Reauthentication | undefined;
-
-export function observeStatuses(next: StatusObserver) {
-  observer = next;
-}
-
-/** For a transport that cannot use apiFetch, such as an upload that reports its progress. */
-export function reportStatus(status: number) {
-  observer(status);
-}
 
 /** Set by AuthGate. Without it a 401 reaches the caller, as it does in the portable viewer. */
 export function setReauthentication(wait: Reauthentication | undefined) {
@@ -41,11 +30,8 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit) {
   const again = input instanceof Request ? input.clone() : input;
   // eslint-disable-next-line no-restricted-globals -- the one place allowed to call it
   const response = await fetch(input, init);
-  observer(response.status);
   if (response.status !== 401 || isSessionRoute(input) || !(await waitForSession())) return response;
   // The server refused before any effect, so the same request is safe to send once more.
   // eslint-disable-next-line no-restricted-globals -- the one place allowed to call it
-  const retried = await fetch(again, init);
-  observer(retried.status);
-  return retried;
+  return fetch(again, init);
 }

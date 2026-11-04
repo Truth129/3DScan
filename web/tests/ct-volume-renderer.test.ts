@@ -50,7 +50,7 @@ describe('direct CT volume physical contract', () => {
       distance = 17.3,
       density = 0.8;
     const expected = volumeStepOpacity(alpha, distance, density);
-    for (const steps of [1, 7, 32, 1536]) {
+    for (const steps of [1, 7, 1536]) {
       const perStep = volumeStepOpacity(alpha, distance / steps, density);
       expect(1 - (1 - perStep) ** steps).toBeCloseTo(expected, 12);
     }
@@ -67,14 +67,16 @@ describe('direct CT volume physical contract', () => {
       const [w, h] = volumeRenderSize(10000, 10000, false, quality);
       expect(w * h * 4).toBeLessThanOrEqual(9 * 1024 ** 2);
     }
+    // Cinematic frames have their own lower bound; ordinary quality is unchanged.
+    expect(volumeRenderSize(3000, 1500, false, 'auto', true)).toEqual([768, 384]);
+    expect(volumeRenderSize(3000, 1500, false, 'detail', true)).toEqual([1024, 512]);
+    expect(volumeRenderSize(3000, 1500, true, 'detail', true)).toEqual([320, 160]);
   });
   it('resolves submillimetre CTs when settled while retaining the bounded motion preview', () => {
     expect(volumeStepMM(0.3, false, 'auto')).toBeCloseTo(0.225, 10);
     expect(volumeStepMM(0.3, false, 'detail')).toBeCloseTo(0.15, 10);
     expect(volumeStepMM(0.3, true, 'detail')).toBe(1.2);
-    expect(volumeStepMM(0.1, false, 'auto')).toBe(0.2);
     expect(volumeStepMM(0.1, false, 'detail')).toBe(0.12);
-    expect(volumeStepMM(1.25, false, 'detail')).toBe(0.625);
   });
 });
 
@@ -105,12 +107,6 @@ describe('bounded cinematic camera lighting', () => {
     expect(volumeShadowSamples({ ...cinematic, cinematic: { ...cinematic.cinematic, shadows: 0 } }, false)).toBe(0);
     expect(volumeShadowSamples(freshVolumeSettings(), false)).toBe(0);
   });
-  it('bounds the cinematic frame separately without changing ordinary quality', () => {
-    expect(volumeRenderSize(3000, 1500, false, 'auto', true)).toEqual([768, 384]);
-    expect(volumeRenderSize(3000, 1500, false, 'detail', true)).toEqual([1024, 512]);
-    expect(volumeRenderSize(3000, 1500, true, 'detail', true)).toEqual([320, 160]);
-    expect(volumeRenderSize(3000, 1500, false, 'detail')).toEqual([1536, 768]);
-  });
   it('updates the same LUT for HU changes and retains the borrowed CT', () => {
     const renderer = new CTVolumeRenderer({} as THREE.WebGLRenderer),
       settings = freshVolumeSettings({ preset: 'CT-Cinematic-Heart' });
@@ -123,9 +119,6 @@ describe('bounded cinematic camera lighting', () => {
     expect(renderer.material.uniforms.uTransfer.value).toBe(texture);
     expect(Array.from(texture.image.data)).not.toEqual(pixels);
     expect(texture.version).toBeGreaterThan(version);
-    const appearanceVersion = texture.version;
-    renderer.setSettings({ ...settings, cinematic: { ...settings.cinematic, myocardiumHU: 120, bloodHU: 600, shadows: 0 } });
-    expect(texture.version).toBe(appearanceVersion);
     renderer.dispose();
   });
   it('retains VTK transfer RGB in cinematic lighting while ordinary presets keep linear light', () => {

@@ -74,26 +74,15 @@ describe('shared 3D review CT frames', () => {
     expect(modelReviewTargetAvailable('liver', ['liver'], undefined, true)).toBe(true);
     expect(modelReviewTargetAvailable('liver', ['other'], undefined, true)).toBe(false);
   });
-  it('uses the existing full CT worker through a separate viewer channel', async () => {
-    const input = request(),
-      value = frame(input),
-      detail = vi.fn();
-    const session = { requestSlice: vi.fn(async () => value) };
-    const frames = new ModelReviewFrames(detail);
-    const result = await frames.request({ ...input, session, localReady: true, fullResolution: true });
-    expect(result?.frame).toBe(value);
-    expect(session.requestSlice).toHaveBeenCalledExactlyOnceWith('axial', 2, ['liver'], false, { axis: 2, index: 2 }, 'model-review');
-    expect(detail).not.toHaveBeenCalled();
-    frames.dispose();
-  });
-
-  it('shows the shared overview without WAN detail and upgrades its quality before drawing', async () => {
+  it('uses the full CT worker through its own channel, showing the overview first and upgrading it before drawing', async () => {
     const input = request(),
       detail = vi.fn(),
       value = frame(input);
     const session = { requestSlice: vi.fn(async () => value) };
     const frames = new ModelReviewFrames(detail);
-    expect((await frames.request({ ...input, session, localReady: true, fullResolution: false }))?.quality).toBe('preview');
+    const preview = await frames.request({ ...input, session, localReady: true, fullResolution: false });
+    expect([preview?.quality, preview?.frame]).toEqual(['preview', value]);
+    expect(session.requestSlice).toHaveBeenCalledExactlyOnceWith('axial', 2, ['liver'], false, { axis: 2, index: 2 }, 'model-review');
     await frames.request({ ...input, session, localReady: true, fullResolution: false });
     expect(session.requestSlice).toHaveBeenCalledTimes(1); // Reuses the bounded overview frame.
     expect((await frames.request({ ...input, session, localReady: true, fullResolution: true }))?.quality).toBe('full');
@@ -179,6 +168,11 @@ describe('shared 3D review CT frames', () => {
       bad.meta.pixel_to_ras[2][3] += 15;
       expect(() => validateModelReviewFrame(bad, input)).toThrow('reference CT');
     }
+    const input = request(),
+      wide = frame(input);
+    wide.meta.pixel_to_ras = wide.meta.pixel_to_ras.map(row => [...row]);
+    wide.meta.pixel_to_ras[0][0] *= 2; // An in-plane footprint off the reference half-voxel edges.
+    expect(() => validateModelReviewFrame(wide, input)).toThrow('reference CT');
   });
 
   it('isolates immutable mask aliases, overlays, comparisons, and geometry in its bounded cache', async () => {
@@ -228,14 +222,6 @@ describe('shared 3D review CT frames', () => {
     frames.dispose();
     expect(await result).toBeUndefined();
   });
-  it('rejects a native-depth frame whose in-plane footprint differs from the reference half-voxel edges', () => {
-    const input = request(),
-      value = frame(input);
-    value.meta.pixel_to_ras = value.meta.pixel_to_ras.map(row => [...row]);
-    value.meta.pixel_to_ras[0][0] *= 2;
-    expect(() => validateModelReviewFrame(value, input)).toThrow('reference CT');
-  });
-
   it('keeps publishing completed local frames during a 60-input continuous drag, with one latest queued slot', async () => {
     const fixture = { ...geometry, shape: [8, 7, 100] as [number, number, number] };
     const input = request({ geometry: fixture });
@@ -277,35 +263,20 @@ describe('shared 3D review CT frames', () => {
     frames.dispose();
   });
 
-  it('does not turn local queue supersession into an HTTP fallback', async () => {
+  it('falls back to HTTP detail for a genuine local allocation failure, never for local queue supersession', async () => {
     const input = request(),
-      detail = vi.fn(),
-      session = {
-        requestSlice: vi.fn(async () => {
-          throw new LocalCTSupersededError();
-        }),
-      };
-    const frames = new ModelReviewFrames(detail),
+      expected = frame(input),
+      detail = vi.fn(async () => expected),
       listener = vi.fn();
+    const session = {
+      requestSlice: vi.fn().mockRejectedValueOnce(new LocalCTSupersededError()).mockRejectedValueOnce(new LocalCTUnsupportedError('Allocation failed')),
+    };
+    const frames = new ModelReviewFrames(detail);
     expect(await frames.request({ ...input, session, localReady: true, fullResolution: true }, listener)).toBeUndefined();
     expect(detail).not.toHaveBeenCalled();
     expect(listener).not.toHaveBeenCalled();
-    frames.dispose();
-  });
-
-  it('retains explicit-alias detail fallback for a genuine local allocation failure', async () => {
-    const input = request(),
-      expected = frame(input),
-      detail = vi.fn(async () => expected);
-    const session = {
-      requestSlice: vi.fn(async () => {
-        throw new LocalCTUnsupportedError('Allocation failed');
-      }),
-    };
-    const frames = new ModelReviewFrames(detail);
     const result = await frames.request({ ...input, session, localReady: true, fullResolution: true });
-    expect(result?.quality).toBe('full');
-    expect(result?.frame).toBe(expected);
+    expect([result?.quality, result?.frame]).toEqual(['full', expected]);
     expect(detail).toHaveBeenCalledTimes(1);
     frames.dispose();
   });

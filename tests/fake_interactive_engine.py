@@ -114,35 +114,3 @@ class OutOfMemoryEngine(Engine):
 
     def refine(self, prompts, progress, cancelled, session_key):
         raise RuntimeError(OUT_OF_MEMORY)
-
-
-class PointwiseEngine(Engine):
-    """Reports pointwise refinement and prefix reuse as the real runtime does,
-    with a cancellable step per new point, for the validation harness."""
-
-    def __init__(self):
-        super().__init__()
-        self.session, self.applied = None, []
-
-    def refine(self, prompts, progress, cancelled, session_key):
-        reused = self.session == session_key and prompts[: len(self.applied)] == self.applied
-        if not reused:
-            self.session, self.applied = session_key, []
-        start = len(self.applied)
-        try:
-            for index in range(start, len(prompts)):
-                progress(f"Refining segmentation with point {index + 1} of {len(prompts)}")
-                deadline = time.monotonic() + 0.2
-                while time.monotonic() < deadline:
-                    if cancelled():
-                        raise InterruptedError("Fake correction cancelled")
-                    time.sleep(0.005)
-                self.applied = prompts[: index + 1]
-        except BaseException:
-            self.session, self.applied = None, []
-            raise
-        return {"reused_prompt_prefix": reused, "predictions_this_request": len(prompts) - start}
-
-    def release(self):
-        super().release()
-        self.session, self.applied = None, []

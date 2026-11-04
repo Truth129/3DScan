@@ -35,7 +35,7 @@ jobs:
       - name: Install scan3d with the test and lint extras (CPU only, no Torch or ROCm)
         run: python -m pip install --editable ".[test,lint]"
       - name: Install TotalSegmentator's task registry without its dependencies
-        # 85 tests read TotalSegmentator's task and label metadata, which is pure Python.
+        # Many tests read TotalSegmentator's task and label metadata, which is pure Python.
         # --no-deps keeps Torch and nnU-Net out; the version follows the tested pin.
         run: |
           python -m pip install --no-deps "$(grep -m1 '^totalsegmentator==' requirements/constraints.txt)"

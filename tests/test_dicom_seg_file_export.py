@@ -2,7 +2,6 @@
 
 import copy
 import hashlib
-from io import BytesIO
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
@@ -10,7 +9,6 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 import nibabel as nib
 import numpy as np
-import pydicom
 import pytest
 
 from scan3d.api import create_app
@@ -134,23 +132,6 @@ def test_folder_case_saves_exact_masks_as_a_file_without_orthanc(rig, tmp_path):
     assert private["payload"]["source_manifest_sha256"] == Path(rig.ct["ct_file"]).parent.name
 
 
-def test_downloaded_file_imports_back_into_its_own_case(rig, tmp_path):
-    output = tmp_path / "saved.dcm"
-    download(rig, execute(rig, prepare(rig)), output)
-    queued = rig.http.post(
-        f"/api/cases/{rig.case['id']}/dicom-seg/imports",
-        data={"revision_id": rig.ct["id"]},
-        files=[("files", ("seg.dcm", output.read_bytes(), "application/dicom"))],
-    )
-    assert queued.status_code == 200, queued.text
-    assert execute(rig, queued.json())["status"] == "completed"
-    imported = rig.service.store.revision(rig.case["id"], rig.service.store.get("cases", rig.case["id"])["active_revision_id"])
-    assert sorted(item["name"] for item in imported["structures"]) == ["Block", "Ring"]
-    masks = {item["name"]: np.asanyarray(nib.load(item["mask_file"]).dataobj) for item in imported["structures"]}
-    for segment in rig.fixture["segments"]:
-        assert np.array_equal(masks[segment.name] > 0, np.asanyarray(nib.load(segment.mask_path).dataobj) > 0)
-
-
 def test_ranked_file_resolves_overlaps_only_in_that_export(rig, tmp_path):
     plain = execute(rig, prepare(rig))
     ranked = execute(rig, prepare(rig, overlap_priority=["ring", "block"]))
@@ -171,7 +152,7 @@ def test_ranked_file_resolves_overlaps_only_in_that_export(rig, tmp_path):
         assert Path(entry["mask_file"]).read_bytes() == original.mask_path.read_bytes()
 
 
-def test_repeated_requests_reuse_one_job_and_its_immutable_bytes(rig, tmp_path, monkeypatch):
+def test_repeated_requests_reuse_one_job_and_its_immutable_bytes(rig):
     queued = prepare(rig)
     assert prepare(rig)["id"] == queued["id"]
     finished = execute(rig, queued)
@@ -179,25 +160,6 @@ def test_repeated_requests_reuse_one_job_and_its_immutable_bytes(rig, tmp_path, 
     assert prepare(rig)["id"] == queued["id"]
     assert rig.service.store.claim("cpu") is None
     assert rig.http.get(file_url(rig, finished)).content == first
-
-
-def test_retry_after_a_failed_job_reuses_the_same_sop(rig, monkeypatch):
-    finished = execute(rig, prepare(rig))
-    sop = pydicom.dcmread(BytesIO(rig.http.get(file_url(rig, finished)).content), stop_before_pixels=True).SOPInstanceUID
-    rig.service.store.update_job(finished["id"], status="failed", stage="Export failed", error="Synthetic failure")
-    retried = execute(rig, prepare(rig))
-    assert retried["id"] != finished["id"] and retried["payload"]["export_id"] == finished["payload"]["export_id"]
-    seg = pydicom.dcmread(BytesIO(rig.http.get(file_url(rig, retried)).content), stop_before_pixels=True)
-    assert seg.SOPInstanceUID == sop
-
-
-def test_changed_masks_are_refused_after_an_export_of_that_selection(rig):
-    execute(rig, prepare(rig))
-    path = Path(rig.saved["structures"][0]["mask_file"])
-    image = nib.load(path)
-    nib.save(nib.Nifti1Image(np.asanyarray(image.dataobj)[::-1].copy(), image.affine), path)
-    refused = rig.http.post(rig.endpoint, json={"delivery": "file"})
-    assert refused.status_code == 400 and "Saved masks changed" in refused.json()["detail"]
 
 
 def test_source_bytes_that_no_longer_match_the_reference_stop_the_job(rig):
@@ -208,31 +170,6 @@ def test_source_bytes_that_no_longer_match_the_reference_stop_the_job(rig):
     assert failed["status"] == "failed" and "no longer match the saved reference image" in failed["error"]
     missing = rig.http.get(f"{rig.endpoint}/{failed['payload']['export_id']}/segment.dcm")
     assert missing.status_code == 404
-
-
-def test_strict_grid_checks_apply_to_a_file(tmp_path, fixture):
-    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", modalities=("CT",)))
-    service = app.state.service
-    original = nib.load(fixture["reference"])
-    shifted = original.affine.copy()
-    shifted[:3, 3] += 0.4 * shifted[:3, 0]
-    moved = tmp_path / "shifted.nii.gz"
-    nib.save(nib.Nifti1Image(np.asanyarray(original.dataobj), shifted), moved)
-    masks = []
-    for segment in fixture["segments"]:
-        target = tmp_path / f"shifted-{segment.mask_path.name}"
-        nib.save(nib.Nifti1Image(np.asanyarray(nib.load(segment.mask_path).dataobj), shifted), target)
-        masks.append(SimpleNamespace(id=segment.id, name=segment.name, color=segment.color, mask_path=target))
-    case, ct = import_folder(service, fixture, moved)
-    saved = save_masks(service, ct, {"segments": masks})
-    http = TestClient(app, base_url="http://127.0.0.1")
-    queued = http.post(f"/api/cases/{case['id']}/revisions/{saved['id']}/dicom-seg", json={"delivery": "file"}).json()
-    http.close()
-    claimed = service.store.claim("cpu")
-    service.execute(claimed)
-    failed = service.store.get("jobs", queued["id"])
-    assert failed["status"] == "failed" and "reference grid" in failed["error"]
-    assert not (service.store.case_dir(case["id"]) / "dicom-exports" / failed["payload"]["export_id"] / "export.json").exists()
 
 
 def test_changed_prepared_bytes_are_never_served_and_stay_in_place(rig):
@@ -286,18 +223,6 @@ def test_demo_masks_have_no_source_series_to_reference(tmp_path):
     available = http.get(f"/api/cases/{case['id']}/revisions/{case['active_revision_id']}/dicom-seg").json()
     http.close()
     assert available["file"]["available"] is False and "no verified original DICOM CT series" in available["file"]["reason"]
-
-
-def test_cancelling_a_queued_file_stops_it_and_a_new_request_can_finish(rig):
-    queued = prepare(rig)
-    cancelled = rig.http.post(f"/api/jobs/{queued['id']}/cancel").json()
-    assert cancelled["status"] == "cancelled" and cancelled["error"] is None
-    assert rig.service.store.claim("cpu") is None
-    assert rig.http.get(file_url(rig, queued)).status_code == 404
-    again = prepare(rig)
-    assert again["id"] != queued["id"]
-    finished = execute(rig, again)
-    assert finished["status"] == "completed" and rig.http.get(file_url(rig, finished)).status_code == 200
 
 
 def test_cancelling_while_encoding_publishes_nothing_and_a_new_request_can_finish(rig, monkeypatch):

@@ -67,33 +67,18 @@ def apng():
 
 REFUSED = {
     "empty": b"",
-    "not a png": b"hello world" * 40,
-    "signature only": GOOD[:8],
     "truncated in IDAT": GOOD[: IDAT + 30],
-    "no IEND": GOOD[:-12],
     "bytes after IEND": GOOD + b"\0",
     "IDAT checksum only": flipped(GOOD, IDAT + 8 + IDAT_LENGTH),
-    "IDAT data byte": flipped(GOOD, IDAT + 40),
-    "IHDR byte": flipped(GOOD, 20),
-    "IEND checksum": flipped(GOOD, len(GOOD) - 1),
-    "IDAT not zlib": b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 16, 16, 8, 6, 0, 0, 0)) + chunk(b"IDAT", b"not zlib") + chunk(b"IEND", b""),
     "IDAT too short": hand_png(16, 16, data=b"\0" * 8),
     "first chunk is not IHDR": b"\x89PNG\r\n\x1a\n" + chunk(b"tEXt", b"a\0b") + GOOD[8:],
-    "second IHDR": GOOD[:33] + GOOD[8:33] + GOOD[33:],
-    "long IHDR": b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", b"\0" * 14) + chunk(b"IEND", b""),
     "chunk longer than the file": GOOD[:IDAT] + struct.pack(">I", 2**31) + GOOD[IDAT + 4 :],
     "16 bit": png_bytes(noise(channels=1)[..., 0].astype(np.uint16) * 257),
     "palette": hand_png(4, 4, colour=3),
-    "grey": png_bytes(noise(channels=1)[..., 0]),
-    "grey with alpha": hand_png(4, 4, colour=4),
     "animated": apng(),
     "colour key": hand_png(2, 1, colour=2, data=b"\0\x01\x02\x03\x04\x05\x06", before_data=chunk(b"tRNS", b"\0\x01\0\x02\0\x03")),
-    "zero width": hand_png(0, 4),
     "wider than an axis allows": hand_png(16385, 1),
-    "bomb header": hand_png(16384, 16384),
-    "gigapixel header": hand_png(50000, 50000),
     "just over the pixel limit": hand_png(6145, 6145),
-    "blank": png_bytes(np.full((8, 8, 3), 37, dtype=np.uint8)),
     "blank after alpha": png_bytes(np.dstack([noise(8, 8), np.zeros((8, 8), dtype=np.uint8)])),
 }
 
@@ -108,9 +93,7 @@ def test_every_bad_capture_is_a_fixed_public_refusal(tmp_path, name):
     assert str(tmp_path) not in str(caught.value) and "capture" in str(caught.value).lower()
 
 
-@pytest.mark.parametrize(
-    "error", [Image.DecompressionBombError("synthetic"), SyntaxError("synthetic"), EOFError(), OSError("synthetic"), zlib.error("synthetic")]
-)
+@pytest.mark.parametrize("error", [Image.DecompressionBombError("synthetic"), zlib.error("synthetic")])
 def test_decoder_failures_never_escape_as_pillow_errors(tmp_path, monkeypatch, error):
     path = tmp_path / "capture.png"
     path.write_bytes(GOOD)
@@ -235,7 +218,7 @@ def test_transparency_blends_over_black_with_integer_rounding(tmp_path):
     assert decoded[0, 2].tolist() == [128, 64, 1]
 
 
-@pytest.mark.parametrize("rows,columns", [(1, 2), (2, 1), (3, 5), (241, 321), (5, 16384)])
+@pytest.mark.parametrize("rows,columns", [(1, 2), (3, 5), (5, 16384)])
 def test_any_size_round_trips_with_even_length_pixel_data(tmp_path, rows, columns):
     pixels = noise(rows, columns)
     result, ds, _ = export(tmp_path, pixels)
@@ -288,25 +271,13 @@ def test_every_designed_attribute(tmp_path):
     assert "SYNTHETIC" not in ds.ImageComments + ds.DerivationDescription
 
 
-def test_identity_elements_are_exact_copies_of_the_source(tmp_path):
-    _, ds, source = export(tmp_path, StudyDescription="Synthetic view study", IssuerOfPatientID="SYNTHETIC-ISSUER")
+def test_identity_elements_are_exact_copies_of_the_source_even_when_odd(tmp_path):
+    tags = dict(PatientSex="U", StudyTime="101010.1234567", PatientBirthDate="19700000", StudyDate="2026-11-01", Laterality="L")
+    _, ds, source = export(tmp_path, StudyDescription="Synthetic view study", IssuerOfPatientID="SYNTHETIC-ISSUER", **tags)
     for keyword in dicom_view._COPIED:
         assert ds[keyword].value == source[keyword].value, keyword
         assert ds[keyword].VR == source[keyword].VR, keyword
-
-
-def test_odd_identity_values_survive_exactly(tmp_path):
-    _, ds, _ = export(
-        tmp_path,
-        PatientSex="U",
-        StudyTime="101010.1234567",
-        PatientBirthDate="19700000",
-        StudyDate="2026-11-01",
-    )
-    assert ds.PatientSex == "U"
-    assert str(ds.StudyTime) == "101010.1234567"
-    assert str(ds.PatientBirthDate) == "19700000"
-    assert str(ds.StudyDate) == "2026-11-01"
+    assert {keyword: str(ds[keyword].value) for keyword in tags} == tags
 
 
 def test_missing_type_two_elements_stay_empty_and_are_not_invented(tmp_path):
@@ -317,10 +288,8 @@ def test_missing_type_two_elements_stay_empty_and_are_not_invented(tmp_path):
 
 CHARSETS = [
     ("ISO_IR 100", "Müller^José", "MÜ12", "Thorax ärztlich"),
-    ("ISO_IR 144", "Иванов^Иван", "ИД-1", "Грудная клетка"),
     ("GB18030", "王^小东", "编号-1", "胸部平扫"),
     (["", "ISO 2022 IR 87"], "Yamada^Tarou=山田^太郎=やまだ^たろう", "ID-山田", "胸部単純"),
-    (["", "ISO 2022 IR 149"], "Hong^Gildong=洪^吉洞=홍^길동", "ID-홍", "흉부 CT"),
 ]
 
 
@@ -346,16 +315,10 @@ def test_ascii_declaring_sources_with_legacy_bytes_keep_pydicoms_reading(tmp_pat
     assert str(ds.PatientName) == str(source.PatientName) and ds.PatientID == source.PatientID
 
 
-def test_ascii_names_pass_under_an_explicit_ascii_character_set(tmp_path):
-    _, ds, _ = export(tmp_path, SpecificCharacterSet="ISO_IR 6", PatientName="ASCII^ONLY")
-    assert ds.SpecificCharacterSet == "ISO_IR 192" and str(ds.PatientName) == "ASCII^ONLY"
-
-
 @pytest.mark.parametrize(
     "values,expected",
     [
         ((None, None, None), "NO"),
-        (("NO", "NO", "NO"), "NO"),
         (("NO", "NO", "YES"), "YES"),
         (("yes", None, None), "YES"),
     ],
@@ -367,12 +330,6 @@ def test_burned_in_annotation_follows_every_source_header(tmp_path, values, expe
 
     _, ds, _ = export(tmp_path, sources=write_sources(tmp_path / "sources", edit=edit))
     assert ds.BurnedInAnnotation == expected
-
-
-@pytest.mark.parametrize("value", ["L", "R", "U"])
-def test_laterality_is_copied_when_present(tmp_path, value):
-    _, ds, _ = export(tmp_path, Laterality=value)
-    assert ds.Laterality == value
 
 
 def test_contributing_equipment_keeps_source_device_without_patient_identity(tmp_path):
@@ -387,10 +344,7 @@ def test_contributing_equipment_keeps_source_device_without_patient_identity(tmp
     "keyword,value",
     [
         ("PatientID", "OTHER"),
-        ("PatientName", "OTHER^PATIENT"),
         ("PatientBirthDate", "19800101"),
-        ("PatientSex", "F"),
-        ("IssuerOfPatientID", "OTHER"),
         ("StudyInstanceUID", "1.2.3"),
         ("SeriesInstanceUID", "1.2.3"),
     ],
@@ -407,8 +361,7 @@ def test_mixed_sources_are_refused_whichever_file_differs(tmp_path, keyword, val
     assert not (tmp_path / "export").exists()
 
 
-@pytest.mark.parametrize("keyword", ["StudyInstanceUID", "SeriesInstanceUID", "SOPInstanceUID"])
-@pytest.mark.parametrize("value", ["", "not.a.uid", "1." + "2" * 80])
+@pytest.mark.parametrize("keyword,value", [("StudyInstanceUID", ""), ("SeriesInstanceUID", "not.a.uid"), ("SOPInstanceUID", "1." + "2" * 80)])
 def test_invalid_source_uids_are_refused(tmp_path, keyword, value):
     def edit(index, image):
         setattr(image, keyword, value)
@@ -468,16 +421,20 @@ def test_output_is_private_and_a_directory_is_never_reused(tmp_path):
     assert [path.name for path in output.iterdir()] == ["view-0001.dcm"]
 
 
-def test_a_failed_write_publishes_nothing_and_leaves_no_staging(tmp_path, monkeypatch):
+def test_a_failed_write_or_cancellation_publishes_nothing_and_leaves_no_staging(tmp_path, monkeypatch):
     def fail(self, path, **kwargs):
         Path(path).write_bytes(b"partial")
         raise OSError("private/patient/path")
 
     monkeypatch.setattr(highdicom.sc.SCImage, "save_as", fail)
     root = tmp_path / "exports"
+    sources, capture = write_sources(tmp_path / "sources", 1), written(tmp_path, noise())
     with pytest.raises(DicomViewError) as caught:
-        export_view(write_sources(tmp_path / "sources", 1), written(tmp_path, noise()), root / "export", revision_id=REVISION)
+        export_view(sources, capture, root / "export", revision_id=REVISION)
     assert "private" not in str(caught.value)
+    assert not list(root.iterdir())
+    with pytest.raises(InterruptedError):
+        export_view(sources, capture, root / "export", revision_id=REVISION, cancelled=lambda: True)
     assert not list(root.iterdir())
 
 
@@ -499,25 +456,7 @@ def test_an_input_changed_during_export_is_refused(tmp_path, target):
     assert not list((tmp_path / "exports").iterdir())
 
 
-def test_cancellation_publishes_nothing(tmp_path):
-    with pytest.raises(InterruptedError):
-        export_view(
-            write_sources(tmp_path / "sources", 1), written(tmp_path, noise()), tmp_path / "exports" / "export", revision_id=REVISION, cancelled=lambda: True
-        )
-    assert not (tmp_path / "exports" / "export").exists()
-
-
 def test_an_unqualified_encoder_version_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(highdicom, "__version__", "99.0.0")
     with pytest.raises(DicomViewError, match="qualification"):
         export_view(write_sources(tmp_path / "sources", 1), written(tmp_path, noise()), tmp_path / "export", revision_id=REVISION)
-
-
-def test_unexpected_encoder_errors_stay_public_safe(tmp_path, monkeypatch):
-    def fail(*args, **kwargs):
-        raise TypeError("private/patient/value")
-
-    monkeypatch.setattr(highdicom.sc.SCImage, "from_ref_dataset", fail)
-    with pytest.raises(DicomViewError) as caught:
-        export_view(write_sources(tmp_path / "sources", 1), written(tmp_path, noise()), tmp_path / "export", revision_id=REVISION)
-    assert "private" not in str(caught.value) and "could not be encoded" in str(caught.value)

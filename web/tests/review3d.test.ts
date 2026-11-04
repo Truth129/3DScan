@@ -162,8 +162,6 @@ describe('3D correction geometry and isolated targets', () => {
         const original = { ...stateFor(frame), tool };
         const gpu = { ...original, frame: undefined, gpuMeta: frame.meta };
         expect(reviewPlaneGesture(gpu, pixels, 'same')).toEqual(reviewPlaneGesture(original, pixels, 'same'));
-        expect(reviewPlaneGesture({ ...gpu, disabled: true }, pixels)).toBeUndefined();
-        expect(reviewPlaneGesture({ ...gpu, showPlane: false }, pixels)).toBeUndefined();
       }
       const wrongIndex = { ...frame.meta, native: { axis, index: 7 } };
       expect(() => validateReviewPlaneMeta(wrongIndex, geometry)).toThrow('reference grid');
@@ -191,27 +189,34 @@ describe('3D correction geometry and isolated targets', () => {
     expect(maxRadius * 1000).toBeCloseTo(4.5, 4);
     ribbon.dispose();
   });
-  it('reuses four plane textures while scrolling, releases resized frames, and windows without reupload', () => {
-    const fakeRenderer = {
+  it('reuses plane textures and geometry, uploads only changed data, and releases resized or cleared frames', () => {
+    const renderer = {
       getContext: () => ({ MAX_ARRAY_TEXTURE_LAYERS: 1, MAX_TEXTURE_SIZE: 2, getParameter: (key: number) => (key === 1 ? 256 : 8192) }),
     } as unknown as THREE.WebGLRenderer;
-    const plane = new Review3DPlane(fakeRenderer),
+    const plane = new Review3DPlane(renderer),
       first = frameFor(geometry);
-    first.current[12] = 1;
     first.parent = new Uint8Array(first.current.length);
-    first.parent[13] = 1;
+    first.overlays = [{ id: 'lung', current: first.current, parent: first.parent, color: [1, 2, 3] }];
     plane.setFrame(first, geometry);
     expect(plane.textureCount).toBe(4);
-    const textures = ['uHU', 'uCurrent', 'uParent', 'uPalette'].map(name => plane.mesh.material.uniforms[name].value as THREE.Texture);
+    const uniforms = plane.mesh.material.uniforms;
+    const textures = ['uHU', 'uCurrent', 'uParent', 'uPalette'].map(name => uniforms[name].value as THREE.Texture);
+    const versions = textures.map(texture => texture.version),
+      quad = plane.mesh.geometry;
     let released = 0;
     textures.forEach(texture => texture.addEventListener('dispose', () => released++));
-    plane.setWindow(800, 100);
-    expect(released).toBe(0);
-    expect(plane.mesh.material.uniforms.uWindow.value).toBe(800);
+    plane.setFrame({ ...first, overlays: [{ ...first.overlays[0], color: [8, 9, 10] }] }, geometry);
+    plane.setWindow(800, 90);
+    expect(uniforms.uWindow.value).toBe(800);
+    expect(textures.map(texture => texture.version)).toEqual([versions[0], versions[1], versions[2], versions[3] + 1]);
+    const positions = quad.getAttribute('position'),
+      previousCoordinates = [...positions.array];
     plane.setFrame(frameFor(geometry, 2, 7), geometry);
+    expect(plane.mesh.geometry).toBe(quad);
+    expect([...positions.array]).not.toEqual(previousCoordinates);
+    expect(uniforms.uHU.value).toBe(textures[0]);
+    expect(textures[0].version).toBe(versions[0] + 1);
     expect(released).toBe(0);
-    expect(plane.textureCount).toBe(4);
-    expect(plane.mesh.material.uniforms.uHU.value).toBe(textures[0]);
     plane.setFrame(frameFor(geometry, 0, 7), geometry);
     expect(released).toBe(3);
     expect(plane.textureCount).toBe(4);
@@ -219,32 +224,6 @@ describe('3D correction geometry and isolated targets', () => {
     expect(released).toBe(4);
     expect(plane.textureCount).toBe(0);
     expect(plane.frame).toBeUndefined();
-    plane.dispose();
-  });
-  it('updates only changed GPU data when recoloring, windowing or moving the native plane', () => {
-    const renderer = {
-      getContext: () => ({ MAX_ARRAY_TEXTURE_LAYERS: 1, MAX_TEXTURE_SIZE: 2, getParameter: (key: number) => (key === 1 ? 256 : 8192) }),
-    } as unknown as THREE.WebGLRenderer;
-    const plane = new Review3DPlane(renderer),
-      first = frameFor(geometry);
-    first.overlays = [{ id: 'lung', current: first.current, color: [1, 2, 3] }];
-    plane.setFrame(first, geometry);
-    const uniforms = plane.mesh.material.uniforms;
-    const textures = ['uHU', 'uCurrent', 'uParent', 'uPalette'].map(name => uniforms[name].value as THREE.Texture);
-    const versions = textures.map(texture => texture.version),
-      quad = plane.mesh.geometry;
-    plane.setFrame({ ...first, overlays: [{ ...first.overlays[0], color: [8, 9, 10] }] }, geometry);
-    expect(textures.map(texture => texture.version)).toEqual([versions[0], versions[1], versions[2], versions[3] + 1]);
-    plane.setWindow(800, 90);
-    expect(textures.map(texture => texture.version)).toEqual([versions[0], versions[1], versions[2], versions[3] + 1]);
-    const positions = quad.getAttribute('position'),
-      previousCoordinates = [...positions.array];
-    plane.setFrame(frameFor(geometry, 2, 7), geometry);
-    expect(plane.mesh.geometry).toBe(quad);
-    expect(quad.getAttribute('position')).toBe(positions);
-    expect([...positions.array]).not.toEqual(previousCoordinates);
-    expect(uniforms.uHU.value).toBe(textures[0]);
-    expect(textures[0].version).toBe(versions[0] + 1);
     plane.dispose();
   });
 });

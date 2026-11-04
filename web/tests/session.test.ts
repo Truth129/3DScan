@@ -37,14 +37,6 @@ describe('clearing what one person leaves behind', () => {
     clearLocalKeys();
     expect([...storage.stored.keys()]).toEqual(['scan3d-workspace-panels-v1', 'scan3d-2d-overlay-opacity-v1', 'scan3d-last-user']);
   });
-  it('carries on when storage is blocked', () => {
-    vi.stubGlobal('localStorage', {
-      get length() {
-        throw new Error('blocked');
-      },
-    });
-    expect(clearLocalKeys).not.toThrow();
-  });
 });
 
 describe('forgetCase', () => {
@@ -91,30 +83,26 @@ describe('a set-password link', () => {
 });
 
 describe('the browser changing hands', () => {
-  it('clears the keys for a different account and remembers it', () => {
-    const storage = browserStorage({ 'scan3d-last-user': 'one', 'scan3d-case': 'case' });
+  it.each([
+    ['clears the keys for a different account', { 'scan3d-last-user': 'one', 'scan3d-case': 'case' }, 'two', { 'scan3d-last-user': 'two' }],
+    ['keeps the keys for the same account', { 'scan3d-last-user': 'one', 'scan3d-case': 'case' }, 'one', { 'scan3d-last-user': 'one', 'scan3d-case': 'case' }],
+    ['keeps the keys when no account is stored, as after an upgrade', { 'scan3d-case': 'case' }, 'one', { 'scan3d-case': 'case', 'scan3d-last-user': 'one' }],
+  ])('%s, and remembers it', (_name, before, user, after) => {
+    const storage = browserStorage(before);
     vi.stubGlobal('localStorage', storage);
-    rememberUser('two');
-    expect(Object.fromEntries(storage.stored)).toEqual({ 'scan3d-last-user': 'two' });
-  });
-  it('keeps the keys for the same account', () => {
-    const storage = browserStorage({ 'scan3d-last-user': 'one', 'scan3d-case': 'case' });
-    vi.stubGlobal('localStorage', storage);
-    rememberUser('one');
-    expect(storage.stored.get('scan3d-case')).toBe('case');
-  });
-  it('keeps the keys when no account is stored, as after an upgrade', () => {
-    const storage = browserStorage({ 'scan3d-job:case': 'job' });
-    vi.stubGlobal('localStorage', storage);
-    rememberUser('one');
-    expect(Object.fromEntries(storage.stored)).toEqual({ 'scan3d-job:case': 'job', 'scan3d-last-user': 'one' });
+    rememberUser(user);
+    expect(Object.fromEntries(storage.stored)).toEqual(after);
   });
   it('carries on when storage is blocked', () => {
     vi.stubGlobal('localStorage', {
+      get length() {
+        throw new Error('blocked');
+      },
       getItem() {
         throw new Error('blocked');
       },
     });
+    expect(clearLocalKeys).not.toThrow();
     expect(() => rememberUser('one')).not.toThrow();
   });
 });

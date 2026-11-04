@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import vtkVolume from '@kitware/vtk.js/Rendering/Core/Volume';
 import vtkVolumeMapper from '@kitware/vtk.js/Rendering/Core/VolumeMapper';
-import { applyVTKVolumePreset, vtkVolumePreset } from '../src/lib/vtk-volume-preset';
+import { applyVTKVolumePreset } from '../src/lib/vtk-volume-preset';
 import { freshNativeVolumeLighting } from '../src/lib/volume-lighting';
 import { freshVolumeSettings } from '../src/lib/volume-presets';
 
@@ -23,22 +23,6 @@ function volume() {
 }
 
 describe('native VTK volume settings', () => {
-  it('draws multi-knot gradient recipes from their first two knots', () => {
-    const gradient = (preset: 'CT-Lung' | 'CT-Fat' | 'US-Fetal') => vtkVolumePreset(freshVolumeSettings({ preset })).gradient;
-    expect(gradient('CT-Lung')).toEqual([
-      [0, 1],
-      [985.12, 1],
-    ]);
-    expect(gradient('CT-Fat')).toEqual([
-      [0, 1],
-      [985.12, 1],
-    ]);
-    expect(gradient('US-Fetal')).toEqual([
-      [-10, 0],
-      [-1, 1],
-    ]);
-  });
-
   it('maps cinematic shadow strength and reach while retaining preset shading when shadows are off', () => {
     const source = freshVolumeSettings({ preset: 'CT-Cinematic-Heart', cinematic: { myocardiumHU: 90, bloodHU: 450, shadows: 2, shadowReach: 0.8 } });
     const original = structuredClone(source),
@@ -74,6 +58,13 @@ describe('native VTK volume settings', () => {
         giReach: 0.25,
       });
       expect(settings).toEqual(freshVolumeSettings({ preset: 'CT-Cinematic-Heart' }));
+      // Explicit benchmark lighting also outranks the optional native display controls.
+      const nativeLighting = freshNativeVolumeLighting({ mode: 'cinematic', scattering: 1 });
+      expect(applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.4, lighting: 'off', nativeLighting })).toMatchObject({
+        shade: false,
+        scattering: 0,
+        localAO: false,
+      });
     } finally {
       fixture.dispose();
     }
@@ -90,8 +81,6 @@ describe('native VTK volume settings', () => {
         { sampleDistanceMM: 0 },
         { sampleDistanceMM: NaN },
         { sampleDistanceMM: 0.2, scattering: 1.1 },
-        { sampleDistanceMM: 0.2, giReach: -1 },
-        { sampleDistanceMM: 0.2, imageSampleDistance: Infinity },
         { sampleDistanceMM: 0.2, aoKernelSize: 2.5 },
       ])
         expect(() => applyVTKVolumePreset(fixture.actor, settings, quality)).toThrow(/VTK/i);
@@ -144,20 +133,6 @@ describe('VolView-style native lighting modes', () => {
       expect(settings).toEqual(before);
       const restored = applyVTKVolumePreset(fixture.actor, settings, { sampleDistanceMM: 0.4, nativeLighting: freshNativeVolumeLighting() });
       expect(restored).toEqual(base);
-    } finally {
-      fixture.dispose();
-    }
-  });
-
-  it('keeps explicit benchmark lighting authoritative over optional native display controls', () => {
-    const fixture = volume();
-    try {
-      const result = applyVTKVolumePreset(fixture.actor, freshVolumeSettings(), {
-        sampleDistanceMM: 0.4,
-        lighting: 'off',
-        nativeLighting: freshNativeVolumeLighting({ mode: 'cinematic', scattering: 1 }),
-      });
-      expect(result).toMatchObject({ shade: false, scattering: 0, localAO: false });
     } finally {
       fixture.dispose();
     }

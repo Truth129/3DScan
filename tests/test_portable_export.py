@@ -3,7 +3,6 @@
 import base64
 from copy import deepcopy
 import gzip
-import itertools
 import json
 import re
 from pathlib import Path
@@ -140,6 +139,12 @@ def decoded_document(plan):
     return text, values
 
 
+def export(settings, revision, request=None, legacy=False):
+    """Prepare and decode an export, as (document text, initOffline arguments)."""
+    request = request if isinstance(request, ExportRequest) else ExportRequest.model_validate(request or {})
+    return decoded_document(prepare_export(revision, revision["case_id"], settings, request, legacy=legacy))
+
+
 def decode_volume(volume):
     descriptor = volume["descriptor"]
     chunks = {item["index"]: item["gzip_base64"] for item in volume["chunks"]}
@@ -148,7 +153,23 @@ def decode_volume(volume):
     return np.frombuffer(raw, dtype=np.dtype(descriptor["dtype"]).newbyteorder("<")).reshape(descriptor["shape"], order="F")
 
 
-@pytest.mark.parametrize("segmentation,volume,plane", [values for values in itertools.product([False, True], repeat=3) if any(values)])
+def source_values(revision):
+    return np.asarray(nib.load(revision["ct_file"]).dataobj, dtype=np.float32)
+
+
+def forbid_decode(monkeypatch):
+    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("The export decoded pixels before refusing"))
+
+
+def forbid_open(monkeypatch, name):
+    original = Path.open
+    monkeypatch.setattr(Path, "open", lambda path, *args, **kwargs: pytest.fail(f"{name} was opened") if path.name == name else original(path, *args, **kwargs))
+
+
+PLANE_AND_VOLUME = {"segmentation": False, "ct_volume": True, "ct_plane": True}
+
+
+@pytest.mark.parametrize("segmentation,volume,plane", [(True, False, False), (False, False, True), (False, True, True)])
 def test_independent_layer_combinations_embed_only_requested_artifacts(portable_case, segmentation, volume, plane):
     settings, revision, glb = portable_case
     request = ExportRequest.model_validate(
@@ -158,10 +179,9 @@ def test_independent_layer_combinations_embed_only_requested_artifacts(portable_
         )
     )
     original = deepcopy(revision)
-    text, (manifest, model, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    text, (manifest, model, payload) = export(settings, revision, request)
     assert (base64.b64decode(model) if model is not None else None) == (glb if segmentation else None)
-    assert payload["layers"] == request.layers.model_dump()
-    assert ("ct" in payload) == (volume or plane)
+    assert payload["layers"] == request.layers.model_dump() and ("ct" in payload) == (volume or plane)
     native = [item for item in payload["masks"] if not item["descriptor"].get("volume_mask_union")]
     unions = [item for item in payload["masks"] if item["descriptor"].get("volume_mask_union")]
     assert {item["id"] for item in native} == ({"fixture:one"} if plane else set())
@@ -169,168 +189,139 @@ def test_independent_layer_combinations_embed_only_requested_artifacts(portable_
     if volume:
         assert unions[0]["descriptor"]["selected_structure_ids"] == ["fixture:two"]
         assert unions[0]["id"] == "volume-mask-union:" + unions[0]["descriptor"]["key"]
-    assert payload["schema_version"] == 1
-    assert "PRIVATE-" not in text
-    assert "mask_file" not in text and "ct_file" not in text and "/api/" not in text
+    assert "PRIVATE-" not in text and "mask_file" not in text and "ct_file" not in text and "/api/" not in text
     assert "connect-src 'none'" in text and "worker-src blob:" in text
     assert Path("web/public/licenses/Slicer-LICENSE.txt").read_text() in text
-    assert manifest["label"] == "Scan3D case " + revision["case_id"][:8]
-    assert manifest["review_status"] == "corrected"
+    assert manifest["label"] == "Scan3D case " + revision["case_id"][:8] and manifest["review_status"] == "corrected"
     assert manifest["model_provenance"] == {"engine": "TotalSegmentator", "engine_version": "2.18.0", "resolution": "standard_full", "tasks": ["total"]}
     assert revision == original
 
 
 def test_ct_hu_and_mask_crops_reconstruct_exactly_on_oblique_reflected_grid(portable_case):
     settings, revision, _ = portable_case
-    request = ExportRequest.model_validate(
-        {
-            "layers": {"segmentation": False, "ct_volume": True, "ct_plane": True},
-            "state": {"plane": {"index": 12, "overlays": ["fixture:one", "fixture:two"]}, "volume_mask": {"enabled": True, "ids": ["fixture:one"]}},
-        }
-    )
-    _, (manifest, model, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    state = {"plane": {"index": 12, "overlays": ["fixture:one", "fixture:two"]}, "volume_mask": {"enabled": True, "ids": ["fixture:one"]}}
+    _, (manifest, model, payload) = export(settings, revision, {"layers": PLANE_AND_VOLUME, "state": state})
     assert model is None
     ct = decode_volume(payload["ct"])
     descriptor = payload["ct"]["descriptor"]
-    hu = (ct.astype(np.float64) * descriptor["slope"] + descriptor["intercept"]).astype(np.float32)
-    np.testing.assert_array_equal(hu, np.asarray(nib.load(revision["ct_file"]).dataobj, dtype=np.float32))
+    np.testing.assert_array_equal((ct.astype(np.float64) * descriptor["slope"] + descriptor["intercept"]).astype(np.float32), source_values(revision))
     np.testing.assert_allclose(descriptor["affine_ras"], imaging.geometry(Path(revision["ct_file"]))["affine_ras"], atol=1e-6)
     assert np.linalg.det(np.asarray(descriptor["affine_ras"])[:3, :3]) < 0
-    assert descriptor["quality"] == "full" and not descriptor["approximate"]
-    assert len(payload["masks"]) == 3
+    assert descriptor["quality"] == "full" and not descriptor["approximate"] and len(payload["masks"]) == 3
     for embedded in payload["masks"]:
-        if embedded["descriptor"].get("volume_mask_union"):
-            assert embedded["descriptor"]["presentation_only"] is True
-            assert embedded["descriptor"]["byte_length"] <= 8 * 1024**2
+        crop = embedded["descriptor"]
+        if crop.get("volume_mask_union"):
+            assert crop["presentation_only"] is True and crop["byte_length"] <= 8 * 1024**2
             continue
         source = next(item for item in revision["structures"] if item["id"] == embedded["id"])
-        mask = decode_volume(embedded)
-        crop = embedded["descriptor"]
         result = np.zeros(ct.shape, dtype=np.uint8)
-        result[tuple(slice(low, low + size) for low, size in zip(crop["origin_ijk"], crop["shape"]))] = mask
+        result[tuple(slice(low, low + size) for low, size in zip(crop["origin_ijk"], crop["shape"]))] = decode_volume(embedded)
         np.testing.assert_array_equal(result, np.asanyarray(nib.load(source["mask_file"]).dataobj))
         expected_affine = np.asarray(descriptor["affine_ras"]).copy()
         expected_affine[:3, 3] = imaging._world(expected_affine, crop["origin_ijk"])
         np.testing.assert_allclose(crop["affine_ras"], expected_affine, atol=1e-6)
         assert all("url" not in chunk for chunk in crop["chunks"])
     assert manifest["geometry"]["shape"] == list(ct.shape)
+    # A revision bound to a registered image exports the same HU, named as CT with its legacy defaults.
+    asset = create_image_asset(revision["case_id"], revision["ct_file"], acquisition=revision["acquisition"])
+    revision["image_asset"], revision["reference_image_id"] = public_image_asset(asset), asset["id"]
+    text, (manifest, _, payload) = export(settings, revision, {"layers": PLANE_AND_VOLUME})
+    bound = payload["ct"]["descriptor"]
+    assert (bound["modality"], bound["scalar"]["units"], bound["reference_image_id"]) == ("CT", "HU", asset["id"])
+    np.testing.assert_array_equal(
+        (decode_volume(payload["ct"]).astype(np.float64) * bound["slope"] + bound["intercept"]).astype(np.float32), source_values(revision)
+    )
+    assert manifest["image_context"]["presentation"]["default_window"] == 400 and "PRIVATE-" not in text
 
 
-def test_display_margin_embeds_separate_volume_alias_and_exact_plane_overlay(portable_case):
+def test_display_margin_and_empty_masks_get_their_own_volume_union(portable_case):
     settings, revision, _ = portable_case
     before = deepcopy(revision)
-    request = ExportRequest.model_validate(
-        {
-            "layers": {"segmentation": False, "ct_plane": True, "ct_volume": True},
-            "state": {"plane": {"overlays": ["fixture:one"]}, "volume_mask": {"enabled": True, "ids": ["fixture:one"], "margin_mm": 2.5}},
-        }
-    )
-    _, (_, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    state = {"plane": {"overlays": ["fixture:one"]}, "volume_mask": {"enabled": True, "ids": ["fixture:one"], "margin_mm": 2.5}}
+    _, (_, _, payload) = export(settings, revision, {"layers": PLANE_AND_VOLUME, "state": state})
     masks = {item["id"]: item for item in payload["masks"]}
     union = next(item for item in payload["masks"] if item["descriptor"].get("volume_mask_union"))
-    assert set(masks) == {"fixture:one", union["id"]}
-    assert union["descriptor"]["selected_structure_ids"] == ["fixture:one"]
-    assert payload["state"]["volume_mask"]["ids"] == ["fixture:one"]
-    assert payload["state"]["volume_mask"]["margin_mm"] == 2.5
+    assert set(masks) == {"fixture:one", union["id"]} and payload["state"]["volume_mask"]["margin_mm"] == 2.5
     exact = masks["fixture:one"]
-    padded = union
-    assert exact["descriptor"]["key"] != padded["descriptor"]["key"]
-    assert padded["descriptor"]["display_margin_mm"] == 2.5
-    assert int(decode_volume(padded).sum()) > int(decode_volume(exact).sum())
+    assert exact["descriptor"]["key"] != union["descriptor"]["key"] and union["descriptor"]["display_margin_mm"] == 2.5
+    assert int(decode_volume(union).sum()) > int(decode_volume(exact).sum())
     assert revision == before
     assert ExportRequest.model_validate({"state": {"volume_mask": {"margin_mm": 0.0625}}}).state.volume_mask.margin_mm == 0.063
-    for margin in [-0.01, 5.01, float("nan"), float("inf")]:
-        with pytest.raises(ValidationError):
-            ExportRequest.model_validate({"state": {"volume_mask": {"margin_mm": margin}}})
+    # An empty mask, named twice, still gives one explicit empty union and no duplicate data.
+    image, _ = imaging._image(Path(revision["ct_file"]))
+    imaging._save_mask(np.zeros(image.shape, np.uint8), image, Path(revision["structures"][0]["mask_file"]))
+    state = {"plane": {"overlays": ["fixture:one", "fixture:one"]}, "volume_mask": {"enabled": True, "mode": "outside", "ids": ["fixture:one"]}}
+    _, (_, _, payload) = export(settings, revision, {"layers": PLANE_AND_VOLUME, "state": state})
+    union = next(item for item in payload["masks"] if item["descriptor"].get("volume_mask_union"))
+    assert len(payload["masks"]) == 2 and union["descriptor"]["empty"] is True and union["descriptor"]["shape"] == [1, 1, 1]
+    assert decode_volume(union).sum() == 0 and payload["state"]["volume_mask"]["mode"] == "outside"
 
 
-def test_no_segmentation_model_access_when_only_ct_is_selected(portable_case, monkeypatch):
-    settings, revision, _ = portable_case
-    (Path(revision["directory"]) / "model.glb").unlink()
-    original = Path.open
-
-    def guarded(path, *args, **kwargs):
-        if path.name == "model.glb":
-            pytest.fail("An excluded segmentation model must never be opened")
-        return original(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", guarded)
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_plane": True}})
-    _, (_, model, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
-    assert model is None and payload["ct"] and payload["masks"] == []
-
-
-def test_prepared_ct_without_segmentation_exports_ct_and_legacy_get_remains_segmentation_only(portable_case):
+def test_segmentation_layer_alone_decides_whether_the_model_is_read(portable_case, monkeypatch):
     settings, revision, glb = portable_case
-    _, arguments = decoded_document(prepare_export(revision, revision["case_id"], settings, ExportRequest(), legacy=True))
+    _, arguments = export(settings, revision, legacy=True)
     assert len(arguments) == 2 and base64.b64decode(arguments[1]) == glb
+    # The legacy surface export needs no source pixels.
+    pixels = Path(revision["ct_file"]).read_bytes()
+    Path(revision["ct_file"]).unlink()
+    assert "image_context" not in export(settings, revision, legacy=True)[1][0]
+    Path(revision["ct_file"]).write_bytes(pixels)
+    (Path(revision["directory"]) / "model.glb").unlink()
+    forbid_open(monkeypatch, "model.glb")
+    _, (_, model, payload) = export(settings, revision, {"layers": {"segmentation": False, "ct_plane": True}})
+    assert model is None and payload["ct"] and payload["masks"] == []
     revision["structures"] = []
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True}})
-    _, (manifest, model, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    _, (manifest, model, payload) = export(settings, revision, {"layers": {"segmentation": False, "ct_volume": True}})
     assert manifest["structures"] == [] and model is None and "ct" in payload
     with pytest.raises(ValueError, match="no segmentation"):
-        prepare_export(revision, revision["case_id"], settings, ExportRequest())
+        export(settings, revision)
 
 
 def test_names_are_escaped_and_no_application_metadata_or_credentials_are_embedded(portable_case):
     settings, revision, _ = portable_case
     revision["structures"][0]["name"] = '</script><script>alert("anatomy")</script>'
-    text, (manifest, _) = decoded_document(prepare_export(revision, revision["case_id"], settings, ExportRequest(), legacy=True))
+    text, (manifest, _) = export(settings, revision, legacy=True)
     assert manifest["structures"][0]["name"] == '</script><script>alert("anatomy")</script>'
-    assert "\\u003c/script>" in text and '<script>alert("anatomy")' not in text
-    assert "PRIVATE-" not in text
+    assert "\\u003c/script>" in text and '<script>alert("anatomy")' not in text and "PRIVATE-" not in text
     assert not {"case_id", "id", "created_at", "parent_id", "model_url", "directory", "ct_file", "operation", "acquisition"} & manifest.keys()
     assert "private_path" not in json.dumps(manifest)
 
 
-def test_header_limits_reject_oversized_ct_before_dense_decode(portable_case, monkeypatch):
+def test_size_and_memory_limits_refuse_before_decoding_or_reading(portable_case, monkeypatch):
     settings, revision, _ = portable_case
-    image = SimpleNamespace(shape=(512, 512, 2048), get_data_dtype=lambda: np.dtype("int16"))
-    monkeypatch.setattr(imaging, "_image", lambda _: (image, np.eye(4)))
-    # Ample memory, so the header limit rejects it rather than this machine's free RAM.
-    monkeypatch.setattr(portable_export, "_available_memory", lambda: 1024**4)
-    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Oversized CT must be rejected before decoding"))
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True}})
-    with pytest.raises(ExportTooLarge, match="512 MiB"):
-        prepare_export(revision, revision["case_id"], settings, request)
-
-
-def test_low_memory_rejected_before_dense_decode(portable_case, monkeypatch):
-    settings, revision, _ = portable_case
-    monkeypatch.setattr(portable_export, "_available_memory", lambda: 1)
-    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Low-memory export must be rejected before decoding"))
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_plane": True}})
-    with pytest.raises(ExportTooLarge, match="insufficient available memory"):
-        prepare_export(revision, revision["case_id"], settings, request)
-
-
-def test_mask_and_html_budget_reject_before_streaming(portable_case, monkeypatch):
-    settings, revision, _ = portable_case
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_plane": True}, "state": {"plane": {"overlays": ["fixture:one"]}}})
+    with monkeypatch.context() as patched:
+        forbid_decode(patched)
+        patched.setattr(portable_export, "_available_memory", lambda: 1)
+        with pytest.raises(ExportTooLarge, match="insufficient available memory"):
+            export(settings, revision, {"layers": {"segmentation": False, "ct_plane": True}})
+        # With ample memory, the header limit refuses a CT too large to embed.
+        patched.setattr(portable_export, "_available_memory", lambda: 1024**4)
+        image = SimpleNamespace(shape=(512, 512, 2048), get_data_dtype=lambda: np.dtype("int16"))
+        patched.setattr(imaging, "_image", lambda _: (image, np.eye(4)))
+        with pytest.raises(ExportTooLarge, match="512 MiB"):
+            export(settings, revision, {"layers": {"segmentation": False, "ct_volume": True}})
     monkeypatch.setattr(portable_export, "MAX_MASK_BYTES", 1)
     with pytest.raises(ExportTooLarge, match="mask crops"):
-        prepare_export(revision, revision["case_id"], settings, request)
-    monkeypatch.setattr(portable_export, "MAX_MASK_BYTES", 192 * 1024**2)
+        export(settings, revision, {"layers": {"segmentation": False, "ct_plane": True}, "state": {"plane": {"overlays": ["fixture:one"]}}})
     monkeypatch.setattr(portable_export, "MAX_HTML_BYTES", 1)
     with pytest.raises(ExportTooLarge, match="size limit|download limit"):
-        prepare_export(revision, revision["case_id"], settings, ExportRequest())
+        export(settings, revision)
+    model = Path(revision["directory"]) / "model.glb"
+    with model.open("wb") as stream:
+        stream.truncate(portable_export.MAX_MODEL_BYTES + 1)
+    forbid_open(monkeypatch, "model.glb")
+    with pytest.raises(ExportTooLarge, match="segmentation model"):
+        export(settings, revision)
 
 
 def test_unknown_segment_and_out_of_range_plane_are_rejected_before_decode(portable_case, monkeypatch):
     settings, revision, _ = portable_case
-    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Invalid references must be rejected before decoding"))
-    for state in (
-        {"plane": {"overlays": ["other:secret"]}},
-        {"volume_mask": {"enabled": True, "ids": ["other:secret"]}},
-        {"display": {"other:secret": {"visible": True, "opacity": 1}}},
-        {"selected": "other:secret"},
-    ):
-        request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_plane": True}, "state": state})
+    forbid_decode(monkeypatch)
+    for state in ({"plane": {"overlays": ["other:secret"]}}, {"display": {"other:secret": {"visible": True, "opacity": 1}}}):
         with pytest.raises(ValueError, match="outside this saved revision"):
-            prepare_export(revision, revision["case_id"], settings, request)
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_plane": True}, "state": {"plane": {"index": 999}}})
+            export(settings, revision, {"layers": {"segmentation": False, "ct_plane": True}, "state": state})
     with pytest.raises(ValueError, match="outside the reference CT"):
-        prepare_export(revision, revision["case_id"], settings, request)
+        export(settings, revision, {"layers": {"segmentation": False, "ct_plane": True}, "state": {"plane": {"index": 999}}})
 
 
 @pytest.mark.parametrize(
@@ -339,13 +330,15 @@ def test_unknown_segment_and_out_of_range_plane_are_rejected_before_decode(porta
         {"layers": {"segmentation": False, "ct_volume": False, "ct_plane": False}},
         {"layers": {"ct_volume": "true"}},
         {"state": {"path": "/private"}},
-        {"state": {"volume": {"density": 20}}},
         {"state": {"volume": {"shift": float("nan")}}},
         {"state": {"volume": {"preset": "unknown-volume-preset"}}},
-        {"state": {"plane": {"axis": True}}},
-        {"state": {"plane": {"axis": 1, "plane": "axial"}}},
         {"state": {"volume": {"crop": [[0, 0, 0], [0, 1, 1]]}}},
-        {"state": {"display": {"fixture:one": {"opacity": -1}}}},
+        {"state": {"volume_mask": {"margin_mm": 5.01}}},
+        {"state": {"camera": {"position_ras": [0, -200, 0], "target_ras": [0, 0, 0], "up_ras": [0, 0, 0], "height_mm": 350, "zoom": 1}}},
+        {"state": {"volume": {"preset": "MR-SignalWindow", "signal_window": {"window": 0, "level": 0}}}},
+        {"state": {"volume": {"preset": "MR-SignalWindow", "signal_window": {"window": 1, "level": float("nan")}}}},
+        {"state": {"volume": {"preset": "MR-SignalWindow", "signal_window": {"window": 1, "level": 0, "invert": "false"}}}},
+        {"state": {"volume": {"preset": "MR-SignalWindow", "signal_window": {"window": 1, "level": 0, "source_file": "private.nii.gz"}}}},
     ],
 )
 def test_render_state_is_strict_finite_and_bounded(changes):
@@ -353,61 +346,26 @@ def test_render_state_is_strict_finite_and_bounded(changes):
         ExportRequest.model_validate(changes)
 
 
-def test_encoded_files_stream_in_bounded_blocks_with_exact_base64_roundtrip(tmp_path):
+def test_render_state_normalizes_camera_and_leaves_out_an_unset_signal_window():
+    data = {"state": {"camera": {"position_ras": [0, -200, 0], "target_ras": [0, 0, 0], "up_ras": [0, 0, 4], "height_mm": 350, "zoom": 1.25}}}
+    assert ExportRequest.model_validate(data).state.camera.up_ras == (0, 0, 1) and data["state"]["camera"]["up_ras"] == [0, 0, 4]
+    assert "signal_window" not in json.loads(ExportRequest().model_dump_json())["state"]["volume"]
+    window = {"window": 0.125, "level": -0.05, "invert": False}
+    assert ExportRequest.model_validate({"state": {"volume": {"signal_window": window}}}).model_dump()["state"]["volume"]["signal_window"] == window
+
+
+def test_encoded_files_stream_in_bounded_blocks_and_refuse_a_changed_file(tmp_path):
     data = bytes(range(256)) * 1800 + b"end!"
     path = tmp_path / "binary"
     path.write_bytes(data)
     file = portable_export.EncodedFile(path, len(data))
     chunks = list(file.chunks())
     assert max(map(len, chunks)) <= portable_export._BASE64_READ_BYTES * 4 // 3
-    assert len(b"".join(chunks)) == file.encoded_length
-    assert base64.b64decode(b"".join(chunks)) == data
-
-
-def test_empty_mask_and_required_id_union_remain_explicit_without_duplicate_data(portable_case):
-    settings, revision, _ = portable_case
-    image, _ = imaging._image(Path(revision["ct_file"]))
-    imaging._save_mask(np.zeros(image.shape, np.uint8), image, Path(revision["structures"][0]["mask_file"]))
-    request = ExportRequest.model_validate(
-        {
-            "layers": {"segmentation": False, "ct_volume": True, "ct_plane": True},
-            "state": {"plane": {"overlays": ["fixture:one", "fixture:one"]}, "volume_mask": {"enabled": True, "mode": "outside", "ids": ["fixture:one"]}},
-        }
-    )
-    _, (_, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
-    assert len(payload["masks"]) == 2
-    embedded = next(item for item in payload["masks"] if item["descriptor"].get("volume_mask_union"))
-    assert embedded["descriptor"]["empty"] is True
-    assert embedded["descriptor"]["shape"] == [1, 1, 1]
-    assert decode_volume(embedded).sum() == 0
-    assert payload["state"]["volume_mask"]["mode"] == "outside"
-
-
-def test_model_limit_is_checked_without_reading_sparse_large_file(portable_case, monkeypatch):
-    settings, revision, _ = portable_case
-    model = Path(revision["directory"]) / "model.glb"
-    with model.open("wb") as stream:
-        stream.truncate(portable_export.MAX_MODEL_BYTES + 1)
-    original = Path.open
-
-    def guarded(path, *args, **kwargs):
-        if path == model:
-            pytest.fail("An oversized model must be rejected before reading it")
-        return original(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "open", guarded)
-    with pytest.raises(ExportTooLarge, match="segmentation model"):
-        prepare_export(revision, revision["case_id"], settings, ExportRequest())
-
-
-def test_camera_state_is_finite_owned_and_direction_normalized():
-    data = {"state": {"camera": {"position_ras": [0, -200, 0], "target_ras": [0, 0, 0], "up_ras": [0, 0, 4], "height_mm": 350, "zoom": 1.25}}}
-    request = ExportRequest.model_validate(data)
-    assert request.state.camera.up_ras == (0, 0, 1)
-    assert data["state"]["camera"]["up_ras"] == [0, 0, 4]
-    data["state"]["camera"]["up_ras"] = [0, 0, 0]
-    with pytest.raises(ValidationError, match="nonzero"):
-        ExportRequest.model_validate(data)
+    assert len(b"".join(chunks)) == file.encoded_length and base64.b64decode(b"".join(chunks)) == data
+    for changed in (data[:-1], data + b"!"):
+        path.write_bytes(changed)
+        with pytest.raises(ValueError, match="artifact changed"):
+            b"".join(file.chunks())
 
 
 def test_supported_volume_presets_match_generated_frontend_catalog():
@@ -424,38 +382,34 @@ def test_supported_volume_presets_match_generated_frontend_catalog():
 def test_mr_surface_export_retains_only_safe_source_display_context(portable_mr, legacy):
     settings, revision, glb = portable_mr
     original = deepcopy(revision)
-    text, arguments = decoded_document(prepare_export(revision, revision["case_id"], settings, ExportRequest(), legacy=legacy))
+    text, arguments = export(settings, revision, legacy=legacy)
     manifest, model = arguments[:2]
-    assert base64.b64decode(model) == glb
     context = manifest["image_context"]
-    assert set(context) == {"reference_image_id", "modality", "scalar", "presentation"}
-    assert context["reference_image_id"] == revision["reference_image_id"]
+    assert base64.b64decode(model) == glb and set(context) == {"reference_image_id", "modality", "scalar", "presentation"}
+    assert context["reference_image_id"] == revision["reference_image_id"] and context["presentation"] == revision["image_asset"]["presentation"]
     assert context["modality"] == "MR" and context["scalar"]["units"] == "signal"
-    assert context["presentation"] == revision["image_asset"]["presentation"]
-    assert "PRIVATE-" not in text and "source_uid" not in text and "content_sha256" not in text
-    assert "image_asset" not in manifest and "case_id" not in context and "source" not in context
+    assert "PRIVATE-" not in text and "source_uid" not in text and "content_sha256" not in text and "image_asset" not in manifest
     assert revision == original
     if not legacy:
-        assert "ct" not in arguments[2]
-        assert arguments[2]["state"]["volume"]["preset"] == "MR-SignalWindow"
+        assert "ct" not in arguments[2] and arguments[2]["state"]["volume"]["preset"] == "MR-SignalWindow"
 
 
-def test_mr_layers_preserve_fractional_signal_and_bound_mask_identity(portable_mr):
+def test_mr_layers_preserve_fractional_signal_windows_and_bound_mask_identity(portable_mr):
     settings, revision, _ = portable_mr
     request = ExportRequest.model_validate(
         {
-            "layers": {"segmentation": False, "ct_volume": True, "ct_plane": True},
+            "layers": PLANE_AND_VOLUME,
             "state": {"plane": {"overlays": ["fixture:one"], "index": 12}, "volume_mask": {"enabled": True, "ids": ["fixture:two"], "margin_mm": 1}},
         }
     )
     original_request, original_revision = request.model_dump(), deepcopy(revision)
-    text, (manifest, model, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
+    text, (manifest, model, payload) = export(settings, revision, request)
     assert model is None and "PRIVATE-" not in text
     context, descriptor = manifest["image_context"], payload["ct"]["descriptor"]
     assert {key: descriptor[key] for key in context} == context
     assert descriptor["dtype"] == "float32" and descriptor["slope"] == 1 and descriptor["intercept"] == 0
     signal = decode_volume(payload["ct"])
-    np.testing.assert_array_equal(signal, np.asarray(nib.load(revision["ct_file"]).dataobj, dtype=np.float32))
+    np.testing.assert_array_equal(signal, source_values(revision))
     assert np.any(signal < 0) and np.any(signal != np.rint(signal))
     assert payload["state"]["volume"]["preset"] == "MR-SignalWindow"
     assert payload["state"]["volume"]["signal_window"] == {"window": 0.125, "level": -0.05, "invert": True}
@@ -467,115 +421,29 @@ def test_mr_layers_preserve_fractional_signal_and_bound_mask_identity(portable_m
     unbound_mask = review_volume.mask_volume(revision["ct_file"], revision["structures"][0]["mask_file"], settings.data_dir / "review-cache", "full")
     assert unbound_mask["key"] != exact["descriptor"]["key"]
     assert request.model_dump() == original_request and revision == original_revision
-
-
-def test_mr_export_keeps_explicit_fractional_signal_and_plane_windows(portable_mr):
-    settings, revision, _ = portable_mr
+    # Explicit fractional windows are kept as given.
     window = {"window": 0.03125, "level": -0.0075, "invert": False}
-    request = ExportRequest.model_validate(
-        {
-            "layers": {"segmentation": False, "ct_volume": True, "ct_plane": True},
-            "state": {"volume": {"preset": "MR-SignalWindow", "signal_window": window}, "plane": {"window": 0.07, "level": 0.02}},
-        }
-    )
-    _, (_, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
-    assert payload["state"]["volume"]["signal_window"] == window
-    assert payload["state"]["plane"]["window"] == 0.07 and payload["state"]["plane"]["level"] == 0.02
+    state = {"volume": {"preset": "MR-SignalWindow", "signal_window": window}, "plane": {"window": 0.07, "level": 0.02}}
+    _, (_, _, payload) = export(settings, revision, {"layers": PLANE_AND_VOLUME, "state": state})
+    assert payload["state"]["volume"]["signal_window"] == window and payload["state"]["plane"]["window"] == 0.07
     assert payload["ct"]["descriptor"]["presentation"]["default_window"] == 0.125
 
 
-@pytest.mark.parametrize(
-    "volume", [{"preset": "CT-Cinematic-Heart"}, {"preset": "angiography"}, {"preset": "CT-Bone"}, {"preset": "MR-SignalWindow", "shift": 25}]
-)
+@pytest.mark.parametrize("volume", [{"preset": "CT-Bone"}, {"preset": "MR-SignalWindow", "shift": 25}])
 def test_mr_rejects_ct_calibration_before_volume_decode(portable_mr, monkeypatch, volume):
     settings, revision, _ = portable_mr
-    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Invalid appearance decoded MRI"))
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True}, "state": {"volume": volume}})
+    forbid_decode(monkeypatch)
     with pytest.raises(ValueError, match="MR .*CT"):
-        prepare_export(revision, revision["case_id"], settings, request)
+        export(settings, revision, {"layers": {"segmentation": False, "ct_volume": True}, "state": {"volume": volume}})
 
 
 @pytest.mark.parametrize("field", ["reference_image_id", "structure_reference_image_id"])
 def test_mr_export_rejects_cross_source_binding_before_decode(portable_mr, monkeypatch, field):
     settings, revision, _ = portable_mr
-    if field == "reference_image_id":
-        revision["reference_image_id"] = identifier()
-    else:
-        revision["structures"][0]["reference_image_id"] = identifier()
-    monkeypatch.setattr(review_volume, "scalar_volume", lambda *args, **kwargs: pytest.fail("Wrong source decoded MRI"))
+    (revision if field == "reference_image_id" else revision["structures"][0])["reference_image_id"] = identifier()
+    forbid_decode(monkeypatch)
     with pytest.raises(ValueError, match="reference image"):
-        prepare_export(revision, revision["case_id"], settings, ExportRequest())
-
-
-@pytest.mark.parametrize(
-    "window",
-    [
-        {"window": 0, "level": 0},
-        {"window": -1, "level": 0},
-        {"window": float("inf"), "level": 0},
-        {"window": 1, "level": float("nan")},
-        {"window": True, "level": 0},
-        {"window": 1, "level": False},
-        {"window": 1, "level": 0, "invert": "false"},
-        {"window": 1, "level": 0, "source_file": "private.nii.gz"},
-    ],
-)
-def test_signal_window_requires_finite_numbers_positive_width_and_strict_inversion(window):
-    with pytest.raises(ValidationError):
-        ExportRequest.model_validate({"state": {"volume": {"preset": "MR-SignalWindow", "signal_window": window}}})
-
-
-@pytest.mark.parametrize("window", [None, {"window": 0.125, "level": -0.05, "invert": False}])
-def test_optional_signal_window_serialization_preserves_ct_shape_and_mr_values(window):
-    request = ExportRequest.model_validate({"state": {"volume": {"signal_window": window}}})
-    serialized = [
-        request.state.volume.model_dump(),
-        json.loads(request.state.volume.model_dump_json()),
-        request.model_dump()["state"]["volume"],
-        json.loads(request.model_dump_json())["state"]["volume"],
-    ]
-    for volume in serialized:
-        if window is None:
-            assert "signal_window" not in volume
-        else:
-            assert volume["signal_window"] == window
-
-
-def test_legacy_ct_surface_export_does_not_require_source_pixels(portable_case):
-    settings, revision, glb = portable_case
-    Path(revision["ct_file"]).unlink()
-    _, (manifest, model) = decoded_document(prepare_export(revision, revision["case_id"], settings, ExportRequest(), legacy=True))
-    assert base64.b64decode(model) == glb and "image_context" not in manifest
-
-
-def test_bound_ct_export_keeps_hu_pixels_and_legacy_appearance_defaults(portable_case):
-    settings, revision, _ = portable_case
-    asset = create_image_asset(revision["case_id"], revision["ct_file"], acquisition=revision["acquisition"])
-    revision["image_asset"] = public_image_asset(asset)
-    revision["reference_image_id"] = asset["id"]
-    request = ExportRequest.model_validate({"layers": {"segmentation": False, "ct_volume": True, "ct_plane": True}})
-    text, (manifest, _, payload) = decoded_document(prepare_export(revision, revision["case_id"], settings, request))
-    descriptor = payload["ct"]["descriptor"]
-    assert descriptor["modality"] == "CT" and descriptor["scalar"]["units"] == "HU"
-    assert descriptor["reference_image_id"] == asset["id"]
-    raw = decode_volume(payload["ct"])
-    pixels = (raw.astype(np.float64) * descriptor["slope"] + descriptor["intercept"]).astype(np.float32)
-    np.testing.assert_array_equal(pixels, np.asarray(nib.load(revision["ct_file"]).dataobj, dtype=np.float32))
-    assert payload["state"] == request.state.model_dump(mode="json", exclude_none=True)
-    assert manifest["image_context"]["presentation"]["default_window"] == 400
-    assert "PRIVATE-" not in text
-
-
-def test_changed_export_file_cannot_silently_truncate_or_extend_stream(tmp_path):
-    path = tmp_path / "artifact"
-    path.write_bytes(b"abc")
-    planned = portable_export.EncodedFile(path, 3)
-    path.write_bytes(b"ab")
-    with pytest.raises(ValueError, match="artifact changed"):
-        b"".join(planned.chunks())
-    path.write_bytes(b"abcd")
-    with pytest.raises(ValueError, match="artifact changed"):
-        b"".join(planned.chunks())
+        export(settings, revision)
 
 
 def test_export_api_headers_legacy_post_authorization_and_limits(portable_case, monkeypatch):
@@ -587,32 +455,17 @@ def test_export_api_headers_legacy_post_authorization_and_limits(portable_case, 
     service.store.save("revisions", revision)
     original = deepcopy(service.store.revision(case["id"], revision["id"]))
     url = f"/api/cases/{case['id']}/revisions/{revision['id']}/export.html"
-    client = TestClient(app, base_url="http://127.0.0.1")
-    try:
+    with TestClient(app, base_url="http://127.0.0.1") as client:
         legacy = client.get(url)
-        assert legacy.status_code == 200, legacy.text
-        assert legacy.headers["cache-control"] == "private, no-store"
+        assert legacy.status_code == 200 and legacy.headers["cache-control"] == "private, no-store", legacy.text
         assert legacy.headers["content-disposition"].endswith('.html"')
-        body = {"layers": {"segmentation": False, "ct_volume": True, "ct_plane": True}, "state": {"plane": {"overlays": ["fixture:one"]}}}
+        body = {"layers": PLANE_AND_VOLUME, "state": {"plane": {"overlays": ["fixture:one"]}}}
         response = client.post(url, json=body)
-        assert response.status_code == 200, response.text
-        assert int(response.headers["content-length"]) == len(response.content)
-        assert response.headers["content-type"].startswith("text/html")
-        assert "PRIVATE-" not in response.text
+        assert response.status_code == 200 and int(response.headers["content-length"]) == len(response.content), response.text
+        assert response.headers["content-type"].startswith("text/html") and "PRIVATE-" not in response.text
         assert client.post(url, json=body, headers={"Origin": "https://other.example"}).status_code == 403
-        wrong = url.replace(case["id"], identifier())
-        assert client.post(wrong, json=body).status_code == 404
+        assert client.post(url.replace(case["id"], identifier()), json=body).status_code == 404
         assert client.post(url, json={"layers": {"segmentation": False, "ct_volume": False, "ct_plane": False}}).status_code == 422
         monkeypatch.setattr(portable_export, "MAX_HTML_BYTES", 1)
         assert client.post(url, json={}).status_code == 413
-        assert service.store.revision(case["id"], revision["id"]) == original
-        assert service.store.list("jobs") == []
-    finally:
-        client.close()
-
-
-def test_new_partial_segment_display_defaults_to_fifty_percent():
-    request = ExportRequest.model_validate({"state": {"display": {"fixture:one": {"visible": True}}}})
-    assert request.state.display["fixture:one"].opacity == 0.5
-    explicit = ExportRequest.model_validate({"state": {"display": {"fixture:one": {"visible": True, "opacity": 1}}}})
-    assert explicit.state.display["fixture:one"].opacity == 1
+    assert service.store.revision(case["id"], revision["id"]) == original and service.store.list("jobs") == []

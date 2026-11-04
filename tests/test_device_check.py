@@ -53,11 +53,13 @@ def discrete(request, index, name):
 
 @pytest.fixture
 def children(monkeypatch):
+    """The device-check children this test started, each with the environment it was given."""
     started = []
     popen = subprocess.Popen
 
     def recorded(*args, **kwargs):
         started.append(popen(*args, **kwargs))
+        started[-1].env = kwargs.get("env")
         return started[-1]
 
     monkeypatch.setattr(segmentation.subprocess, "Popen", recorded)
@@ -72,16 +74,11 @@ def test_child_returns_the_same_dictionary_as_device_info(fake_torch):
     assert resolve("cpu") == CPU
 
 
-def test_auto_alone_falls_back_to_the_cpu(fake_torch):
+def test_auto_alone_falls_back_to_the_cpu_and_invalid_requests_stay_value_errors(fake_torch):
     fake_torch()
     assert resolve("auto") == CPU
     with pytest.raises(RuntimeError, match="PyTorch cannot access a GPU"):
-        resolve("gpu")
-    with pytest.raises(RuntimeError, match="PyTorch cannot access a GPU"):
         resolve("gpu:0")
-
-
-def test_invalid_requests_stay_value_errors(fake_torch):
     fake_torch(DISCRETE)
     with pytest.raises(ValueError, match="SCAN3D_DEVICE must be"):
         resolve("cuda")
@@ -101,19 +98,14 @@ def test_child_crash_fails_clearly(fake_torch):
         resolve("gpu")
 
 
-def test_cancellation_stops_a_slow_child(fake_torch, children):
+def test_a_slow_child_can_be_cancelled_and_a_hung_one_cannot_hold_the_lane(fake_torch, children, monkeypatch):
     fake_torch(failure="hang")
     with pytest.raises(SegmentationCancelled):
         _resolve_device("gpu", lambda: True)
-    assert children[0].poll() is not None
-
-
-def test_hung_child_fails_the_job_instead_of_holding_the_lane(fake_torch, children, monkeypatch):
     monkeypatch.setattr(segmentation, "DEVICE_CHECK_SECONDS", 0.5)
-    fake_torch(failure="hang")
     with pytest.raises(RuntimeError, match="did not report a device within 0.5 s"):
         resolve("gpu")
-    assert children[0].poll() is not None
+    assert [child.poll() is not None for child in children] == [True, True]
 
 
 # An added inference path, through a real second interpreter
@@ -127,63 +119,28 @@ def stand_in_path(tmp_path, monkeypatch):
     return stub, require(binding("nvidia"))
 
 
-def test_a_path_answers_from_its_own_interpreter(stand_in_path, children, tmp_path):
+def test_a_path_answers_from_its_own_interpreter_with_its_environment_and_this_scan3d(stand_in_path, children, tmp_path, monkeypatch):
     stub, path = stand_in_path
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/other-stack/lib")
+    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:7")
     runtime = _resolve_device(path.device, lambda: False, path)
     assert children[0].args == [stub.python, "-P", "-m", "scan3d.segmentation", "gpu"]
     assert (tmp_path / "prefixes").read_text().split() == [str(Path(stub.python).parents[1])]
     assert runtime == {**discrete("gpu", 0, GPU_NAME), "hip": None, "cuda": "13.0.fake"}
-
-
-def test_the_default_path_keeps_the_api_interpreter(fake_torch, children, tmp_path, monkeypatch):
-    fake_torch(DISCRETE)
-    monkeypatch.setenv("SCAN3D_FAKE_TORCH_PREFIXES", str(tmp_path / "prefixes"))
-    resolve("gpu")
-    assert children[0].args == [sys.executable, "-P", "-m", "scan3d.segmentation", "gpu"]
-    assert (tmp_path / "prefixes").read_text().split() == [sys.prefix]
-
-
-def spawned_environment(monkeypatch):
-    seen = {}
-    popen = subprocess.Popen
-
-    def recorded(command, **options):
-        seen.update(options["env"])
-        return popen(command, **options)
-
-    monkeypatch.setattr(segmentation.subprocess, "Popen", recorded)
-    return seen
-
-
-def test_a_paths_device_check_gets_that_paths_environment_and_this_scan3d(stand_in_path, monkeypatch):
-    _, path = stand_in_path
-    monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/other-stack/lib")
-    monkeypatch.setenv("SCAN3D_DEVICE", "gpu:7")
-    seen = spawned_environment(monkeypatch)
-    _resolve_device(path.device, lambda: False, path)
-    expected = path.environment()
+    seen, expected = children[0].env, path.environment()
     assert {key: value for key, value in seen.items() if key != "PYTHONPATH"} == {key: value for key, value in expected.items() if key != "PYTHONPATH"}
     assert "LD_LIBRARY_PATH" not in seen and seen["SCAN3D_DEVICE"] == "gpu"
     assert seen["PYTHONPATH"] == f"{ROOT}{os.pathsep}{expected['PYTHONPATH']}"
 
 
-def test_the_default_paths_device_check_inherits_everything(fake_torch, monkeypatch):
+def test_the_default_path_keeps_the_api_interpreter_and_inherits_everything(fake_torch, children, tmp_path, monkeypatch):
     fake_torch(DISCRETE)
+    monkeypatch.setenv("SCAN3D_FAKE_TORCH_PREFIXES", str(tmp_path / "prefixes"))
     monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/this-stack/lib")
-    seen = spawned_environment(monkeypatch)
     resolve("gpu")
-    assert seen == {**os.environ, "PYTHONPATH": f"{ROOT}{os.pathsep}{os.environ['PYTHONPATH']}"}
-
-
-def test_a_path_can_still_be_cancelled_and_cannot_hold_the_lane(stand_in_path, children, monkeypatch):
-    _, path = stand_in_path
-    monkeypatch.setenv("SCAN3D_FAKE_TORCH", "hang")
-    with pytest.raises(SegmentationCancelled):
-        _resolve_device(path.device, lambda: True, path)
-    monkeypatch.setattr(segmentation, "DEVICE_CHECK_SECONDS", 0.5)
-    with pytest.raises(RuntimeError, match="did not report a device within 0.5 s"):
-        _resolve_device(path.device, lambda: False, path)
-    assert [child.poll() is not None for child in children] == [True, True]
+    assert children[0].args == [sys.executable, "-P", "-m", "scan3d.segmentation", "gpu"]
+    assert (tmp_path / "prefixes").read_text().split() == [sys.prefix]
+    assert children[0].env == {**os.environ, "PYTHONPATH": f"{ROOT}{os.pathsep}{os.environ['PYTHONPATH']}"}
 
 
 def test_a_paths_failure_keeps_its_type_and_message(stand_in_path, monkeypatch):

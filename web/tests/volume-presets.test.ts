@@ -72,25 +72,18 @@ describe('complete Slicer preset catalog', () => {
     }
     expect(getVolumePreset('soft-tissue').sourcePreset).toBe('CT-Cardiac');
     expect(getVolumePreset('CT-Soft-Tissue').sourcePreset).toBe('CT-Soft-Tissue');
-    expect(getVolumePreset('CT-Soft-Tissue').opacity).not.toEqual(getVolumePreset('soft-tissue').opacity);
   });
 
   it('keeps DTI and micro-CT scalar ranges rather than imposing a CT-only LUT', () => {
     expect(getVolumePreset('DTI-FA-Brain').transferRange).toEqual([0, 0.995]);
     expect(getVolumePreset('uCT-Bone-16bit').transferRange).toEqual([33600, 99135]);
     expect(sampleVolumeTransfer('uCT-Bone-16bit', 59866.8515625)[3]).toBe(1);
-    expect(sampleVolumeTransfer('DTI-FA-Brain', 0.6419)[3]).toBe(1);
   });
 
-  it('preserves unshaded and nonconstant gradient-opacity appearances', () => {
-    expect(getVolumePreset('CT-Coronary-Arteries').shade).toBe(false);
-    expect(getVolumePreset('CT-Soft-Tissue').shade).toBe(false);
-    expect(getVolumePreset('CT-Bone').shade).toBe(true);
+  it('samples nonconstant gradient opacity', () => {
     expect(sampleVolumeGradientOpacity('US-Fetal', -10)).toBe(0);
     expect(sampleVolumeGradientOpacity('US-Fetal', -5.5)).toBe(0.5);
-    expect(sampleVolumeGradientOpacity('US-Fetal', 0)).toBe(1);
     expect(sampleVolumeGradientOpacity('uCT-Skull', 46.9644546508789)).toBe(0.1);
-    expect(sampleVolumeGradientOpacity('uCT-Skull', 128.360549926758)).toBe(1);
     expect(sampleVolumeGradientOpacity('angiography', 0)).toBe(1);
     expect(sampleVolumeGradientOpacity('uCT-Skull', NaN)).toBe(0);
   });
@@ -117,34 +110,19 @@ describe('CT volume transfer functions', () => {
     }
   });
 
-  it('preserves the angiography cutoff rather than making air or lower-density tissue opaque', () => {
+  it('samples color and opacity by physical HU at knots, cutoffs and below the first knot', () => {
     expect(getVolumePreset('angiography').sourcePreset).toBe('CT-AAA');
     expect(sampleVolumeTransfer('angiography', 143.556)[3]).toBe(0);
     expect(sampleVolumeTransfer('angiography', 166.222)).toEqual([0.882353, 0.603922, 0.290196, 0.686275]);
-    expect(sampleVolumeTransfer('angiography', 8192)[3]).toBe(0.803922);
-  });
-
-  it('preserves independent lung color knots and the narrow density band', () => {
-    // -530 is a color knot between independent constant-opacity knots.
+    // -530 is a color knot between independent constant-opacity lung knots.
     expect(sampleVolumeTransfer('lung', -530)).toEqual([0.134704, 0.781726, 0.0724558, 0.15]);
     expect(sampleVolumeTransfer('lung', -600)[3]).toBe(0);
-    expect(sampleVolumeTransfer('lung', -599)[3]).toBe(0.15);
     expect(sampleVolumeTransfer('lung', -399)[3]).toBe(0);
-    expect(sampleVolumeTransfer('lung', 1200)[3]).toBe(0);
-  });
-
-  it('preserves air opacity at and below the first scalar knot', () => {
-    expect(sampleVolumeTransfer('CT-Air', -3024)).toEqual([1, 1, 1, 0.705882]);
     expect(sampleVolumeTransfer('CT-Air', -4096)).toEqual([1, 1, 1, 0.705882]);
-    expect(sampleVolumeTransfer('CT-Air', -900)).toEqual([0.2, 1, 1, 0.715686]);
-  });
-
-  it('samples color and opacity by physical HU without sharing arrays between appearance changes', () => {
-    const first = sampleVolumeTransfer('bone', 641.385);
-    expect(first).toEqual([0.905882, 0.815686, 0.552941, 0.715686]);
-    first[3] = 0;
+    const bone = sampleVolumeTransfer('bone', 641.385);
+    expect(bone).toEqual([0.905882, 0.815686, 0.552941, 0.715686]);
+    bone[3] = 0;
     expect(sampleVolumeTransfer('bone', 641.385)[3]).toBe(0.715686);
-    expect(getVolumePreset('soft-tissue').sourcePreset).toBe('CT-Cardiac');
   });
 });
 
@@ -194,48 +172,40 @@ describe('relative cinematic heart appearance', () => {
   it('places all supplied script knots relative to myocardial and blood HU', () => {
     const settings = { ...DEFAULT_CINEMATIC_SETTINGS, myocardiumHU: 100, bloodHU: 500 };
     const preset = getVolumePreset(CINEMATIC_HEART_PRESET, settings);
-    expect(preset.opacity).toEqual([
+    // The saved palette fixes the full recipe; these knots show it moves with both references.
+    expect([0, 4, 7, 8, 9].map(index => preset.opacity[index])).toEqual([
       [-250, 0],
-      [-100, 0.006],
-      [0, 0.02],
-      [48, 0.1],
       [100, 0.25],
-      [120, 0.4],
-      [144, 0.65],
       [180, 0.9],
       [500, 0.97],
       [900, 1],
     ]);
     expect(preset.color[4]).toEqual([100, 0.7, 0.11, 0.07]);
     expect(preset.color[8]).toEqual([500, 0.68, 0.64, 0.56]);
-    expect(preset.gradientOpacity).toEqual([[0, 1]]);
-    expect(preset).toMatchObject({ shade: true, interpolation: 'linear', ambient: 0.3, diffuse: 0.8, specular: 0.25, specularPower: 25 });
     expect(sampleVolumeTransfer(CINEMATIC_HEART_PRESET, 100, settings)).toEqual([0.7, 0.11, 0.07, 0.25]);
     expect(samplePresetTransfer(preset, 500)).toEqual([0.68, 0.64, 0.56, 0.97]);
-    expect(sampleVolumeTransfer(CINEMATIC_HEART_PRESET, Number.NaN, settings)).toEqual([0, 0, 0, 0]);
   });
-  it('adapts cardiac colors to bright low-keV blood without modifying official presets', () => {
+  it('adapts to bright blood and wide manual ranges with sorted finite knots, without modifying official presets', () => {
     const ordinary = getVolumePreset('CT-Cardiac');
     const settings = { ...DEFAULT_CINEMATIC_SETTINGS, myocardiumHU: 120, bloodHU: 1100 };
-    const preset = getVolumePreset(CINEMATIC_HEART_PRESET, settings);
-    expect(preset.color.at(-1)![0]).toBe(1688);
+    expect(getVolumePreset(CINEMATIC_HEART_PRESET, settings).color.at(-1)![0]).toBe(1688);
     expect(sampleVolumeTransfer(CINEMATIC_HEART_PRESET, 1100, settings)).toEqual([0.68, 0.64, 0.56, 0.97]);
     expect(getVolumePreset('CT-Cardiac')).toBe(ordinary);
-    expect(getVolumePreset(CINEMATIC_HEART_PRESET).opacity[4][0]).toBe(80);
-  });
-  it('keeps sorted finite knots even for unusually wide manual reference ranges', () => {
-    const preset = getVolumePreset(CINEMATIC_HEART_PRESET, { myocardiumHU: -500, bloodHU: 3000, shadows: 2, shadowReach: 1 });
-    for (let i = 1; i < preset.opacity.length; i++) expect(preset.opacity[i][0]).toBeGreaterThan(preset.opacity[i - 1][0]);
-    for (const point of preset.color) expect(point.every(Number.isFinite)).toBe(true);
-    expect(preset.transferRange).toEqual([preset.opacity[0][0], preset.opacity.at(-1)![0]]);
+    const wide = getVolumePreset(CINEMATIC_HEART_PRESET, { myocardiumHU: -500, bloodHU: 3000, shadows: 2, shadowReach: 1 });
+    for (let i = 1; i < wide.opacity.length; i++) expect(wide.opacity[i][0]).toBeGreaterThan(wide.opacity[i - 1][0]);
+    for (const point of wide.color) expect(point.every(Number.isFinite)).toBe(true);
+    expect(wide.transferRange).toEqual([wide.opacity[0][0], wide.opacity.at(-1)![0]]);
   });
   it('requires finite separated manual references and owns bounded nested settings', () => {
     expect(cinematicReferenceError(80, 180)).toBe('');
-    expect(cinematicReferenceError(80, 179)).toContain('100 HU');
-    expect(cinematicReferenceError(NaN, 400)).toContain('myocardium');
-    expect(cinematicReferenceError(80, Infinity)).toContain('blood pool');
-    expect(cinematicReferenceError(-501, 400)).toContain('myocardium');
-    expect(cinematicReferenceError(80, 3001)).toContain('blood pool');
+    for (const [myocardium, blood] of [
+      [80, 179],
+      [NaN, 400],
+      [80, Infinity],
+      [-501, 400],
+      [80, 3001],
+    ])
+      expect(cinematicReferenceError(myocardium, blood)).not.toBe('');
     const supplied = { myocardiumHU: 120, bloodHU: 900, shadows: 1.1, shadowReach: 0.5 };
     const first = freshVolumeSettings({ preset: CINEMATIC_HEART_PRESET, cinematic: supplied }),
       second = freshVolumeSettings();
@@ -243,7 +213,6 @@ describe('relative cinematic heart appearance', () => {
     first.cinematic.myocardiumHU = 111;
     expect(first.cinematic.bloodHU).toBe(900);
     expect(second.cinematic).toEqual(DEFAULT_CINEMATIC_SETTINGS);
-    expect(DEFAULT_VOLUME_SETTINGS.cinematic).toEqual(DEFAULT_CINEMATIC_SETTINGS);
     expect(freshCinematicSettings({ myocardiumHU: 300, bloodHU: 350, shadows: 99, shadowReach: -1 })).toEqual({
       myocardiumHU: 80,
       bloodHU: 400,

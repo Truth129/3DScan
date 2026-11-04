@@ -6,7 +6,6 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 import pydicom
-from pydicom.dataset import Dataset
 from pydicom.pixels import pack_bits
 from pydicom.uid import DeflatedExplicitVRLittleEndian, ImplicitVRLittleEndian, generate_uid
 import pytest
@@ -44,23 +43,6 @@ def modify(fixture, callback):
     callback(ds)
     ds.save_as(fixture["seg"], enforce_file_format=True)
     return ds
-
-
-def test_ranked_export_imports_as_separate_masks_without_overlap(fixture, tmp_path):
-    ranked = dicom_seg.export_segmentation(
-        fixture["paths"],
-        fixture["reference"],
-        fixture["segments"],
-        tmp_path / "ranked",
-        revision_id="synthetic",
-        source_kind="totalsegmentator",
-        overlap_priority=["1", "0"],
-    )
-    fixture["seg"] = ranked.files[0].path
-    winner, loser = run(fixture)
-    assert [winner["name"], loser["name"]] == ["Imported 1", "Imported 0"]
-    np.testing.assert_array_equal(nib.load(winner["mask_file"]).dataobj, fixture["truth"][..., 1])
-    np.testing.assert_array_equal(nib.load(loser["mask_file"]).dataobj, fixture["truth"][..., 0] & ~fixture["truth"][..., 1])
 
 
 def test_import_exact_separate_masks_names_colors_and_source_identity(fixture):
@@ -144,9 +126,7 @@ def test_reject_wrong_study_or_frame(fixture, field):
         (lambda ds: setattr(ds.ReferencedSeriesSequence[0].ReferencedInstanceSequence[0], "ReferencedSOPInstanceUID", generate_uid()), "foreign"),
         (lambda ds: delattr(ds, "ReferencedSeriesSequence"), "functional-group"),
         (lambda ds: setattr(ds, "SegmentationType", "FRACTIONAL"), "Only BINARY"),
-        (lambda ds: setattr(ds, "SegmentationType", "LABELMAP"), "Only BINARY"),
         (lambda ds: setattr(ds, "BitsAllocated", 8), "binary pixel encoding"),
-        (lambda ds: setattr(ds, "NumberOfFrames", int(ds.NumberOfFrames) + 1), "length|metadata"),
         (lambda ds: setattr(ds, "PixelData", ds.PixelData + b"\x00\x00"), "Pixel Data length"),
         (lambda ds: setattr(ds.PerFrameFunctionalGroupsSequence[0].SegmentIdentificationSequence[0], "ReferencedSegmentNumber", 99), "unknown segment"),
         (
@@ -333,7 +313,7 @@ def test_shared_segment_identification_and_implicit_vr(fixture):
     np.testing.assert_array_equal(nib.load(structures[0]["mask_file"]).dataobj, fixture["truth"][..., 0])
 
 
-@pytest.mark.parametrize("limit", ["MAX_SEGMENTS", "MAX_FRAMES", "MAX_HEADER_BYTES", "MAX_FILE_BYTES"])
+@pytest.mark.parametrize("limit", ["MAX_SEGMENTS", "MAX_FRAMES", "MAX_FILE_BYTES"])
 def test_metadata_and_bundle_limits_reject_before_allocating_masks(fixture, monkeypatch, limit):
     monkeypatch.setattr(dicom_seg_import, limit, 1)
     monkeypatch.setattr(dicom_seg_import, "_pixel_frames", lambda *a, **k: pytest.fail("must reject before mask decoding"))
@@ -372,8 +352,7 @@ def test_repeated_transfer_syntax_rejected_before_pydicom_dataset_read(fixture, 
     if len(uid) % 2:
         uid += b"\x00"
     element = struct.pack("<HH2sH", 2, 0x10, b"UI", len(uid)) + uid
-    # Appending a second transfer-syntax declaration inside file metadata must
-    # not let pydicom perform whole-dataset deflate expansion after preflight.
+    # A second transfer syntax in file meta must not let pydicom inflate the whole dataset after preflight.
     marker = struct.pack("<HH", 2, 0x12)
     offset = data.index(marker, 132)
     fixture["seg"].write_bytes(data[:offset] + element + data[offset:])

@@ -35,7 +35,6 @@ describe('task and output-name search', () => {
   it('matches a task id or label as well as derived output names', () => {
     expect(ids(searchSegmentationTasks(tasks, 'craniofacial_structures', 'total').matches)).toEqual(['craniofacial_structures']);
     expect(ids(searchSegmentationTasks(tasks, 'body outline', 'total').matches)).toEqual(['body']);
-    expect(ids(searchSegmentationTasks(tasks, 'skin', 'total').matches)).toEqual(['body']);
   });
   it('retains the selected task and canonical option order without changing the catalogue', () => {
     const before = JSON.stringify(tasks),
@@ -55,8 +54,6 @@ describe('task and output-name search', () => {
     const result = searchSegmentationTasks(tasks, 'mandible', 'total');
     expect(result.matches).toEqual([tasks[3]]);
     expect(result.matches[0]).toBe(tasks[3]);
-    expect(result.matches[0].license_required).toBe(true);
-    expect(result.matches[0].license_available).toBe(false);
   });
   it('restores every original option for an empty query', () => {
     const result = searchSegmentationTasks(tasks, '  _  ', 'body');

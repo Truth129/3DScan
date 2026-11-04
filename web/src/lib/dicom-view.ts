@@ -66,7 +66,7 @@ const PNG_DATA_URL = 'data:image/png;base64,';
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 /** A sync decode, so that nothing can run between the identity checks and the frozen capture. */
-export function pngBytes(url: string): Uint8Array<ArrayBuffer> {
+function pngBytes(url: string): Uint8Array<ArrayBuffer> {
   if (!url.startsWith(PNG_DATA_URL)) throw new Error('The 3D view did not produce a PNG image.');
   const text = atob(url.slice(PNG_DATA_URL.length)),
     bytes = new Uint8Array(text.length);

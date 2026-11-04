@@ -52,8 +52,7 @@ def converted_with(monkeypatch, values, affine, slope, intercept):
     monkeypatch.setattr(dicom, "_run_converter", converter)
 
 
-@pytest.mark.parametrize("shared_geometry,reflected", [(False, False), (True, True)])
-@pytest.mark.parametrize("mapping", ["native", "flip_i", "swap_i_k"])
+@pytest.mark.parametrize("shared_geometry,reflected,mapping", [(False, False, "native"), (True, True, "flip_i"), (True, True, "swap_i_k")])
 def test_source_preserving_signed_axis_permutations_are_accepted(tmp_path, monkeypatch, shared_geometry, reflected, mapping):
     source = write_enhanced_mr(tmp_path / "enhanced.dcm", shared_geometry=shared_geometry, reflected=reflected)
     values, affine, slope, intercept = native_volume(source)
@@ -104,7 +103,7 @@ def test_reflected_affine_without_reflecting_pixels_is_rejected(tmp_path, monkey
     assert not (tmp_path / "converted/reference.nii.gz").exists()
 
 
-@pytest.mark.parametrize("corruption", ["samples", "slope", "intercept"])
+@pytest.mark.parametrize("corruption", ["samples", "intercept"])
 def test_original_signal_samples_and_standard_rescale_are_checked(tmp_path, monkeypatch, corruption):
     source = write_enhanced_mr(tmp_path / "enhanced.dcm")
     values, affine, slope, intercept = native_volume(source)

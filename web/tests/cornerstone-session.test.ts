@@ -134,6 +134,9 @@ describe('session-scoped Cornerstone source leases', () => {
     lease.setOverlayBytes(1024 * MiB);
     expect(budget.stats.usedBytes).toBe(budget.limitBytes);
     expect(() => lease.setOverlayBytes(1024 * MiB + 1)).toThrow(VolumeMemoryBudgetError);
+    // A rejected staging reservation keeps the previous charge and the source.
+    expect(budget.stats.usedBytes).toBe(budget.limitBytes);
+    expect(lease.owner.isDisposed).toBe(false);
     lease.release();
     expect(budget.stats.usedBytes).toBe(0);
   });
@@ -165,24 +168,17 @@ describe('session-scoped Cornerstone source leases', () => {
     expect(uploadSignal?.aborted).toBe(true);
   });
 
-  it('retains memory and source on a rejected staged overlay reservation', async () => {
-    const { session } = provider(),
-      budget = new VolumeMemoryBudget(512);
-    const lease = await acquireCornerstoneSource(session, { budget });
-    lease.setOverlayBytes(20);
-    const before = budget.stats;
-    expect(() => lease.setOverlayBytes(1000)).toThrow(VolumeMemoryBudgetError);
-    expect(budget.stats).toEqual(before);
-    expect(lease.owner.isDisposed).toBe(false);
-    lease.release();
-  });
-
-  it('preserves budget errors and permits retry before any source allocation', async () => {
-    const { session } = provider();
+  it('preserves budget and synchronous provider errors and permits retry before any source allocation', async () => {
+    const { session, raw } = provider();
     await expect(acquireCornerstoneSource(session, { budget: new VolumeMemoryBudget(1) })).rejects.toBeInstanceOf(VolumeMemoryBudgetError);
+    const budget = new VolumeMemoryBudget(4096);
+    raw.getGPUVolume.mockImplementationOnce(() => {
+      throw new Error('Synthetic source unavailable');
+    });
+    await expect(acquireCornerstoneSource(session, { budget })).rejects.toThrow('Synthetic source unavailable');
+    expect(budget.stats.usedBytes).toBe(0);
     expect(factory.create).not.toHaveBeenCalled();
-    const budget = new VolumeMemoryBudget(4096),
-      retry = await acquireCornerstoneSource(session, { budget });
+    const retry = await acquireCornerstoneSource(session, { budget });
     expect(factory.create).toHaveBeenCalledOnce();
     retry.release();
     expect(budget.stats.usedBytes).toBe(0);
@@ -216,17 +212,6 @@ describe('session-scoped Cornerstone source leases', () => {
     expect(retry.owner.isDisposed).toBe(false);
     expect(budget.stats.usedBytes).toBe(bytes);
     retry.release();
-  });
-
-  it('preserves a provider error thrown before its first asynchronous boundary', async () => {
-    const { session, raw } = provider(),
-      budget = new VolumeMemoryBudget(4096);
-    raw.getGPUVolume.mockImplementationOnce(() => {
-      throw new Error('Synthetic source unavailable');
-    });
-    await expect(acquireCornerstoneSource(session, { budget })).rejects.toThrow('Synthetic source unavailable');
-    expect(budget.stats.usedBytes).toBe(0);
-    expect(factory.create).not.toHaveBeenCalled();
   });
 
   it('invalidates old source leases before replacement and cannot release the replacement reservation', async () => {

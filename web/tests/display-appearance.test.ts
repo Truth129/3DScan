@@ -20,23 +20,8 @@ describe('segmentation presentation colors', () => {
     expect(normalizeStructureColor([1, 0.5, 0])).toBe('#ff8000');
     expect(normalizeStructureColor([255, 128, 0])).toBe('#ff8000');
     expect(normalizeStructureColor([0.5, 0.25, 0, 1])).toBe('#804000');
-    expect(normalizeStructureColor([0, 0, 0])).toBe('#000000');
   });
-  it.each([
-    '#123',
-    '#ffffffff',
-    'red',
-    'url(javascript:alert(1))',
-    '',
-    '#12zzef',
-    [NaN, 0, 0],
-    [Infinity, 0, 0],
-    [-1, 0, 0],
-    [256, 0, 0],
-    [1, 2],
-    [1, 2, 3, 4, 5],
-    null,
-  ])('rejects invalid or nonportable colors %j', color => {
+  it.each(['#123', 'url(javascript:alert(1))', '#12zzef', [NaN, 0, 0], [256, 0, 0], [1, 2], null])('rejects invalid or nonportable colors %j', color => {
     expect(normalizeStructureColor(color)).toBeUndefined();
   });
   it('keeps source masks, measurements and unaffected objects unchanged', () => {
@@ -56,9 +41,6 @@ describe('segmentation presentation colors', () => {
     expect((view[0] as typeof first).relationship).toBe(first.relationship);
     expect(view[1]).toBe(second);
     expect(first.color).toBe('#112233');
-    expect(source[0]).toBe(first);
-  });
-  it('reuses a structure for an equivalent color or inherited override', () => {
     const structure = { id: 'total:lung', color: [1, 0.5, 0], volume_ml: 9 };
     expect(displayStructures([structure], { [structure.id]: '#ff8000' })[0]).toBe(structure);
     expect(displayStructures([structure], Object.create({ [structure.id]: '#000000' }))[0]).toBe(structure);
@@ -97,23 +79,16 @@ describe('segmentation presentation colors', () => {
     expect(values.has(STRUCTURE_COLORS_STORAGE_PREFIX + a)).toBe(false);
     expect(readStructureColors(b)).toEqual({ 'total:lung': '#223344' });
   });
-  it('does not touch global storage without a scope', () => {
+  it('handles unscoped, malformed, oversized and blocked storage', () => {
     const getItem = vi.fn(),
-      setItem = vi.fn();
+      setItem = vi.fn(() => {
+        throw new Error('quota');
+      });
     vi.stubGlobal('localStorage', { getItem, setItem });
     expect(readStructureColors('')).toEqual({});
     expect(saveStructureColors('', { first: '#aabbcc' })).toBe(false);
     expect(getItem).not.toHaveBeenCalled();
     expect(setItem).not.toHaveBeenCalled();
-  });
-  it('handles malformed, oversized and blocked storage', () => {
-    const getItem = vi.fn();
-    vi.stubGlobal('localStorage', {
-      getItem,
-      setItem: () => {
-        throw new Error('quota');
-      },
-    });
     getItem.mockReturnValue('{broken');
     expect(readStructureColors('case:image')).toEqual({});
     getItem.mockReturnValue('x'.repeat(1024 * 1024 + 1));

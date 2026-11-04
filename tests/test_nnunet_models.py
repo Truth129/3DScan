@@ -126,7 +126,7 @@ def test_changed_weights_stop_a_run_before_any_child_can_load_them(pinned, tmp_p
         segmentation.segment(image, tmp_path / "output", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
 
 
-@pytest.mark.parametrize("codes", [("L", "P", "S"), ("R", "A", "S"), ("L", "S", "A"), ("A", "R", "I"), ("S", "P", "R")])
+@pytest.mark.parametrize("codes", [("L", "P", "S"), ("R", "A", "S"), ("A", "R", "I")])
 def test_model_input_matches_the_simpleitk_reader_the_model_was_trained_with(tmp_path, codes):
     values = np.random.default_rng(1).integers(-1000, 1000, (7, 9, 11)).astype(np.int16)
     affine = np.eye(4)

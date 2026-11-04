@@ -145,7 +145,6 @@ export class CornerstoneMPR {
   private presentationKey = '';
   private inactiveViewports = new Set<string>();
   private overlayStyle = { fill: true, outline: true };
-  private selections: readonly CTOverlaySelection[] = [];
   private listeners: Array<() => void> = [];
   private sourceListeners: Array<() => void> = [];
   private mprAttached = false;
@@ -915,14 +914,9 @@ export class CornerstoneMPR {
       }
     });
   }
-  setOverlayStyle(style: { fill: boolean; outline: boolean }) {
-    this.overlayStyle = { ...style };
-    this.setOverlayPresentation(this.selections, this.overlayOpacity);
-  }
   setOverlayPresentation(selections: readonly CTOverlaySelection[], opacity = this.overlayOpacity, style?: { fill: boolean; outline: boolean }) {
     if (this.disposed || !this.mprAttached) return;
     if (!Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error('MPR overlay opacity must be between zero and one.');
-    this.selections = selections;
     if (style) this.overlayStyle = { ...style };
     this.overlayOpacity = opacity;
     const nextPresentation = JSON.stringify([

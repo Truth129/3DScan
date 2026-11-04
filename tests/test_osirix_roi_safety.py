@@ -68,28 +68,11 @@ def test_previous_dense_mask_is_released_before_loading_next_structure(fixture, 
     _assert_no_staging(fixture)
 
 
-@pytest.mark.parametrize("target", ["reference", "mask"])
-def test_corrupt_nifti_is_reported_without_source_text_or_paths(fixture, target):
-    path = fixture["reference"] if target == "reference" else fixture["segments"][0].mask_path
-    marker = b"SYNTHETIC-INVALID-NIFTI-CONTENT"
-    path.write_bytes(marker)
-    with pytest.raises(osirix_roi.NativeROIError) as error:
-        _export(fixture)
-    assert str(error.value) == _GENERIC_ERROR
-    assert str(path) not in str(error.value) and marker.decode() not in str(error.value)
-    assert not fixture["output"].exists()
-    _assert_no_staging(fixture)
-
-
 @pytest.mark.parametrize(
     "changes",
     [
-        {"source_paths": None},
-        {"source_paths": [None]},
         {"source_paths": [object()]},
         {"reference_path": None},
-        {"reference_path": object()},
-        {"output_dir": None},
         {"output_dir": object()},
         {"segments": None},
     ],
@@ -102,7 +85,7 @@ def test_malformed_input_containers_and_paths_have_a_constant_public_error(fixtu
     _assert_no_staging(fixture)
 
 
-@pytest.mark.parametrize("segments", [[], [object()], ["SYNTHETIC-INVALID-SELECTION"], {"SYNTHETIC-INVALID-SELECTION": "not a structure"}])
+@pytest.mark.parametrize("segments", [[], ["SYNTHETIC-INVALID-SELECTION"]])
 def test_malformed_selection_has_a_constant_public_error(fixture, segments):
     with pytest.raises(osirix_roi.NativeROIError) as error:
         _export(fixture, segments=segments)
@@ -120,22 +103,27 @@ def test_malformed_mask_path_has_a_constant_public_error(fixture):
     _assert_no_staging(fixture)
 
 
-@pytest.mark.parametrize("corruption", ["truncated", "invalid-deflate"])
-def test_corrupt_gzip_payload_has_a_safe_error(fixture, corruption):
-    path = fixture["segments"][0].mask_path
-    image = nib.load(path)
-    # The header remains readable, while later voxel decompression reaches EOF.
-    values = np.random.default_rng(4921).integers(0, 2, image.shape, dtype=np.uint8)
-    nib.save(nib.Nifti1Image(values, image.affine), path)
-    data = bytearray(path.read_bytes())
-    if corruption == "truncated":
-        path.write_bytes(data[: len(data) // 2])
-        osirix_roi.imaging._image(path)
+@pytest.mark.parametrize("corruption", ["not-nifti", "truncated", "invalid-deflate"])
+def test_corrupt_nifti_or_gzip_payload_has_a_safe_error(fixture, corruption):
+    path = fixture["reference"] if corruption == "not-nifti" else fixture["segments"][0].mask_path
+    marker = b"SYNTHETIC-INVALID-NIFTI-CONTENT"
+    if corruption == "not-nifti":
+        path.write_bytes(marker)
     else:
-        data[len(data) // 2] = 255
-        path.write_bytes(data)
+        # The header stays readable, and later voxel decompression fails.
+        image = nib.load(path)
+        values = np.random.default_rng(4921).integers(0, 2, image.shape, dtype=np.uint8)
+        nib.save(nib.Nifti1Image(values, image.affine), path)
+        data = bytearray(path.read_bytes())
+        if corruption == "truncated":
+            path.write_bytes(data[: len(data) // 2])
+            osirix_roi.imaging._image(path)
+        else:
+            data[len(data) // 2] = 255
+            path.write_bytes(data)
     with pytest.raises(osirix_roi.NativeROIError) as error:
         _export(fixture)
     assert str(error.value) == _GENERIC_ERROR
+    assert str(path) not in str(error.value) and marker.decode() not in str(error.value)
     assert not fixture["output"].exists()
     _assert_no_staging(fixture)

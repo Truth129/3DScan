@@ -93,9 +93,13 @@ def test_purge_removes_every_row_and_audits_counts_only(rig):
     assert case["label"] not in json.dumps(audit)
 
 
-def test_purge_needs_the_password_and_refuses_a_wrong_one(rig):
+def test_purge_needs_the_password_refuses_a_wrong_one_and_echoes_neither(rig):
     case_id = trashed(rig)
     refused(rig.owner.post(f"/api/trash/{case_id}/purge", json={}), 400, "Enter your password to delete forever.")
+    secret = secrets.token_urlsafe(16)
+    malformed = rig.owner.post(f"/api/trash/{case_id}/purge", json={"password": secret, "extra": 1})
+    refused(malformed, 422, "Invalid delete request.")
+    assert secret not in malformed.text
     guess = wrong()
     response = purge(rig.owner, case_id, guess)
     refused(response, 403, "Wrong password.")
@@ -185,14 +189,6 @@ def test_purge_waits_for_a_request_on_its_case(rig):
     finally:
         rig.service.activity.leave(case_id)
     assert purge(rig.owner, case_id).status_code == 200
-
-
-def test_a_malformed_purge_body_does_not_echo_the_password(rig):
-    case_id = trashed(rig)
-    secret = secrets.token_urlsafe(16)
-    response = rig.owner.post(f"/api/trash/{case_id}/purge", json={"password": secret, "extra": 1})
-    refused(response, 422, "Invalid delete request.")
-    assert secret not in response.text
 
 
 def test_the_gate_counts_a_request_and_a_new_case_until_the_response_ends(tmp_path):
@@ -420,24 +416,17 @@ def test_a_purge_resumes_after_a_restart_and_a_returning_folder_goes(tmp_path):
         soon(lambda: not folder.exists())
 
 
-def test_start_removes_orthanc_staging_leftovers(tmp_path):
+def test_start_removes_orthanc_staging_and_an_idle_gpu_lane_releases_the_warm_engine(tmp_path, monkeypatch):
     service, _ = off_mode(tmp_path)
     leftover = service.settings.data_dir / "orthanc-staging" / "transfer-abc" / "f"
     fill(leftover, 16)
-    service.start()
-    try:
-        assert not leftover.parent.exists()
-    finally:
-        service.stop()
-
-
-def test_an_idle_gpu_lane_releases_the_warm_engine_after_a_purge(tmp_path, monkeypatch):
-    service, _ = off_mode(tmp_path)
     released = threading.Event()
     monkeypatch.setattr(service, "_release_interactive", released.set)
+    # A purge sets this, and the idle lane gives the engine back.
     service.release_engine.set()
     service.start()
     try:
+        assert not leftover.parent.exists()
         assert released.wait(2) and not service.release_engine.is_set()
     finally:
         service.stop()

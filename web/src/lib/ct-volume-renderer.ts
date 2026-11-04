@@ -5,7 +5,7 @@ import type { VolumeDescriptor } from './ct-reslice';
 import { freshVolumeSettings, getVolumePreset, samplePresetTransfer, type CTVolumeSettings } from './volume-presets';
 
 const LUT_SIZE = 4096;
-export const CT_VOLUME_MAX_STEPS = 1536;
+const CT_VOLUME_MAX_STEPS = 1536;
 export type CTVolumeMaskMode = 'off' | 'inside' | 'outside';
 const vertexShader = `out vec2 vUv;
 void main() { vUv = uv; gl_Position = vec4(position.xy, 0., 1.); }`;

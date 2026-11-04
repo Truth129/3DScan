@@ -853,20 +853,6 @@ export class AnatomyScene {
     if (!state.gpuMeta && this.reviewPlane.gpuActive) this.reviewPlane.clear();
     this.reviewPlane.mesh.visible = visible && !!this.reviewPlane.meta;
   }
-  reviewPatientToCanvas(point: Point): [number, number] {
-    this.camera.updateMatrixWorld();
-    const vector = new THREE.Vector3(...rasToScene(point)).project(this.camera),
-      bounds = this.renderer.domElement.getBoundingClientRect();
-    return [((vector.x + 1) * bounds.width) / 2, ((1 - vector.y) * bounds.height) / 2];
-  }
-  reviewDiagnostics() {
-    return {
-      textures: this.reviewPlane.textureCount,
-      markers: this.reviewMarkers.group.children.length,
-      activeGesture: !!this.gesture,
-      ready: this.reviewReady,
-    };
-  }
   focusReviewPlane() {
     const meta = this.reviewPlane.meta;
     if (!meta || !this.reviewPlane.mesh.visible) return;

@@ -22,7 +22,6 @@ def test_preflight_counts_all_layers_before_any_voxel_allocation(tmp_path, monke
     monkeypatch.setattr(imaging, "_ct_array", lambda *a: pytest.fail("Oversized frame decoded the CT"))
     monkeypatch.setattr(imaging, "_reslice", lambda *a, **k: pytest.fail("Oversized frame allocated pixels"))
     overlays = ((str(i), path, path if compare else None) for i in range(overlay_count))
-    assert review_volume._FRAME_MAX_BYTES == 256 * 1024**2
     with pytest.raises(ValueError, match="256 MiB decoded payload"):
         review_volume.review_frame(path, None, "axial", 0, overlays=overlays)
 

@@ -111,6 +111,7 @@ describe('opening the page', () => {
     const view = await gate(seen(null));
     expect(app(view)).toBeUndefined();
     expect(overlay(view).open).toBe(true);
+    expect(document.activeElement).toBe(named(view, 'username'));
     expect(named(view, 'username').getAttribute('autocomplete')).toBe('username');
     expect(named(view, 'password').getAttribute('autocomplete')).toBe('current-password');
     expect(view.text()).toContain('Signs out when the browser closes, and after 12 hours at most.');
@@ -144,6 +145,7 @@ describe('opening the page', () => {
     current = seen(null);
     await heartbeat();
     expect(named(view, 'password')).toBeDefined();
+    expect(document.activeElement, 'the form that replaces the command').toBe(named(view, 'username'));
   });
   it('says so when the server does not answer, and opens when it does', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
@@ -156,25 +158,20 @@ describe('opening the page', () => {
     await settled();
     expect(app(view)).toBeDefined();
   });
-  it('clears what the last person left before the app opens for someone else', async () => {
-    localStorage.setItem('scan3d-last-user', asha.id);
-    localStorage.setItem('scan3d-case', 'case-of-asha');
-    const view = await gate(seen(null));
-    accepts = seen(ravi);
-    await signIn(view, 'ravi');
-    expect(app(view).getAttribute('data-case')).toBeNull();
-    expect(localStorage.getItem('scan3d-last-user')).toBe(ravi.id);
-    expect(reload).not.toHaveBeenCalled();
-  });
-  it('starts at the Library after the form, keeping the job keys', async () => {
+  it.each<[string, SessionUser]>([
+    ['clears what the last person left before the app opens for someone else', ravi],
+    ['starts at the Library for the same person, keeping the job keys', asha],
+  ])('%s', async (_name, user) => {
     localStorage.setItem('scan3d-last-user', asha.id);
     localStorage.setItem('scan3d-case', 'case-of-asha');
     localStorage.setItem('scan3d-job:case-of-asha', 'job-of-asha');
     const view = await gate(seen(null));
-    accepts = seen(asha);
-    await signIn(view);
+    accepts = seen(user);
+    await signIn(view, user.username);
     expect(app(view).getAttribute('data-case')).toBeNull();
-    expect(localStorage.getItem('scan3d-job:case-of-asha')).toBe('job-of-asha');
+    expect(localStorage.getItem('scan3d-last-user')).toBe(user.id);
+    expect(localStorage.getItem('scan3d-job:case-of-asha')).toBe(user === asha ? 'job-of-asha' : null);
+    expect(reload).not.toHaveBeenCalled();
     localStorage.removeItem('scan3d-job:case-of-asha');
   });
 });
@@ -217,17 +214,12 @@ describe('a set-password link', () => {
     expect(overlay(view).open).toBe(false);
     expect(channels[0].posted).toEqual(['signed-in']);
   });
-  it('says when the two passwords differ, and sends nothing', async () => {
+  it('sends nothing while the two passwords differ, and offers sign-in instead of a used link', async () => {
     opened();
     const view = await gate(seen(null));
     await setPassword(view, PASSWORD + '!');
     expect(view.text()).toContain('The two passwords differ.');
     expect(redeems).toEqual([]);
-    expect(app(view)).toBeUndefined();
-  });
-  it('shows the sentence for a used link and offers sign-in instead', async () => {
-    opened();
-    const view = await gate(seen(null));
     // As a browser leaves it once the field it was in is disabled for the wait.
     document.body.focus();
     await setPassword(view);
@@ -306,21 +298,17 @@ describe('a session that ends in use', () => {
     expect((await held).status).toBe(200);
     expect(reload).not.toHaveBeenCalled();
   });
-  it('keeps the open case when the same person signs in on the overlay', async () => {
+  it('covers the app when a heartbeat finds no session, and keeps the open case when the same person signs in', async () => {
     const view = await gate(seen(asha));
     localStorage.setItem('scan3d-case', 'case-of-asha');
     current = seen(null);
     await heartbeat();
+    expect(overlay(view).open).toBe(true);
+    expect(document.activeElement, 'the name is filled in').toBe(named(view, 'password'));
     accepts = seen(asha);
     await signIn(view);
     expect(localStorage.getItem('scan3d-case')).toBe('case-of-asha');
     localStorage.removeItem('scan3d-case');
-  });
-  it('covers the app when a heartbeat finds no session', async () => {
-    const view = await gate(seen(asha));
-    current = seen(null);
-    await heartbeat();
-    expect(overlay(view).open).toBe(true);
   });
   it('lets a 401 from before the latest sign-in pass', async () => {
     const view = await gate(seen(asha)),
@@ -410,29 +398,11 @@ describe('the overlay stays on top', () => {
   });
 });
 
-describe('where the cursor goes', () => {
-  it('starts in the username on the first load', async () => {
-    const view = await gate(seen(null));
-    expect(document.activeElement).toBe(named(view, 'username'));
-  });
-  it('moves to the form that replaces the command', async () => {
-    const view = await gate(seen(null, true));
-    current = seen(null);
-    await heartbeat();
-    expect(document.activeElement).toBe(named(view, 'username'));
-  });
-  it('starts in the password on the overlay, where the name is filled in', async () => {
-    const view = await gate(seen(asha));
-    current = seen(null);
-    await heartbeat();
-    expect(document.activeElement).toBe(named(view, 'password'));
-  });
-  it('stays with someone typing when a heartbeat replaces the session', async () => {
-    const view = await gate(seen(null));
-    named(view, 'password').focus();
-    await heartbeat();
-    expect(document.activeElement).toBe(named(view, 'password'));
-  });
+it('stays with someone typing when a heartbeat replaces the session', async () => {
+  const view = await gate(seen(null));
+  named(view, 'password').focus();
+  await heartbeat();
+  expect(document.activeElement).toBe(named(view, 'password'));
 });
 
 describe('other tabs', () => {

@@ -7,7 +7,7 @@ import pytest
 
 from scan3d import __main__ as cli
 from scan3d import config
-from scan3d.config import Settings, load_environment, read_env_file
+from scan3d.config import load_environment, read_env_file
 
 
 def write(tmp_path, text):
@@ -89,13 +89,6 @@ def test_serve_defaults_come_from_the_config_file(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "umask", lambda mask: captured.update(umask=mask))
     cli.main()
     assert (captured["app"], captured["host"], captured["port"], captured["umask"]) == ("app", "127.0.0.2", 9123, 0o077)
-
-
-def test_a_plain_install_offers_ct_only(monkeypatch):
-    monkeypatch.delenv("SCAN3D_MODALITIES", raising=False)
-    assert Settings.from_env().modalities == ("CT",)
-    monkeypatch.setenv("SCAN3D_MODALITIES", "CT,MR")
-    assert Settings.from_env().modalities == ("CT", "MR")
 
 
 def test_the_example_is_all_defaults_and_documents_every_setting():

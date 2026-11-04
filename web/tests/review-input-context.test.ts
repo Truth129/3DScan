@@ -36,19 +36,14 @@ it('keeps the drawing context across newly delivered metadata for the same grid'
   expect(reviewInputContext(structuredClone(geometry), structuredClone(meta))).toBe(reviewInputContext(geometry, meta));
 });
 
-it('invalidates gestures when the native slice changes', () => {
-  expect(reviewInputContext(geometry, { ...meta, native: { axis: 2, index: 39 } })).not.toBe(reviewInputContext(geometry, meta));
-});
-
-it('invalidates gestures when pixel mapping changes through camera or viewport resize', () => {
-  const shifted = structuredClone(meta);
+it('invalidates gestures when the native slice, pixel mapping, viewport or reference CT transform changes', () => {
+  const shifted = structuredClone(meta),
+    reflected = structuredClone(geometry);
   shifted.pixel_to_ras[0][3] += 0.25;
-  expect(reviewInputContext(geometry, shifted)).not.toBe(reviewInputContext(geometry, meta));
-  expect(reviewInputContext(geometry, { ...meta, width: 81 })).not.toBe(reviewInputContext(geometry, meta));
-});
-
-it('invalidates gestures when the reference CT transform changes', () => {
-  const reflected = structuredClone(geometry);
   reflected.affine_ras[0][0] *= -1;
-  expect(reviewInputContext(reflected, meta)).not.toBe(reviewInputContext(geometry, meta));
+  const original = reviewInputContext(geometry, meta);
+  expect(reviewInputContext(geometry, { ...meta, native: { axis: 2, index: 39 } })).not.toBe(original);
+  expect(reviewInputContext(geometry, shifted)).not.toBe(original);
+  expect(reviewInputContext(geometry, { ...meta, width: 81 })).not.toBe(original);
+  expect(reviewInputContext(reflected, meta)).not.toBe(original);
 });

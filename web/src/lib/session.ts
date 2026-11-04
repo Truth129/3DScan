@@ -159,7 +159,7 @@ export function watchOtherTabs(heard: (change: TabChange) => void) {
 }
 
 /** A download the browser follows itself cannot be held and repeated like a request, so look first. */
-export async function ensureSession() {
+async function ensureSession() {
   if (!(await getSession()).user) await waitForSession();
 }
 

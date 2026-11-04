@@ -249,16 +249,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+type Workspace = Awaited<ReturnType<typeof app>>;
+const NOT_READY = 'The 3D view is not ready.',
+  CHANGED = 'The view changed during capture. Try again.';
+const failCapture = () => {
+  fake.capture = async () => {
+    throw new Error(NOT_READY);
+  };
+};
+const close = async (view: Workspace) => {
+  click(view.labelled('Close DICOM view export'));
+  await settled();
+};
+
 describe('capturing from the workspace', () => {
-  it('asks the viewport for the frozen revision and opens a dialog on that frame', async () => {
-    const view = await app();
+  it('asks the viewport for the frozen revision, opens a dialog on that frame, and captures again once it closes', async () => {
+    const view = await app(),
+      capture = vi.spyOn(fake, 'capture');
     expect(view.dicom().textContent).toBe('DICOM ↗');
-    expect(view.dialog()).toBeUndefined();
     await view.export();
     expect(view.dialog()?.open).toBe(true);
     expect(view.text()).toContain('Synthetic A · Revision revision · 640 × 480 px');
     expect(api.dicomViewAvailability).toHaveBeenCalledWith('case-a', 'revision-a2', expect.any(AbortSignal));
     expect(view.banner()).toBe('');
+    await close(view);
+    expect(view.dialog()).toBeUndefined();
+    await view.export();
+    expect(capture).toHaveBeenCalledTimes(2);
   });
   it('freezes the reference image of the revision, from the asset when the revision has no reference of its own', async () => {
     const asset = {
@@ -270,42 +287,26 @@ describe('capturing from the workspace', () => {
       presentation: LEGACY_CT_PRESENTATION,
     } as Revision['image_asset'];
     revisions['revision-a2'] = { ...revisions['revision-a2'], reference_image_id: undefined, image_asset: asset };
-    const requests: unknown[] = [];
-    fake.capture = async (request: { referenceImageId: string; revisionId: string }) => {
-      requests.push(request);
-      return frame(request);
-    };
-    const view = await app();
-    await view.export();
-    expect(requests).toEqual([{ caseId: 'case-a', revisionId: 'revision-a2', referenceImageId: 'asset-a' }]);
+    const capture = vi.spyOn(fake, 'capture');
+    await (await app()).export();
+    expect(capture.mock.calls[0][0]).toEqual({ caseId: 'case-a', revisionId: 'revision-a2', referenceImageId: 'asset-a' });
   });
-  it('refuses a revision with no reference image, without capturing', async () => {
+  it('refuses a revision with no reference image without capturing', async () => {
     revisions['revision-a2'] = { ...revisions['revision-a2'], reference_image_id: undefined };
-    const capture = vi.fn();
-    fake.capture = capture;
-    const view = await app();
+    const capture = vi.spyOn(fake, 'capture'),
+      view = await app();
     await view.export();
     expect(capture).not.toHaveBeenCalled();
     expect(view.dialog()).toBeUndefined();
     expect(view.banner()).toContain('not ready');
   });
-  it('shows a refusal from the viewport and keeps nothing', async () => {
-    fake.capture = async () => {
-      throw new Error('The 3D view is not ready.');
-    };
+  it('shows a refusal from the viewport, and clears it when a new capture starts', async () => {
+    const good = fake.capture;
+    failCapture();
     const view = await app();
     await view.export();
     expect(view.dialog()).toBeUndefined();
-    expect(view.banner()).toContain('The 3D view is not ready.');
-  });
-  it('clears an earlier refusal when a new capture starts', async () => {
-    const good = fake.capture;
-    fake.capture = async () => {
-      throw new Error('The 3D view is not ready.');
-    };
-    const view = await app();
-    await view.export();
-    expect(view.banner()).toContain('The 3D view is not ready.');
+    expect(view.banner()).toContain(NOT_READY);
     fake.capture = good;
     await view.export();
     expect(view.dialog()?.open).toBe(true);
@@ -313,36 +314,26 @@ describe('capturing from the workspace', () => {
   });
   it('shows a refusal inside an expanded viewport, whose inert header holds the banner’s dismiss button', async () => {
     fake.expanded = true;
-    fake.capture = async () => {
-      throw new Error('The 3D view is not ready.');
-    };
+    failCapture();
     const view = await app();
     await view.export();
-    expect(fake.refusals.at(-1)).toBe('The 3D view is not ready.');
+    expect(fake.refusals.at(-1)).toBe(NOT_READY);
     expect(view.banner()).toBe('');
   });
-  it('refuses a frame whose evidence names another image', async () => {
-    fake.capture = async (request: { referenceImageId: string; revisionId: string }) => ({ ...frame(request), referenceImageId: 'image-other' });
-    const view = await app();
-    await view.export();
-    expect(view.dialog()).toBeUndefined();
-    expect(view.banner()).toContain('The view changed during capture. Try again.');
-  });
-  it('refuses to capture a workspace that shows anything but one saved revision, however the request arrives', async () => {
-    const capture = vi.fn();
-    fake.capture = capture;
-    const view = await app();
+  it('refuses to capture a comparison, however the request arrives, and says why on the button', async () => {
+    const capture = vi.spyOn(fake, 'capture'),
+      view = await app();
     click(view.button('Before'));
     await settled();
+    expect(view.dicom().getAttribute('title')).toContain('turn off comparison');
     fake.viewports.at(-1).exportView();
     await settled();
     expect(capture).not.toHaveBeenCalled();
     expect(view.banner()).toContain('not ready');
   });
   it('refuses to capture during review', async () => {
-    const capture = vi.fn();
-    fake.capture = capture;
-    const view = await app();
+    const capture = vi.spyOn(fake, 'capture'),
+      view = await app();
     click(view.button('Review segmentation ↗'));
     await settled();
     fake.viewports.at(-1).exportView();
@@ -350,23 +341,13 @@ describe('capturing from the workspace', () => {
     expect(capture).not.toHaveBeenCalled();
     expect(view.dialog()).toBeUndefined();
   });
-  it('takes one capture at a time, however often it is asked', async () => {
-    const held = holdCapture(),
-      capture = vi.spyOn(fake, 'capture'),
-      view = await app();
-    fake.viewports.at(-1).exportView();
-    fake.viewports.at(-1).exportView();
-    await settled();
-    expect(capture).toHaveBeenCalledOnce();
-    held.resolve();
-    await settled();
-    expect(view.dialog()?.open).toBe(true);
-  });
-  it('disables the button while a frame is on its way', async () => {
+  it('takes one capture at a time, with the button disabled while the frame is on its way', async () => {
     const held = holdCapture(),
       capture = vi.spyOn(fake, 'capture'),
       view = await app();
     await view.export();
+    fake.viewports.at(-1).exportView();
+    await settled();
     expect((view.dicom() as unknown as HTMLButtonElement).disabled).toBe(true);
     expect(view.dicom().getAttribute('title')).toBe('Capturing the view…');
     held.resolve();
@@ -380,16 +361,33 @@ describe('capturing from the workspace', () => {
     expect(fake.viewports).not.toHaveLength(0);
     expect(view.dicom()).toBeUndefined();
   });
-  it('passes the disabled reason to the button', async () => {
-    const view = await app();
-    click(view.button('Before'));
-    await settled();
-    expect(view.dicom().getAttribute('title')).toContain('turn off comparison');
-  });
 });
 
 describe('the recheck after the capture', () => {
-  async function during(change: (view: Awaited<ReturnType<typeof app>>) => unknown) {
+  const draft = (values: Record<string, unknown>) =>
+    fake.review.onState({
+      id: 'draft',
+      case_id: 'case-a',
+      revision_id: 'revision-a2',
+      structure_id: 'heart',
+      status: 'draft',
+      prompts: [],
+      ...values,
+    } as unknown as InteractiveReview);
+  it.each<[string, (view: Workspace) => unknown]>([
+    ['the case changes', view => view.open('case-b')],
+    [
+      'the revision changes',
+      view => {
+        vi.spyOn(api, 'activate').mockImplementation(async () => ({ ...cases[0], active_revision_id: 'revision-a1' }));
+        return view.activateParent();
+      },
+    ],
+    ['Before is shown', view => click(view.button('Before'))],
+    ['comparison starts', () => fake.review.onPreviewOverlaps(['heart'])],
+    ['a draft gains prompts', () => draft({ prompts: [{}] })],
+    ['review opens', view => click(view.button('Review segmentation ↗'))],
+  ])('discards the capture when %s', async (_name, change) => {
     const held = holdCapture(),
       view = await app();
     await view.export();
@@ -398,40 +396,8 @@ describe('the recheck after the capture', () => {
     held.resolve();
     await settled();
     expect(view.dialog()).toBeUndefined();
-    expect(view.banner()).toBe('⚠ The view changed during capture. Try again.×');
+    expect(view.banner()).toBe(`⚠ ${CHANGED}×`);
     expect(posts).toHaveLength(0);
-  }
-  it('discards the capture when the case changes', () => during(view => view.open('case-b')));
-  it('discards the capture when the revision changes', async () => {
-    vi.spyOn(api, 'activate').mockImplementation(async () => ({ ...cases[0], active_revision_id: 'revision-a1' }));
-    await during(async view => {
-      await view.activateParent();
-      expect(api.activate).toHaveBeenCalledWith('case-a', 'revision-a1', 'revision-a2');
-    });
-  });
-  it('discards the capture when Before is shown', () => during(view => click(view.button('Before'))));
-  it('discards the capture when comparison starts', () => during(() => fake.review.onPreviewOverlaps(['heart'])));
-  it.each([
-    ['prompts', { prompts: [{}] }],
-    ['a candidate', { candidate: { revision_id: 'review-1' } }],
-    ['a new structure', { new_structure: true }],
-    ['a relationship change', { relationship_dirty: true }],
-  ])('discards the capture when a draft gains %s', (_name, values) =>
-    during(() => {
-      const draft = { id: 'draft', case_id: 'case-a', revision_id: 'revision-a2', structure_id: 'heart', status: 'draft', prompts: [], ...values };
-      fake.review.onState(draft as unknown as InteractiveReview);
-    }),
-  );
-  it('discards the capture when review opens', () => during(view => click(view.button('Review segmentation ↗'))));
-  it('discards a capture that resolves after its viewport was replaced', async () => {
-    const held = holdCapture(),
-      view = await app();
-    await view.export();
-    await view.open('case-b');
-    expect(fake.viewports.at(-1).props.caseId).toBe('case-b');
-    held.resolve();
-    await settled();
-    expect(view.dialog()).toBeUndefined();
   });
   it('reports a view that closed during capture as a changed view', async () => {
     const held = deferred<ViewportCapture>();
@@ -441,25 +407,25 @@ describe('the recheck after the capture', () => {
     await view.open('case-b');
     held.reject(new DOMException('The shared CT source request was cancelled.', 'AbortError'));
     await settled();
-    expect(view.banner()).toContain('The view changed during capture. Try again.');
+    expect(view.banner()).toContain(CHANGED);
   });
 });
 
 describe('a held capture', () => {
-  it('is dropped with its case', async () => {
+  it.each<[string, (view: Workspace) => Promise<void>]>([
+    ['case', view => view.open('case-b')],
+    [
+      'revision',
+      view => {
+        vi.spyOn(api, 'activate').mockImplementation(async () => ({ ...cases[0], active_revision_id: 'revision-a1' }));
+        return view.activateParent();
+      },
+    ],
+  ])('is dropped with its %s', async (_name, change) => {
     const view = await app();
     await view.export();
     expect(view.dialog()?.open).toBe(true);
-    await view.open('case-b');
-    expect(view.dialog()).toBeUndefined();
-  });
-  it('is dropped with its revision', async () => {
-    vi.spyOn(api, 'activate').mockImplementation(async () => ({ ...cases[0], active_revision_id: 'revision-a1' }));
-    fake.capture = async (request: { referenceImageId: string; revisionId: string }) => frame(request);
-    const view = await app();
-    await view.export();
-    expect(view.dialog()?.open).toBe(true);
-    await view.activateParent();
+    await change(view);
     expect(view.dialog()).toBeUndefined();
   });
   it('survives a new record of the same revision', async () => {
@@ -512,8 +478,7 @@ describe('a request that fails after its dialog has gone', () => {
 
   it('puts a refusal on the banner, as closing mid-request leaves nothing else to show it', async () => {
     const view = await posted();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     expect(view.dialog()).toBeUndefined();
     view.answer.resolve(refusal());
     await settled();
@@ -523,36 +488,24 @@ describe('a request that fails after its dialog has gone', () => {
   });
   it('warns that a lost connection may still have queued the job', async () => {
     const view = await posted();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     view.answer.reject(new TypeError('Failed to fetch'));
     await settled();
     expect(view.banner()).toContain('Failed to fetch');
     expect(view.banner()).toContain('may already have reached the workstation');
   });
-  it('names the case while the next one is loading, because nothing shows the old one by then', async () => {
+  it('names the case once the workspace has moved on, even while the next case loads', async () => {
     const view = await posted();
-    const loading = deferred<Case>();
-    vi.mocked(api.case).mockImplementationOnce(() => loading.promise);
+    vi.mocked(api.case).mockImplementationOnce(() => deferred<Case>().promise);
     await view.open('case-b');
     expect(view.dialog()).toBeUndefined();
     view.answer.resolve(refusal());
     await settled();
     expect(view.banner()).toContain(`Synthetic A: ${REFUSED}`);
   });
-  it('says something when the error answer has no text', async () => {
-    const view = await posted();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
-    view.answer.resolve(new Response('Bad gateway', { status: 502, statusText: '' }));
-    await settled();
-    expect(view.banner()).toContain('The server answered with status 502.');
-    expect(view.banner()).toContain('may already have reached the workstation');
-  });
   it('shows a failure inside an expanded viewport, where it can be dismissed', async () => {
     const view = await posted();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     fake.expanded = true;
     view.answer.resolve(refusal());
     await settled();
@@ -562,21 +515,6 @@ describe('a request that fails after its dialog has gone', () => {
     fake.viewports.at(-1).unread(REFUSED);
     await settled();
     expect(view.banner()).toContain(REFUSED);
-  });
-  it('names the case when the workspace has moved on', async () => {
-    const view = await posted();
-    await view.open('case-b');
-    expect(view.dialog()).toBeUndefined();
-    view.answer.resolve(refusal());
-    await settled();
-    expect(view.banner()).toContain(`Synthetic A: ${REFUSED}`);
-  });
-  it('leaves a failure to a dialog that is still showing', async () => {
-    const view = await posted();
-    view.answer.resolve(refusal());
-    await settled();
-    expect(view.text()).toContain(REFUSED);
-    expect(view.banner()).toBe('');
   });
 });
 
@@ -593,27 +531,19 @@ describe('following a job', () => {
     await settled();
     return view;
   }
-  it('reopens the dialog while the job runs, without a new capture', async () => {
+  const earlier = () => vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
+
+  it('reopens the dialog while the job runs, without a new capture, and leaves the workspace free', async () => {
     const view = await start(),
       capture = vi.spyOn(fake, 'capture');
     expect(view.text()).toContain('Exporting DICOM view');
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    expect(view.text()).not.toContain('Waiting for the processing worker');
+    await close(view);
     expect(view.dialog()?.open).toBe(false);
+    expect(view.dicom().getAttribute('title')).toBeFalsy();
     await view.export();
     expect(view.dialog()?.open).toBe(true);
     expect(capture).not.toHaveBeenCalled();
-  });
-  it('takes a new capture after the dialog closes with no job running', async () => {
-    const view = await app();
-    await view.export();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
-    expect(view.dialog()).toBeUndefined();
-    const capture = vi.spyOn(fake, 'capture');
-    await view.export();
-    expect(capture).toHaveBeenCalledOnce();
-    expect(view.dialog()?.open).toBe(true);
   });
   it('shows the end of a job in its open dialog, with no second report', async () => {
     const view = await start();
@@ -623,21 +553,9 @@ describe('following a job', () => {
     expect(view.toast()).toBe('');
     expect(view.banner()).toBe('');
   });
-  it('shows a failure in its open dialog, and retries with the same image', async () => {
-    const view = await start();
-    polled = async () => job('failed', { error: 'Delivery not confirmed.' });
-    await settled();
-    expect(view.text()).toContain('Retry from this dialog reuses the same image.');
-    expect(view.banner()).toBe('');
-    click(view.button('Archive in Orthanc'));
-    await settled();
-    expect(posts).toHaveLength(2);
-    expect((posts[1].form.get('image') as File).size).toBe((posts[0].form.get('image') as File).size);
-  });
   it('toasts a job that ends after its dialog closed, and lets go of the capture', async () => {
     const view = await start();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     polled = async () => job('completed', { result: archived });
     await settled();
     expect(view.toast()).toContain('View archived in Orthanc');
@@ -647,10 +565,11 @@ describe('following a job', () => {
     await view.export();
     expect(capture).toHaveBeenCalledOnce();
   });
-  it('names the case when a failure lands after moving to another', async () => {
+  it('names the case when a failure lands after moving to another, even while it loads', async () => {
     const view = await start();
+    await close(view);
+    vi.mocked(api.case).mockImplementationOnce(() => deferred<Case>().promise);
     await view.open('case-b');
-    expect(view.dialog()).toBeUndefined();
     polled = async () => job('failed', { error: 'Delivery not confirmed.' });
     await settled();
     expect(view.banner()).toContain('Synthetic A: Delivery not confirmed.');
@@ -673,13 +592,9 @@ describe('following a job', () => {
     vi.mocked(fetch).mockImplementation((async () => {
       throw new TypeError('Failed to fetch');
     }) as typeof fetch);
-    const view = await app();
-    await view.export();
-    click(view.button('Archive in Orthanc'));
-    await settled();
+    const view = await start();
     expect(view.text()).toContain('Repeating it is safe');
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     polled = async () => job('failed', { error: 'Delivery is not confirmed.' });
     await settled();
     expect(view.banner()).toContain('Delivery is not confirmed.');
@@ -688,25 +603,13 @@ describe('following a job', () => {
     const answer = deferred<Response>();
     vi.mocked(fetch).mockImplementation((async () => answer.promise) as typeof fetch);
     const view = await start();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     listed = [job('running')];
     answer.reject(new TypeError('Failed to fetch'));
     await settled();
     polled = async () => job('failed', { error: 'Delivery is not confirmed.' });
     await settled();
     expect(view.banner()).toContain('Delivery is not confirmed.');
-  });
-  it('names the case of a job that fails while the next one is loading', async () => {
-    const view = await start(),
-      loading = deferred<Case>();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
-    vi.mocked(api.case).mockImplementationOnce(() => loading.promise);
-    await view.open('case-b');
-    polled = async () => job('failed', { error: 'Delivery not confirmed.' });
-    await settled();
-    expect(view.banner()).toContain('Synthetic A: Delivery not confirmed.');
   });
   it('keeps both of two failures that land close together', async () => {
     const second = { id: 'view-2', case_id: 'case-b', revision_id: 'revision-b1' };
@@ -718,14 +621,12 @@ describe('following a job', () => {
       return ended ? job('failed', values) : job('running', { ...values, error: undefined });
     });
     const view = await start();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     await view.open('case-b');
     await view.export();
     click(view.button('Archive in Orthanc'));
     await settled();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     ended = true;
     await settled();
     expect(view.banner()).toContain('Synthetic A: First failure.');
@@ -735,53 +636,38 @@ describe('following a job', () => {
     polled = async () => job('completed', { result: archived });
     const view = await start();
     expect(view.text()).toContain('View archived in Orthanc');
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     await view.export();
     const answer = deferred<Response>();
     vi.mocked(fetch).mockImplementation((async () => answer.promise) as typeof fetch);
     click(view.button('Archive in Orthanc'));
     await settled();
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     expect(view.toast()).toBe('');
     answer.resolve(Response.json(job('completed', { result: archived })));
     await settled();
     expect(view.toast()).toContain('View archived in Orthanc');
   });
   it('reports an earlier export that only the dialog listed', async () => {
-    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
+    earlier();
     const view = await app();
     await view.export();
     expect(view.text()).toContain('still in progress');
-    click(view.labelled('Close DICOM view export'));
-    await settled();
+    await close(view);
     polled = async () => job('failed', { id: 'earlier', error: 'Delivery is not confirmed.' });
     await settled();
     expect(view.banner()).toContain('Delivery is not confirmed.');
   });
-  it('says inside the dialog how an earlier export ended, because the notice lies under its backdrop', async () => {
-    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
+  it.each<[string, Partial<DicomViewExportJob>, string]>([
+    ['finishes', { status: 'completed', result: archived }, 'An earlier export of this revision finished. View archived in Orthanc.'],
+    ['fails', { status: 'failed', error: 'Delivery is not confirmed.' }, 'did not finish'],
+  ])('says inside the dialog when an earlier export %s, because the notice lies under its backdrop', async (_name, values, text) => {
+    earlier();
     const view = await app();
     await view.export();
-    expect(view.text()).toContain('still in progress');
-    polled = async () => job('completed', { id: 'earlier', result: archived });
+    polled = async () => job(values.status!, { id: 'earlier', ...values });
     await settled();
     expect(view.text()).not.toContain('still in progress');
-    expect(view.text()).toContain('An earlier export of this revision finished. View archived in Orthanc.');
-  });
-  it('moves the note on when an earlier export fails while the dialog is open', async () => {
-    vi.mocked(api.dicomViewAvailability).mockResolvedValue({ ...availability, exports: [job('running', { id: 'earlier' })] });
-    const view = await app();
-    await view.export();
-    polled = async () => job('failed', { id: 'earlier', error: 'Delivery is not confirmed.' });
-    await settled();
-    expect(view.text()).not.toContain('still in progress');
-    expect(view.text()).toContain('did not finish');
-  });
-  it('leaves the workspace free while an export runs', async () => {
-    const view = await start();
-    expect(view.text()).not.toContain('Waiting for the processing worker');
-    expect(view.dicom().getAttribute('title')).toBeFalsy();
+    expect(view.text()).toContain(text);
   });
 });

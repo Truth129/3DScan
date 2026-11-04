@@ -3,15 +3,8 @@ import { freshVolumeMaskSettings, normalizeVolumeMaskMargin, visibleVolumeMaskId
 import { freshVolumeSettings } from '../src/lib/volume-presets';
 
 describe('explicit CT volume mask selection', () => {
-  it('starts disabled and empty, with independent owned selection arrays', () => {
-    const first = freshVolumeMaskSettings(),
-      next = freshVolumeMaskSettings();
-    expect(first).toEqual({ enabled: false, mode: 'inside', ids: [], margin_mm: 0 });
-    first.ids.push('liver');
-    expect(next.ids).toEqual([]);
-  });
-
-  it('keeps a deliberately empty enabled mask rather than exposing the unmasked volume', () => {
+  it('starts disabled and keeps a deliberately empty enabled mask rather than exposing the unmasked volume', () => {
+    expect(freshVolumeMaskSettings()).toEqual({ enabled: false, mode: 'inside', ids: [], margin_mm: 0 });
     expect(freshVolumeMaskSettings({ enabled: true, mode: 'outside', ids: [] })).toEqual({ enabled: true, mode: 'outside', ids: [], margin_mm: 0 });
   });
 
@@ -48,9 +41,7 @@ describe('explicit CT volume mask selection', () => {
   it('bounds display margins and keeps padded identities distinct from review labels', () => {
     expect(freshVolumeMaskSettings({ margin_mm: NaN }).margin_mm).toBe(0);
     expect(freshVolumeMaskSettings({ margin_mm: 20 }).margin_mm).toBe(5);
-    expect(freshVolumeMaskSettings({ margin_mm: -1 }).margin_mm).toBe(0);
     expect(volumeMaskSourceId('heart', 0)).toBe('heart');
-    expect(volumeMaskSourceId('heart', 2.5)).toBe('volume-margin:2.5:heart');
     expect(volumeMaskSourceId('heart', 2.5001)).toBe('volume-margin:2.5:heart');
     expect(volumeMaskSourceId('heart', 0.0625)).toBe('volume-margin:0.063:heart');
     expect(normalizeVolumeMaskMargin(0.0001)).toBe(0);

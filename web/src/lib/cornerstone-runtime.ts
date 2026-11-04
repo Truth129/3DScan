@@ -176,9 +176,6 @@ export class CornerstoneFrameViewport {
   get frame() {
     return this.currentFrame;
   }
-  get cacheEntries() {
-    return [...records.keys()].filter(key => key.startsWith(`scan3d-frame:${this.id}:`)).length;
-  }
   get camera() {
     return this.viewport.getCamera();
   }

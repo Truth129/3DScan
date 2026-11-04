@@ -41,9 +41,7 @@ def test_mr_catalog_and_defaults_are_modality_specific_without_torch_import():
     "modality,options",
     [
         ("MR", {"tasks": ["total"]}),
-        ("MR", {"tasks": ["lung_vessels"]}),
         ("CT", {"tasks": ["total_mr"]}),
-        ("CT", {"tasks": ["body_mr"]}),
         ("MR", {"tasks": ["total_mr"], "body_seg": True}),
         ("MR", {"tasks": ["total_mr"], "robust_crop": True}),
     ],

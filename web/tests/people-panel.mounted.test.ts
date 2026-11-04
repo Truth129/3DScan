@@ -66,12 +66,15 @@ afterEach(() => {
 });
 
 describe('People', () => {
-  it('lists each person with role, archive and when last seen', async () => {
+  it('lists each person with role, archive, when last seen and what can be done', async () => {
     const view = panel(),
       when = new Date(asha.last_seen_at!).toLocaleDateString();
     await settled();
     expect(view.row('asha').textContent).toContain(`Asha (you)asha · Administrator · Archive · Last seen ${when}`);
     expect(view.row('ravi').textContent).toContain('Raviravi · Member · No archive · Not seen yet');
+    // No role change, sign-out or disable on your own row.
+    expect(buttons(view.row('asha'))).toEqual(['Turn archive off', 'Reset link']);
+    expect(buttons(view.row('ravi'))).toEqual(['Make administrator', 'Turn archive on', 'Reset link', 'Sign out everywhere', 'Disable']);
   });
   it('adds a person and shows a link to copy', async () => {
     const newcomer = person('newcomer', { display_name: 'New Comer', state: 'invited', link_expires_at: made.expires_at }),
@@ -145,42 +148,30 @@ describe('People', () => {
     expect(view.linkField(), 'used in another browser').toBeUndefined();
     expect(view.row('ravi').textContent).toContain('Last seen');
   });
-  it('drops the link of someone it disables, and keeps the focus on the button', async () => {
+  it('shows a refusal and keeps the list, then drops the link of someone it disables, keeping the focus on the button', async () => {
     linkForRavi();
-    vi.spyOn(api, 'disablePerson').mockResolvedValue({ ...ravi, state: 'disabled', link_expires_at: made.expires_at });
+    vi.spyOn(api, 'disablePerson')
+      .mockRejectedValueOnce(new ApiError(409, 'Keep at least one administrator who can sign in'))
+      .mockResolvedValue({ ...ravi, state: 'disabled', link_expires_at: made.expires_at });
     const view = panel();
     await settled();
     click(view.action('ravi', 'Reset link'));
     await settled();
-    const disable = view.action('ravi', 'Disable')!;
-    disable.focus();
-    click(disable);
-    // As a browser does when the focused button is disabled.
-    document.body.focus();
-    await settled();
-    expect(view.linkField()).toBeUndefined();
-    expect(document.activeElement).toBe(disable);
-  });
-  it('offers no role change, sign-out or disable on your own row', async () => {
-    const view = panel();
-    await settled();
-    expect(buttons(view.row('asha'))).toEqual(['Turn archive off', 'Reset link']);
-    expect(buttons(view.row('ravi'))).toEqual(['Make administrator', 'Turn archive on', 'Reset link', 'Sign out everywhere', 'Disable']);
-  });
-  it('shows a refusal and keeps the list', async () => {
-    vi.spyOn(api, 'disablePerson').mockRejectedValue(new ApiError(409, 'Keep at least one administrator who can sign in'));
-    const view = panel();
-    await settled();
-    const disable = view.action('ravi', 'Disable')!;
-    disable.focus();
-    click(disable);
-    // As a browser does when the focused button is disabled.
-    document.body.focus();
-    await settled();
+    const disable = async () => {
+      const button = view.action('ravi', 'Disable')!;
+      button.focus();
+      click(button);
+      // As a browser does when the focused button is disabled.
+      document.body.focus();
+      await settled();
+      expect(document.activeElement, 'the focus returns to the button pressed').toBe(button);
+    };
+    await disable();
     expect(view.all(element => element.getAttribute('role') === 'alert').map(element => element.textContent)).toEqual([
       'Keep at least one administrator who can sign in',
     ]);
-    expect(view.row('ravi').textContent).toContain('Not seen yet');
-    expect(document.activeElement, 'the focus returns to the button pressed').toBe(disable);
+    expect(view.row('ravi').textContent).toContain('Reset link works until');
+    await disable();
+    expect(view.linkField()).toBeUndefined();
   });
 });

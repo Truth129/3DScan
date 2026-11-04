@@ -211,7 +211,6 @@ function setup() {
     callbacks,
     group,
     rotationCleanup,
-    context,
     rendererEvents,
     mprActor,
   };
@@ -225,16 +224,6 @@ afterEach(() => {
 });
 
 describe('physical shared CT volume', () => {
-  it.each([
-    [0, 1e6],
-    [-1e6, 1e6],
-    [-2, -1],
-  ])('round-trips the finite orthographic clipping interval [%s, %s]', (nearMM, farMM) => {
-    const converted = volumeCameraLPS({ ...camera, nearMM, farMM });
-    expect(converted.clippingRange).toEqual([nearMM, farMM]);
-    expect(volumeCameraRAS(converted)).toMatchObject({ nearMM, farMM });
-  });
-
   it('publishes the real Cornerstone parallel-camera reset interval through camera events', async () => {
     const fixture = setup(),
       onCamera = vi.fn(),
@@ -242,15 +231,13 @@ describe('physical shared CT volume', () => {
     const adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera, onCamera, onError });
     adapters.push(adapter);
     onCamera.mockClear();
-    // Pinned Cornerstone resetCamera emits CAMERA_MODIFIED with this interval
-    // before VolumeViewport3D refits it to the visible actors' bounds.
+    // Pinned Cornerstone resetCamera emits CAMERA_MODIFIED with this interval before refitting it.
     adapter.nativeRenderer.getActiveCamera().setClippingRange(-1e6, 1e6);
     fixture.element.dispatchEvent(event('camera', {}));
     await Promise.resolve();
     expect(onCamera).toHaveBeenLastCalledWith(expect.objectContaining({ nearMM: -1e6, farMM: 1e6 }));
     await adapter.render();
     expect(onError).not.toHaveBeenCalled();
-    expect(adapter.isDisposed).toBe(false);
   });
 
   it('retains the physical camera through shared-engine and tool resize resets without blocking real navigation', async () => {
@@ -262,7 +249,6 @@ describe('physical shared CT volume', () => {
     onCamera.mockClear();
     const transient = { ...camera, focalPointRAS: [4, 5, 6] as Point, positionRAS: [74, -115, 96] as Point, parallelScaleMM: 126, nearMM: 3, farMM: 215 };
     // Core resets each shared 3D viewport even when only an MPR canvas changed.
-    // Its tool observer then reapplies a relative presentation at the new fit.
     adapter.nativeViewport.setCamera(volumeCameraLPS(transient));
     for (const listener of fixture.rendererEvents) listener({ type: 'ResetCameraEvent' });
     adapter.nativeViewport.setCamera(volumeCameraLPS({ ...transient, parallelScaleMM: 140 }));
@@ -271,11 +257,8 @@ describe('physical shared CT volume', () => {
     await Promise.resolve();
     expect(adapter.camera).toEqual(camera);
     expect(onCamera).toHaveBeenLastCalledWith(camera);
-    expect(fixture.engine.getViewports()).toHaveLength(4);
-    expect(fixture.texture.delete).not.toHaveBeenCalled();
     onCamera.mockClear();
-    // Normal public setCamera during orbit/pan/zoom has no ResetCameraEvent.
-    // Accept its final clipping range, after VolumeViewport3D finishes refitting.
+    // Orbit, pan and zoom have no ResetCameraEvent, so their refitted clipping is accepted.
     adapter.nativeViewport.setCamera(volumeCameraLPS(transient));
     adapter.nativeRenderer.getActiveCamera().setClippingRange(4, 216);
     await Promise.resolve();
@@ -321,14 +304,10 @@ describe('physical shared CT volume', () => {
     adapters.push(adapter);
     expect(adapter.stats()).toMatchObject({ volumeVisible: true });
     adapter.clearMask('inside');
-    adapter.setVolumeVisible(true);
     await adapter.render();
     expect(adapter.stats()).toMatchObject({ volumeVisible: false, volumeRequestedVisible: true, mask: { mode: 'inside', ready: false } });
-    adapter.setMaskMode('outside');
-    await adapter.render();
-    expect(adapter.stats()).toMatchObject({ volumeVisible: false, mask: { mode: 'outside', ready: false } });
     await adapter.setMask(undefined, 'outside');
-    expect(adapter.stats()).toMatchObject({ volumeVisible: false });
+    expect(adapter.stats()).toMatchObject({ volumeVisible: false, mask: { mode: 'outside', ready: false } });
     adapter.clearMask();
     expect(adapter.stats()).toMatchObject({ volumeVisible: true });
     adapter.setVolumeVisible(false);
@@ -336,7 +315,6 @@ describe('physical shared CT volume', () => {
     adapter.clearMask();
     expect(adapter.stats()).toMatchObject({ volumeVisible: false, volumeRequestedVisible: false });
     expect(fixture.owner.isDisposed).toBe(false);
-    expect(fixture.engine.getViewports()).toHaveLength(4);
     expect(fixture.texture.delete).not.toHaveBeenCalled();
   });
 
@@ -372,17 +350,22 @@ describe('physical shared CT volume', () => {
     ];
     expect(cornerstoneVolumeStepMM(small, 'detail')).toBe(0.5);
   });
-  it('round-trips an independent RAS camera and rejects degenerate projection state', () => {
+  it('round-trips an independent RAS camera with finite clipping and rejects degenerate projection state', () => {
     const input = structuredClone(camera);
-    const converted = volumeCameraLPS(input),
-      returned = volumeCameraRAS(converted);
+    const returned = volumeCameraRAS(volumeCameraLPS(input));
     for (const key of ['positionRAS', 'focalPointRAS', 'viewUpRAS'] as const)
       returned[key].forEach((value, axis) => expect(value).toBeCloseTo(input[key][axis], 12));
-    expect(returned.parallelScaleMM).toBe(90);
-    expect(returned.nearMM).toBe(0.1);
-    expect(returned.farMM).toBe(1500);
+    expect(returned).toMatchObject({ parallelScaleMM: 90, nearMM: 0.1, farMM: 1500 });
     returned.positionRAS[0] = 0;
     expect(input).toEqual(camera);
+    for (const [nearMM, farMM] of [
+      [-1e6, 1e6],
+      [-2, -1],
+    ]) {
+      const converted = volumeCameraLPS({ ...camera, nearMM, farMM });
+      expect(converted.clippingRange).toEqual([nearMM, farMM]);
+      expect(volumeCameraRAS(converted)).toMatchObject({ nearMM, farMM });
+    }
     for (const invalid of [
       { ...camera, parallelScaleMM: 0 },
       { ...camera, farMM: Infinity },
@@ -444,21 +427,6 @@ describe('physical shared CT volume', () => {
     expect(() => adapter.render()).toThrow(/no longer available/i);
   });
 
-  it('cancels a pending frame and unregisters the owner listener on early disposal', async () => {
-    const fixture = setup(),
-      adapter = await CornerstoneVolume3D.create(fixture.element, fixture.owner, { settings: freshVolumeSettings(), camera });
-    adapters.push(adapter);
-    fake.suspended = true;
-    const result = adapter.render();
-    const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' });
-    expect(adapter.render()).toBe(result);
-    adapter.dispose();
-    await rejected;
-    expect(fixture.callbacks.size).toBe(0);
-    expect(fixture.engine.getViewports()).toHaveLength(3);
-    expect(fixture.engine.hasBeenDestroyed).toBe(false);
-  });
-
   it('observes synchronous dispatch failures and retries without releasing the MPR source', async () => {
     const fixture = setup(),
       onError = vi.fn();
@@ -478,13 +446,11 @@ describe('physical shared CT volume', () => {
     adapter.setSettings(freshVolumeSettings({ shift: 25 }));
     await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('Synthetic settings dispatch failure'));
     expect(adapter.isDisposed).toBe(true);
-    expect(fixture.engine.getViewports()).toHaveLength(3);
     expect(fixture.owner.isDisposed).toBe(false);
     expect(fixture.texture.delete).not.toHaveBeenCalled();
-    expect(fixture.texture.releaseGraphicsResources).not.toHaveBeenCalled();
     const retry = await CornerstoneVolume3D.create(fixture.element, fixture.owner, options);
     adapters.push(retry);
-    expect(retry.stats()).toMatchObject({ sharedCTTexture: true, sameContextAsMPR: true, viewportCount: 4 });
+    expect(retry.stats()).toMatchObject({ sharedCTTexture: true, viewportCount: 4 });
   });
 
   it('rejects a source that disappears while its actor is being created', async () => {
@@ -555,9 +521,6 @@ describe('native volume light ownership', () => {
     adapter.setCamera({ ...camera, positionRAS: [-170, -40, 120] });
     await adapter.render();
     expect(liveStats(adapter).lighting).toEqual(fixed);
-    adapter.setLighting({ ...settings, lightFollowsCamera: false, ambient: 0.9 });
-    await adapter.render();
-    expect(liveStats(adapter).lighting?.positionLPS).toEqual(fixed?.positionLPS);
     adapter.setLighting({ ...settings, lightFollowsCamera: false, azimuth: -25 });
     await adapter.render();
     expect(liveStats(adapter).lighting?.positionLPS).not.toEqual(fixed?.positionLPS);

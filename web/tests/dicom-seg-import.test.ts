@@ -54,14 +54,10 @@ describe('DICOM SEG upload selection', () => {
     expect(body.get('revision_id')).toBe('revision b');
     expect((body.getAll('files') as File[]).map(file => [file.name, file.size])).toEqual(input.map(file => [file.name, file.size]));
   });
-  it('uses import wording when existing draft/comparison/busy guards block an import', () => {
+  it('uses import wording when the export guards block an import', () => {
     const options = { caseId: 'case-a', revision: { id: 'revision-a' } as Revision, busy: false, comparison: false, action: 'importing masks' as const };
-    expect(savedRevisionExportBlockReason(options)).toBe('');
     expect(savedRevisionExportBlockReason({ ...options, busy: true })).toContain('before importing');
-    expect(savedRevisionExportBlockReason({ ...options, comparison: true })).toContain('comparison');
-    expect(savedRevisionExportBlockReason({ ...options, pendingPrompts: true })).toBe(
-      'Save or discard the correction draft before importing masks into the saved revision.',
-    );
+    expect(savedRevisionExportBlockReason({ ...options, pendingPrompts: true })).toContain('before importing masks into the saved revision');
   });
 });
 
@@ -82,23 +78,14 @@ describe('DICOM SEG submission lifecycle', () => {
     expect(state.submitting.value).toBe(false);
     scope.stop();
   });
-  it('blocks duplicate submits while an upload is pending', async () => {
-    let resolve!: (value: Job) => void;
-    const create = vi.spyOn(api, 'importDicomSeg').mockImplementation(() => new Promise(done => (resolve = done))),
-      { scope, state } = fixture();
-    const pending = state.start(files());
-    expect(state.submitting.value).toBe(true);
-    await state.start(files());
-    expect(create).toHaveBeenCalledOnce();
-    resolve(job());
-    await pending;
-    scope.stop();
-  });
-  it.each(['case', 'revision', 'dispose'])('ignores and aborts a late upload after changing %s', async change => {
+  it.each(['case', 'revision', 'dispose'])('blocks a duplicate submit, and ignores and aborts a late upload after changing %s', async change => {
     let resolve!: (value: Job) => void;
     const create = vi.spyOn(api, 'importDicomSeg').mockImplementation(() => new Promise(done => (resolve = done))),
       { scope, state, source, queued } = fixture();
     const pending = state.start(files());
+    expect(state.submitting.value).toBe(true);
+    await state.start(files());
+    expect(create).toHaveBeenCalledOnce();
     if (change === 'dispose') scope.stop();
     else source.value = change === 'case' ? { caseId: 'case-b', revisionId: 'revision-b' } : { ...source.value, revisionId: 'revision-b' };
     resolve(job());

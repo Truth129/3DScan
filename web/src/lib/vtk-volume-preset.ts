@@ -15,7 +15,7 @@ export interface VTKVolumeQuality {
   aoKernelRadius?: number;
 }
 
-export function vtkVolumePreset(settings: CTVolumeSettings) {
+function vtkVolumePreset(settings: CTVolumeSettings) {
   const current = freshVolumeSettings(settings);
   const preset = getVolumePreset(current.preset, current.cinematic, current.signal_window);
   // Native vtk.js exposes one linear gradient ramp and holds it flat past the

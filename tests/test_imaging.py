@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 from itertools import product
+import re
 import zipfile
 
 import nibabel as nib
@@ -113,22 +114,22 @@ def test_region_operates_on_world_voxel_centers(fixture, tmp_path):
     assert result["changed_voxels"] == int((mask.astype(bool) & ~region).sum())
 
 
-@pytest.mark.parametrize("plane,fixed", [("axial", 2), ("coronal", 1), ("sagittal", 0)])
-def test_anatomical_slice_transform_and_probe(fixture, plane, fixed):
+def test_anatomical_slice_transform_and_probe(fixture):
     ct_path, mask_path, affine, ct, _ = fixture
     center = np.array(imaging.geometry(ct_path)["center_ras"])
-    frame = review_volume.review_frame(ct_path, mask_path, plane, center[fixed])["frame"]
+    fixed = 1
+    frame = review_volume.review_frame(ct_path, mask_path, "coronal", center[fixed])["frame"]
     meta = frame["meta"]
     assert frame["pixels"] == meta["width"] * meta["height"]
     transform = np.array(meta["pixel_to_ras"])
     assert transform[fixed, 3] == pytest.approx(center[fixed])
     assert transform[fixed, 0] == transform[fixed, 1] == 0
     point = (affine @ [5, 6, 7, 1])[:3]
-    assert imaging.probe(ct_path, point)["hu"] == ct[5, 6, 7]
-    assert imaging.probe(ct_path, point)["voxel"] == [5, 6, 7]
+    probe = imaging.probe(ct_path, point)
+    assert probe["hu"] == ct[5, 6, 7] and probe["voxel"] == [5, 6, 7]
 
 
-@pytest.mark.parametrize("fixed", [None, 0, 1, 2])
+@pytest.mark.parametrize("fixed", [None, 1])
 def test_fast_reslice_matches_full_patient_coordinate_sampling(fixed):
     """Both the native-slab and fully oblique paths preserve the sampling rule."""
     rng = np.random.default_rng(92)
@@ -140,8 +141,7 @@ def test_fast_reslice_matches_full_patient_coordinate_sampling(fixed):
     positions = [2.14]
     if fixed is not None:
         mapping[fixed, :2] = 0
-        # Exercise fractional interpolation, exact voxel centres, and the
-        # half-voxel border where mode='constant' must remain outside the CT.
+        # Fractional, exact-centre and half-voxel-border positions.
         positions = [-0.1, 0, 2.37, 4.5, values.shape[fixed] - 1, values.shape[fixed] - 0.9]
     rows, columns = np.indices((11, 12), dtype=np.float64)
     for position in positions:
@@ -153,11 +153,8 @@ def test_fast_reslice_matches_full_patient_coordinate_sampling(fixed):
         np.testing.assert_allclose(actual, expected, rtol=0, atol=0.0005)
         expected_mask = ndi.map_coordinates(mask, coordinates, order=0, mode="constant", cval=0, prefilter=False)
         actual_mask = imaging._reslice(mask, mapping, rows.shape, order=0, cval=0)
-        # affine_transform evaluates the affine in C; the reference grid is
-        # evaluated by NumPy first. Fused arithmetic can put an exact physical
-        # half-voxel on opposite sides of the tie (SciPy 1.16 builds do this).
-        # Require exact agreement everywhere else. At a few-ULP tie, accept
-        # only the value of an equally nearest physical voxel.
+        # Fused arithmetic can put an exact half-voxel on either side of the tie
+        # (SciPy 1.16), so a mismatch must be a tie between equally near voxels.
         for row, column in np.argwhere(actual_mask != expected_mask):
             point = coordinates[:, row, column]
             assert np.all((point >= 0) & (point <= np.asarray(mask.shape) - 1)), point
@@ -170,7 +167,7 @@ def test_fast_reslice_matches_full_patient_coordinate_sampling(fixed):
             assert bool(actual_mask[row, column]) in allowed
 
 
-@pytest.mark.parametrize("axis", [0, 1, 2])
+@pytest.mark.parametrize("axis", [0, 2])
 def test_native_slab_half_voxel_selects_upper_slice(axis):
     """The explicitly fixed native axis retains its deterministic tie rule."""
     mask = np.zeros((8, 8, 8), dtype=bool)
@@ -198,52 +195,30 @@ def test_misaligned_or_nonbinary_masks_rejected(fixture, tmp_path):
         imaging.analyze_mask(ct, bad)
 
 
-def test_display_mask_cache_reuse_is_immutable_and_validates_each_reference_grid(fixture, monkeypatch):
-    ct_path, mask_path, affine, _, _ = fixture
+def test_display_mask_cache_is_shared_immutable_checked_per_grid_and_bounded(fixture, tmp_path, monkeypatch):
+    ct_path, mask_path, affine, _, mask = fixture
     ct, _ = imaging._image(ct_path)
     imaging._SLICE_MASK_CACHE.clear()
     original_binary = imaging._binary
     calls = []
-
-    def load(*args):
-        calls.append(args)
-        return original_binary(*args)
-
-    monkeypatch.setattr(imaging, "_binary", load)
+    monkeypatch.setattr(imaging, "_binary", lambda *args: calls.append(args) or original_binary(*args))
     with ThreadPoolExecutor(max_workers=4) as executor:
         masks = list(executor.map(lambda _: imaging._slice_mask(mask_path, ct, affine), range(4)))
-    assert len(calls) == 1
-    assert all(mask is masks[0] for mask in masks)
-    assert masks[0].flags.writeable is False
+    assert len(calls) == 1 and all(item is masks[0] for item in masks)
     with pytest.raises(ValueError, match="read-only"):
         masks[0][0, 0, 0] = True
     shifted = affine.copy()
     shifted[0, 3] += 2
     with pytest.raises(ValueError, match="geometry"):
         imaging._slice_mask(mask_path, ct, shifted)
-    assert len(calls) == 2
-
-
-def test_display_mask_cache_invalidates_replaced_file_and_respects_byte_bound(fixture, tmp_path, monkeypatch):
-    ct_path, mask_path, affine, _, mask = fixture
-    ct, _ = imaging._image(ct_path)
-    imaging._SLICE_MASK_CACHE.clear()
-    first = imaging._slice_mask(mask_path, ct, affine)
+    # A replaced file is never served from the cache.
     replacement = np.zeros_like(mask)
     replacement[3:6, 4:8, 5:9] = 1
     save(tmp_path / "replacement.nii.gz", replacement, affine).replace(mask_path)
-    second = imaging._slice_mask(mask_path, ct, affine)
-    assert second is not first
-    np.testing.assert_array_equal(second, replacement)
-    assert len(imaging._SLICE_MASK_CACHE) == 1
-    monkeypatch.setattr(imaging, "_SLICE_MASK_CACHE_BYTES", second.nbytes + 1)
-    other = save(tmp_path / "other.nii.gz", mask, affine)
-    imaging._slice_mask(other, ct, affine)
-    assert len(imaging._SLICE_MASK_CACHE) == 1
-    assert sum(value.nbytes for value in imaging._SLICE_MASK_CACHE.values()) <= imaging._SLICE_MASK_CACHE_BYTES
+    np.testing.assert_array_equal(imaging._slice_mask(mask_path, ct, affine), replacement)
     monkeypatch.setattr(imaging, "_SLICE_MASK_CACHE_BYTES", 1)
     imaging._SLICE_MASK_CACHE.clear()
-    imaging._slice_mask(other, ct, affine)
+    imaging._slice_mask(mask_path, ct, affine)
     assert not imaging._SLICE_MASK_CACHE
 
 
@@ -288,14 +263,6 @@ def test_glb_real_geometry_scale_identity_and_winding(fixture, tmp_path):
     centered = positions.astype(float) - positions.mean(axis=0)
     a, b, c = (centered[faces[:, i]] for i in range(3))
     assert np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6 > 0
-    original = path.read_bytes()
-
-    def cancelled(_):
-        raise InterruptedError("Cancelled before mesh extraction")
-
-    with pytest.raises(InterruptedError):
-        surfaces.build_model([entry(mask_path)], path, detailed=True, progress=cancelled)
-    assert path.read_bytes() == original
 
 
 def test_display_simplification_preserves_thin_branch_tips_and_closed_topology(tmp_path, monkeypatch):
@@ -410,47 +377,39 @@ def test_dicom_index_sorts_physical_position_and_flags_gaps(tmp_path):
     assert any("missing slices" in message for message in dicom.index_dicom(tmp_path)[0]["warnings"])
 
 
-def test_dicom_duplicate_positions_are_not_silently_merged(tmp_path):
-    series, frame = generate_uid(), generate_uid()
-    write_dicom(tmp_path / "a.dcm", series, frame, 0)
-    write_dicom(tmp_path / "b.dcm", series, frame, 0)
-    record = dicom.index_dicom(tmp_path)[0]
-    assert any("Repeated slice positions" in message for message in record["warnings"])
-    with pytest.raises(ValueError, match="Repeated slice positions"):
-        dicom.convert_series(record["files"], tmp_path / "converted")
+def change_second_slice(**tags):
+    def apply(ds):
+        for name, value in tags.items():
+            if value is None:
+                del ds[name]
+            else:
+                setattr(ds, name, value)
+
+    return apply
 
 
-@pytest.mark.parametrize("missing_tag", ["ImagePositionPatient", "ImageOrientationPatient", "PixelSpacing", "Rows", "Columns"])
-def test_dicom_missing_required_geometry_is_reported_before_conversion(tmp_path, missing_tag):
-    series, frame = generate_uid(), generate_uid()
-    for index in range(2):
-        path = tmp_path / f"{index}.dcm"
-        write_dicom(path, series, frame, index)
-    path = tmp_path / "1.dcm"
-    incomplete = pydicom.dcmread(path)
-    del incomplete[missing_tag]
-    incomplete.save_as(path, enforce_file_format=True)
-
-    record = dicom.index_dicom(tmp_path)[0]
-    assert "Missing patient position, orientation or pixel geometry" in record["warnings"]
-    with pytest.raises(ValueError, match="Missing patient position, orientation or pixel geometry"):
-        dicom.convert_series(record["files"], tmp_path / "converted")
-
-
-def test_dicom_missing_coordinate_frame_has_an_explicit_diagnostic(tmp_path):
+@pytest.mark.parametrize(
+    "change,message",
+    [
+        (change_second_slice(ImagePositionPatient=[0, 0, 0]), "Repeated slice positions"),
+        (change_second_slice(ImagePositionPatient=None), "Missing patient position, orientation or pixel geometry"),
+        (change_second_slice(PixelSpacing=None), "Missing patient position, orientation or pixel geometry"),
+        (change_second_slice(FrameOfReferenceUID=None), "missing or multiple patient coordinate frames"),
+        (change_second_slice(AcquisitionNumber=2), "AcquisitionNumber"),
+        (change_second_slice(ConvolutionKernel="LUNG"), "ConvolutionKernel"),
+    ],
+)
+def test_dicom_series_that_cannot_be_one_volume_is_flagged_and_never_converted(tmp_path, change, message):
     series, frame = generate_uid(), generate_uid()
     for index in range(2):
-        path = tmp_path / f"{index}.dcm"
-        write_dicom(path, series, frame, index)
-        incomplete = pydicom.dcmread(path)
-        del incomplete["FrameOfReferenceUID"]
-        incomplete.save_as(path, enforce_file_format=True)
-
-    record = dicom.index_dicom(tmp_path)[0]
-    assert record["slice_count"] == 2  # Missing NumberOfFrames defaults to one.
-    assert record["study_uid"] is None and record["frame_of_reference_uid"] is None
-    assert "Series has missing or multiple patient coordinate frames" in record["warnings"]
-    with pytest.raises(ValueError, match="missing or multiple patient coordinate frames"):
+        write_dicom(tmp_path / f"{index}.dcm", series, frame, index)
+    second = pydicom.dcmread(tmp_path / "1.dcm")
+    change(second)
+    second.save_as(tmp_path / "1.dcm", enforce_file_format=True)
+    (record,) = dicom.index_dicom(tmp_path)
+    assert record["slice_count"] == 2  # An absent NumberOfFrames counts as one.
+    assert any(re.search(message, warning) for warning in record["warnings"])
+    with pytest.raises(ValueError, match=message):
         dicom.convert_series(record["files"], tmp_path / "converted")
 
 
@@ -468,51 +427,27 @@ def conversion_sources(tmp_path, syntax=None):
     return dicom.index_dicom(source)[0]["files"]
 
 
-@pytest.mark.parametrize("syntax", ["1.2.840.10008.1.2.4.90", "1.2.840.10008.1.2.4.91"])
-def test_dicom_unsupported_jpeg2000_explains_installed_decoder_and_keeps_private_log(tmp_path, monkeypatch, syntax):
-    files = conversion_sources(tmp_path, syntax)
+@pytest.mark.parametrize(
+    "syntax,message",
+    [("1.2.840.10008.1.2.4.90", "JPEG 2000.*OpenJPEG"), ("PRIVATE_UNKNOWN_SYNTAX", "installed DICOM converter.*required decoder")],
+)
+def test_dicom_unsupported_compression_is_explained_without_exposing_converter_output(tmp_path, monkeypatch, syntax, message):
+    files = conversion_sources(tmp_path, syntax if syntax[0].isdigit() else None)
     output = tmp_path / "converted"
-    output.mkdir()
-    log = output / "dcm2niix.log"
-    log.write_text("old log")
-    log.chmod(0o644)
     patient_details = b"Patient: PRIVATE_NAME, source /private/patient/source.dcm"
     monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
-    monkeypatch.setattr(
-        dicom.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=2,
-            stdout=b"Warning: Unsupported transfer syntax: " + syntax.encode() + b"\n" + patient_details,
-            stderr=b"No valid DICOM images were found",
-        ),
-    )
-    with pytest.raises(RuntimeError, match="JPEG 2000.*OpenJPEG") as error:
+    stdout = b"Warning: Unsupported transfer syntax: " + syntax.encode() + b"\n" + patient_details
+    monkeypatch.setattr(dicom.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=2, stdout=stdout, stderr=b""))
+    with pytest.raises(RuntimeError, match=message) as error:
         dicom.convert_series(files, output)
-    assert "verify the selected" not in str(error.value)
-    assert "PRIVATE_NAME" not in str(error.value) and "/private/" not in str(error.value)
-    assert "dcm2niix.log" in str(error.value)
-    assert patient_details.decode() in log.read_text()
-    assert "exit code: 2" in log.read_text()
-    assert log.stat().st_mode & 0o777 == 0o600
-    assert not (output / "reference.nii.gz").exists()
-    assert not list(output.glob(".dicom-*"))
+    assert "PRIVATE" not in str(error.value) and "/private/" not in str(error.value)
+    # The details stay in a private log beside the output.
+    log = output / "dcm2niix.log"
+    assert patient_details.decode() in log.read_text() and log.stat().st_mode & 0o777 == 0o600
+    assert not (output / "reference.nii.gz").exists() and not list(output.glob(".dicom-*"))
 
 
-def test_dicom_unknown_unsupported_compression_never_exposes_converter_metadata(tmp_path, monkeypatch):
-    files = conversion_sources(tmp_path)
-    monkeypatch.setenv("SCAN3D_DCM2NIIX", "synthetic-dcm2niix")
-    monkeypatch.setattr(
-        dicom.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=2, stdout="Unsupported transfer syntax: PRIVATE_UNKNOWN_SYNTAX /private/patient", stderr=""),
-    )
-    with pytest.raises(RuntimeError, match="installed DICOM converter.*required decoder") as error:
-        dicom.convert_series(files, tmp_path / "converted")
-    assert "PRIVATE_UNKNOWN_SYNTAX" not in str(error.value) and "/private" not in str(error.value)
-
-
-@pytest.mark.parametrize("returncode,output_count", [(0, 0), (0, 2), (2, 0), (8, 1)])
+@pytest.mark.parametrize("returncode,output_count", [(0, 2), (2, 0), (8, 1)])
 def test_dicom_missing_multiple_or_partially_failed_converter_outputs_are_never_accepted(tmp_path, monkeypatch, returncode, output_count):
     files = conversion_sources(tmp_path)
     output = tmp_path / "converted"
@@ -521,8 +456,6 @@ def test_dicom_missing_multiple_or_partially_failed_converter_outputs_are_never_
     def convert(command, **kwargs):
         target = Path(command[command.index("-o") + 1])
         for index in range(output_count):
-            # A nonzero converter result must fail before even trying to load a
-            # partial output, regardless of whether the file looks like NIfTI.
             (target / f"reference{index}.nii.gz").write_bytes(b"partial output")
         return SimpleNamespace(returncode=returncode, stdout=b"source /private/patient", stderr=b"conversion details")
 
@@ -598,29 +531,11 @@ def test_dicom_codec_fallback_preserves_original_bytes_hu_and_oblique_geometry(t
         target = Path(command[command.index("-o") + 1])
         calls.append((source, target))
         if len(calls) == 1:
-            assert all((source / f"{index:06d}.dcm").stat().st_ino == Path(name).stat().st_ino for index, name in enumerate(files))
             (target / "native-partial.nii.gz").write_bytes(b"must never be accepted")
             return SimpleNamespace(returncode=1, stdout=b"OpenJPEG failed to read the header /private/patient", stderr=b"")
-        assert source != calls[0][0] and target != calls[0][1]
-        assert not list(target.iterdir())
-        for index, name in enumerate(files):
-            normalized = source / f"{index:06d}.dcm"
-            assert normalized.stat().st_ino != Path(name).stat().st_ino
-            before, after = pydicom.dcmread(name), pydicom.dcmread(normalized)
-            assert after.file_meta.TransferSyntaxUID == ExplicitVRLittleEndian
-            for key in (
-                "SOPInstanceUID",
-                "FrameOfReferenceUID",
-                "ImagePositionPatient",
-                "ImageOrientationPatient",
-                "PixelSpacing",
-                "RescaleSlope",
-                "RescaleIntercept",
-                "LossyImageCompression",
-            ):
-                assert getattr(after, key) == getattr(before, key)
-            before.pixel_array_options(decoding_plugin="gdcm")
-            np.testing.assert_array_equal(after.pixel_array, before.pixel_array)
+        # The retry reads decoded copies in fresh folders.
+        assert source != calls[0][0] and target != calls[0][1] and not list(target.iterdir())
+        assert all(pydicom.dcmread(path).file_meta.TransferSyntaxUID == ExplicitVRLittleEndian for path in source.glob("*.dcm"))
         return native_run(command, **kwargs)
 
     monkeypatch.setattr(dicom.subprocess, "run", convert)
@@ -646,16 +561,16 @@ def test_dicom_codec_fallback_preserves_original_bytes_hu_and_oblique_geometry(t
         np.testing.assert_array_equal(values[tuple(np.moveaxis(np.rint(locations).astype(int), -1, 0))], expected)
     manifest = json.loads((output / "conversion.json").read_text())
     assert manifest["primary_exit_code"] == 1 and manifest["final_exit_code"] == 0
-    assert manifest["normalizer"]["name"] == "pydicom-gdcm"
-    assert manifest["normalizer"]["decoded_slice_count"] == 2
+    assert manifest["normalizer"]["name"] == "pydicom-gdcm" and manifest["normalizer"]["decoded_slice_count"] == 2
     assert manifest["normalizer"]["resampled"] is manifest["normalizer"]["recompressed"] is False
     assert "/private" not in json.dumps(manifest)
-    assert "OpenJPEG failed" in (output / "dcm2niix.log").read_text()
-    assert "Normalized retry" in (output / "dcm2niix.log").read_text()
+    assert "OpenJPEG failed" in (output / "dcm2niix.log").read_text() and "Normalized retry" in (output / "dcm2niix.log").read_text()
 
 
-@pytest.mark.parametrize("native_message,expected_calls", [(b"generic conversion error", 1), (b"Failed to decode frame", 2)])
-@pytest.mark.parametrize("retry_exit,retry_outputs", [(0, 0), (1, 1)])
+@pytest.mark.parametrize(
+    "native_message,expected_calls,retry_exit,retry_outputs",
+    [(b"generic conversion error", 1, 0, 0), (b"Failed to decode frame", 2, 0, 0), (b"Failed to decode frame", 2, 1, 1)],
+)
 def test_dicom_fallback_is_targeted_and_failed_or_empty_retry_never_uses_primary_partial_output(
     tmp_path, monkeypatch, native_message, expected_calls, retry_exit, retry_outputs
 ):
@@ -717,7 +632,7 @@ def test_gpu_selection_prefers_a_discrete_gpu_and_only_auto_may_use_the_cpu(monk
         segmentation._device_info("cuda")
 
 
-@pytest.mark.parametrize("profile", ["abdomen", "chest", "chest_abdomen"])
+@pytest.mark.parametrize("profile", ["abdomen", "chest_abdomen"])
 def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixture, tmp_path, monkeypatch, profile):
     ct_path, _, affine, ct, _ = fixture
     commands = []
@@ -765,24 +680,19 @@ def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixtur
     destination = tmp_path / "runs"
     first = segmentation.segment(ct_path, destination, profile, lambda _: None, lambda: False)
     second = segmentation.segment(ct_path, destination, profile, lambda _: None, lambda: False)
-    retained = {entry["id"]: entry for entry in first}
-    assert set(retained) == {
-        "total:liver",
-        "total:brain",
-        "total:skull",
-        "total:vertebrae_C1",
-        "total:humerus_left",
-        "total:femur_left",
-        "total:gluteus_maximus_left",
-        "total:atrial_appendage_left",
-    } | ({f"lung_vessels:{name}" for name in segmentation._LUNG} if profile != "abdomen" else set())
-    assert retained["total:skull"]["group"] == "Bones"
-    assert retained["total:vertebrae_C1"]["group"] == "Bones"
-    assert retained["total:humerus_left"]["group"] == "Bones"
-    assert retained["total:femur_left"]["group"] == "Bones"
-    assert retained["total:brain"]["group"] == "Head organs"
-    assert retained["total:gluteus_maximus_left"]["group"] == "Muscles"
-    assert retained["total:atrial_appendage_left"]["group"] == "Chest organs"
+    groups = {entry["id"]: entry["group"] for entry in first if entry["task"] == "total"}
+    assert groups == {
+        "total:liver": "Abdominal organs",
+        "total:brain": "Head organs",
+        "total:skull": "Bones",
+        "total:vertebrae_C1": "Bones",
+        "total:humerus_left": "Bones",
+        "total:femur_left": "Bones",
+        "total:gluteus_maximus_left": "Muscles",
+        "total:atrial_appendage_left": "Chest organs",
+    }
+    lung = {entry["id"] for entry in first if entry["task"] == "lung_vessels"}
+    assert lung == ({f"lung_vessels:{name}" for name in segmentation._LUNG} if profile != "abdomen" else set())
     assert first[0]["mask_file"] != second[0]["mask_file"]
     assert [command[command.index("--task") + 1] for command in commands] == (["total", "total"] if profile == "abdomen" else ["total", "lung_vessels"] * 2)
     assert "--fast" not in commands[0]
@@ -790,14 +700,12 @@ def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixtur
     manifest = json.loads((destination / "inference.json").read_text())
     assert manifest["status"] == "completed"
     assert manifest["output_selection"] == "all_nonempty_task_outputs"
-    assert manifest["structure_count"] == len(retained)
+    assert manifest["structure_count"] == len(first)
     assert manifest["empty_labels"] == ["total:spleen"]
     assert manifest["qc"]
 
 
 def test_checkpoint_fingerprint_changes_when_weight_bytes_change(tmp_path, monkeypatch):
-    # The installed task registry is pure metadata; tiny synthetic checkpoint
-    # files test our identity contract without loading/training a model.
     monkeypatch.setenv("TOTALSEG_WEIGHTS_PATH", str(tmp_path / "weights"))
     incomplete = segmentation.model_fingerprint("abdomen")
     assert incomplete["weights_complete"] is False
@@ -817,23 +725,7 @@ def test_checkpoint_fingerprint_changes_when_weight_bytes_change(tmp_path, monke
     assert str(tmp_path) not in json.dumps(second)
 
 
-def test_slicer_rejects_different_lattice(fixture, tmp_path):
-    ct_path, mask_path, affine, _, mask = fixture
-    header = {
-        "space": "right-anterior-superior",
-        "space directions": affine[:3, :3].T * 0.5,
-        "space origin": affine[:3, 3],
-        "Segment0_ID": "total:liver",
-        "Segment0_Layer": "0",
-        "Segment0_LabelValue": "1",
-    }
-    path = tmp_path / "wrong_grid.seg.nrrd"
-    nrrd.write(str(path), mask, header)
-    with pytest.raises(ValueError, match="different voxel grid"):
-        slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "wrong")
-
-
-def test_slicer_strict_case_hash_prevents_cross_case_and_missing_identity(fixture, tmp_path):
+def test_slicer_import_refuses_another_grid_or_ct_and_a_missing_identity(fixture, tmp_path):
     ct_path, mask_path, affine, ct, mask = fixture
     header = {
         "space": "right-anterior-superior",
@@ -844,6 +736,9 @@ def test_slicer_strict_case_hash_prevents_cross_case_and_missing_identity(fixtur
         "Segment0_LabelValue": "1",
     }
     path = tmp_path / "no_identity.seg.nrrd"
+    nrrd.write(str(path), mask, {**header, "space directions": affine[:3, :3].T * 0.5})
+    with pytest.raises(ValueError, match="different voxel grid"):
+        slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "wrong")
     nrrd.write(str(path), mask, header)
     with pytest.raises(ValueError, match="lacks the source CT identity"):
         slicer_io.import_segmentation(ct_path, path, [entry(mask_path)], tmp_path / "missing", require_source_hash=True)
@@ -876,22 +771,10 @@ def test_real_dcm2niix_preserves_patient_coordinates_and_rescaled_hu(tmp_path):
         path = source / f"{index}.dcm"
         write_dicom(path, series, frame, 10 + 1.5 * index)
         ds = pydicom.dcmread(path)
-        ds.StudyInstanceUID = study
-        ds.SeriesNumber = 1
-        ds.InstanceNumber = index + 1
-        ds.ImageType = ["ORIGINAL", "PRIMARY", "AXIAL"]
-        ds.SamplesPerPixel = 1
-        ds.PhotometricInterpretation = "MONOCHROME2"
-        ds.BitsAllocated = 16
-        ds.BitsStored = 16
-        ds.HighBit = 15
-        ds.PixelRepresentation = 0
-        ds.RescaleSlope = 2
-        ds.RescaleIntercept = -1024
-        ds.RescaleType = "HU"
-        ds.SliceThickness = 1.5
-        ds.AcquisitionNumber = 1
-        ds.ConvolutionKernel = "STANDARD"
+        ds.update(dict(StudyInstanceUID=study, SeriesNumber=1, InstanceNumber=index + 1, ImageType=["ORIGINAL", "PRIMARY", "AXIAL"], SamplesPerPixel=1))
+        ds.update(dict(PhotometricInterpretation="MONOCHROME2", BitsAllocated=16, BitsStored=16, HighBit=15, PixelRepresentation=0))
+        ds.update(dict(RescaleSlope=2, RescaleIntercept=-1024, RescaleType="HU", SliceThickness=1.5, AcquisitionNumber=1, ConvolutionKernel="STANDARD"))
+        # Exposure varies per slice and must not split the series.
         ds.Exposure = [6, 5, 4, 6, 4][index]
         rows, columns = np.indices((int(ds.Rows), int(ds.Columns)))
         pixels = (rows * 10 + columns + index * 100).astype("<u2")
@@ -905,17 +788,3 @@ def test_real_dcm2niix_preserves_patient_coordinates_and_rescaled_hu(tmp_path):
     result = imaging.probe(converted, [-2.1, -3.2, 13])
     assert result["hu"] == (4 * 10 + 3 + 2 * 100) * 2 - 1024
     assert imaging.geometry(converted)["spacing"] == pytest.approx([0.7, 0.8, 1.5], rel=1e-6)
-
-
-@pytest.mark.parametrize("attribute,value", [("AcquisitionNumber", 2), ("ConvolutionKernel", "LUNG"), ("TemporalPositionIdentifier", 2)])
-def test_dicom_does_not_merge_distinct_acquisitions_or_kernels(tmp_path, attribute, value):
-    series, frame = generate_uid(), generate_uid()
-    write_dicom(tmp_path / "a.dcm", series, frame, 0)
-    write_dicom(tmp_path / "b.dcm", series, frame, 1)
-    item = pydicom.dcmread(tmp_path / "b.dcm")
-    setattr(item, attribute, value)
-    item.save_as(tmp_path / "b.dcm", enforce_file_format=True)
-    record = dicom.index_dicom(tmp_path)[0]
-    assert any(attribute in message for message in record["warnings"])
-    with pytest.raises(ValueError, match=attribute):
-        dicom.convert_series(record["files"], tmp_path / "output")

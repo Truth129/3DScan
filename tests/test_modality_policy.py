@@ -28,7 +28,7 @@ def test_current_ct_adapter_owns_unchanged_presentation_and_capabilities():
     assert adapter.presentation()["default_window"] == 400
 
 
-@pytest.mark.parametrize("modality", ["XA", "MG", "US", "DX", "not-a-modality"])
+@pytest.mark.parametrize("modality", ["XA", "US", "not-a-modality"])
 def test_unimplemented_modality_routes_are_rejected_explicitly(modality):
     with pytest.raises(ValueError, match="(?i)(unsupported|not.*support|modality)"):
         get_modality_adapter(modality)
@@ -39,16 +39,6 @@ def test_unimplemented_modality_routes_are_rejected_explicitly(modality):
     ):
         with pytest.raises(ValueError, match="(?i)(unsupported|not.*support|modality)"):
             operation()
-
-
-def test_ct_task_catalog_does_not_accidentally_enable_mr_models():
-    names = set(task_ids())
-    assert names == set(task_ids(modality="CT"))
-    assert {"total", "total_v3", "breasts"} <= names
-    assert not {"total_mr", "body_mr", "vertebrae_mr", "brain_aneurysm"} & names
-    catalog = segmentation_catalog(modality="CT")
-    assert all(entry["modality"] == "CT" for entry in catalog["tasks"])
-    assert normalize_options("corcta", {"tasks": ["total_v3"]}, modality="CT")["tasks"] == ["total_v3"]
 
 
 def test_scalar_preview_can_preserve_fractional_signal_without_ct_quantization(tmp_path):

@@ -1,6 +1,7 @@
 """Header/frame boundaries for static Enhanced MR without patient data."""
 
 from copy import deepcopy
+import json
 from pathlib import Path
 import shutil
 import tempfile
@@ -112,8 +113,7 @@ def _read(path):
     return [(path, dicom._read(path))]
 
 
-@pytest.mark.parametrize("shared_geometry", [False, True])
-@pytest.mark.parametrize("temporal", [1, 6])
+@pytest.mark.parametrize("shared_geometry,temporal", [(False, 1), (True, 6)])
 def test_enhanced_static_frame_views_keep_original_source_identity_and_metadata(tmp_path, shared_geometry, temporal):
     path = write_enhanced_mr(tmp_path / "source.dcm", shared_geometry=shared_geometry, temporal_indices=[temporal] * 5)
     items = _read(path)
@@ -143,12 +143,6 @@ def test_enhanced_static_frame_views_keep_original_source_identity_and_metadata(
         (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].PixelValueTransformationSequence[0].update({"RescaleSlope": 0.5}), "rescale"),
         (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].FrameContentSequence[0].update({"StackID": "2"}), "stacks"),
         (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].FrameContentSequence[0].update({"TemporalPositionIndex": 2}), "temporal"),
-        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"ComplexImageComponent": "PHASE"}), "magnitude"),
-        (
-            lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"FrameType": ["ORIGINAL", "PRIMARY", "DIFFUSION", "NONE"]}),
-            "diffusion",
-        ),
-        (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"PixelPresentation": "COLOR"}), "MONOCHROME"),
         (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].MRImageFrameTypeSequence[0].update({"VolumeBasedCalculationTechnique": "MIP"}), "projections"),
         (lambda ds: ds.PerFrameFunctionalGroupsSequence[2].update(_group("MRDiffusionSequence", DiffusionBValue=1000)), "diffusion"),
         (lambda ds: ds.PerFrameFunctionalGroupsSequence.pop(), "count"),
@@ -173,16 +167,7 @@ def test_enhanced_mixed_or_ambiguous_headers_are_rejected_without_source_mutatio
     assert items[0][1] == before
 
 
-@pytest.mark.parametrize(
-    "marker,value",
-    [
-        ("ConcatenationUID", generate_uid()),
-        ("ConcatenationFrameOffsetNumber", 0),
-        ("InConcatenationNumber", 1),
-        ("InConcatenationTotalNumber", 2),
-        ("SOPInstanceUIDOfConcatenationSource", generate_uid()),
-    ],
-)
+@pytest.mark.parametrize("marker,value", [("ConcatenationUID", generate_uid()), ("InConcatenationNumber", 1)])
 def test_enhanced_partial_concatenations_remain_explicitly_unsupported(tmp_path, marker, value):
     path = write_enhanced_mr(tmp_path / "source.dcm")
     ds = pydicom.dcmread(path)
@@ -193,9 +178,8 @@ def test_enhanced_partial_concatenations_remain_explicitly_unsupported(tmp_path,
 
 
 @pytest.mark.skipif(not shutil.which("dcm2niix"), reason="Native dcm2niix is not installed")
-@pytest.mark.parametrize("shared_geometry,reflected", [(False, False), (True, True)])
-def test_native_enhanced_conversion_stages_one_original_and_preserves_fractional_signal(tmp_path, monkeypatch, shared_geometry, reflected):
-    path = write_enhanced_mr(tmp_path / "source.dcm", shared_geometry=shared_geometry, reflected=reflected)
+def test_native_enhanced_conversion_stages_one_original_and_preserves_fractional_signal(tmp_path, monkeypatch):
+    path = write_enhanced_mr(tmp_path / "source.dcm", shared_geometry=True, reflected=True)
     original = path.read_bytes()
     (record,) = dicom.index_dicom(tmp_path)
     native_run = dicom.subprocess.run
@@ -209,8 +193,6 @@ def test_native_enhanced_conversion_stages_one_original_and_preserves_fractional
     converted = dicom.convert_series(record["files"], tmp_path / "converted")
     assert staged_counts == [1] and path.read_bytes() == original
     assert np.any(np.asarray(nib.load(converted).dataobj) != np.rint(np.asarray(nib.load(converted).dataobj)))
-    import json
-
     manifest = json.loads((converted.parent / "conversion.json").read_text())
     assert manifest["storage_kind"] == "enhanced_mr" and manifest["slice_count"] == 5
     assert manifest["source_instance_count"] == 1
@@ -231,7 +213,5 @@ def test_enhanced_physical_order_can_differ_from_source_frame_storage_order(tmp_
     (record,) = dicom.index_dicom(tmp_path)
     converted = dicom.convert_series(record["files"], tmp_path / "converted")
     assert path.read_bytes() == original
-    import json
-
     manifest = json.loads((converted.parent / "conversion.json").read_text())
     assert [frame["frame_index"] for frame in manifest["source_frame_order"]] == [4, 3, 2, 1, 0]

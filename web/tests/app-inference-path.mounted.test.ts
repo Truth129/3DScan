@@ -164,23 +164,19 @@ describe('running segmentation', () => {
     await submit(root);
     expect(server.segment).toHaveBeenCalledExactlyOnceWith('case', { ...settings, inference_path: 'nvidia' });
   });
-  it('sends the first available row when nobody has chosen', async () => {
+  it('sends the first available row when nobody has chosen, and reads no list when the run is accepted', async () => {
     const server = workstation([amd, nvidia]);
     const root = await openPanel();
     expect(server.stored.has(SEGMENT_PATH_KEY)).toBe(false);
+    vi.mocked(api.segmentationOptions).mockClear();
     await submit(root);
     expect(server.segment).toHaveBeenCalledExactlyOnceWith('case', { ...settings, inference_path: 'default' });
+    expect(api.segmentationOptions).not.toHaveBeenCalled();
   });
-  it("keeps one path's request exactly as it was", async () => {
-    const server = workstation([amd]);
-    const root = await openPanel();
-    expect(root.select('Run on')).toBeUndefined();
-    await submit(root);
-    expect(server.segment).toHaveBeenCalledExactlyOnceWith('case', settings);
-  });
-  it('sends no card with one path, whatever this browser remembered', async () => {
+  it("keeps one path's request exactly as it was, whatever this browser remembered", async () => {
     const server = workstation([amd], { remembered: 'nvidia' });
     const root = await openPanel();
+    expect(root.select('Run on')).toBeUndefined();
     await submit(root);
     expect(server.segment).toHaveBeenCalledExactlyOnceWith('case', settings);
   });
@@ -192,14 +188,11 @@ describe('running segmentation', () => {
     expect(server.segment).not.toHaveBeenCalled();
     expect(root.named('segmentation-status')?.content).toContain('Broken Test GPU is unavailable: Its last GPU check failed.');
   });
-  it('stops a blocked card in App too, whatever the panel last rendered', async () => {
-    const server = workstation([amd, broken], { remembered: 'broken' });
-    await emitRun(await openPanel());
-    expect(server.segment).not.toHaveBeenCalled();
-  });
-  it('runs by that same route once the card is one that works', async () => {
+  it('stops a blocked card in App too, whatever the panel last rendered, and runs by that route once the card works', async () => {
     const server = workstation([amd, broken], { remembered: 'broken' });
     const root = await openPanel();
+    await emitRun(root);
+    expect(server.segment).not.toHaveBeenCalled();
     await choose(root.select('Run on'), 'default');
     expect(runButton(root)?.props.disabled).toBeFalsy();
     await emitRun(root);
@@ -269,9 +262,12 @@ describe('a segmentation that is refused', () => {
   const refusal = 'This GPU is not set up on this workstation.';
   const second = row('second', 'Second Test GPU');
 
-  it('reads the list again and reports the card that has gone', async () => {
+  it('reads the list again, reports the card that has gone and keeps what the person set', async () => {
     const server = workstation([amd, nvidia, second], { remembered: 'nvidia' });
     const root = await openPanel();
+    const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
+    (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
+    await settled();
     const options = vi.mocked(api.segmentationOptions);
     options.mockClear();
     options.mockImplementation(async () => catalog([amd, second]));
@@ -282,6 +278,7 @@ describe('a segmentation that is refused', () => {
     expect(root.named('segmentation-status')?.content).toContain('no longer set up on this workstation, so AMD Test GPU is selected.');
     expect(root.named('segmentation-panel'), 'it stays open for the next try').toBeDefined();
     expect(root.content).toContain(refusal);
+    expect(robustCrop().props.checked).toBe(true);
   });
   it('stops the card that a refusal found unavailable, with its Check again', async () => {
     const server = workstation([amd, nvidia], { remembered: 'nvidia' });
@@ -293,40 +290,22 @@ describe('a segmentation that is refused', () => {
     expect(root.named('segmentation-status')?.content).toContain('NVIDIA Test GPU is unavailable: Its last GPU check failed.');
     expect(form(root).button('Check again')).toBeDefined();
   });
-  it('keeps what the person set', async () => {
-    const server = workstation([amd, nvidia]);
+  it.each([
+    ['a refusal whose list read failed too', [amd, nvidia], (root: FakeElement) => submit(root), true],
+    ['a Check again that failed', [amd, broken], (root: FakeElement) => press(form(root).button('Check again')), false],
+  ])('keeps what the person set through Retry tasks after %s', async (_name, paths, trigger, refuse) => {
+    const server = workstation(paths);
     const root = await openPanel();
     const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
     (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
     await settled();
-    server.segment.mockRejectedValueOnce(new ApiError(400, refusal));
-    await submit(root);
-    expect(robustCrop().props.checked).toBe(true);
-  });
-  it('keeps what the person set through Retry tasks when the read after a refusal failed too', async () => {
-    const server = workstation([amd, nvidia]);
-    const root = await openPanel();
-    const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
-    (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
-    await settled();
-    server.segment.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    if (refuse) server.segment.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     vi.mocked(api.segmentationOptions).mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    await submit(root);
+    await trigger(root);
     expect(root.named('segmentation-error')?.content).toContain('Failed to fetch');
     await press(root.button('Retry tasks'));
     expect(robustCrop().props.checked).toBe(true);
     expect(runButton(root)?.props.disabled).toBeFalsy();
-  });
-  it('keeps them through Retry tasks after a Check again that failed', async () => {
-    workstation([amd, broken]);
-    const root = await openPanel();
-    const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
-    (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
-    await settled();
-    vi.mocked(api.segmentationOptions).mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    await press(form(root).button('Check again'));
-    await press(root.button('Retry tasks'));
-    expect(robustCrop().props.checked).toBe(true);
   });
   it("leaves one path's Retry tasks restoring the revision's settings, as it did", async () => {
     workstation([amd]);
@@ -366,36 +345,25 @@ describe('a segmentation that is refused', () => {
     expect(options).not.toHaveBeenCalled();
     expect(root.content).not.toContain(refusal);
   });
-  it('reads nothing when the run is accepted', async () => {
-    workstation([amd, nvidia]);
-    const root = await openPanel();
-    const options = vi.mocked(api.segmentationOptions);
-    options.mockClear();
-    await submit(root);
-    expect(options).not.toHaveBeenCalled();
-  });
 });
 
 describe('the header while a job runs', () => {
   const banner = (root: FakeElement) => root.named('job-banner')?.all.find(node => node.tag === 'strong')?.content;
 
-  it('names the card while the job waits', async () => {
-    workstation([amd, nvidia], { job: { ...queued, inference_path: bound(nvidia) } });
+  it.each<[string, InferencePathRow[], Partial<Job>, string]>([
+    ['names the card while the job waits', [amd, nvidia], { inference_path: bound(nvidia) }, 'Waiting for the processing worker · NVIDIA Test GPU'],
+    [
+      'still names it when the job has failed, because the stage has been overwritten',
+      [amd, nvidia],
+      { status: 'failed', stage: 'Failed', inference_path: bound(nvidia) },
+      'Processing failed · NVIDIA Test GPU',
+    ],
+    ['adds nothing for a job that names no card', [amd], {}, 'Waiting for the processing worker'],
+  ])('%s', async (_name, paths, job, text) => {
+    workstation(paths, { job: { ...queued, ...job } });
     const root = await openPanel();
     await submit(root);
-    expect(banner(root)).toBe('Waiting for the processing worker · NVIDIA Test GPU');
-  });
-  it('still names it when the job has failed, because the stage has been overwritten', async () => {
-    workstation([amd, nvidia], { job: { ...queued, status: 'failed', stage: 'Failed', inference_path: bound(nvidia) } });
-    const root = await openPanel();
-    await submit(root);
-    expect(banner(root)).toBe('Processing failed · NVIDIA Test GPU');
-  });
-  it('adds nothing for a job that names no card', async () => {
-    workstation([amd]);
-    const root = await openPanel();
-    await submit(root);
-    expect(banner(root)).toBe('Waiting for the processing worker');
+    expect(banner(root)).toBe(text);
   });
   it('says who started a job someone else started on the open case', async () => {
     workstation([amd]);
@@ -440,26 +408,21 @@ describe('the revision history', () => {
   const ran = (run: Record<string, unknown>) => ({ inference_path: 'nvidia', gpu_name: 'NVIDIA Test GPU', reused: false, results_moved_to_cpu: false, ...run });
   const revision = (id: string, operation: Record<string, unknown>): Revision => ({ ...prepared, id, operation });
 
-  it("shows each revision's own card", async () => {
+  it("shows each revision's own card after its mask change, and no line for one that names none", async () => {
+    const correction = { changed_voxels: 5, before_volume_ml: 1, after_volume_ml: 2, code_version: 'test', runtime: ran({}) };
     workstation([amd], {
-      revisions: [revision('fresh', { runtime: ran({}) }), revision('spilled', { runtime: ran({ reused: true, results_moved_to_cpu: true }) })],
+      revisions: [
+        revision('corrected', correction),
+        revision('spilled', { runtime: ran({ reused: true, results_moved_to_cpu: true }) }),
+        revision('plain', { type: 'segment' }),
+      ],
     });
     const root = await start();
     await press(root.button('Revision history'));
-    expect(historyLines(root)).toEqual(['Run on NVIDIA Test GPU', 'Run on NVIDIA Test GPU · reused saved result · part re-ran in system memory']);
-  });
-  it("follows a correction's mask change with its card", async () => {
-    const operation = { changed_voxels: 5, before_volume_ml: 1, after_volume_ml: 2, code_version: 'test', runtime: ran({}) };
-    workstation([amd], { revisions: [revision('corrected', operation)] });
-    const root = await start();
-    await press(root.button('Revision history'));
-    expect(historyLines(root)).toEqual(['5 changed voxels · 1.0 → 2.0 mL · code test · Run on NVIDIA Test GPU']);
-  });
-  it('shows no line for a revision that names no card', async () => {
-    workstation([amd], { revisions: [revision('plain', { type: 'segment' })] });
-    const root = await start();
-    await press(root.button('Revision history'));
-    expect(historyLines(root)).toEqual([]);
+    expect(historyLines(root)).toEqual([
+      '5 changed voxels · 1.0 → 2.0 mL · code test · Run on NVIDIA Test GPU',
+      'Run on NVIDIA Test GPU · reused saved result · part re-ran in system memory',
+    ]);
   });
 });
 
@@ -522,16 +485,19 @@ describe('the Library', () => {
     expect(root.named('case-button')?.content.trim()).toBe('RENAMED');
     expect(root.named('case-row-open')?.content).toContain('RENAMED');
   });
-  it('reads the list on a heartbeat only while the Library shows', async () => {
+  it('reads the list and Trash on a heartbeat only while the Library shows', async () => {
     workstation([amd]);
     const root = await start();
     vi.mocked(api.cases).mockClear();
     await heartbeat();
     expect(api.cases).not.toHaveBeenCalled();
+    expect(api.trashed).not.toHaveBeenCalled();
     await press(root.named('case-button'));
     vi.mocked(api.cases).mockClear();
+    vi.mocked(api.trashed).mockClear();
     await heartbeat();
     expect(api.cases).toHaveBeenCalledOnce();
+    expect(api.trashed).toHaveBeenCalledOnce();
   });
   it('reads the list when a series is added under it, because search covers series', async () => {
     workstation([amd]);
@@ -803,16 +769,6 @@ describe('the Library', () => {
       expect(root.named('undo-toast')).toBeUndefined();
       expect(stored.get('scan3d-case')).toBe('case');
     });
-    it('reads Trash on a heartbeat only while the Library shows', async () => {
-      workstation([amd]);
-      const root = await start();
-      await heartbeat();
-      expect(api.trashed).not.toHaveBeenCalled();
-      await press(root.named('case-button'));
-      vi.mocked(api.trashed).mockClear();
-      await heartbeat();
-      expect(api.trashed).toHaveBeenCalledOnce();
-    });
   });
   it('leaves a case that is opening alone on a heartbeat', async () => {
     const { stored } = workstation([amd]);
@@ -882,23 +838,18 @@ describe('the Library', () => {
       vi.mocked(api.revision).mockClear();
       return { root, stored };
     }
-    it('goes back to the open case when the row had gone, and says so', async () => {
+    it.each([
+      ['the row had gone', new ApiError(404, 'Case not found'), GONE],
+      ['any other failure', busy, 'The workstation is busy.'],
+    ])('goes back to the open case when %s, and says why', async (_name, reason, text) => {
       const { root, stored } = await listed();
-      vi.mocked(api.case).mockRejectedValueOnce(new ApiError(404, 'Case not found'));
+      vi.mocked(api.case).mockRejectedValueOnce(reason);
       await press(root.button('OTHER'));
       expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
       expect(root.named('case-toolbar')).toBeDefined();
-      expect(stored.get('scan3d-case')).toBe('case');
-      expect(root.content).toContain(GONE);
-    });
-    it('goes back to the open case on any other failure, and says why', async () => {
-      const { root, stored } = await listed();
-      vi.mocked(api.case).mockRejectedValueOnce(busy);
-      await press(root.button('OTHER'));
-      expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
       expect(root.button('Select series'), 'not left on the series page').toBeUndefined();
       expect(stored.get('scan3d-case')).toBe('case');
-      expect(root.content).toContain('The workstation is busy.');
+      expect(root.content).toContain(text);
     });
     it('stays on a case that loaded when only its job read fails', async () => {
       const { root, stored } = await listed();
@@ -1068,18 +1019,17 @@ describe('the Library', () => {
       await press(root.button('Reset to scan'));
       expect(root.content).toContain('Back to the scan. Your draft stays with its version in Revision history.');
     });
-    it('waits for a running job, as Activate does', async () => {
+    it('waits for a running job, as Activate does, and offers nothing on the scan itself', async () => {
       segmentedCase();
       vi.mocked(api.jobs).mockImplementation(async () => [queued]);
       const root = await start();
       await press(root.button('Revision history'));
       expect(root.button('Reset to scan')?.props.disabled).toBe(true);
-    });
-    it('offers nothing on the scan itself', async () => {
+      opened.splice(0).forEach(app => app.unmount());
       workstation([amd]);
-      const root = await start();
-      await press(root.button('Revision history'));
-      expect(root.button('Reset to scan')).toBeUndefined();
+      const scanOnly = await start();
+      await press(scanOnly.button('Revision history'));
+      expect(scanOnly.button('Reset to scan')).toBeUndefined();
     });
     it('keeps the version it shows when a series is added after someone else saved', async () => {
       const { activate } = segmentedCase();

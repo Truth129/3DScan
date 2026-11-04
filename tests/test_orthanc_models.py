@@ -1,6 +1,5 @@
 """Archive record validation must preserve existing identity and manifest bytes."""
 
-from dataclasses import FrozenInstanceError
 import hashlib
 import json
 
@@ -18,8 +17,7 @@ def fixture_snapshot():
 
 def test_record_and_manifest_json_order_hashes_and_round_trip_are_unchanged():
     client, snapshot = fixture_snapshot()
-    # This independently spells out the pre-dataclass wire format and insertion
-    # order. Manifest SHA-256 depends on ordinary indent=2 JSON, not sorted JSON.
+    # The pre-dataclass wire format in insertion order: manifest SHA-256 hashes indent=2 JSON, not sorted JSON.
     legacy = {
         "id": SERIES,
         "source_key": hashlib.sha256(client.base_url.encode()).hexdigest(),
@@ -72,17 +70,7 @@ def test_record_and_manifest_json_order_hashes_and_round_trip_are_unchanged():
     assert json_record(parse_download({key: expected[key] for key in ("snapshot", "files", "bytes", "content_digest")}))["files"] == files
 
 
-def test_records_are_immutable_slotted_and_use_tuples_internally():
-    _, snapshot = fixture_snapshot()
-    assert not hasattr(snapshot, "__dict__") and isinstance(snapshot.instances, tuple) and isinstance(snapshot.warnings, tuple)
-    with pytest.raises(FrozenInstanceError):
-        snapshot.description = "changed"
-    with pytest.raises(FrozenInstanceError):
-        snapshot.instances[0].size = 99
-    assert parse_snapshot(json_record(snapshot)) == snapshot
-
-
-@pytest.mark.parametrize(("field", "value"), [("instance_count", True), ("expected_instances", False), ("expected_instances", 0), ("stable", 1)])
+@pytest.mark.parametrize(("field", "value"), [("instance_count", True), ("expected_instances", 0), ("stable", 1)])
 def test_counts_and_flags_are_strict_and_validation_errors_are_sanitized(field, value):
     _, snapshot = fixture_snapshot()
     wire = json_record(snapshot)

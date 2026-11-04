@@ -5,7 +5,7 @@ import type { PortableCamera } from './portable-viewer';
 // red outer wall; the general Oblique view faces a different side of the heart.
 // Only orientation is reused: framing always comes from this case's anatomy.
 export const CARDIAC_DIRECTION_RAS = [-388.927, -27.256, 90.286] as const;
-export const CARDIAC_UP_RAS = [0.234347, -0.38016, 0.89474] as const;
+const CARDIAC_UP_RAS = [0.234347, -0.38016, 0.89474] as const;
 
 /** Display-only camera; vessel/whole-body bounds must not dwarf the heart. */
 export function cardiacCamera(structures: readonly Pick<Structure, 'name' | 'bounds_ras'>[], marginMM = 0): PortableCamera | undefined {

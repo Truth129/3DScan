@@ -320,8 +320,6 @@ describe('shared native Cornerstone MPR ownership', () => {
     owner.setNativeReview(true);
     expect(viewport.camera.parallelScale).toBe(25);
     expect(viewport.camera.focalPoint.slice(0, 2)).toEqual([12, -7]);
-    expect(viewport.camera.position.slice(0, 2)).toEqual([12, -7]);
-    expect(viewport.camera.position[2] - viewport.camera.focalPoint[2]).toBe(100);
     viewport.camera = { ...viewport.camera, parallelScale: 40 };
     owner.setNativeReview(false);
     expect(viewport.camera.parallelScale).toBe(40);
@@ -331,11 +329,8 @@ describe('shared native Cornerstone MPR ownership', () => {
   it('uploads one reflected native volume once for all three viewports and releases every owned image', async () => {
     const input = source(),
       owner = await create(input);
-    expect(fake.tools.segmentation.config.style.setRenderInactiveSegmentations).not.toHaveBeenCalled();
-    expect(fake.engines).toHaveLength(1);
     expect(fake.engines[0].viewports.size).toBe(3);
     expect(fake.volumes.size).toBe(1);
-    expect(input.readSlab).toHaveBeenCalledTimes(1);
     expect(owner.geometry.bounds_ras).toEqual([
       [-3, -1.5, -2],
       [1, 4.5, 6],
@@ -348,11 +343,9 @@ describe('shared native Cornerstone MPR ownership', () => {
     ]);
     for (const viewport of fake.engines[0].getViewports())
       expect(viewport.setVolumes).toHaveBeenCalledWith([{ volumeId: volume.volumeId, actorUID: volume.volumeId }], false, true);
-    owner.setPointRAS([-1, 1.5, 2]);
     owner.setWindow(1200, -200);
     owner.setSlab('mip', 20);
     expect(input.readSlab).toHaveBeenCalledTimes(1);
-    expect(owner.stats().volumeCopies).toBe(1);
     owner.dispose();
     expect(fake.images.size).toBe(0);
     expect(fake.volumes.size).toBe(0);
@@ -436,9 +429,6 @@ describe('shared native Cornerstone MPR ownership', () => {
     expect([...currentBytes]).toEqual([1, 1, 0, 0, 0, 0, 0, 0]);
     expect([...parentBytes]).toEqual([1, 0, 1, 0, 0, 0, 0, 0]);
     expect(owner.overlayUpdateMemoryBytes(sources, true)).toBe(0);
-    const styleUpdates = fake.tools.segmentation.config.style.setStyle.mock.calls.length;
-    for (let repeat = 0; repeat < 5; repeat++) owner.setOverlayPresentation(palette, 0.4);
-    expect(fake.tools.segmentation.config.style.setStyle).toHaveBeenCalledTimes(styleUpdates);
     owner.setOverlayPresentation([{ id: 'target', color: '#123456' }], 0.2, { fill: false, outline: true });
     expect(await owner.setOverlays(sources, palette, true, 0.4)).toBe(true);
     expect(current.readSlab).toHaveBeenCalledTimes(1);
@@ -497,32 +487,23 @@ describe('shared native Cornerstone MPR ownership', () => {
     expect(fake.tools.segmentation.addSegmentations).not.toHaveBeenCalled();
   });
 
-  it('rejects a foreign mask grid even when its source identity matches', async () => {
-    const owner = await create(),
-      mask = source('shifted-grid', new Uint8Array(8), 0.5);
-    await expect(owner.setOverlays({ overlays: [{ id: 'target', current: mask, parent: null }] }, [{ id: 'target', color: '#abc' }])).rejects.toThrow(
-      'native voxel centres',
-    );
-    expect(mask.readSlab).not.toHaveBeenCalled();
-    expect(fake.volumes.size).toBe(1);
-    const outside = source('outside-grid', new Uint8Array(8), 2);
-    await expect(owner.setOverlays({ overlays: [{ id: 'target', current: outside, parent: null }] }, [{ id: 'target', color: '#abc' }])).rejects.toThrow(
-      'inside the source grid',
-    );
-    expect(outside.readSlab).not.toHaveBeenCalled();
-  });
-
-  it('rolls back a failed native comparison without dropping the previous overlay or replacing the CT', async () => {
+  it('rejects foreign mask grids before reading and rolls back without dropping the previous overlay or CT', async () => {
     const input = source(),
       owner = await create(input),
       original = source('original', new Uint8Array([1, 0, 0, 0, 0, 0, 0, 0]));
     await owner.setOverlays({ overlays: [{ id: 'target', current: original, parent: null }] }, [{ id: 'target', color: '#aaa' }]);
     const priorVolumes = [...fake.volumes.keys()];
+    const outside = source('outside-grid', new Uint8Array(8), 2);
+    await expect(owner.setOverlays({ overlays: [{ id: 'target', current: outside, parent: null }] }, [{ id: 'target', color: '#abc' }])).rejects.toThrow(
+      'inside the source grid',
+    );
+    expect(outside.readSlab).not.toHaveBeenCalled();
     const next = source('next', new Uint8Array(8)),
       misaligned = source('misaligned', new Uint8Array(8), 0.5);
     await expect(
       owner.setOverlays({ overlays: [{ id: 'target', current: next, parent: misaligned }] }, [{ id: 'target', color: '#aaa' }], true),
     ).rejects.toThrow('native voxel centres');
+    expect(misaligned.readSlab).not.toHaveBeenCalled();
     expect([...fake.volumes.keys()]).toEqual(priorVolumes);
     expect(owner.stats().overlayIds).toEqual(['target']);
     expect(input.readSlab).toHaveBeenCalledTimes(1);

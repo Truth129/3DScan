@@ -50,6 +50,11 @@ describe('local CT geometry and HU preservation', () => {
     expect(probeVolume(volume, [0.49, 0.51, 1])).toEqual({ hu: -804, voxel: [0, 1, 1] });
     expect(sampleLinear(volume, -0.001, 0, 0)).toBe(-1024);
     expect(sampleLinear(volume, 1, 1, 1)).toBe(-802);
+    // Probes round to the nearest voxel independently of interpolation and stop half a voxel out.
+    expect(probeVolume(volume, [0.499, 0, 0]).hu).toBe(-1024);
+    expect(probeVolume(volume, [0.5, 0, 0]).hu).toBe(-1022);
+    expect(probeVolume(volume, [-0.501, 0, 0]).hu).toBeNull();
+    expect(probeVolume(volume, [NaN, 0, 0]).hu).toBeNull();
   });
 
   it('matches radiological reflected anisotropic pixel centres and constant CT padding', () => {
@@ -201,17 +206,6 @@ describe('local CT geometry and HU preservation', () => {
     expect(slice.overlays![1].current[overlap]).toBe(1);
     expect(slice.overlays![0].current.reduce((a, b) => a + b)).toBe(1);
     expect(slice.overlays![1].current.reduce((a, b) => a + b)).toBe(2);
-  });
-
-  it('rounds exact HU probes independently of interpolation and returns null outside', () => {
-    const volume = allocateVolume(descriptor([2, 2, 2]));
-    volume.values[0] = -100;
-    volume.values[1] = 200;
-    expect(probeVolume(volume, [0.499, 0, 0]).hu).toBe(-100);
-    expect(probeVolume(volume, [0.5, 0, 0]).hu).toBe(200);
-    expect(probeVolume(volume, [-0.5, 0, 0]).hu).toBe(-100);
-    expect(probeVolume(volume, [-0.501, 0, 0]).hu).toBeNull();
-    expect(probeVolume(volume, [NaN, 0, 0]).hu).toBeNull();
   });
 
   it('matches float32 HU rounding before interpolation for noninteger NIfTI scaling', () => {
@@ -392,18 +386,15 @@ describe('stationary full-resolution CT detail', () => {
     expect(url).not.toContain('window');
     expect(init.signal).toBe(signal);
     expect(result.hu.buffer).toBe(result.current.buffer);
-  });
-  it('accepts CT-only frames and rejects incorrect byte offsets', async () => {
-    const meta = sliceMetadata(descriptor([2, 2, 2]), 'axial', 0);
-    const header = { meta, dtype: 'float32', pixels: 4, current_offset: null, parent_offset: null };
+    const ctOnly = { meta, dtype: 'float32', pixels: 4, current_offset: null, parent_offset: null };
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response(new Float32Array([1, 2, 3, 4]).buffer, { headers: { 'X-CT-Frame': JSON.stringify(header) } })),
+      vi.fn().mockResolvedValue(new Response(new Float32Array([1, 2, 3, 4]).buffer, { headers: { 'X-CT-Frame': JSON.stringify(ctOnly) } })),
     );
     expect([...(await fetchCTDetail('/revision', 'axial', 0)).current]).toEqual([0, 0, 0, 0]);
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response(new ArrayBuffer(20), { headers: { 'X-CT-Frame': JSON.stringify({ ...header, current_offset: 17 }) } })),
+      vi.fn().mockResolvedValue(new Response(new ArrayBuffer(20), { headers: { 'X-CT-Frame': JSON.stringify({ ...ctOnly, current_offset: 17 }) } })),
     );
     await expect(fetchCTDetail('/revision', 'axial', 0)).rejects.toThrow('layout');
   });

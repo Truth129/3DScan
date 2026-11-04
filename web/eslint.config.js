@@ -7,7 +7,7 @@ import vue from 'eslint-plugin-vue';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig([
-  globalIgnores(['dist/', 'test-results/', 'playwright-report/']),
+  globalIgnores(['dist/', 'test-results/']),
   {
     files: ['**/*.{js,ts,vue}'],
     extends: [js.configs.recommended, tseslint.configs.recommended, vue.configs['flat/recommended'], vue.configs['no-layout-rules']],

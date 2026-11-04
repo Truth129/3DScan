@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe('workspace panel preferences', () => {
-  it('retains valid choices across storage and ignores unrelated or inherited fields', () => {
+  it('retains valid choices across storage, ignores unrelated or inherited fields, and repairs a layout hiding both viewers', () => {
     const inherited = Object.assign(Object.create({ anatomy: false }), { model: false, review: true, inspector: false, unrelated: true });
     expect(restoreWorkspacePanels(inherited)).toEqual({ anatomy: true, model: false, review: true, inspector: false });
     expect(restoreWorkspacePanels('{"anatomy":false,"review":false,"inspector":false}')).toEqual({
@@ -37,19 +37,17 @@ describe('workspace panel preferences', () => {
       inspector: false,
     });
     expect(restoreWorkspacePanels({ model: 'false', review: 0, inspector: null })).toEqual(defaultWorkspacePanels());
-  });
-
-  it.each([null, undefined, 'not JSON', 'null', '[]', [], 0, false])('falls back safely for invalid storage %s', value => {
-    expect(restoreWorkspacePanels(value)).toEqual(defaultWorkspacePanels());
-  });
-
-  it('repairs an old or tampered layout that hides both viewers', () => {
     expect(restoreWorkspacePanels({ anatomy: false, model: false, review: false, inspector: false })).toEqual({
       anatomy: false,
       model: true,
       review: false,
       inspector: false,
     });
+  });
+
+  it.each([null, 'not JSON', '[]', 0])('falls back safely for invalid storage %s', value => {
+    expect(restoreWorkspacePanels(value)).toEqual(defaultWorkspacePanels());
+    expect(restoreWorkspaceLayout(value)).toEqual(defaultWorkspaceLayout());
   });
 
   it('cannot hide the last viewer and does not mutate the current preference', () => {
@@ -65,18 +63,17 @@ describe('workspace panel preferences', () => {
     expect(setWorkspacePanel(ctOnly, 'inspector', false).inspector).toBe(false);
   });
 
-  it('persists a normalized layout and reads it back without sharing mutable defaults', () => {
-    const getItem = vi.fn(),
-      setItem = vi.fn();
-    vi.stubGlobal('localStorage', { getItem, setItem });
+  it('persists panels and a normalized layout, and reads them back', () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value) });
     const state = { anatomy: false, model: false, review: true, inspector: false };
     saveWorkspacePanels(state);
-    expect(setItem).toHaveBeenCalledWith(WORKSPACE_PANELS_STORAGE_KEY, JSON.stringify(state));
-    getItem.mockReturnValue(setItem.mock.calls[0][1]);
+    expect(stored.get(WORKSPACE_PANELS_STORAGE_KEY)).toBe(JSON.stringify(state));
     expect(readWorkspacePanels()).toEqual(state);
-    const copy = defaultWorkspacePanels();
-    copy.anatomy = false;
-    expect(defaultWorkspacePanels().anatomy).toBe(true);
+    saveWorkspaceLayout({ arrangement: 'rows', modelShare: 0.9, sidebarWidth: 250 });
+    const layout = { arrangement: 'rows', modelShare: MODEL_SHARE_RANGE[1], sidebarWidth: 250 };
+    expect(stored.get(WORKSPACE_LAYOUT_STORAGE_KEY)).toBe(JSON.stringify(layout));
+    expect(readWorkspaceLayout()).toEqual(layout);
   });
 
   it('keeps the workspace usable when storage is unavailable or blocked', () => {
@@ -89,7 +86,9 @@ describe('workspace panel preferences', () => {
       },
     });
     expect(readWorkspacePanels()).toEqual(defaultWorkspacePanels());
+    expect(readWorkspaceLayout()).toEqual(defaultWorkspaceLayout());
     expect(() => saveWorkspacePanels(defaultWorkspacePanels())).not.toThrow();
+    expect(() => saveWorkspaceLayout(defaultWorkspaceLayout())).not.toThrow();
   });
 });
 
@@ -121,12 +120,9 @@ describe('workspace tiling preferences', () => {
     expect(reviewFocusFor(panels)).toBe(focus);
   });
 
-  it.each([null, undefined, 'not JSON', '[]', 7, { arrangement: 'grid', modelShare: 'wide', sidebarWidth: Infinity }])(
-    'falls back to defaults for invalid layout %s',
-    value => {
-      expect(restoreWorkspaceLayout(value)).toEqual(defaultWorkspaceLayout());
-    },
-  );
+  it('falls back to defaults for an invalid layout record', () => {
+    expect(restoreWorkspaceLayout({ arrangement: 'grid', modelShare: 'wide', sidebarWidth: Infinity })).toEqual(defaultWorkspaceLayout());
+  });
 
   it('clamps dragged and keyboard values to the supported ranges', () => {
     expect(clampModelShare(0)).toBe(MODEL_SHARE_RANGE[0]);
@@ -162,28 +158,5 @@ describe('workspace tiling preferences', () => {
     expect(hidden).toEqual({ ...defaultWorkspacePanels(), anatomy: false, inspector: false });
     expect(toggleWorkspaceSidebar({ ...hidden, inspector: true })).toEqual(hidden);
     expect(toggleWorkspaceSidebar(hidden)).toEqual(defaultWorkspacePanels());
-  });
-
-  it('persists a normalized layout and tolerates blocked storage', () => {
-    const getItem = vi.fn(),
-      setItem = vi.fn();
-    vi.stubGlobal('localStorage', { getItem, setItem });
-    saveWorkspaceLayout({ arrangement: 'rows', modelShare: 0.9, sidebarWidth: 250 });
-    expect(setItem).toHaveBeenCalledWith(
-      WORKSPACE_LAYOUT_STORAGE_KEY,
-      JSON.stringify({ arrangement: 'rows', modelShare: MODEL_SHARE_RANGE[1], sidebarWidth: 250 }),
-    );
-    getItem.mockReturnValue(setItem.mock.calls[0][1]);
-    expect(readWorkspaceLayout()).toEqual({ arrangement: 'rows', modelShare: MODEL_SHARE_RANGE[1], sidebarWidth: 250 });
-    vi.stubGlobal('localStorage', {
-      getItem: () => {
-        throw new Error('blocked');
-      },
-      setItem: () => {
-        throw new Error('full');
-      },
-    });
-    expect(readWorkspaceLayout()).toEqual(defaultWorkspaceLayout());
-    expect(() => saveWorkspaceLayout(defaultWorkspaceLayout())).not.toThrow();
   });
 });

@@ -10,10 +10,8 @@ import pytest
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="Linux fork-buffer regression")
 def test_unbuffered_worker_prevents_manager_replaying_hidden_stdout():
-    # nnU-Net creates its preprocessing Manager while TotalSegmentator's
-    # nostdout context hides sys.stdout. multiprocessing cannot flush the real
-    # stream before fork; the manager restores it at shutdown and replays its
-    # inherited buffer. The GPU/model never runs in this reproduction.
+    # nnU-Net starts its Manager while TotalSegmentator's nostdout hides sys.stdout, so fork
+    # cannot flush the real stream and the manager replays its inherited buffer at shutdown.
     program = textwrap.dedent("""
         import contextlib
         import multiprocessing

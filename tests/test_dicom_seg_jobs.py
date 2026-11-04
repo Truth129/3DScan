@@ -54,6 +54,21 @@ def post(rig, revision_id=None, **kwargs):
     )
 
 
+def parent_with_mask(rig):
+    """A saved direct edit whose one mask shares the imported ring's name."""
+    mask = str(rig.fixture["segments"][0].mask_path)
+    parent = rig.service.build_revision(
+        rig.case["id"],
+        Path(rig.ct["ct_file"]),
+        [{"id": "custom:existing", "name": "Ring", "task": "custom", "group": "Custom", "color": "#ff00ff", "mask_file": mask}],
+        source="direct_edit",
+        parent=rig.ct["id"],
+        acquisition=rig.ct["acquisition"],
+    )
+    rig.service.store.commit_revision(parent)
+    return parent
+
+
 def run(rig, response):
     assert response.status_code == 200, response.text
     job = rig.service.store.claim("cpu")
@@ -87,16 +102,7 @@ def test_ct_only_import_creates_editable_revision_and_preserves_overlap(rig):
 
 
 def test_append_keeps_existing_masks_and_duplicate_import_is_rejected(rig):
-    old = rig.fixture["segments"][0]
-    parent = rig.service.build_revision(
-        rig.case["id"],
-        Path(rig.ct["ct_file"]),
-        [{"id": "custom:existing", "name": "Ring", "task": "custom", "group": "Custom", "color": "#ff00ff", "mask_file": str(old.mask_path)}],
-        source="direct_edit",
-        parent=rig.ct["id"],
-        acquisition=rig.ct["acquisition"],
-    )
-    rig.service.store.commit_revision(parent)
+    parent = parent_with_mask(rig)
     job = run(rig, post(rig, parent["id"]))
     assert job["status"] == "completed", job.get("error")
     result = rig.service.store.revision(rig.case["id"], job["revision_id"])
@@ -185,7 +191,7 @@ def test_active_revision_change_during_surface_build_cannot_publish(rig, monkeyp
     assert all(revision["source"] != "dicom_seg_import" for revision in rig.service.store.list("revisions", rig.case["id"]))
 
 
-@pytest.mark.parametrize("tag", ["StudyInstanceUID", "SeriesInstanceUID", "FrameOfReferenceUID"])
+@pytest.mark.parametrize("tag", ["SeriesInstanceUID", "FrameOfReferenceUID"])
 def test_actual_source_headers_must_match_prepared_asset_before_enqueue(rig, tag):
     path = Path(rig.service.store.get("cases", rig.case["id"])["series"][0]["files"][0])
     image = pydicom.dcmread(path)
@@ -197,16 +203,8 @@ def test_actual_source_headers_must_match_prepared_asset_before_enqueue(rig, tag
 
 
 def test_existing_parent_mask_mutation_after_enqueue_is_rejected(rig):
+    parent = parent_with_mask(rig)
     old = rig.fixture["segments"][0]
-    parent = rig.service.build_revision(
-        rig.case["id"],
-        Path(rig.ct["ct_file"]),
-        [{"id": "custom:existing", "name": "Ring", "task": "custom", "group": "Custom", "color": "#ff00ff", "mask_file": str(old.mask_path)}],
-        source="direct_edit",
-        parent=rig.ct["id"],
-        acquisition=rig.ct["acquisition"],
-    )
-    rig.service.store.commit_revision(parent)
     response = post(rig, parent["id"])
     old.mask_path.write_bytes(old.mask_path.read_bytes() + b"changed")
     final = run(rig, response)

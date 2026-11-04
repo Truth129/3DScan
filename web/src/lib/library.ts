@@ -40,6 +40,6 @@ export function trashMessage(result: TrashResult, label?: string) {
 }
 
 /** Nothing leaves Trash on its own, so past this the Library says so. */
-export const TRASH_REMINDER_DAYS = 30;
+const TRASH_REMINDER_DAYS = 30;
 export const overdueInTrash = (cases: readonly Case[], now = Date.now()) =>
   cases.filter(item => item.trashed_at && now - Date.parse(item.trashed_at) > TRASH_REMINDER_DAYS * 86_400_000).length;

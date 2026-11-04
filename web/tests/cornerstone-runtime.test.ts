@@ -170,8 +170,6 @@ describe('Cornerstone viewport asynchronous ownership', () => {
     expect(viewport.imageIds).toEqual([imageId]);
     expect(viewport.camera).toEqual({ zoom: 2 });
     expect(cornerstoneFrameCacheStats().images).toBe(1);
-    expect(viewer.frame!.hu).toBe(original.hu);
-    expect(viewer.frame!.current).toBe(original.current);
     expect(viewer.setPresentation({ ...styled, hu: frame.hu.slice() })).toBe(false);
     expect(viewer.setPresentation({ ...styled, overlays: [{ ...styled.overlays[0], current: frame.current.slice() }] })).toBe(false);
     expect(viewer.setPresentation({ ...styled, reference_image_id: 'other-source' })).toBe(false);

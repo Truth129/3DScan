@@ -78,13 +78,23 @@ def test_an_admin_adds_a_person_who_sets_a_password_from_the_link(rig):
     assert not any(secret in str(rows(rig, "SELECT * FROM audit_events")) for secret in (link["code"], password))
 
 
-def test_a_link_works_once(rig):
+def test_a_link_works_once_and_an_expired_or_replaced_one_reads_as_used(rig):
     code = add(rig, "once")["link"]["code"]
     assert redeem(browser(rig), code).status_code == 200
     sessions = rows(rig, "SELECT token_hash FROM sessions ORDER BY token_hash")
     again = redeem(browser(rig), code)
     assert again.status_code == 410 and again.json() == LINK_USED and again.headers["cache-control"] == "no-store"
     assert rows(rig, "SELECT token_hash FROM sessions ORDER BY token_hash") == sessions
+    made = add(rig, "expiring")
+    person = made["person"]["id"]
+    with rig.store.connection() as con:
+        past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(timespec="microseconds")
+        con.execute("UPDATE one_time_codes SET expires_at=? WHERE user_id=?", (past, person))
+    assert redeem(browser(rig), made["link"]["code"]).json() == LINK_USED
+    first = rig.admin.post(f"/api/people/{person}/link").json()["code"]
+    second = rig.admin.post(f"/api/people/{person}/link").json()["code"]
+    assert redeem(browser(rig), first).json() == LINK_USED
+    assert redeem(browser(rig), second).status_code == 200
 
 
 def test_two_uses_of_one_link_at_once_sign_in_once(rig):
@@ -105,19 +115,6 @@ def test_two_uses_of_one_link_at_once_sign_in_once(rig):
         thread.join()
     assert sorted(results, key=str) == sorted([made["person"]["id"], LinkUsed], key=str)
     assert len(rows(rig, "SELECT 1 FROM sessions WHERE user_id=?", made["person"]["id"])) == 1
-
-
-def test_an_expired_or_replaced_link_reads_as_used(rig):
-    made = add(rig, "expiring")
-    person = made["person"]["id"]
-    with rig.store.connection() as con:
-        past = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(timespec="microseconds")
-        con.execute("UPDATE one_time_codes SET expires_at=? WHERE user_id=?", (past, person))
-    assert redeem(browser(rig), made["link"]["code"]).json() == LINK_USED
-    first = rig.admin.post(f"/api/people/{person}/link").json()["code"]
-    second = rig.admin.post(f"/api/people/{person}/link").json()["code"]
-    assert redeem(browser(rig), first).json() == LINK_USED
-    assert redeem(browser(rig), second).status_code == 200
 
 
 def test_a_link_dies_with_its_makers_admin_rights(rig):
@@ -200,8 +197,8 @@ def test_redeem_needs_https_or_loopback_and_sign_in_on(rig, tmp_path):
     refused = redeem(plain, code)
     assert refused.status_code == 403 and refused.json() == {"detail": "Set your password through the HTTPS address"}
     _, http = off_mode(tmp_path)
-    off = redeem(http, code)
-    assert off.status_code == 400 and off.json() == {"detail": "Sign-in is off on this workstation"}
+    assert redeem(http, code).json() == {"detail": "Sign-in is off on this workstation"}
+    assert http.get("/api/people").status_code == 404
 
 
 def test_people_lists_accounts_without_secrets(rig):
@@ -317,9 +314,3 @@ def test_people_actions_are_audited_with_ids_only(rig):
     written = str(rows(rig, "SELECT * FROM audit_events"))
     for secret in ("audit-target", "Audit Target", made["link"]["code"], code, token_hash(code)):
         assert secret not in written
-
-
-def test_people_and_redeem_with_sign_in_off(tmp_path):
-    _, http = off_mode(tmp_path)
-    assert http.get("/api/people").status_code == 404
-    assert redeem(http, secrets.token_urlsafe(32)).json() == {"detail": "Sign-in is off on this workstation"}

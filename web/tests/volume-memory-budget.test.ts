@@ -52,67 +52,46 @@ describe('shared source-volume memory budget', () => {
     expect(budget.stats.usedBytes).toBe(0);
   });
 
-  it('releases hidden views idempotently without letting stale async cleanup erase a new allocation', () => {
+  it('releases hidden views idempotently, notifying only on change, without letting stale cleanup erase a new allocation', () => {
     const budget = new VolumeMemoryBudget(1000);
     const changed = vi.fn();
     const unsubscribe = budget.onChange(changed);
     const old = budget.reserve('three', request());
     const replacement = budget.reserve('three', request('b'));
+    expect(changed).toHaveBeenCalledTimes(2);
     old.release();
     expect(budget.stats.usedBytes).toBe(200);
     replacement.release();
     replacement.release();
     expect(budget.stats.usedBytes).toBe(0);
     expect(changed).toHaveBeenCalledTimes(3);
-    unsubscribe();
     budget.reserve('three', request());
-    expect(changed).toHaveBeenCalledTimes(3);
+    budget.reserve('three', request());
+    expect(changed).toHaveBeenCalledTimes(4);
+    unsubscribe();
+    budget.reserve('three', request('c'));
+    expect(changed).toHaveBeenCalledTimes(4);
   });
 
-  it('estimates all retained Cornerstone copies and a bounded upload slab', () => {
+  it('estimates retained Cornerstone copies, a bounded upload slab and scaled float samples', () => {
     const three = volumeMemoryRequest(descriptor, 'three');
     const mpr = volumeMemoryRequest(descriptor, 'cornerstone', 50);
-    expect(three.workerBytes).toBe(descriptor.byte_length);
-    expect(three.cpuBytes).toBe(8 * 1024 ** 2);
-    expect(three.gpuBytes).toBe(descriptor.byte_length);
-    expect(mpr.workerBytes).toBe(descriptor.byte_length);
-    expect(mpr.cpuBytes).toBe(8 * 1024 ** 2 + descriptor.byte_length);
-    expect(mpr.gpuBytes).toBe(descriptor.byte_length * 2);
+    expect(three).toMatchObject({ workerBytes: descriptor.byte_length, cpuBytes: 8 * 1024 ** 2, gpuBytes: descriptor.byte_length });
+    expect(mpr).toMatchObject({ workerBytes: descriptor.byte_length, cpuBytes: 8 * 1024 ** 2 + descriptor.byte_length, gpuBytes: descriptor.byte_length * 2 });
     expect(mpr.overlayBytes).toBe(50);
-    expect(defaultVolumeMemoryLimit(2)).toBe(LOW_MEMORY_VOLUME_BYTES);
-    expect(defaultVolumeMemoryLimit(4)).toBe(LOW_MEMORY_VOLUME_BYTES);
-    expect(defaultVolumeMemoryLimit(8)).toBe(DESKTOP_VOLUME_MEMORY_BYTES);
-  });
-
-  it('reserves scaled float image samples only when the source needs rescaling', () => {
+    // Retained copies stay charged after upload staging ends.
+    expect(volumeMemoryRequest(descriptor, 'cornerstone', 50, false)).toEqual({ ...mpr, cpuBytes: descriptor.byte_length });
     const scaled = volumeMemoryRequest({ ...descriptor, slope: 0.5, intercept: -1024 }, 'cornerstone');
     const floating = volumeMemoryRequest({ ...descriptor, dtype: 'float32', byte_length: descriptor.byte_length * 2 }, 'cornerstone');
     expect(scaled.cpuBytes).toBe(8 * 1024 ** 2 + descriptor.byte_length * 2);
     expect(floating.cpuBytes).toBe(scaled.cpuBytes);
-    expect(scaled.gpuBytes).toBe(floating.gpuBytes);
-    expect(floating.workerBytes).toBe(descriptor.byte_length * 2);
+    expect(floating.gpuBytes).toBe(scaled.gpuBytes);
+    expect(defaultVolumeMemoryLimit(4)).toBe(LOW_MEMORY_VOLUME_BYTES);
+    expect(defaultVolumeMemoryLimit(8)).toBe(DESKTOP_VOLUME_MEMORY_BYTES);
   });
 
-  it('keeps retained CT copies charged after bounded upload staging ends', () => {
-    const uploading = volumeMemoryRequest(descriptor, 'cornerstone', 50);
-    const retained = volumeMemoryRequest(descriptor, 'cornerstone', 50, false);
-    expect(uploading.cpuBytes - retained.cpuBytes).toBe(8 * 1024 ** 2);
-    expect(retained.workerBytes).toBe(uploading.workerBytes);
-    expect(retained.gpuBytes).toBe(uploading.gpuBytes);
-    expect(retained.overlayBytes).toBe(50);
-    expect(retained.cpuBytes).toBe(descriptor.byte_length);
-  });
-
-  it('rejects malformed byte estimates and notifies only when memory changes', () => {
+  it('rejects malformed byte estimates', () => {
     const budget = new VolumeMemoryBudget(1000);
-    const changed = vi.fn();
-    budget.onChange(changed);
-    const old = budget.reserve('three', request());
-    const next = budget.reserve('three', request());
-    expect(changed).toHaveBeenCalledOnce();
-    old.release();
-    next.release();
-    expect(changed).toHaveBeenCalledTimes(2);
     for (const bytes of [-1, Infinity, NaN, 1.5]) expect(() => budget.reserve('three', { ...request(), cpuBytes: bytes })).toThrow('reservation');
     expect(() => volumeMemoryRequest({ ...descriptor, byte_length: Infinity }, 'three')).toThrow('estimate');
   });

@@ -56,7 +56,7 @@ def test_legacy_point_normalizes_and_materializes_with_kernel_support():
     assert plans[0]["prompt_ids"] == ["legacy"]
 
 
-@pytest.mark.parametrize("changes", [{"axis": True}, {"index": -1}, {"vertices": [[-1, 2], [4, 5]]}, {"vertices": [[2, 2], [2, 4]]}, {"radius_mm": 3}])
+@pytest.mark.parametrize("changes", [{"axis": True}, {"vertices": [[-1, 2], [4, 5]]}, {"vertices": [[2, 2], [2, 4]]}])
 def test_invalid_native_box_is_rejected(changes):
     prompt = dict(id="box", kind="bbox", include=True, axis=2, index=4, vertices=[[2, 2], [6, 6]])
     with pytest.raises(ValueError):

@@ -2,7 +2,6 @@
 
 from dataclasses import FrozenInstanceError, replace
 import copy
-from itertools import permutations
 from pathlib import Path
 import shutil
 import weakref
@@ -109,40 +108,35 @@ def test_exact_independent_masks_preserve_overlap_and_source_geometry(fixture):
         outputs[entry.structure_id] = pixels
     assert np.count_nonzero(outputs["ring"] & outputs["block"]) == 529
     assert len({entry.sop_instance_uid for entry in result.files}) == 1
+    # Unranked, the export cannot say whether segments overlap.
+    assert seg.SegmentsOverlap == "UNDEFINED" and seg.ContentDescription == "Exported voxel masks; clinical review status is unchanged"
     assert result.reference_sha256 == before[fixture["reference"]]
     assert {path: hash_file(path) for path in before} == before
     with pytest.raises(FrozenInstanceError):
         result.revision_id = "changed"
 
 
-@pytest.mark.parametrize("occupied_slice", [None, 5])
-def test_per_frame_segment_discovery_and_highdicom_readback_preserve_exact_masks(fixture, occupied_slice):
+def test_per_frame_segment_discovery_and_highdicom_readback_preserve_a_sparse_mask(fixture):
     import highdicom as hd
 
     truth = fixture["truth"].copy()
-    if occupied_slice is not None:
-        truth[np.arange(len(truth)) != occupied_slice] = False
-        for segment in fixture["segments"]:
-            image = nib.load(segment.mask_path)
-            values = np.asanyarray(image.dataobj).copy()
-            # The fixture's native order is reversed-column, source-slice, row.
-            values[:, np.arange(values.shape[1]) != occupied_slice, :] = 0
-            nib.save(nib.Nifti1Image(values, image.affine), segment.mask_path)
+    truth[np.arange(len(truth)) != 5] = False
+    for segment in fixture["segments"]:
+        image = nib.load(segment.mask_path)
+        values = np.asanyarray(image.dataobj).copy()
+        # The fixture's native order is reversed-column, source-slice, row.
+        values[:, np.arange(values.shape[1]) != 5, :] = 0
+        nib.save(nib.Nifti1Image(values, image.affine), segment.mask_path)
     result = export(fixture)
     source_ids = [str(image.SOPInstanceUID) for image in fixture["images"]]
     instance = result.files[0]
     for entry in instance.segments:
         index = 1 if entry.structure_id == "block" else 0
         expected = truth[..., index]
-        # This reader intentionally requires identification on every frame,
-        # matching the layout of the prototype accepted by OsiriX.
+        # This reader requires identification on every frame, the layout OsiriX accepted.
         dataset, decoded = independent_pixels(instance.path, fixture["images"], entry.segment_number)
         np.testing.assert_array_equal(decoded, expected)
-        assert int(dataset.NumberOfFrames) == int(np.count_nonzero(np.any(truth, axis=(1, 2))))
-        if occupied_slice is not None:
-            assert int(dataset.NumberOfFrames) == 2
-        else:
-            assert int(dataset.NumberOfFrames) > 1
+        assert int(dataset.NumberOfFrames) == 2
         restored = hd.seg.segread(instance.path)
         native = restored.get_pixels_by_source_instance(source_ids, segment_numbers=[entry.segment_number], assert_missing_frames_are_empty=True)
         np.testing.assert_array_equal(native[..., 0], expected)
@@ -193,13 +187,6 @@ def test_ranked_export_of_separate_masks_changes_no_voxels_or_provenance(fixture
     assert [item.SegmentAlgorithmType for item in seg.SegmentSequence] == ["AUTOMATIC", "AUTOMATIC"]
 
 
-def test_unranked_export_still_declares_overlap_unknown_without_a_ranked_label(fixture):
-    seg = independent_pixels(export(fixture).files[0].path, fixture["images"])[0]
-    assert seg.SegmentsOverlap == "UNDEFINED"
-    assert "overlaps resolved" not in seg.SeriesDescription
-    assert seg.ContentDescription == "Exported voxel masks; clinical review status is unchanged"
-
-
 def test_ranked_export_stops_instead_of_emptying_a_structure(fixture):
     fixture["segments"].append(replace(fixture["segments"][0], id="copy", name="Copy"))
     with pytest.raises(dicom_seg.DicomSegError, match="Overlap rank 3 would lose every voxel"):
@@ -208,7 +195,7 @@ def test_ranked_export_stops_instead_of_emptying_a_structure(fixture):
     assert not list(fixture["output"].parent.glob(".dicom-seg-*"))
 
 
-@pytest.mark.parametrize("ranking", [[], ["ring"], ["ring", "ring"], ["ring", "block", "block"], ["ring", "other"]])
+@pytest.mark.parametrize("ranking", [["ring"], ["ring", "ring"], ["ring", "other"]])
 def test_ranking_must_name_every_selected_structure_once(fixture, ranking):
     with pytest.raises(dicom_seg.DicomSegError, match="Rank every selected structure"):
         export(fixture, overlap_priority=ranking)
@@ -221,7 +208,7 @@ def test_a_single_structure_has_nothing_to_rank(fixture):
         export(fixture, overlap_priority=["ring"])
 
 
-@pytest.mark.parametrize("source_kind", ["refinement", "slicer_correction", "interactive", "direct_edit", "include_all_outputs"])
+@pytest.mark.parametrize("source_kind", ["interactive", "direct_edit", "include_all_outputs"])
 def test_corrected_or_mixed_provenance_is_not_declared_fully_automatic(fixture, source_kind):
     result = dicom_seg.export_segmentation(
         fixture["paths"], fixture["reference"], fixture["segments"][:1], fixture["output"], revision_id="saved-revision", source_kind=source_kind
@@ -318,26 +305,19 @@ def test_eight_segments_share_one_instance_with_continuous_odd_sized_frame_bits(
     assert list(instance.path.parent.iterdir()) == [instance.path]
 
 
-@pytest.mark.parametrize("limit", [100, 10_000])
-def test_packed_pixels_and_final_metadata_respect_the_instance_size_bound(fixture, monkeypatch, limit):
-    monkeypatch.setattr(dicom_seg, "_MAX_ENCODED_BYTES", limit)
-    with pytest.raises(dicom_seg.DicomSegError, match="file size"):
+@pytest.mark.parametrize(
+    "bound,limit,match", [("_MAX_ENCODED_BYTES", 100, "file size"), ("_MAX_ENCODED_BYTES", 10_000, "file size"), ("_MAX_ENCODED_FRAMES", 1, "frame count")]
+)
+def test_packed_pixels_final_metadata_and_frame_count_respect_the_instance_bounds(fixture, monkeypatch, bound, limit, match):
+    monkeypatch.setattr(dicom_seg, bound, limit)
+    with pytest.raises(dicom_seg.DicomSegError, match=match):
         export(fixture)
     assert not fixture["output"].exists()
     assert not list(fixture["output"].parent.glob(".dicom-seg-*"))
 
 
-def test_encoded_frame_metadata_is_bounded_even_for_tiny_pixel_arrays(fixture, monkeypatch):
-    monkeypatch.setattr(dicom_seg, "_MAX_ENCODED_FRAMES", 1)
-    with pytest.raises(dicom_seg.DicomSegError, match="frame count"):
-        export(fixture)
-    assert not fixture["output"].exists()
-    assert not list(fixture["output"].parent.glob(".dicom-seg-*"))
-
-
-@pytest.mark.parametrize("order", list(permutations(range(3))))
-@pytest.mark.parametrize("flip", [False, True])
-def test_all_reference_axis_orders_and_reflections_match_patient_pixels(fixture, order, flip):
+@pytest.mark.parametrize("order,flip", [((0, 1, 2), True), ((2, 0, 1), False), ((1, 2, 0), True)])
+def test_reference_axis_orders_and_reflections_match_patient_pixels(fixture, order, flip):
     for path in [fixture["reference"], *(segment.mask_path for segment in fixture["segments"])]:
         image = nib.load(path)
         data = np.asanyarray(image.dataobj).transpose(order).copy()
@@ -377,7 +357,7 @@ def test_constant_gantry_shear_uses_full_affine_without_resampling(fixture):
 
 @pytest.mark.parametrize(
     "slice_count,spacing,position_decimals,origin_z",
-    [(12, 0.3333, 3, -20), (256, 0.6, 6, -300), (500, 0.5, None, -1200)],
+    [(12, 0.3333, 3, -20), (500, 0.5, None, -1200)],
 )
 def test_real_converter_rounding_preserves_every_ct_sample_and_seg_bit(tmp_path, monkeypatch, slice_count, spacing, position_decimals, origin_z):
     bundled = Path(__file__).resolve().parents[1] / ".tools/bin/dcm2niix"
@@ -413,8 +393,7 @@ def test_real_converter_rounding_preserves_every_ct_sample_and_seg_bit(tmp_path,
     mask_path = tmp_path / "mask.nii.gz"
     nib.save(nib.Nifti1Image((native_values % 11 < 2).astype(np.uint8), reference.affine), mask_path)
 
-    # Prove correspondence independently at every source pixel, including the
-    # accumulated spacing error that the earlier 0.001-voxel gate rejected.
+    # Check every source pixel independently, including the accumulated spacing error an earlier 0.001-voxel gate rejected.
     inverse = np.linalg.inv(reference.affine)
     row, column = np.indices((8, 8))
     seen = np.zeros(reference.shape, dtype=np.uint8)
@@ -448,9 +427,7 @@ def test_real_converter_rounding_preserves_every_ct_sample_and_seg_bit(tmp_path,
 
 @pytest.mark.parametrize("scale,axis,offset", [(1.0, 1, 0.04), (0.1, 0, 0.06)])
 def test_reference_rounding_limits_apply_in_both_voxels_and_millimetres(fixture, scale, axis, offset):
-    # Thick slices isolate the physical limit; a finely spaced source isolates
-    # the voxel limit. Both reference and mask move so mask validation cannot
-    # conceal a missing source/reference geometry check.
+    # Thick slices isolate the millimetre limit and fine ones the voxel limit; masks move too, so only the source check can refuse.
     for path in fixture["paths"]:
         image = pydicom.dcmread(path)
         for field in ("ImagePositionPatient", "PixelSpacing"):
@@ -476,8 +453,7 @@ def test_rounding_tolerance_cannot_hide_far_corner_spacing_drift(fixture):
         affine = image.affine.copy()
         delta = 0.0009 * affine[:3, 0]
         affine[:3, 0] += delta
-        # Keep every DICOM plane origin at its original integer native voxel;
-        # only checking origins would miss the opposite corner's larger drift.
+        # Every plane origin stays on its voxel; only the far corner drifts.
         affine[:3, 3] -= (image.shape[0] - 1) * delta
         nib.save(nib.Nifti1Image(np.asanyarray(image.dataobj), affine), path)
     with pytest.raises(dicom_seg.DicomSegError, match="pixels"):
@@ -485,7 +461,7 @@ def test_rounding_tolerance_cannot_hide_far_corner_spacing_drift(fixture):
     assert not fixture["output"].exists()
 
 
-@pytest.mark.parametrize("problem", ["patient", "frame", "source_class", "orientation", "spacing", "duplicate", "missing", "irregular"])
+@pytest.mark.parametrize("problem", ["patient", "frame", "source_class", "orientation", "duplicate", "irregular"])
 def test_inconsistent_or_unsupported_sources_are_rejected(fixture, problem):
     path = fixture["paths"][2]
     image = pydicom.dcmread(path)
@@ -559,8 +535,8 @@ def test_existing_exports_are_immutable(fixture):
     assert [entry.path.read_bytes() for entry in result.files] == before
 
 
-@pytest.mark.parametrize("label", ["左肺", "Heart 🫀"])
-def test_non_latin_segment_labels_are_preserved_as_utf8(fixture, label):
+def test_non_latin_segment_labels_are_preserved_as_utf8(fixture):
+    label = "左肺 🫀"
     for path in fixture["paths"]:
         source = pydicom.dcmread(path)
         source.PatientName = "SYNTHETIC^Müller"

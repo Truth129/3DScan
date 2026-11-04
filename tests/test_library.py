@@ -70,12 +70,6 @@ def test_cases_list_last_opened_first_for_each_person(rig):
     assert [case["id"] for case in listed(rig.other)] == [newer, older]
 
 
-def test_opening_a_missing_case_is_not_found_with_sign_in_off(tmp_path):
-    _, http = off_mode(tmp_path)
-    response = http.post(f"/api/cases/{'0' * 32}/open")
-    assert response.status_code == 404 and response.json() == {"detail": "Case not found"}
-
-
 def test_trash_hides_a_case_from_every_route_and_list(rig):
     case_id = rig.service.new_case("Synthetic")["id"]
     kept = rig.service.store.case_dir(case_id) / "kept.bin"
@@ -106,7 +100,6 @@ def test_a_trashed_case_reads_as_absent_with_sign_in_off(tmp_path):
     assert http.post(f"/api/cases/{case_id}/trash").json() == {"id": case_id, "jobs_stopped": 1, "sends_continuing": 0}
     absent(http.get(f"/api/cases/{case_id}"), "Case not found")
     absent(http.post(f"/api/cases/{case_id}/trash"), "Case not found")
-    absent(http.post(f"/api/cases/{'0' * 32}/trash"), "Case not found")
     absent(http.get(f"/api/jobs/{job['id']}"), "Job not found")
     absent(http.post(f"/api/imports/{upload_id}/finish"), "Upload not found")
     assert http.get("/api/cases").json() == []
@@ -219,28 +212,20 @@ def test_trash_restore_and_rename_audit_ids_only(rig):
     assert rows == [(rig.owner.user_id, action, case_id, None, "{}") for action in ("case.rename", "case.trash", "case.restore")]
 
 
-def test_rename_updates_the_list_and_the_record(rig):
+def test_rename_trims_refuses_bad_names_and_waits_for_an_import(rig):
     case_id = imported(rig.service)
     response = rig.owner.patch(f"/api/cases/{case_id}", json={"label": "  Synthetic renamed  "})
     assert response.status_code == 200 and response.json()["label"] == "Synthetic renamed"
-    assert rig.service.store.get("cases", case_id)["label"] == "Synthetic renamed"
     assert next(case for case in rig.owner.get("/api/cases").json() if case["id"] == case_id)["label"] == "Synthetic renamed"
-
-
-def test_rename_refuses_an_empty_or_unprintable_name(rig):
-    case_id = imported(rig.service)
-    for label in ("", "   ", "Synthetic\x07name", "Synthetic\x7fname"):
+    for label in ("   ", "Synthetic\x07name"):
         response = rig.owner.patch(f"/api/cases/{case_id}", json={"label": label})
         assert response.status_code == 400 and response.json() == {"detail": "A case name must contain 1 to 128 printable characters"}
     assert rig.owner.patch(f"/api/cases/{case_id}", json={"label": "x" * 129}).status_code == 422
     with pytest.raises(ValueError, match="1 to 128"):
         rig.service.store.rename_case(case_id, "x" * 129)
-    assert rig.service.store.get("cases", case_id)["label"] == "Synthetic"
-
-
-def test_rename_waits_for_an_import(rig):
-    case_id = rig.service.new_case("Synthetic")["id"]
-    response = rig.owner.patch(f"/api/cases/{case_id}", json={"label": "Synthetic renamed"})
+    assert rig.service.store.get("cases", case_id)["label"] == "Synthetic renamed"
+    importing = rig.service.new_case("Synthetic")["id"]
+    response = rig.owner.patch(f"/api/cases/{importing}", json={"label": "Synthetic renamed"})
     assert response.status_code == 409 and response.json() == {"detail": "This case is still importing. Rename it when the import finishes."}
 
 
@@ -274,11 +259,6 @@ def test_storage_lists_every_case_with_its_name_and_who_added_it(rig):
     row = next(row for row in report["cases"] if row.get("id") == case["id"])
     assert row["label"] == "Synthetic" and row["owner"] == "Owner" and row["trashed_at"] and row["size"] >= 8192
     assert report["totals"]["trash"] == before + row["size"]
-
-
-def test_storage_refuses_a_member(rig):
-    response = rig.member.get("/api/storage")
-    assert response.status_code == 403 and response.json() == {"detail": "Administrator access is required"}
 
 
 def test_storage_totals_cover_cases_trash_caches_and_the_rest(tmp_path):

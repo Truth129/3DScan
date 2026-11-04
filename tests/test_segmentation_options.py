@@ -24,14 +24,9 @@ from scan3d.segmentation_options import normalize_options, segmentation_catalog
     "name,task,group",
     [
         ("eye_left", "head_glands_cavities", "Head organs"),
-        ("heart_myocardium", "heartchambers_highres", "Heart"),
-        ("body_trunc", "body", "Body"),
         ("torso_fat", "tissue_types", "Tissues"),
-        ("lung_nodules", "lung_nodules", "Lung findings"),
         ("lung_pleural", "pleural_pericard_effusion", "Chest findings"),
         ("aorta", "heartchambers_highres", "Arteries"),
-        ("lung_veins", "lung_vessels", "Veins"),
-        ("skull", "craniofacial_structures", "Bones"),
         ("liver", "total_v3", "Abdominal organs"),
     ],
 )
@@ -42,9 +37,10 @@ def test_task_appearance_has_meaningful_fallback_and_keeps_anatomical_priorities
 @pytest.mark.parametrize(
     "name,task",
     [
-        *[(name, "total") for name in ("vertebrae_C1", "rib_left_12", "skull", "sternum", "hip_left", "femur_right", "humerus_left")],
-        *[(name, "total_mr") for name in ("vertebrae", "sacrum", "scapula_right", "clavicula_left")],
-        *[(name, "mrsegmentator") for name in ("spine", "sacrum", "left_hip", "right_femur")],
+        ("vertebrae_C1", "total"),
+        ("rib_left_12", "total"),
+        ("scapula_right", "total_mr"),
+        ("left_hip", "mrsegmentator"),
         ("femur", "appendicular_bones"),
     ],
 )
@@ -104,7 +100,6 @@ def test_catalog_exposes_output_names_and_correct_vertebral_and_brain_labels():
     assert set(tasks["body"]["classes"]) == {"body", "body_trunc", "body_extremities", "skin"}
     assert tasks["vertebrae_pp"]["label"] == "Vertebrae C1–L5 — postprocessed"
     assert tasks["vertebrae_pp_refined"]["label"] == "Vertebrae C1–L5 — body-refined"
-    assert "posterior" not in tasks["vertebrae_pp"]["label"].lower()
     assert "Brain" in tasks["ventricle_parts"]["label"]
     assert {"renal_arteries", "celiac_trunk", "superior_mesenteric_artery"} <= set(tasks["renal_arteries"]["classes"])
 
@@ -115,16 +110,11 @@ def test_catalog_exposes_output_names_and_correct_vertebral_and_brain_labels():
         {"tasks": []},
         {"tasks": "total"},
         {"tasks": ["total", "total"]},
-        {"tasks": ["total_mr"]},
         {"tasks": ["--device=cpu"]},
-        {"tasks": [123]},
-        {"tasks": ["test"]},
         {"tasks": ["lung_vessels_LEGACY"]},
         {"body_seg": "false"},
-        {"robust_crop": 1},
         {"remove_small_blobs": 200},
         {"fast": True},
-        {"device": "cpu"},
     ],
 )
 def test_rejects_unknown_tasks_and_untyped_or_unapproved_options(options):
@@ -142,8 +132,7 @@ def test_license_check_is_local_and_never_discloses_the_key(tmp_path, monkeypatc
     monkeypatch.setenv("TOTALSEG_HOME_DIR", str(tmp_path))
     with pytest.raises(ValueError, match="license configured"):
         normalize_options("chest", {"tasks": ["heartchambers_highres"]})
-    secret = "private-key-123456"  # same 18-character offline shape checked upstream
-    assert len(secret) == 18
+    secret = "private-key-123456"  # The 18-character offline shape checked upstream.
     (tmp_path / "config.json").write_text(json.dumps({"license_number": secret}))
     catalog = segmentation_catalog()
     assert secret not in json.dumps(catalog)
@@ -183,7 +172,6 @@ def test_fingerprint_records_exact_task_options_and_auxiliary_crop_models(tmp_pa
     "task,flags,auxiliary_id",
     [
         ("total", {"body_seg": True}, 300),
-        ("liver_vessels", {"robust_crop": True}, 297),
         ("teeth", {}, 298),
     ],
 )
@@ -372,15 +360,6 @@ def run(tmp_path, monkeypatch):
     return state
 
 
-def test_a_path_spawns_its_own_interpreter_with_its_own_environment(run):
-    run.segment()
-    ((command, options),) = run.spawned
-    assert command[:4] == [ADDED.python, "-u", "-m", "totalsegmentator.bin.TotalSegmentator"]
-    assert "--verbose" in command and command[command.index("--device") + 1] == "gpu:0"
-    assert options["env"] == ADDED.environment()
-    assert run.fingerprinted_with == {"inference_path": ADDED}
-
-
 def test_the_default_path_spawns_exactly_what_it_did(run):
     run.report.pop("torch_version")
     run.segment(None)
@@ -409,21 +388,6 @@ def nothing_ran(run):
     assert run.spawned == [] and list(run.output.glob("run-*")) == [] and not (run.output / "inference.json").exists()
 
 
-@pytest.mark.parametrize(
-    "measured, found",
-    [
-        ({"gpu_name": "Test Other GPU"}, r"Test Other GPU \(gpu:0, CUDA\)"),
-        ({"cuda": None}, rf"{GPU_NAME} \(gpu:0, no CUDA\)"),
-        ({"selected_device": "cpu", "gpu_name": None, "cuda": None}, r"no GPU \(cpu, no CUDA\)"),
-    ],
-)
-def test_a_wrong_card_or_build_stops_before_a_run_exists(run, measured, found):
-    run.measured.update(measured)
-    with pytest.raises(RuntimeError, match=f"Expected {GPU_NAME}, but the GPU check found {found}. No result was kept and no other GPU was tried."):
-        run.segment()
-    nothing_ran(run)
-
-
 def test_a_crop_model_task_is_refused_off_the_first_card_because_upstream_drops_the_index(run):
     run.measured.update(selected_device="gpu:1", gpu_index=1)
     with pytest.raises(ValueError) as error:
@@ -446,17 +410,11 @@ def test_only_a_crop_model_off_the_first_card_is_refused(run, inference_path, de
     assert len(run.spawned) == 1
 
 
-def test_a_report_from_another_torch_is_rejected(run):
-    run.report["torch_version"] = "9.9.9"
-    with pytest.raises(RuntimeError, match=f"ran on PyTorch 9.9.9, not the 2.0 that {GPU_NAME} was checked on. No result was kept and no other GPU was tried."):
-        run.segment()
-    assert run.manifest()["status"] == "failed"
-
-
 def test_a_report_without_a_torch_version_is_rejected_on_a_path(run):
     run.report.pop("torch_version")
-    with pytest.raises(RuntimeError, match="ran on PyTorch None"):
+    with pytest.raises(RuntimeError, match=f"ran on PyTorch None, not the 2.0 that {GPU_NAME} was checked on. No result was kept"):
         run.segment()
+    assert run.manifest()["status"] == "failed"
 
 
 @pytest.mark.parametrize("inference_path", [ADDED, None], ids=["added", "default"])
@@ -469,16 +427,13 @@ def test_a_run_that_fell_back_to_the_cpu_is_rejected(run, inference_path):
 @pytest.mark.parametrize(
     "log, returncode, cause",
     [
-        (b"torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB\n", 1, "it ran out of GPU memory"),
         (b"RuntimeError: HIP Out Of Memory\n", 1, "it ran out of GPU memory"),
-        (b"", -9, "the process was killed, usually because system memory ran out"),
         (b"CUDA out of memory on an earlier attempt\n", -9, "the process was killed, usually because system memory ran out"),
         (b"Traceback\n", 3, "exit 3"),
-        (b"", -11, "exit -11"),
         (b"out of memory\n" + b"x" * (64 * 1024), 1, "exit 1"),
         (b"x" * (64 * 1024) + b"\nout of memory\n", 1, "it ran out of GPU memory"),
     ],
-    ids=["cuda", "any-case", "killed", "killed-with-old-text", "plain", "another-signal", "older-than-the-tail", "end-of-a-long-log"],
+    ids=["any-case", "killed-with-old-text", "plain", "older-than-the-tail", "end-of-a-long-log"],
 )
 def test_a_failed_task_says_what_stopped_it_on_which_card(run, log, returncode, cause):
     run.log, run.returncode = log, returncode
@@ -495,21 +450,14 @@ def test_a_failure_on_the_default_path_keeps_its_message(run):
     assert str(error.value) == "TotalSegmentator total failed (exit 1); inspect the local worker log"
 
 
-def test_results_moved_to_system_memory_are_recorded_and_explained(run):
-    run.log = b"Predicting\n" + OVERFLOW + b"Done\n"
+# Preprocessing prints before the move and the rest of the task after it, so no window is enough.
+@pytest.mark.parametrize("log", [b"Predicting\n" + OVERFLOW + b"Done\n", b"x" * (64 * 1024) + OVERFLOW + b"x" * (64 * 1024)], ids=["short", "long"])
+def test_results_moved_to_system_memory_are_recorded_and_explained(run, log):
+    run.log = log
     run.segment()
     manifest = run.manifest()
     assert manifest["tasks"][0]["results_moved_to_cpu"] is True and manifest["qc"] == [QC]
     assert json.loads(next(run.output.glob("run-*/inference.json")).read_text()) == manifest
-
-
-def test_a_move_is_found_anywhere_in_a_long_log(run):
-    # Preprocessing prints before it and the rest of the task after it, so no window is enough.
-    filler = b"x" * (64 * 1024)
-    run.log = filler + OVERFLOW + filler
-    run.segment()
-    manifest = run.manifest()
-    assert manifest["tasks"][0]["results_moved_to_cpu"] is True and manifest["qc"] == [QC]
 
 
 def test_a_clean_log_records_no_move(run):

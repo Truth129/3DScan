@@ -1,6 +1,6 @@
 import type { Case } from '../types';
 import { ApiError, request } from './api';
-import { reportStatus, waitForSession } from './api-fetch';
+import { waitForSession } from './api-fetch';
 
 export interface ImportProgress {
   phase: 'uploading' | 'retrying' | 'indexing';
@@ -32,7 +32,7 @@ interface ImportSession {
 }
 
 /** Each request stays far below the server's multipart limits and is cheap to resend. */
-export const IMPORT_LIMITS: ImportLimits = { parts: 256, bytes: 32 * 1024 ** 2, piece: 16 * 1024 ** 2 };
+const IMPORT_LIMITS: ImportLimits = { parts: 256, bytes: 32 * 1024 ** 2, piece: 16 * 1024 ** 2 };
 const RETRY_SECONDS = [1, 2, 4, 8, 16, 30];
 
 /** Group whole files into bounded batches; larger files become ordered byte ranges. */
@@ -80,7 +80,6 @@ function sendForm<T>(url: string, body: FormData, progress: (fraction: number) =
       if (event.lengthComputable && event.total) progress(event.loaded / event.total);
     };
     xhr.onload = settle(() => {
-      reportStatus(xhr.status);
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(xhr.response as T);
         return;

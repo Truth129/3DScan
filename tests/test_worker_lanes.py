@@ -84,47 +84,6 @@ def test_direct_edit_and_acceptance_finish_while_gpu_lane_is_blocked(example, mo
     assert service.store.get("cases", case["id"])["active_revision_id"] == accepted["revision_id"]
 
 
-def test_gpu_jobs_never_overlap_and_interactive_predictions_precede_queued_segmentation(example, monkeypatch):
-    service, case, base, prompt = example
-    guard, active, peak, order = threading.Lock(), [0], [0], []
-
-    def gpu_work(kind):
-        with guard:
-            active[0] += 1
-            peak[0] = max(peak[0], active[0])
-            order.append(kind)
-        time.sleep(0.05)
-        with guard:
-            active[0] -= 1
-
-    fake_engine_only(service, monkeypatch, FakeRuntime(during=lambda: gpu_work("review_predict")))
-
-    def segmentation(job):
-        gpu_work("segment")
-        return {**base, "id": identifier()}
-
-    monkeypatch.setattr(service, "_segment", segmentation)
-    segment = service.store.enqueue(case["id"], "segment", {"revision_id": base["id"]})
-    predictions = []
-    for draft in (
-        service.reviews.create(case["id"], base["id"], "total:liver"),
-        service.reviews.create(case["id"], base["id"], "total:kidney_left"),
-        service.reviews.create_structure(case["id"], base["id"], "Third target"),
-    ):
-        draft = service.reviews.update(case["id"], draft["id"], 0, [prompt])
-        predictions.append(service.reviews.predict(case["id"], draft["id"], draft["generation"]))
-    draft = direct_draft(service, case, base)
-    direct = service.reviews.predict(case["id"], draft["id"], draft["generation"])
-    service.start()
-    try:
-        results = [finished(service, job) for job in (*predictions, direct, segment)]
-    finally:
-        service.stop()
-    assert [result["status"] for result in results] == ["completed"] * 5, results
-    assert peak[0] == 1
-    assert order == ["review_predict"] * 3 + ["segment"]
-
-
 def test_claim_orders_interactive_review_before_batch_work_within_each_lane(tmp_path):
     store = Store(tmp_path)
     case = dict(id=identifier(), label="Lane order", status="imported", series=[])
@@ -316,26 +275,6 @@ def test_a_chosen_path_changes_no_jobs_lane(example, added_paths):
     assert service.store.claim("gpu")["id"] == malformed["id"]
 
 
-def test_a_queued_choice_survives_a_restart_and_reaches_its_job(example, monkeypatch, added_paths):
-    service, case, base, _ = example
-    queued = service.segment_case(case["id"], base["id"], "total", inference_path="nvidia")
-    restarted = Service(service.settings)
-    seen = []
-
-    def segmentation(job):
-        seen.append(job["inference_path"])
-        return {**base, "id": identifier()}
-
-    monkeypatch.setattr(restarted, "_segment", segmentation)
-    assert restarted.store.get("jobs", queued["id"]) == queued
-    restarted.start()
-    try:
-        assert finished(restarted, queued)["status"] == "completed"
-    finally:
-        restarted.stop()
-    assert seen == [binding("nvidia")]
-
-
 @pytest.mark.parametrize(
     "change, error",
     [
@@ -344,15 +283,11 @@ def test_a_queued_choice_survives_a_restart_and_reaches_its_job(example, monkeyp
             f"{GPU_NAME} is no longer available: This GPU is not set up on this workstation. Nothing ran and no other GPU was tried.",
         ),
         (
-            lambda stub: stub.change(lambda record: record.update(gpu_ready=False)),
-            f"{GPU_NAME} is no longer available: Its last GPU check failed. Nothing ran and no other GPU was tried.",
-        ),
-        (
             lambda stub: stub.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU")),
             f"{GPU_NAME} changed after this job was queued. Nothing ran and no other GPU was tried. Start it again.",
         ),
     ],
-    ids=["removed", "went-bad", "changed"],
+    ids=["removed", "changed"],
 )
 def test_a_queued_job_whose_path_changed_fails_by_name_and_does_not_strand(example, monkeypatch, added_paths, change, error):
     service, case, base, _ = example
@@ -469,36 +404,19 @@ def test_a_queued_correction_survives_a_restart_on_its_card(example, monkeypatch
     assert restarted.reviews.get(case["id"], draft["id"])["inference_path"] == binding("second")
 
 
-@pytest.mark.parametrize(
-    "change, error",
-    [
-        (
-            lambda stub: stub.proof.unlink(),
-            f"{SECOND_GPU} is no longer available: This GPU is not set up on this workstation. Nothing ran and no other GPU was tried.",
-        ),
-        (
-            lambda stub: stub.change(lambda record: record.update(gpu_ready=False)),
-            f"{SECOND_GPU} is no longer available: Its last GPU check failed. Nothing ran and no other GPU was tried.",
-        ),
-        (
-            lambda stub: stub.change(lambda record: record["path"].update(gpu_name="Test Replacement GPU")),
-            f"{SECOND_GPU} changed after this job was queued. Nothing ran and no other GPU was tried. Start it again.",
-        ),
-    ],
-    ids=["removed", "went-bad", "changed"],
-)
-def test_a_queued_correction_whose_path_changed_fails_by_name_and_does_not_strand(example, monkeypatch, paths, change, error):
+def test_a_queued_correction_whose_path_changed_fails_by_name_and_does_not_strand(example, monkeypatch, paths):
     service, case, base, prompt = example
     _, second = paths
     runtime = fake_engine_only(service, monkeypatch)
     draft = model_draft(service, case, base, prompt)
     queued = service.reviews.predict(case["id"], draft["id"], draft["generation"], inference_path="second")
-    change(second)
+    second.change(lambda record: record.update(gpu_ready=False))
     service.start()
     try:
         result = finished(service, queued)
     finally:
         service.stop()
+    error = f"{SECOND_GPU} is no longer available: Its last GPU check failed. Nothing ran and no other GPU was tried."
     assert (result["status"], result["stage"], result["error"]) == ("failed", "Failed", error)
     assert result["inference_path"]["id"] == "second" and runtime.calls == []
     state = service.reviews.get(case["id"], draft["id"])

@@ -801,7 +801,6 @@ defineExpose({
     return id === generation && !planeError.value;
   },
   resetView: () => viewer?.resetCamera(),
-  reviewPatientToCanvas: (ras: Point) => reviewInput?.patientToCanvas(ras),
   retry: initialize,
   retryMask: loadMask,
   retryColors: loadColors,

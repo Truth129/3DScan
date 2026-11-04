@@ -2024,7 +2024,6 @@ onBeforeUnmount(() => {
                   :review-radius="interactiveRadius"
                   :native-review="workspaceMode === 'review' && interactiveNative"
                   @point="setPoint"
-                  @prompt="interactivePanel?.addPrompt($event)"
                   @gesture="interactivePanel?.addGesture($event)"
                   @window-level="cornerstoneWindowLevel"
                 />

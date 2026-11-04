@@ -11,20 +11,9 @@ import {
 } from '../src/lib/acquisition';
 
 describe('acquisition labels and cardiac timing', () => {
-  it('offers CorCTA, calcium-score and CTA phase choices without a multi-series phase', () => {
-    expect(SCAN_REGION_IDS).toContain('corcta');
-    expect(SCAN_REGION_IDS).toContain('cardiac');
-    expect(SCAN_REGION_IDS).toContain('abdomen_pelvis');
-    expect(SCAN_REGION_IDS).toContain('head_neck');
-    expect(SCAN_REGION_IDS).toContain('breast');
-    expect(CONTRAST_PHASE_IDS).toContain('coronary_arterial');
-    expect(CONTRAST_PHASE_IDS).toContain('pulmonary_arterial');
-    expect(CONTRAST_PHASE_IDS).toContain('noncontrast');
+  it('offers no multi-series phase, and no choice twice', () => {
     expect(CONTRAST_PHASE_IDS).not.toContain('dual_phase');
-    expect(CARDIAC_PHASE_IDS).toContain('best_diastolic');
-    expect(CARDIAC_PHASE_IDS).toContain('best_systolic');
-    expect(new Set(SCAN_REGION_IDS).size).toBe(SCAN_REGION_IDS.length);
-    expect(new Set(CONTRAST_PHASE_IDS).size).toBe(CONTRAST_PHASE_IDS.length);
+    for (const ids of [SCAN_REGION_IDS, CONTRAST_PHASE_IDS, CARDIAC_PHASE_IDS]) expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('restores a CorCTA reconstruction and sends only the chosen series and recorded labels', () => {

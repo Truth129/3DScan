@@ -44,6 +44,18 @@ describe('CT overlay presentation', () => {
     expect(result.overlays?.[1].current).toBe(input.overlays?.[1].current);
     expect(result.overlays?.map(layer => layer.current[2])).toEqual([1, 1]);
     expect(input.overlays?.[0].color).toBeUndefined();
+    expect(input.overlayOpacity).toBeUndefined();
+    expect(result.overlayOpacity).toBeUndefined();
+  });
+
+  it('applies an explicit 2D opacity only to the styled frame and reuses an unchanged style', () => {
+    const input = frame();
+    const styled = colorCTOverlays(input, [{ id: 'total:liver', color: '#cc6619' }], 0.4);
+    expect(styled.overlayOpacity).toBe(0.4);
+    expect(styled.overlays![0].current).toBe(input.overlays![0].current);
+    expect(input.overlayOpacity).toBeUndefined();
+    expect(colorCTOverlays(styled, [{ id: 'total:liver', color: '#cc6619' }], 0.4)).toBe(styled);
+    expect(colorCTOverlays(input, undefined, 0).overlayOpacity).toBe(0);
   });
 
   it('accounts for all mask and parent buffers without double-counting the legacy alias', () => {
@@ -52,19 +64,5 @@ describe('CT overlay presentation', () => {
     input.parent = previous;
     input.overlays![0].parent = previous;
     expect(ctFrameBytes(input)).toBe(16 + 4 + 4 + 4);
-  });
-});
-
-describe('2D opacity presentation isolation', () => {
-  it('applies an explicit 2D opacity without modifying data or legacy 3D frames', () => {
-    const input = frame();
-    const styled = colorCTOverlays(input, [{ id: 'total:liver', color: '#cc6619' }], 0.4);
-    expect(styled.overlayOpacity).toBe(0.4);
-    expect(styled.hu).toBe(input.hu);
-    expect(styled.overlays![0].current).toBe(input.overlays![0].current);
-    expect(input.overlayOpacity).toBeUndefined();
-    expect(colorCTOverlays(input, [{ id: 'total:liver', color: '#cc6619' }]).overlayOpacity).toBeUndefined();
-    expect(colorCTOverlays(styled, [{ id: 'total:liver', color: '#cc6619' }], 0.4)).toBe(styled);
-    expect(colorCTOverlays(input, undefined, 0).overlayOpacity).toBe(0);
   });
 });

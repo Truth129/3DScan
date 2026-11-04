@@ -24,23 +24,18 @@ describe('acquisition selection form', () => {
     expect(html).not.toContain('aria-label="Cardiac reconstruction phase"');
     expect(html).not.toContain('aria-label="Reconstruction phase (% R–R)"');
   });
-  it('reports invalid percentages visibly and retains the erroneous value for correction', async () => {
+  it.each([
+    [101, 'value="101"'],
+    // An incomplete entry stays invalid without assigning NaN to the native input.
+    [NaN, 'value=""'],
+  ])('reports the invalid percentage %s visibly and keeps what was typed for correction', async (rr_percent, kept) => {
     const html = await renderToString(
-      createSSRApp(AcquisitionFields, { modelValue: acquisitionSelection({ profile: 'cardiac', phase: 'arterial', rr_percent: 101 }) }),
+      createSSRApp(AcquisitionFields, { modelValue: acquisitionSelection({ profile: 'corcta', phase: 'arterial', rr_percent }) }),
     );
     expect(html).toContain('role="alert"');
     expect(html).toContain('between 0 and 100% R–R');
-    expect(html).toContain('value="101"');
     expect(html).toContain('aria-invalid="true"');
-  });
-  it('keeps an incomplete numeric entry invalid without assigning NaN to the native input', async () => {
-    const html = await renderToString(
-      createSSRApp(AcquisitionFields, { modelValue: acquisitionSelection({ profile: 'corcta', phase: 'coronary_arterial', rr_percent: NaN }) }),
-    );
-    expect(html).toContain('aria-invalid="true"');
-    expect(html).toContain('between 0 and 100% R–R');
-    expect(html).not.toContain('value="NaN"');
-    expect(html).toMatch(/aria-label="Reconstruction phase \(% R–R\)"[^>]*value=""/);
+    expect(html).toMatch(new RegExp(`aria-label="Reconstruction phase \\(% R–R\\)"[^>]*${kept}`));
   });
   it('escapes saved custom phase labels and respects the busy state', async () => {
     const html = await renderToString(

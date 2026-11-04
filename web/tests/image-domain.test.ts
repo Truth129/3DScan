@@ -68,23 +68,10 @@ function descriptor(): VolumeDescriptor {
 }
 
 describe('modality-neutral image metadata with legacy CT compatibility', () => {
-  it('retains the historical CT presentation without sharing mutable defaults', () => {
-    expect(imagePresentation()).toEqual({
-      units: 'HU',
-      background_value: -1024,
-      default_window: 400,
-      default_level: 40,
-      photometric_interpretation: 'MONOCHROME2',
-      preset_group: 'CT',
-      preview_quantization_step: 1,
-    });
-    const changed = imagePresentation();
-    changed.default_level = 900;
-    expect(imagePresentation().default_level).toBe(40);
+  it('defaults to an owned legacy CT presentation and otherwise uses explicit units without imposing HU', () => {
+    expect(imagePresentation()).toEqual(LEGACY_CT_PRESENTATION);
+    imagePresentation().default_level = 900;
     expect(LEGACY_CT_PRESENTATION.default_level).toBe(40);
-  });
-
-  it('uses explicit scalar units and presentation without imposing HU or CT ranges', () => {
     const context = imageContext(asset());
     expect(context.reference_image_id).toBe('a'.repeat(32));
     expect(context.source?.frame_of_reference_uid).toBe('1.2.4');
@@ -93,9 +80,6 @@ describe('modality-neutral image metadata with legacy CT compatibility', () => {
     expect(() => imagePresentation({ ...context, scalar: { units: 'HU' } })).toThrow('Invalid');
     expect(() => imagePresentation({ ...context, presentation: { ...signalPresentation, default_window: 0 } })).toThrow('Invalid');
     expect(() => imagePresentation({ ...context, presentation: { ...signalPresentation, background_value: NaN } })).toThrow('Invalid');
-  });
-
-  it('reserves other image representations for their dedicated adapters', () => {
     expect(() => imageContext({ ...asset(), kind: 'cine' } as unknown as ImageAsset)).toThrow('dedicated viewer');
   });
 

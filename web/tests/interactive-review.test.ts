@@ -13,12 +13,6 @@ import type { VolumeDescriptor } from '../src/lib/ct-reslice';
 import type { Geometry, InteractiveReview, SliceMeta } from '../src/types';
 
 describe('interactive CT review geometry and generations', () => {
-  it('keeps legacy drafts as AI and recognizes explicit direct drafts', () => {
-    expect(reviewMethod()).toBe('nninteractive');
-    expect(reviewMethod({})).toBe('nninteractive');
-    expect(reviewMethod({ method: 'direct' })).toBe('direct');
-    expect(reviewMethod({ method: 'nninteractive' })).toBe('nninteractive');
-  });
   const review: InteractiveReview = {
     id: 'draft',
     case_id: 'case',
@@ -33,14 +27,15 @@ describe('interactive CT review geometry and generations', () => {
       summary: { changed_voxels: 2, added_voxels: 1, removed_voxels: 1, before_volume_ml: 9, after_volume_ml: 9 },
     },
   };
-  it('shows only a candidate for the current live draft generation', () => {
+  it('shows only a candidate for the current live draft generation, and reads a legacy draft as AI', () => {
+    expect([reviewMethod(), reviewMethod({}), reviewMethod({ method: 'direct' })]).toEqual(['nninteractive', 'nninteractive', 'direct']);
     expect(reviewCandidateRevision(review)).toBe('review-draft-3');
     expect(reviewCandidateRevision({ ...review, generation: 4 })).toBeUndefined();
     expect(reviewCandidateRevision({ ...review, generation: 4, dirty: true })).toBe('review-draft-3');
     expect(reviewCandidateRevision({ ...review, status: 'discarded' })).toBeUndefined();
     expect(reviewCandidateRevision({ ...review, status: 'accepted' })).toBeUndefined();
   });
-  it('projects RAS prompts with reflected, anisotropic pixel axes and clips other slices', () => {
+  it('projects RAS prompts with reflected, anisotropic axial and coronal pixel axes and clips other slices', () => {
     const meta: SliceMeta = {
       plane: 'axial',
       width: 100,
@@ -65,14 +60,9 @@ describe('interactive CT review geometry and generations', () => {
       0.5,
     );
     expect(markers).toEqual([{ id: 'a', ras, include: true, x: 12.5, y: 22.5 }]);
-  });
-  it('uses the displayed patient plane for coronal prompts', () => {
-    const meta: SliceMeta = {
+    const coronal: SliceMeta = {
+      ...meta,
       plane: 'coronal',
-      width: 100,
-      height: 80,
-      position_mm: 15,
-      extent_mm: [],
       pixel_to_ras: [
         [-2, 0, 0, 80],
         [0, 0, 0, 15],
@@ -80,8 +70,8 @@ describe('interactive CT review geometry and generations', () => {
         [0, 0, 0, 1],
       ],
     };
-    const ras = pixelToRas(meta.pixel_to_ras, 9, 14);
-    expect(visibleReviewPrompts([{ id: 'a', ras, include: false }], meta, 0.5)[0]).toMatchObject({ x: 9.5, y: 14.5 });
+    const onCoronal = pixelToRas(coronal.pixel_to_ras, 9, 14);
+    expect(visibleReviewPrompts([{ id: 'c', ras: onCoronal, include: false }], coronal, 0.5)[0]).toMatchObject({ x: 9.5, y: 14.5 });
   });
   it('uses physical distance to a rotated MPR plane when projecting point prompts', () => {
     const c = Math.SQRT1_2;
