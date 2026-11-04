@@ -36,6 +36,16 @@ from .store import ReviewConflict, identifier, now, safe_id
 _ALIAS = re.compile(r"review-([a-f0-9]{32})-(0|[1-9][0-9]{0,9})")
 _MEASUREMENTS = {"volume_ml", "voxel_count", "bounds_ras", "centroid_ras", "qc"}
 _OVERLAP_CHUNK_VOXELS = 4 * 1024 * 1024
+# One AI mark can make the model drop parts of the mask it never touched, and
+# the volume totals can hide that. These decide when an AI candidate warns of it.
+_INTERIOR_DEPTH_MM = 2.0
+_FAR_FROM_MARKS_MM = 40.0
+_FAR_REMOVAL_SHARE = 0.05
+# Caps on sampled voxels, mask lookups and mark voxels. With all three reached,
+# on a 30 million voxel synthetic mask, the check took under half a second.
+_FAR_SAMPLES = 1024 * 1024
+_FAR_LOOKUPS = 128 * 1024 * 1024
+_FAR_MARKS = 1024 * 1024
 
 
 def _count_foreground(values, check_cancel):
@@ -116,6 +126,69 @@ def _changed_structure(structure, change):
     if change.get("relationship") is not None:
         entry["relationship"] = change["relationship"]
     return entry
+
+
+def _mark_voxels(prompts, affine, shape):
+    """Native voxels of every mark, as the engine's own rasterizer gave them."""
+    voxels = [np.zeros((0, 3), dtype=np.int64)]
+    for prompt in prompts:
+        mark = materialize_prompt(prompt, affine, shape)
+        if mark["kind"] == "point":
+            voxels.append(np.asarray([mark["voxel"]], dtype=np.int64))
+        elif mark["kind"] == "bbox":
+            low, high = np.asarray(mark["bbox_ijk"]).T
+            voxels.append(np.indices(high - low).reshape(3, -1).T + low)
+        else:
+            voxels.append(np.argwhere(mark["image"]) + np.asarray(mark["interaction_bbox"])[:, 0])
+    voxels = np.concatenate(voxels)
+    # Only marks covering several whole slices pass this; an even stride then
+    # thins them, which can move the 40 mm edge by part of that stride.
+    return voxels[:: max(1, -(-len(voxels) // _FAR_MARKS))]
+
+
+def _far_removal_share(before, after, affine, prompts):
+    """Share of the saved mask's interior that the candidate removed far from every mark.
+
+    Interior voxels have every voxel centre within 2 mm, through the full affine,
+    inside the saved mask, so surface jitter and parts thinner than about 4 mm do
+    not count. Distance to the marks is exact in patient millimetres. A large mask
+    is sampled on an even voxel lattice, so the share is then an estimate. None
+    when the saved mask has no interior.
+    """
+    from scipy.spatial import cKDTree
+
+    bounds = imaging._foreground_bounds(before)
+    if bounds is None:
+        return None
+    matrix = np.asarray(affine, dtype=np.float64)[:3, :3]
+    reach = np.ceil(_INTERIOR_DEPTH_MM * np.linalg.norm(np.linalg.inv(matrix), axis=1) + 1e-7).astype(int)
+    offsets = np.indices(reach * 2 + 1).reshape(3, -1).T - reach
+    lengths = np.linalg.norm(offsets @ matrix.T, axis=1)
+    # Nearest first, so most voxels at the surface drop out after a few lookups.
+    order = np.argsort(lengths, kind="stable")
+    offsets = offsets[order][(lengths[order] > 0) & (lengths[order] <= _INTERIOR_DEPTH_MM + 1e-7)]
+    low, high = bounds
+    size = high - low + 1
+    # The zero halo holds every offset, and counts the grid's edge as outside the mask.
+    padded = np.zeros(tuple(size + 2 * reach), dtype=bool)
+    padded[tuple(slice(r, r + s) for r, s in zip(reach, size))] = before[tuple(slice(a, b + 1) for a, b in zip(low, high))]
+    limit = max(1, min(_FAR_SAMPLES, _FAR_LOOKUPS // max(1, len(offsets))))
+    step = max(1, int(np.ceil((np.count_nonzero(padded) / limit) ** (1 / 3))))
+    samples = np.argwhere(padded[tuple(slice(r, r + s, step) for r, s in zip(reach, size))]) * step + reach
+    samples = samples[:: max(1, -(-len(samples) // limit))]
+    flat, strides = padded.reshape(-1), np.asarray(padded.strides) // padded.itemsize
+    inside = samples @ strides
+    for delta in offsets @ strides:
+        inside = inside[flat[inside + delta]]
+    if not len(inside):
+        return None
+    voxels = np.stack(np.unravel_index(inside, padded.shape), axis=1) - reach + low
+    lost = voxels[~after[tuple(voxels.T)]]
+    marks = _mark_voxels(prompts, affine, before.shape)
+    if len(lost) and len(marks):
+        nearest = cKDTree(marks @ matrix.T).query(lost @ matrix.T, distance_upper_bound=_FAR_FROM_MARKS_MM + 1)[0]
+        lost = lost[nearest > _FAR_FROM_MARKS_MM]
+    return len(lost) / len(inside)
 
 
 def public_review(record):
@@ -709,13 +782,18 @@ class ReviewManager:
             removed += int(np.count_nonzero(a & ~b))
         voxel_volume_ml = abs(float(np.linalg.det(affine[:3, :3]))) / 1000
         summary = _summary(before_count, after_count, added, removed, voxel_volume_ml)
+        # A direct edit changes only what was drawn or cut; the model can change anything it re-predicts.
+        far = None if job["payload"].get("method") == "direct" or not removed else _far_removal_share(before, after, affine, job["payload"]["prompts"])
         del before, before_flat, after_flat, a, b
         overlap = self._overlaps(job, base, selected, after, image, affine, directory, target, summary)
-        preview = (
-            self._surface_preview(job, review, base, selected, overlap["affected_structures"], after, image, affine)
-            if job["payload"].get("method") == "direct"
-            else {}
-        )
+        if far is not None and far >= _FAR_REMOVAL_SHARE:
+            overlap["warnings"].insert(
+                0,
+                f"AI assist removed {far:.0%} of the original mask's interior more than {_FAR_FROM_MARKS_MM:.0f} mm from every mark; "
+                "check the whole structure before saving",
+            )
+        # For AI candidates too, so Candidate in 3D shows what Save keeps, including a loss far from the marks.
+        preview = self._surface_preview(job, review, base, selected, overlap["affected_structures"], after, image, affine)
         del after
         if _digest(ct) != ct_digest or _digest(mask_path) != before_digest:
             raise ValueError("The source CT or mask changed during interactive prediction")

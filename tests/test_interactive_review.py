@@ -177,6 +177,53 @@ def test_no_change_and_empty_candidates_can_be_seen_but_not_accepted(example, mo
     assert service.store.get("cases", case["id"])["active_revision_id"] == base["id"]
 
 
+class CuttingRuntime(FakeRuntime):
+    """Removes one block of the mask, as the model can wherever it re-predicts."""
+
+    def __init__(self, block):
+        super().__init__()
+        self.block = block
+
+    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, **kwargs):
+        image, affine = imaging._image(ct_path)
+        mask, _, _ = imaging._binary(mask_path, image, affine)
+        mask[self.block] = False
+        imaging._save_mask(mask, image, output_path)
+        return {"engine": "fake-nninteractive", "version": "test", "checkpoint_sha256": "a" * 64, "device": "test-boundary"}
+
+
+@pytest.mark.parametrize("cut,warning", [(slice(30, 38), "21%"), (slice(2, 10), None)], ids=["far", "near"])
+def test_ai_candidate_warns_when_it_removes_interior_far_from_every_mark(tmp_path, cut, warning):
+    service = Service(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
+    case = service.new_case("Far removal fixture")
+    folder = service.store.case_dir(case["id"]) / "fixture"
+    folder.mkdir()
+    # Sheared and anisotropic. A 2 mm step along i puts the far cut 52 mm or more from the mark.
+    affine = np.eye(4)
+    affine[:3, :3] = [[2.0, 0, 0], [0, 1.5, 0.8], [0, 0, 2.5]]
+    ct = nib.Nifti1Image(np.full((40, 8, 8), 45, dtype=np.int16), affine)
+    nib.save(ct, folder / "reference.nii.gz")
+    mask = np.zeros(ct.shape, dtype=np.uint8)
+    mask[2:38, 2:6, 2:6] = 1
+    imaging._save_mask(mask, ct, folder / "bowel.nii.gz")
+    structure = dict(
+        id="total:small_bowel", name="small_bowel", task="total", group="Abdominal organs", color="#c08090", mask_file=str(folder / "bowel.nii.gz")
+    )
+    base = service.build_revision(case["id"], folder / "reference.nii.gz", [structure], source="synthetic_fixture")
+    service.store.commit_revision(base)
+    # Both cuts take 56 of the 272 voxels whose 2 mm neighbourhood lies wholly inside the mask.
+    service.interactive_runtime = CuttingRuntime((cut, slice(None), slice(None)))
+    draft = service.reviews.create(case["id"], base["id"], structure["id"])
+    point = dict(id="point-1", kind="point", ras=imaging._world(affine, [4, 3, 3]).tolist(), include=True)
+    draft = service.reviews.update(case["id"], draft["id"], 0, [point])
+    assert execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"]))["status"] == "completed"
+    result = service.reviews.get(case["id"], draft["id"])["candidate"]
+    expected = f"AI assist removed {warning} of the original mask's interior more than 40 mm from every mark; check the whole structure before saving"
+    assert result["warnings"] == ([expected] if warning else [])
+    # Candidate in 3D draws the AI result, not the saved surface.
+    assert result["preview_3d_ready"] and result["surface_assets"][0]["key"] != base["surface_assets"][0]["key"]
+
+
 def test_point_validation_uses_oblique_reflected_grid_and_rejects_bad_prompts(example):
     service, case, base, prompt = example
     draft = service.reviews.create(case["id"], base["id"], "total:liver")
