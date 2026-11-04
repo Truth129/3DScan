@@ -23,7 +23,7 @@ from scan3d.config import ROOT
 from scan3d.store import Store
 
 SCRIPT = ROOT / "scripts" / "add_inference_path.sh"
-SETTINGS_CODE = ("__init__.py", "config.py", "doctor.py", "inference_paths.py")
+SETTINGS_CODE = ("__init__.py", "config.py", "doctor.py", "inference_paths.py", "archive/__init__.py", "archive/settings.py")
 GIB = 1024**3
 LOCKED = {"alpha": {"version": "1.0", "complete": True}, "beta": {"version": "2.0.post1", "complete": True}}
 COREUTILS = ("bash", "cat", "dirname", "flock", "grep", "mkdir", "mktemp", "realpath", "rm", "sort", "stat", "tail")
@@ -282,7 +282,8 @@ class Rig:
         (self.root / "scripts" / "check_gpu.py").write_text(STUB_CHECK)
         self.lock.write_text(STUB_LOCK)
         for name in SETTINGS_CODE:
-            shutil.copy(ROOT / "scan3d" / name, self.root / "scan3d")
+            (self.root / "scan3d" / name).parent.mkdir(exist_ok=True)
+            shutil.copy(ROOT / "scan3d" / name, self.root / "scan3d" / name)
         for name in (".venv", ".venv-rocm10-py314"):  # What the script must never adopt.
             (self.root / name / "bin").mkdir(parents=True)
             (self.root / name / "pyvenv.cfg").write_text("home = another stack\n")
