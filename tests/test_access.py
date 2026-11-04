@@ -224,7 +224,7 @@ def test_two_people_on_one_draft_get_a_conflict_not_a_lost_draft(rig):
     assert listed["started_by"] == "Owner" and [prompt["id"] for prompt in listed["prompts"]] == ["owner-mark"]
 
 
-def test_view_and_seg_sends_need_the_archive_and_a_seg_file_does_not(rig, monkeypatch):
+def test_view_and_seg_sends_need_the_archive_and_files_do_not(rig, monkeypatch):
     own = rig.member.post("/api/cases/demo").json()
     prefix = f"/api/cases/{own['id']}/revisions/{own['active_revision_id']}"
     for response in (rig.member.get(f"{prefix}/dicom-view"), rig.member.post(f"{prefix}/dicom-view"), rig.member.post(f"{prefix}/dicom-seg", json={})):
@@ -236,6 +236,8 @@ def test_view_and_seg_sends_need_the_archive_and_a_seg_file_does_not(rig, monkey
     assert answer.status_code == 200
     body = answer.json()
     assert body["available"] is False and body["reason"] == ARCHIVE_OFF and body["destinations"] == [] and "file" in body
+    view_file = rig.member.get(f"{prefix}/dicom-view-file")
+    assert view_file.status_code == 200 and view_file.json()["available"] is False
 
 
 def test_every_account_lists_every_case_with_who_added_it(rig):

@@ -199,6 +199,25 @@ def add_routes(app, service):
     ):
         return public_job(service.orthanc_view_exports.start(case_id, revision_id, image.file, reference_image_id, destination, resend=resend))
 
+    # A file stays on this machine, so it needs neither the archive nor a CT imported from one.
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view-file")
+    def dicom_view_file_availability(case_id: str, revision_id: str):
+        return service.view_file_exports.availability(case_id, revision_id)
+
+    @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-view-file")
+    def dicom_view_file_export(
+        case_id: str,
+        revision_id: str,
+        image: UploadFile = File(...),
+        reference_image_id: str = Form(..., min_length=1, max_length=128),
+    ):
+        return public_job(service.view_file_exports.start(case_id, revision_id, image.file, reference_image_id))
+
+    @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view-file/{export_id}/view.dcm")
+    def dicom_view_file(case_id: str, revision_id: str, export_id: str):
+        path = service.view_file_exports.prepared_file(case_id, revision_id, export_id)
+        return FileResponse(path, media_type="application/dicom", filename=f"scan3d-view-{revision_id[:8]}-{export_id[-8:]}.dcm")
+
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/cinematic-reference")
     def cinematic_reference(case_id: str, revision_id: str):
         from .cinematic import reference_values

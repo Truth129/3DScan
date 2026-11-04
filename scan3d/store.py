@@ -25,6 +25,8 @@ LANES = ("gpu", "cpu")
 INTERACTIVE_KINDS = frozenset({"review_predict", "review_accept"})
 # A send of these that Orthanc has started runs to its end, whatever happens here.
 OUTBOUND_KINDS = frozenset({"orthanc_export", "orthanc_view_export", "orthanc_roi_export"})
+# Every kind an export manager runs and cancels. A file export sends nothing.
+EXPORT_KINDS = OUTBOUND_KINDS | {"view_file_export"}
 
 
 def job_lane(job):

@@ -31,8 +31,8 @@ or an unexpected 500 is plain text.
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
 | 409    | Stale state; reload before retrying. Or work under way must finish first, or a People change would leave no admin | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever, Clear caches and People |
 | 410    | A set-password link no longer works                     | `POST /api/session/redeem`                |
-| 411    | Captured view, sign-in or set-password without a plain `Content-Length` | `dicom-view` upload, sign-in and set-password checks |
-| 413    | Offline HTML export, captured view, sign-in or set-password over a size limit | `ExportTooLarge`, `dicom-view` upload, sign-in and set-password checks |
+| 411    | Captured view, sign-in or set-password without a plain `Content-Length` | `dicom-view` and `dicom-view-file` uploads, sign-in and set-password checks |
+| 413    | Offline HTML export, captured view, sign-in or set-password over a size limit | `ExportTooLarge`, `dicom-view` and `dicom-view-file` uploads, sign-in and set-password checks |
 | 422    | Schema validation failed                                | FastAPI                                   |
 | 429    | Too many password attempts, or no hashing slot in a second | `POST /api/session`, `POST /api/session/redeem`, `POST /api/trash/{id}/purge` |
 | 499    | Client left while a mask or label union was being built | `volume-mask`, `volume-labels`            |
@@ -50,8 +50,8 @@ paths.
 - **Origin.** A non-GET request whose `Origin` differs from `Host` gets 403. Hosts must appear in
   `SCAN3D_ALLOWED_HOSTS`.
 - **Private responses.** `/api/session`, `/api/session/redeem`, `/api/people`, `/api/orthanc/*`, the
-  license route, `.../dicom-seg`, a prepared `segment.dcm` and `.../dicom-view` use
-  `Cache-Control: no-store`, errors included.
+  license route, `.../dicom-seg`, a prepared `segment.dcm`, `.../dicom-view`, `.../dicom-view-file`
+  and a prepared `view.dcm` use `Cache-Control: no-store`, errors included.
   Candidate records, descriptors, agreement reports and frames use `private, no-store`. So does any
   other `/api/` response that sets no header of its own.
 - **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces and `model.glb` use
@@ -398,6 +398,8 @@ Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 | `GET`, `POST .../dicom-seg`                        | SEG and OsiriX ROI export        | No              |
 | `GET .../dicom-seg/{export_id}/segment.dcm`        | Prepared SEG file                | No              |
 | `GET`, `POST .../dicom-view`                       | 3D view export status and start  | No              |
+| `GET`, `POST .../dicom-view-file`                  | 3D view file status and start    | No              |
+| `GET .../dicom-view-file/{export_id}/view.dcm`     | Prepared 3D view file            | No              |
 
 ## System routes
 
@@ -1262,6 +1264,18 @@ image, source manifest, PNG hash and encoding version.
 **Result.** `result.dicom_view` has `export_id`, `encoding_version`, `archived`, `sent`,
 `instance_count` and optional `destination` and `destination_id`, with no patient fields or PNG
 hash.
+
+### DICOM view file
+
+The same capture becomes a file to download, and nothing is archived or sent. It needs only the case:
+any CT prepared from DICOM, a folder or ZIP import included, and no archive access.
+
+- **`GET .../dicom-view-file`** returns `{available, reason?, exports: Job[], encoding_version}`.
+- **`POST .../dicom-view-file`** takes multipart `image` and `reference_image_id`, with the limits
+  above, and returns a `view_file_export` job. Identical bytes reuse one job and SOP.
+- **`GET .../dicom-view-file/{export_id}/view.dcm`** serves a completed file's verified bytes, or 404.
+- The encoding and identity rules are the ones above, with no archive checks. `result.dicom_view`
+  adds `file: true`.
 
 ## Orthanc routes
 

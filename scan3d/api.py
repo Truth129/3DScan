@@ -55,7 +55,7 @@ class SelectiveGZip:
     Level 5 is within 0.5% of level 9's size on the viewer bundles at half the CPU.
     """
 
-    _skip = re.compile(r"/(?:slicer\.zip|export\.html|segment\.dcm)$")
+    _skip = re.compile(r"/(?:slicer\.zip|export\.html|segment\.dcm|view\.dcm)$")
     _glb = re.compile(r"^/api/cases/[^/]+/revisions/[^/]+/(?:model\.glb|surfaces/[^/]+\.glb)$")
 
     def __init__(self, app):
@@ -186,7 +186,7 @@ def create_app(settings: Settings | None = None):
         # Local filesystem endpoints must not be callable by an unrelated browser origin.
         # scope["path"] is what routing matches. request.url.path would stop at
         # an encoded "?" in an earlier segment, and miss the upload check below.
-        view_export = request.scope["path"].endswith("/dicom-view")
+        view_export = request.scope["path"].endswith(("/dicom-view", "/dicom-view-file"))
         session = _is_session_path(request)
         redeem = _is_redeem_path(request)
         private = (
@@ -194,7 +194,7 @@ def create_app(settings: Settings | None = None):
             or redeem
             or request.url.path == "/api/totalsegmentator/license"
             or request.url.path.startswith("/api/orthanc/")
-            or request.url.path.endswith(("/dicom-seg", "/segment.dcm"))
+            or request.url.path.endswith(("/dicom-seg", "/segment.dcm", "/view.dcm"))
             or view_export
             or _is_purge_path(request)
             # A People answer can carry a link's code.

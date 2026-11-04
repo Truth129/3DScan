@@ -101,6 +101,9 @@ RULES = {
     ("GET", f"{_REVISION}/dicom-seg/{{export_id}}/segment.dcm"): Rule("case", "export.seg_file"),
     ("GET", f"{_REVISION}/dicom-view"): Rule("case_archive"),
     ("POST", f"{_REVISION}/dicom-view"): Rule("case_archive", "export.view"),
+    ("GET", f"{_REVISION}/dicom-view-file"): Rule("case"),
+    ("POST", f"{_REVISION}/dicom-view-file"): Rule("case", "export.view"),
+    ("GET", f"{_REVISION}/dicom-view-file/{{export_id}}/view.dcm"): Rule("case", "export.view_file"),
 }
 # These exist only in some configurations: FastAPI's pages with sign-in off, the build notice with no viewer built,
 # and People only with sign-in on.

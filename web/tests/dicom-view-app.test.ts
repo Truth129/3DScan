@@ -234,6 +234,7 @@ beforeEach(() => {
   vi.spyOn(api, 'jobs').mockImplementation(async () => listed);
   vi.spyOn(api, 'job').mockImplementation(() => polled());
   vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability);
+  vi.spyOn(api, 'dicomViewFileAvailability').mockResolvedValue({ available: false });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -355,11 +356,11 @@ describe('capturing from the workspace', () => {
     expect(capture).toHaveBeenCalledOnce();
     expect(view.dialog()?.open).toBe(true);
   });
-  it('offers no DICOM view send to an account without the archive', async () => {
+  it('offers DICOM view to an account without the archive, since a file needs none', async () => {
     session.value = { mode: 'password', setup_required: false, user: { id: 'u', username: 'u', display_name: 'U', role: 'member', archive_access: false } };
     const view = await app();
     expect(fake.viewports).not.toHaveLength(0);
-    expect(view.dicom()).toBeUndefined();
+    expect(view.dicom()).toBeDefined();
   });
 });
 

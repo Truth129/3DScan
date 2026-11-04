@@ -550,7 +550,7 @@ fails the request. The actions are:
 - `case.trash`, `case.restore`, `case.purge`, each written with the change itself
 - `case.purge_password_failed`
 - `archive.query`, `archive.launch`
-- `export.slicer`, `export.html`, `export.seg`, `export.seg_file`, `export.view`
+- `export.slicer`, `export.html`, `export.seg`, `export.seg_file`, `export.view`, `export.view_file`
 
 An inference path's proof names an interpreter that the app will run, so its folder needs the same
 protection as the checkout.

@@ -541,10 +541,14 @@ and metadata, so treat them like the study itself.
 
 ### DICOM view
 
-**DICOM ↗** in the 3D view adds the current view to the original study as a new one-image series.
-It needs a configured Orthanc and a CT imported from that archive. Choose **Archive in Orthanc**, or
-pick a **Send destination** and choose **Send to** it. See
-[send a 3D view back](ORTHANC.md#send-a-3d-view-back).
+**DICOM ↗** in the 3D view saves the current view as a one-image DICOM file in the original patient
+and study, or adds it to that study in Orthanc as a new series.
+
+- **File.** Choose **Prepare file**, then **Download file**. It needs a CT prepared from DICOM, a
+  folder or ZIP import included, and no archive. The file carries the CT's patient details.
+- **Orthanc.** Choose **Archive in Orthanc**, or pick a **Send destination** and choose **Send to**
+  it. This needs a configured Orthanc, archive access and a CT imported from that archive. See
+  [send a 3D view back](ORTHANC.md#send-a-3d-view-back).
 
 The image is a picture. It has no calibration and no orientation labels, so do not measure on it,
 and nothing in it marks left from right.
