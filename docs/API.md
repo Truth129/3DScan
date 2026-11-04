@@ -770,8 +770,9 @@ non-empty:
 | `batches` set   | None, and another card now holds the draft's path ID | 409, with `replay` too                  |
 | `batches` set   | `replay: true`                          | Repeats the draft's steps on the named path, or on its own path if none is named |
 
-**`replay`** repeats every recorded batch exactly, from the original mask, plus any pending marks as
-one more batch. On its own path, a worker that still holds those batches reuses them and runs only
+**`replay`** repeats every recorded batch, in order, from the original mask, plus any pending marks
+as one more batch. Its result can differ slightly from the earlier one, because upstream's
+refinement can sample at random. On its own path, a worker that still holds those batches reuses them and runs only
 pending marks. Nothing need be pending, and a pending relationship goes with it as a model run. With
 `batches` empty, it adds nothing.
 

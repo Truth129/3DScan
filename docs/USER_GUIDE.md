@@ -351,13 +351,24 @@ Then choose **Apply edits · N**.
 
 ### AI assist
 
-**AI assist** uses nnInteractive for larger corrections and can change voxels beyond your marks.
+**AI assist** uses nnInteractive for larger corrections. It can change voxels far beyond your marks:
+one mark can remove other separate parts of the segment or loops of a folded tube, and an Exclude
+on a large leak can remove much of the organ.
 It needs the [model installed](INSTALL.md#ai-models), whose pretrained checkpoint is licensed for
 noncommercial use only. Inference stays on your computer and never trains the model.
 
 1. Choose **+ Include** or **− Exclude**.
 2. Mark with **Point**, **Hint brush**, **Lasso** or **Box** (2D, on one native slice).
 3. Choose **Run AI · N** once for all pending marks. This can take a minute or more, even on a GPU.
+
+- To keep separate parts or a long tube, mark every part, or points along the whole tube, in the
+  same **Run AI**.
+- Draw a long, thin structure as several shorter **Hint brush** strokes. One long stroke can update
+  only part of its length.
+- Prefer **Lasso** to **Box** on a large or irregular structure. A box can spread into its empty
+  corners and the neighbouring organs.
+- A new mark after **↶ Undo** repeats the earlier steps from the original mask, which can move
+  voxels you already checked.
 
 A warning beside **Exit review** says when a result removes 5% or more of the mask's interior, the
 part over 2 mm inside, more than 40 mm from every mark. The volume line can hide such a loss, so
@@ -368,7 +379,8 @@ check the whole structure on the CT and in 3D before saving.
 - **Native slice planes**, required for hint brush, lasso and box
 - **Automatically focus inference**, on by default
 - **Start from an empty mask**, which leaves the saved mask unchanged
-- **Refine whole mask**, a slower extra model stage
+- **Refine whole mask**, a slower extra model stage. Later runs no longer use the marks made before
+  it.
 
 If **Refine whole mask** fails or is cancelled with no marks waiting, the result before it stays
 and can be saved.
