@@ -379,8 +379,8 @@ check the whole structure on the CT and in 3D before saving.
 - **Native slice planes**, required for hint brush, lasso and box
 - **Automatically focus inference**, on by default
 - **Start from an empty mask**, which leaves the saved mask unchanged
-- **Refine whole mask**, a slower extra model stage. Later runs no longer use the marks made before
-  it.
+- **Refine whole mask**, a slower extra model stage. The marks made before it keep guiding later
+  runs.
 
 If **Refine whole mask** fails or is cancelled with no marks waiting, the result before it stays
 and can be saved.

@@ -477,7 +477,7 @@ def test_explicit_apply_groups_nearby_points_once_then_predicts_only_new_warm_ba
     runtime.release()
 
 
-def test_equal_end_whole_refinement_boundary_is_reused_and_next_batch_starts_after_reset(batch_runtime_files, tmp_path):
+def test_equal_end_whole_refinement_boundary_is_reused_and_next_batch_keeps_earlier_marks(batch_runtime_files, tmp_path):
     fixture, runtime = batch_runtime_files, interactive.InteractiveRuntime()
     prompts = [fixture.point("one", [7, 8, 9]), fixture.point("two", [3, 4, 5], False)]
     predict(runtime, fixture, tmp_path, prompts, "before-full.nii.gz", batches=[boundary(2)])
@@ -487,12 +487,14 @@ def test_equal_end_whole_refinement_boundary_is_reused_and_next_batch_starts_aft
     assert full["reused_prompt_prefix"] and full["predictions_this_request"] == 1
     assert session.full_calls == [{"autozoom": False}] and session.initial_modes == [False, True]
     assert nib.load(tmp_path / "full.nii.gz").get_fdata()[1, 1, 1] == 1
-    assert full["batch_statistics"][0]["resets_prompt_channels"]
+    assert full["batch_statistics"][0]["kept_marks"] == 2
     prompts.append(fixture.point("after-full", [8, 9, 10]))
     appended = predict(runtime, fixture, tmp_path, prompts, "appended.nii.gz", batches=[*history, boundary(3)])
     assert appended["reused_prompt_prefix"] and appended["predictions_this_request"] == 1
     assert len(session.full_calls) == 1 and len(session.calls) == 2
-    assert len(session.calls[-1]["evidence"]) == 1  # Previous gestures were reset by official full refinement.
+    # The official refinement reset every channel; the marks made before it still guide this run, in order.
+    evidence = session.calls[-1]["evidence"]
+    assert [(list(item["payload"]), item["include"]) for item in evidence] == [([7, 8, 9], True), ([3, 4, 5], False), ([8, 9, 10], True)]
     undone = predict(runtime, fixture, tmp_path, prompts[:2], "undo-full.nii.gz", batches=[boundary(2)])
     assert not undone["reused_prompt_prefix"] and undone["predictions_this_request"] == 1
     np.testing.assert_array_equal(nib.load(tmp_path / "before-full.nii.gz").dataobj, nib.load(tmp_path / "undo-full.nii.gz").dataobj)

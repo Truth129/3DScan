@@ -215,14 +215,18 @@ def test_support_understatement_nonbinary_and_out_of_bounds_inputs_are_rejected(
         )
 
 
-def test_whole_mask_refinement_copies_target_before_official_reset_and_reports_boundary():
+def test_whole_mask_refinement_copies_target_before_official_reset_and_keeps_every_mark():
     session = FakeSession()
     session.target[20:30, 20:30, 1] = 1
     before = session.target.copy()
-    result = batch.refine_whole_mask(session, lambda m: None, lambda: False, autozoom=False)
+    marks = [point("one", [20, 20, 1]), point("two", [25, 25, 1], False)]
+    result = batch.refine_whole_mask(session, lambda m: None, lambda: False, autozoom=False, marks=marks)
     np.testing.assert_array_equal(session.target, before)
-    assert result["prediction_regions"] == 1 and result["resets_prompt_channels"]
-    assert session.events == ["full_refine"] and session.do_autozoom is True
+    assert result["prediction_regions"] == 1 and result["kept_marks"] == 2
+    # The official reset drops every mark, so each is registered again after it, in order, predicting nothing.
+    assert session.events == ["full_refine", "register", "register"] and session.do_autozoom is True
+    assert session.registered == [("point", [20, 20, 1], True), ("point", [25, 25, 1], False)]
+    assert not session.new_interaction_centers and not session.new_interaction_zoom_out_factors
 
 
 def test_whole_refinement_requires_supported_nonempty_binary_candidate():

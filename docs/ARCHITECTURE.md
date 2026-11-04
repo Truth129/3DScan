@@ -297,8 +297,10 @@ it starts:
 - **Direct** edits (paint, erase, 3D scissors) are deterministic, run on the CPU lane, and replay in
   order from the immutable source mask.
 - **nnInteractive** takes include and exclude prompts on the GPU lane: points in RAS, and boxes,
-  scribbles and lassos on native slices. It can also refine a whole mask. A replay is not
-  byte-exact, because upstream's refinement can fall back to unseeded random sampling.
+  scribbles and lassos on native slices. It can also refine a whole mask. Upstream's refinement
+  resets every prompt channel, so the adapter registers the draft's marks again after it, and they
+  keep guiding later runs. A replay is not byte-exact, because upstream's refinement can fall back
+  to unseeded random sampling.
 
 Prompts autosave and never run inference. **Apply** queues one job for all pending marks and
 produces an immutable candidate, `review-<session>-<generation>`. It works on the read-only image,

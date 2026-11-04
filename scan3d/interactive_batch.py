@@ -241,13 +241,31 @@ def register_and_predict(session, prompts, progress, cancelled, *, autozoom=True
         session.set_do_autozoom(previous_autozoom)
 
 
-def refine_whole_mask(session, progress, cancelled, *, autozoom=True):
-    """Explicit official whole-label refinement, resetting prompt channels.
+def keep_marks(session, marks, cancelled):
+    """Register marks this draft already applied again, predicting nothing.
+
+    Upstream's initial-mask call resets every prompt channel and the interaction
+    intensity. Each registration raises that intensity once, so registering every
+    mark again in its first order stamps each at the intensity it first had, and
+    later Applies are guided by them as if no reset had happened.
+    """
+    for mark in marks:
+        _check_cancelled(cancelled)
+        _register(session, mark)
+    # Registration queues prediction centres, which a later Apply must not inherit.
+    session.new_interaction_centers = []
+    session.new_interaction_zoom_out_factors = []
+
+
+def refine_whole_mask(session, progress, cancelled, *, autozoom=True, marks=()):
+    """Explicit official whole-label refinement that keeps the draft's marks.
 
     Copying is essential: the official API clears its target during reset, so
     passing its own target buffer as the initial label would erase that label.
-    Replay history must record this reset boundary separately from gesture
-    batches. Callers invalidate the warm runtime if the operation fails.
+    The reset also drops every earlier mark, and without them the next Apply can
+    flood, so `marks`, every mark applied so far in order, are registered again
+    after the pass. Replay history must record this boundary separately from
+    gesture batches. Callers invalidate the warm runtime if it fails.
     """
     if metadata.version("nnInteractive") != SUPPORTED_ENGINE_VERSION:
         raise RuntimeError("Whole-mask refinement requires the pinned nnInteractive 2.6.0 adapter")
@@ -271,12 +289,13 @@ def refine_whole_mask(session, progress, cancelled, *, autozoom=True):
         _check_cancelled(cancelled)
         box = session.add_initial_seg_interaction(initial, run_prediction=True)
         _check_cancelled(cancelled)
+        keep_marks(session, marks, cancelled)
         return {
             "adapter_version": ADAPTER_VERSION,
             "prediction_regions": 1,
             "prediction_calls": 1,
             "mode": "whole_mask",
-            "resets_prompt_channels": True,
+            "kept_marks": len(marks),
             "changed_bbox_ijk": np.asarray(box, dtype=np.int64).tolist() if box is not None else None,
         }
     finally:
