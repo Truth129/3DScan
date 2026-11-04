@@ -778,10 +778,11 @@ non-empty:
 | `batches` set   | `replay: true`                          | Repeats the draft's steps on the named path, or on its own path if none is named |
 
 **`replay`** repeats every recorded batch, in order, from the original mask, plus any pending marks
-as one more batch. Its result can differ slightly from the earlier one, because upstream's
-refinement can sample at random. On its own path, a worker that still holds those batches reuses
-them, or rebuilds them from their stored result, and runs only pending marks. Nothing need be pending, and a pending relationship goes with it as a model run. With
-`batches` empty, it adds nothing.
+as one more batch. Upstream's refinement can sample at random, seeded per step from the draft, but
+another card or build can still give a slightly different result. On its own path, a worker that
+still holds those batches reuses them, or rebuilds them from their stored result, and runs only
+pending marks. Nothing need be pending, and a pending relationship goes with it as a model run.
+With `batches` empty, it adds nothing.
 
 - Once queued, the new generation makes the old candidate `dirty`, so it cannot be
   accepted. It stays in `candidate` until the new one publishes, which also changes the draft's

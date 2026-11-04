@@ -14,6 +14,7 @@ from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
 import gc
+import hashlib
 import os
 import sys
 import threading
@@ -204,6 +205,16 @@ def _stored(value, history):
     return {**value, "mask_path": Path(value["mask_path"]).resolve()}
 
 
+def _step_seed(session_key: str, index: int) -> int:
+    """NumPy's seed for one Apply step of one draft.
+
+    Upstream's refinement planner can fall back to `np.random.choice`, its only random call. A
+    seed from the draft and the step's place, not the process, lets a replay, a restore or another
+    worker draw what the first run drew.
+    """
+    return int.from_bytes(hashlib.sha256(f"{session_key}|{index}".encode()).digest()[:4], "big")
+
+
 def _marks(prompts, affine, shape, start=0):
     """The engine's form of these normalized marks, numbered by their place in the draft."""
     from .interactive_prompts import mark_name, materialize_prompt
@@ -354,6 +365,9 @@ class InteractiveRuntime:
         if self._owner_thread is not None and self._owner_thread != thread:
             raise RuntimeError("nnInteractive runtime must remain on its owning GPU worker thread")
         self._owner_thread = thread
+        # Each step seeds NumPy's global generator, the one upstream draws from; give the rest of
+        # the process its own back.
+        generator = np.random.get_state()  # noqa: NPY002
         try:
             started = time.monotonic()
             self._cancel(cancelled)
@@ -441,6 +455,7 @@ class InteractiveRuntime:
                     self._cancel(cancelled)
                     if prompt["kind"] != "point":
                         raise ValueError("Drawing tools require persisted Apply batch boundaries")
+                    np.random.seed(_step_seed(session_key, len(self._applied)))  # noqa: NPY002
                     progress(f"Refining segmentation with point {len(self._applied) + 1} of {len(normalized)}")
                     changed_bbox = self._session.add_point_interaction(prompt["voxel"], include_interaction=prompt["include"], run_prediction=True)
                     self._cancel(cancelled)
@@ -451,6 +466,8 @@ class InteractiveRuntime:
 
                 for batch in history[len(self._applied_batches) :]:
                     self._cancel(cancelled)
+                    # By the step's place in the draft, so a warm run, a restore and a replay agree.
+                    np.random.seed(_step_seed(session_key, len(self._applied_batches)))  # noqa: NPY002
                     start, end = len(self._applied), batch["end"]
                     pending = normalized[start:end]
                     if batch["legacy"]:
@@ -515,6 +532,8 @@ class InteractiveRuntime:
         except BaseException:
             self.release()
             raise
+        finally:
+            np.random.set_state(generator)  # noqa: NPY002
 
     def _refusal(self, stored, history):
         """Why a stored result cannot rebuild this session, or None when it can."""

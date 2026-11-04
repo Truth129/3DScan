@@ -304,8 +304,10 @@ it starts:
 - **nnInteractive** takes include and exclude prompts on the GPU lane: points in RAS, and boxes,
   scribbles and lassos on native slices. It can also refine a whole mask. Upstream's refinement
   resets every prompt channel, so the adapter registers the draft's marks again after it, and they
-  keep guiding later runs. A replay is not byte-exact, because upstream's refinement can fall back
-  to unseeded random sampling.
+  keep guiding later runs. Upstream's refinement can fall back to random sampling, so each Apply
+  step seeds NumPy's generator from the draft and the step's place, and restores the generator
+  after the request. On one card and build a replay has then matched the warm run byte for byte;
+  another card or build can still differ.
 
 Prompts autosave and never run inference. **Apply** queues one job for all pending marks and
 produces an immutable candidate, `review-<session>-<generation>`. It works on the read-only image,

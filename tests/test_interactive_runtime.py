@@ -530,6 +530,26 @@ def test_a_stored_result_rebuilds_a_cold_session_with_every_mark_and_runs_only_l
         assert replayed["restored"] is None and reason in replayed["stored_result_refused"] and replayed["predictions_this_request"] == 4
 
 
+def test_each_step_draws_from_its_own_seed_in_warm_runs_and_replays_and_numpy_is_left_as_it_was(batch_runtime_files, tmp_path, monkeypatch):
+    fixture, draws = batch_runtime_files, []
+    original = BatchRuntimeSession._predict
+    # Upstream's refinement fallback draws from NumPy's global generator inside a prediction.
+    monkeypatch.setattr(BatchRuntimeSession, "_predict", lambda session: (draws.append(np.random.random()), original(session))[1])  # noqa: NPY002
+    prompts = [fixture.point("one", [7, 8, 9]), fixture.point("two", [3, 4, 5], False)]
+    history = [boundary(1), boundary(2)]
+    np.random.seed(5)  # noqa: NPY002
+    before = np.random.get_state()  # noqa: NPY002
+    warm = interactive.InteractiveRuntime()
+    predict(warm, fixture, tmp_path, prompts[:1], batches=history[:1])
+    predict(warm, fixture, tmp_path, prompts, "warm.nii.gz", batches=history)
+    # A fresh runtime, as another worker process would be, replays both steps in one request.
+    predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts, "replay.nii.gz", batches=history)
+    predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts, "other.nii.gz", batches=history, session_key="session-2")
+    assert draws[:2] == draws[2:4] and draws[0] != draws[1] and draws[4:] != draws[:2]
+    after = np.random.get_state()  # noqa: NPY002
+    assert after[0] == before[0] and np.array_equal(after[1], before[1]) and after[2:] == before[2:]
+
+
 def test_start_empty_initializes_zero_but_measures_against_saved_source_and_replays_when_changed(batch_runtime_files, tmp_path):
     fixture, runtime = batch_runtime_files, interactive.InteractiveRuntime()
     prompts = [fixture.point("one", [7, 8, 9])]
