@@ -128,7 +128,7 @@ _RECEIPT = TypeAdapter(_Receipt)
 
 @dataclass(frozen=True, slots=True)
 class _SegSource:
-    """What a SEG binds to, whichever way its CT arrived.
+    """What an export binds to, whichever way its CT arrived.
 
     A folder or ZIP import has no manifest, so the digest of its bytes names it
     in both roles. That digest also names the prepared reference, which is what
@@ -222,6 +222,7 @@ class OrthancExports:
     # For an export of several instances that stopped with only some stored; None keeps the texts above.
     partial_error = None
     offers_file = True
+    artifact_adapter = _ARTIFACT
 
     def __init__(self, service):
         self.service = service
@@ -258,19 +259,24 @@ class OrthancExports:
         if any(not structures[key].get("voxel_count", 1) for key in selected):
             raise ExportUnavailable(f"Empty masks cannot be exported as {self.noun}.")
         selection = tuple(structures[key] for key in selected)
-        if archive or "source_manifest_sha256" in reference["source"]:
-            source, directory = self._source(case_id, case, reference, connect=archive)
-            seg_source = _SegSource(
-                tuple(directory / item.path for item in source.files),
-                reference["source"]["source_manifest_sha256"],
-                source.content_digest,
-                source.snapshot.study_uid,
-                source.frame_of_reference_uid,
-                source.snapshot.snapshot,
-                source.snapshot.source_key,
-            )
-            return _Inputs(revision, reference, source, directory, selection, seg_source)
-        return _Inputs(revision, reference, None, None, selection, self._local_source(case_id, case, revision, reference))
+        source, directory, seg_source = self._series_source(case_id, case, revision, reference, connect=archive)
+        return _Inputs(revision, reference, source, directory, selection, seg_source)
+
+    def _series_source(self, case_id, case, revision, reference, *, connect):
+        """The CT series an export binds to: a retained archive import, or else a folder or ZIP import."""
+        if not connect and "source_manifest_sha256" not in reference["source"]:
+            return None, None, self._local_source(case_id, case, revision, reference)
+        source, directory = self._source(case_id, case, reference, connect=connect)
+        seg_source = _SegSource(
+            tuple(directory / item.path for item in source.files),
+            reference["source"]["source_manifest_sha256"],
+            source.content_digest,
+            source.snapshot.study_uid,
+            source.frame_of_reference_uid,
+            source.snapshot.snapshot,
+            source.snapshot.source_key,
+        )
+        return source, directory, seg_source
 
     def _local_source(self, case_id, case, revision, reference):
         """A folder or ZIP import. Its bytes are hashed in the job, not on each request."""
@@ -363,8 +369,7 @@ class OrthancExports:
         if overlap_priority is not None:
             encoding["overlap_priority"] = overlap_priority
         artifact_key = hashlib.sha256(json.dumps(encoding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        # A destination cannot contain a colon, so a file never shares its key.
-        export_key = hashlib.sha256((artifact_key + ":" + ("file:" if file_delivery else destination or "")).encode()).hexdigest()
+        export_key = self._export_key(artifact_key, destination, file_delivery)
         fields = {
             **identity,
             "encoding_version": EXPORT_ENCODING_VERSION,
@@ -396,6 +401,10 @@ class OrthancExports:
             return summary
 
         return self._enqueue(case_id, revision_id, fields, extras, destination, display_name, resend, summarize, guard=changed_inputs)
+
+    def _export_key(self, artifact_key, destination, file_delivery):
+        """One export of one artifact to one place. A destination cannot contain a colon, so a file never shares its key."""
+        return hashlib.sha256((artifact_key + ":" + ("file:" if file_delivery else destination or "")).encode()).hexdigest()
 
     def _frozen_inputs(self, revision_id, inputs):
         """The saved masks an export binds to, its keys, and the guard that refuses a mask changed since an earlier export."""
@@ -508,11 +517,15 @@ class OrthancExports:
             or [_frozen_structure(item) for item in inputs.structures] != payload["structures"]
         ):
             raise ExportUnavailable("The saved revision changed after this export was queued. Start a fresh export from a saved revision.")
+        self._verify_source(inputs, job)
+        return inputs
+
+    def _verify_source(self, inputs, job):
+        """The source files must still hold the bytes this export binds to."""
         if inputs.source is not None:
             self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=lambda: self.service.cancelled(job))
         elif _hash_series(inputs.seg_source.paths, lambda: self.service.cancelled(job)) != inputs.seg_source.content_sha256:
             raise ExportUnavailable("The original CT files no longer match the saved reference image. Reimport and prepare the CT before export.")
-        return inputs
 
     def _artifact(self, job, directory):
         from .dicom_seg import DicomSegError, SegmentInput, export_segmentation
@@ -666,7 +679,7 @@ class OrthancExports:
         if job is None:
             raise NotFound(f"No prepared {self.label} file")
         directory = self._directory(case_id, export_id)
-        artifact = self._cached_manifest(job, directory / "export.json", _ARTIFACT)
+        artifact = self._cached_manifest(job, directory / "export.json", self.artifact_adapter)
         self._check_files(job, directory, artifact)
         return directory / "dicom" / artifact.files[0].path
 
