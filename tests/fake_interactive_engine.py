@@ -27,7 +27,7 @@ class Engine:
         self.loads = self.requests = 0
         self.warm = False
 
-    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None):
+    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None, stored=None):
         self.requests += 1
         if not self.warm:
             progress("Loading the fake correction model")
@@ -70,6 +70,7 @@ class Engine:
             "prompts": prompts,
             "batches": batches,
             "options": options,
+            "stored": stored,
             "session_key": session_key,
             "torch_imported": "torch" in sys.modules,
             **fields,

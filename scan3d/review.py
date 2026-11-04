@@ -191,6 +191,36 @@ def _far_removal_share(before, after, affine, prompts):
     return len(lost) / len(inside)
 
 
+def _stored_result(review, payload, ct_digest, before_digest):
+    """The stored result of the longest run of this job's first Apply steps, or None.
+
+    It must be the engine's own output for the same marks, options and sources, as the store
+    recorded it; the engine checks the file's hash, its own card and build, and the steps' kind
+    before it rebuilds from the bytes. Among equals the latest wins, which after a re-run on
+    another card is that card's. Relationships change other masks only, so they need not match.
+    """
+    from .interactive import RESULT_IDENTITY
+
+    best, longest = None, 0
+    for candidate in review.get("candidates", {}).values():
+        steps, provenance = candidate.get("batches_snapshot") or [], candidate.get("provenance") or {}
+        if (
+            len(steps) < max(1, longest)
+            or payload["batches"][: len(steps)] != steps
+            or candidate.get("prompts_snapshot") != payload["prompts"][: steps[-1]["end"]]
+            or candidate.get("options") != payload["options"]
+            or (candidate.get("ct_sha256"), candidate.get("before_mask_sha256")) != (ct_digest, before_digest)
+            or not candidate.get("mask_sha256")
+            or provenance.get("output_mask_sha256") != candidate["mask_sha256"]
+        ):
+            continue
+        best, longest = candidate, len(steps)
+    if best is None:
+        return None
+    engine = {key: best["provenance"].get(key) for key in RESULT_IDENTITY}
+    return dict(mask_path=best["mask_file"], mask_sha256=best["mask_sha256"], batches=longest, engine=engine)
+
+
 def public_review(record):
     """Return review state without source paths, checkpoint paths or mask paths."""
     result = {
@@ -742,6 +772,7 @@ class ReviewManager:
                 cancelled=lambda: self.service.cancelled(job),
             )
         else:
+            stored = _stored_result(review, job["payload"], ct_digest, before_digest)
             provenance = runtime.predict(
                 ct,
                 mask_path,
@@ -752,8 +783,9 @@ class ReviewManager:
                 session_key=f"{review['id']}:{review['revision_id']}:{before_digest}",
                 options=job["payload"]["options"],
                 batches=job["payload"]["batches"],
-                # Only when set, so the default path's request is exactly today's.
+                # Only when set, so the default path's request and a draft with nothing stored are exactly today's.
                 **({"inference_path": inference_path} if inference_path else {}),
+                **({"stored": stored} if stored else {}),
             )
             if inference_path:
                 # The engine measures its card as it loads, so this can only follow the run.

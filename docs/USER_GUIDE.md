@@ -367,8 +367,9 @@ noncommercial use only. Inference stays on your computer and never trains the mo
   only part of its length.
 - Prefer **Lasso** to **Box** on a large or irregular structure. A box can spread into its empty
   corners and the neighbouring organs.
-- A new mark after **↶ Undo** repeats the earlier steps from the original mask, which can move
-  voxels you already checked.
+- A new mark after **↶ Undo** continues from the stored result of the last whole **Run AI** before
+  it. Marks of a **Run AI** that the Undo went inside run again, which can move voxels you already
+  checked.
 
 A warning beside **Exit review** says when a result removes 5% or more of the mask's interior, the
 part over 2 mm inside, more than 40 mm from every mark. The volume line can hide such a loss, so

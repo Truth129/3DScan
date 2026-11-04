@@ -109,6 +109,7 @@ def predict(runtime, fixture, tmp_path, prompts, name="candidate.nii.gz", **kwar
         kwargs.get("session_key", "session-1"),
         batches=kwargs.get("batches"),
         options=kwargs.get("options"),
+        stored=kwargs.get("stored"),
     )
 
 
@@ -499,6 +500,34 @@ def test_equal_end_whole_refinement_boundary_is_reused_and_next_batch_keeps_earl
     assert not undone["reused_prompt_prefix"] and undone["predictions_this_request"] == 1
     np.testing.assert_array_equal(nib.load(tmp_path / "before-full.nii.gz").dataobj, nib.load(tmp_path / "undo-full.nii.gz").dataobj)
     runtime.release()
+
+
+def test_a_stored_result_rebuilds_a_cold_session_with_every_mark_and_runs_only_later_steps(batch_runtime_files, tmp_path):
+    fixture = batch_runtime_files
+    prompts = [fixture.point("one", [7, 8, 9]), fixture.point("two", [3, 4, 5], False), fixture.point("three", [8, 9, 10])]
+    history = [boundary(1), boundary(2, full=True), boundary(3)]
+    warm = interactive.InteractiveRuntime()
+    for count in (1, 2, 3):
+        result = predict(warm, fixture, tmp_path, prompts[: history[count - 1]["end"]], f"warm-{count}.nii.gz", batches=history[:count])
+    warm_session = fixture.sessions[-1]
+    after_refine = tmp_path / "warm-2.nii.gz"
+
+    def stored(**change):
+        digest = interactive._sha256(interactive._identity(after_refine))
+        return {"mask_path": str(after_refine), "mask_sha256": digest, "batches": 2, "engine": {k: result[k] for k in interactive.RESULT_IDENTITY}, **change}
+
+    restored = predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts, "restored.nii.gz", batches=history, stored=stored())
+    session = fixture.sessions[-1]
+    assert restored["restored"]["batches"] == 2 and not restored["reused_prompt_prefix"] and restored["stored_result_refused"] is None
+    # No forward pass before the last step: the session holds the stored mask and every applied mark, as the warm one did.
+    assert restored["predictions_this_request"] == len(session.calls) == 1 and not session.full_calls
+    np.testing.assert_array_equal(session.initials[0], nib.load(after_refine).dataobj)
+    assert session.calls[0]["evidence"] == warm_session.calls[-1]["evidence"]
+    np.testing.assert_array_equal(nib.load(tmp_path / "restored.nii.gz").dataobj, nib.load(tmp_path / "warm-3.nii.gz").dataobj)
+    # A mask that no longer matches its hash, or one another card made, replays every step instead.
+    for change, reason in (({"mask_sha256": "0" * 64}, "hash"), ({"engine": {**stored()["engine"], "gpu_name": "Other GPU"}}, "card")):
+        replayed = predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts, "replayed.nii.gz", batches=history, stored=stored(**change))
+        assert replayed["restored"] is None and reason in replayed["stored_result_refused"] and replayed["predictions_this_request"] == 4
 
 
 def test_start_empty_initializes_zero_but_measures_against_saved_source_and_replays_when_changed(batch_runtime_files, tmp_path):

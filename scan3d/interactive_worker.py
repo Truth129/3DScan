@@ -21,6 +21,10 @@ it, and stdout/stderr stay free for native logs in the service journal:
                      {"event": "progress", "id": N, "message": "..."}
                      {"event": "result", "id": N, "provenance": {...}}
                      {"event": "error", "id": N, "kind": "cancelled|invalid|failed", "message": "..."}
+
+A predict's args may name a stored result to rebuild from. The protocol stays 1:
+a child from before it ignores the field and replays every step, which is still
+correct, and a newer child treats its absence as nothing stored.
 """
 
 from __future__ import annotations
@@ -191,7 +195,9 @@ class InteractiveWorker:
         child = self._child
         return child.process.pid if child is not None and child.process.poll() is None else None
 
-    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None, inference_path=None):
+    def predict(
+        self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, *, batches=None, options=None, stored=None, inference_path=None
+    ):
         args = {
             "ct_path": str(ct_path),
             "mask_path": str(mask_path),
@@ -200,6 +206,7 @@ class InteractiveWorker:
             "session_key": session_key,
             "batches": batches,
             "options": options,
+            "stored": stored,
         }
         with self._lock:
             if cancelled():
@@ -356,6 +363,7 @@ def _serve(channel, engine):
                 args["session_key"],
                 batches=args.get("batches"),
                 options=args.get("options"),
+                stored=args.get("stored"),
             )
             channel.send({"event": "result", "id": request, "provenance": provenance})
         except Exception as exc:

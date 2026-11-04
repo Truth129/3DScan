@@ -238,7 +238,12 @@ and because only process exit returns all GPU memory.
 - **Cancellation** is cooperative first. After 10 seconds its process group is killed.
 - **Failure.** A crash, a GPU or model failure, or 600 seconds without progress
   (`SCAN3D_NNINTERACTIVE_STALL_SECONDS`) fails that job only. The next prediction starts a fresh
-  worker, which replays recorded batches.
+  worker, which rebuilds the draft from its latest stored result.
+- **Restore.** A request may name the stored result of its first Apply steps. Without warm state
+  the worker loads that mask as upstream's initial mask and registers every applied mark again
+  with no forward pass, which gives the warm session's state byte for byte. It checks the mask's
+  hash and its own model, card and build first, and replays from the original mask otherwise. The
+  field is optional, so the protocol stays 1: an older worker ignores it and replays.
 - **Exit.** The worker exits before a `segment` job, at shutdown, if the API process dies, and when
   a request names another [inference path](#inference-paths). The next worker starts only after
   that exit, so one inference process exists across all GPUs. The job reports

@@ -77,7 +77,10 @@ def alive(pid):
 def test_child_keeps_one_warm_engine_and_returns_its_provenance(worker, tmp_path):
     messages = []
     first = predict(worker, tmp_path, progress=messages.append)
-    second = predict(worker, tmp_path, name="second.nii.gz", progress=messages.append)
+    # The protocol carries a stored result for the engine to rebuild from, and nothing when none is named.
+    stored = {"mask_path": str(tmp_path / "candidate.nii.gz"), "mask_sha256": "a" * 64, "batches": 1, "engine": {"device": "gpu:0"}}
+    second = predict(worker, tmp_path, name="second.nii.gz", progress=messages.append, stored=stored)
+    assert first["stored"] is None and second["stored"] == stored
     assert first["pid"] == second["pid"] == worker.pid != os.getpid()
     assert (first["loads"], second["loads"], second["requests"]) == (1, 1, 2)
     assert messages.count("Loading the fake correction model") == 1

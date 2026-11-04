@@ -34,6 +34,9 @@ MODEL_REVISION = "3f308d751c00644e4fde6f09c600264b393b21b5"
 CHECKPOINT_SHA256 = "b3ac4421f85457bbd1aa0d87f5e67bcb7bc8e2ce6b824b6ac45077cc5d630ea9"
 MODEL_LICENSE = "CC BY-NC-SA 4.0"
 MIOPEN_FIND_MODE = "FAST"
+# A stored result is rebuilt from only on the model, card and build that made it, so a
+# draft's later steps never continue another card's bytes.
+RESULT_IDENTITY = ("engine", "engine_version", "checkpoint_sha256", "device", "gpu_name", "torch_version", "hip_version", "cuda_version")
 
 
 @contextmanager
@@ -182,6 +185,25 @@ def _batches(records, count):
     return result
 
 
+def _stored(value, history):
+    """A stored result for the first `batches` Apply steps of this history, or None."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or history is None
+        or set(value) != {"mask_path", "mask_sha256", "batches", "engine"}
+        or not isinstance(value["mask_path"], str)
+        or not isinstance(value["mask_sha256"], str)
+        or not isinstance(value["engine"], dict)
+        or isinstance(value["batches"], bool)
+        or not isinstance(value["batches"], int)
+        or not 1 <= value["batches"] <= len(history)
+    ):
+        raise ValueError("Invalid stored correction result")
+    return {**value, "mask_path": Path(value["mask_path"]).resolve()}
+
+
 def _marks(prompts, affine, shape, start=0):
     """The engine's form of these normalized marks, numbered by their place in the draft."""
     from .interactive_prompts import mark_name, materialize_prompt
@@ -285,22 +307,48 @@ class InteractiveRuntime:
         }
 
     def predict(
-        self, ct_path: Path, mask_path: Path, prompts: list[dict], output_path: Path, progress, cancelled, session_key: str, *, batches=None, options=None
+        self,
+        ct_path: Path,
+        mask_path: Path,
+        prompts: list[dict],
+        output_path: Path,
+        progress,
+        cancelled,
+        session_key: str,
+        *,
+        batches=None,
+        options=None,
+        stored=None,
     ) -> dict:
         thread = threading.get_ident()
         if self._owner_thread is not None and self._owner_thread != thread:
             raise RuntimeError("nnInteractive runtime must remain on its owning GPU worker thread")
         with _kernel_settings():
-            return self._predict(ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, batches=batches, options=options)
+            return self._predict(ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, batches=batches, options=options, stored=stored)
 
     def _predict(
-        self, ct_path: Path, mask_path: Path, prompts: list[dict], output_path: Path, progress, cancelled, session_key: str, *, batches=None, options=None
+        self,
+        ct_path: Path,
+        mask_path: Path,
+        prompts: list[dict],
+        output_path: Path,
+        progress,
+        cancelled,
+        session_key: str,
+        *,
+        batches=None,
+        options=None,
+        stored=None,
     ) -> dict:
         """Write an uncommitted candidate, reusing an exact warm prompt prefix.
 
-        Undo, edited prompts, a changed baseline, or a different session reloads
-        the original mask and replays the requested prompt sequence. A cancelled
-        or failed prediction invalidates all warm state before another request.
+        Without one, as after Undo, an edited prompt, a failure or a new worker,
+        `stored` names the stored result of this draft's first Apply steps. The
+        session is rebuilt from its mask and the draft's marks with no forward
+        pass, which gives the warm session's state at that step byte for byte,
+        and only later steps run. Otherwise the original mask is reloaded and
+        every step replays. A cancelled or failed prediction invalidates all
+        warm state before another request.
         """
         thread = threading.get_ident()
         if self._owner_thread is not None and self._owner_thread != thread:
@@ -323,6 +371,7 @@ class InteractiveRuntime:
             # Standalone callers retain the original point-wise API. Application
             # jobs always supply their persisted Apply boundaries explicitly.
             history = _batches(batches, len(normalized)) if batches is not None else None
+            stored = _stored(stored, history)
             model_started = time.monotonic()
             self._load_model(progress)
             model_seconds = time.monotonic() - model_started
@@ -349,6 +398,7 @@ class InteractiveRuntime:
                 and normalized[: len(self._applied)] == self._applied
                 and (history is None or (len(history) >= len(self._applied_batches) and history[: len(self._applied_batches)] == self._applied_batches))
             )
+            restored, refused = None, None
             if not prefix:
                 progress("Initializing correction from the saved segmentation")
                 baseline, _, _ = _binary(mask_path, image, affine)
@@ -358,6 +408,11 @@ class InteractiveRuntime:
                     self._target = np.zeros(image.shape, dtype=np.uint8)
                 self._session.set_target_buffer(self._target)
                 initial = np.zeros_like(baseline) if settings["start_empty"] else baseline
+                if stored is not None:
+                    refused = self._refusal(stored, history)
+                    if refused is None:
+                        initial, _, _ = _binary(stored["mask_path"], image, affine)
+                        restored = stored
                 self._session.add_initial_seg_interaction(initial, run_prediction=False)
                 # Fail before any prompt if an upstream version changes initial
                 # mask semantics. Slab comparisons bound temporary memory even
@@ -367,6 +422,15 @@ class InteractiveRuntime:
                 ):
                     raise RuntimeError("nnInteractive changed the saved mask during initialization")
                 self._state_key, self._applied, self._applied_batches = state_key, [], []
+                if restored is not None:
+                    from .interactive_batch import keep_marks
+
+                    count = restored["batches"]
+                    end = history[count - 1]["end"]
+                    progress(f"Continuing from the stored result of Apply step {count}")
+                    # Every applied mark, because Refine whole mask keeps them too.
+                    keep_marks(self._session, _marks(normalized[:end], affine, image.shape), cancelled)
+                    self._applied, self._applied_batches = normalized[:end], history[:count]
             prepare_seconds = time.monotonic() - prepare_started
             applied_now = 0
             changed_bbox = None
@@ -430,6 +494,8 @@ class InteractiveRuntime:
                 "batch_adapter_sha256": _sha256(_identity(Path(__file__).with_name("interactive_batch.py"))),
                 "prompt_rasterizer_sha256": _sha256(_identity(Path(__file__).with_name("interactive_prompts.py"))),
                 "reused_prompt_prefix": prefix,
+                "restored": {"batches": restored["batches"], "mask_sha256": restored["mask_sha256"]} if restored else None,
+                "stored_result_refused": refused,
                 "last_changed_bbox_ijk": changed_bbox,
                 "source_ct_sha256": _sha256(ct_identity),
                 "input_mask_sha256": _sha256(mask_identity),
@@ -449,6 +515,17 @@ class InteractiveRuntime:
         except BaseException:
             self.release()
             raise
+
+    def _refusal(self, stored, history):
+        """Why a stored result cannot rebuild this session, or None when it can."""
+        if any(batch["legacy"] for batch in history[: stored["batches"]]):
+            return "Pointwise steps from before per-step results always replay"
+        if any(self._model_provenance.get(key) != stored["engine"].get(key) for key in RESULT_IDENTITY):
+            return "Another model, card or build made the stored result"
+        path = stored["mask_path"]
+        if not path.is_file() or _sha256(_identity(path)) != stored["mask_sha256"]:
+            return "The stored mask does not match its recorded hash"
+        return None
 
     def release(self):
         """Free warm CT/model state before TotalSegmentator needs the GPU."""

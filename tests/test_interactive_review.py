@@ -14,8 +14,9 @@ from inference_path_stub import GPU_NAME, activate, stand_in
 from scan3d import imaging
 from scan3d.api import create_app
 from scan3d.config import Settings
+from scan3d.fileio import hash_file
 from scan3d.inference_paths import binding, replaced
-from scan3d.interactive import _batches
+from scan3d.interactive import RESULT_IDENTITY, _batches
 from scan3d.review import public_review
 from scan3d.service import Service
 from scan3d.store import ReviewConflict, Store, identifier, public_job, public_revision
@@ -827,6 +828,34 @@ def test_undo_onto_an_earlier_run_restores_its_result_or_lets_run_ai_repeat_its_
     job = queue(example, draft, full_refine=refine)
     assert job["payload"]["batches"] == [*draft["batches"], *([{"end": 1, "autozoom": True, "full_refine": True}] if refine else [])]
     assert execute_next(service, job)["status"] == "completed" and sent(example)[0] == draft["prompts"]
+
+
+class OutputRuntime(FakeRuntime):
+    """Records its output's hash as the real engine does, so its results can be rebuilt from."""
+
+    def predict(self, *args, **kwargs):
+        return {**super().predict(*args, **kwargs), "output_mask_sha256": hash_file(args[3])}
+
+
+def test_a_run_names_the_stored_result_of_its_longest_run_of_applied_steps(example):
+    service = example[0]
+    service.interactive_runtime = OutputRuntime()
+    draft = ran(example, marked(example))
+    assert "stored" not in sent(example)[1]
+    first = draft["candidate"]
+    add_mark(example, draft)
+    second = ran(example, draft)["candidate"]
+    engine = {key: first["provenance"].get(key) for key in RESULT_IDENTITY}
+    assert sent(example)[1]["stored"] == dict(mask_path=first["mask_file"], mask_sha256=first["mask_sha256"], batches=1, engine=engine)
+    add_mark(example, draft, "point-3")
+    ran(example, draft)
+    assert sent(example)[1]["stored"]["mask_path"] == second["mask_file"] and sent(example)[1]["stored"]["batches"] == 2
+    # A result the store did not record as the engine's own output is never offered.
+    service.interactive_runtime = FakeRuntime()
+    ran(example, draft, full_refine=True)
+    add_mark(example, draft, "point-4")
+    ran(example, draft)
+    assert sent(example)[1]["stored"]["batches"] == 3
 
 
 @pytest.mark.parametrize("ending", ["failed", "cancelled", "interrupted"])

@@ -249,6 +249,8 @@ def keep_marks(session, marks, cancelled):
     mark again in its first order stamps each at the intensity it first had, and
     later Applies are guided by them as if no reset had happened.
     """
+    if metadata.version("nnInteractive") != SUPPORTED_ENGINE_VERSION:
+        raise RuntimeError("Keeping marks requires the pinned nnInteractive 2.6.0 adapter")
     for mark in marks:
         _check_cancelled(cancelled)
         _register(session, mark)

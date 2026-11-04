@@ -630,6 +630,11 @@ marks with no `candidate`, whose applied steps it repeats. See [Choosing a path]
 - Queuing a run moves `generation`, and publishing its result does not. A client that has not seen
   the run gets 409, so it can neither cancel the run nor replace its result.
 - A policy-only Apply reuses the previous prediction with no inference.
+- A worker without the draft's warm state, as after Undo, a failure or a restart, rebuilds it from
+  the stored result of the longest run of applied steps, with no forward pass, and runs only the
+  steps after it. It replays from the original mask when no stored result has the same marks,
+  options and sources, the mask's hash differs from its record, another card or build made it, or
+  the steps are a schema-1 draft's pointwise ones.
 - `full_refine` (nnInteractive only) refines the whole mask from the current candidate, and can take
   longer than a local correction. Upstream's refinement resets every mark, so the worker registers
   the earlier marks again, predicting nothing, and they keep guiding later runs. If it fails or is
@@ -774,8 +779,8 @@ non-empty:
 
 **`replay`** repeats every recorded batch, in order, from the original mask, plus any pending marks
 as one more batch. Its result can differ slightly from the earlier one, because upstream's
-refinement can sample at random. On its own path, a worker that still holds those batches reuses them and runs only
-pending marks. Nothing need be pending, and a pending relationship goes with it as a model run. With
+refinement can sample at random. On its own path, a worker that still holds those batches reuses
+them, or rebuilds them from their stored result, and runs only pending marks. Nothing need be pending, and a pending relationship goes with it as a model run. With
 `batches` empty, it adds nothing.
 
 - Once queued, the new generation makes the old candidate `dirty`, so it cannot be
@@ -810,7 +815,8 @@ A saved correction's `operation.runtime` records what made its candidate:
 
 - **nnInteractive.** The same `device`, `gpu_name`, `torch_version`, `hip_version` and
   `cuda_version`, plus `inference_path` if named. `miopen_find_mode` is null unless the build is
-  HIP.
+  HIP. `restored` is `{batches, mask_sha256}` when the run rebuilt its first steps from a stored
+  result, else null, and `stored_result_refused` says why a stored result was not used.
 - **Direct edit.** `device: "cpu"` and no GPU or PyTorch keys.
 - **Relationship-only.** Its prediction's provenance, or `engine: "mask-relationship-processing"`
   and none of these keys with no prediction to reuse.
