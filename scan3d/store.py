@@ -622,6 +622,23 @@ class Store:
         return Store._upgrade_review(review)
 
     @staticmethod
+    def _made_from(candidate, prompts, options, batches, relationship):
+        """Whether a stored result is exactly what these marks, options, steps and relationship give."""
+        return (
+            candidate.get("prompts_snapshot") == prompts
+            and candidate.get("options") == options
+            and candidate.get("batches_snapshot") == batches
+            and candidate.get("relationship", INDEPENDENT) == relationship
+        )
+
+    @staticmethod
+    def _realias(review, candidate, generation):
+        """The same immutable result under this generation's alias, which Save must name."""
+        candidate = {**candidate, "generation": generation, "revision_id": f"review-{review['id']}-{generation}"}
+        review.setdefault("candidates", {})[str(generation)] = candidate
+        return candidate
+
+    @staticmethod
     def _review_generation(review, generation):
         if review["generation"] != generation:
             raise ReviewConflict("The correction draft changed; reload its current prompts")
@@ -686,20 +703,14 @@ class Store:
             elif next_prompts == candidate["prompts_snapshot"] and next_relationship == candidate.get("relationship", INDEPENDENT):
                 # Undoing only unapplied marks restores the exact saved result,
                 # with a fresh immutable alias and no inference work.
-                candidate = {**candidate, "generation": generation + 1, "revision_id": f"review-{session_id}-{generation + 1}"}
-                review.setdefault("candidates", {})[str(generation + 1)] = candidate
-            if review["method"] == "direct" and candidate is None and not discard:
-                # Applied paint/erase undo can restore an exact immutable
-                # checkpoint immediately; no model or dense replay is needed.
+                candidate = self._realias(review, candidate, generation + 1)
+            if candidate is None and not discard:
+                # An undo onto an applied step restores that step's exact immutable result, in
+                # either method, with no model or dense replay. A model run of the same steps
+                # need not give the same bytes.
                 for previous_candidate in reversed(list(review.get("candidates", {}).values())):
-                    if (
-                        previous_candidate.get("prompts_snapshot") == next_prompts
-                        and previous_candidate.get("options") == next_options
-                        and previous_candidate.get("batches_snapshot") == batches
-                        and previous_candidate.get("relationship", INDEPENDENT) == next_relationship
-                    ):
-                        candidate = {**previous_candidate, "generation": generation + 1, "revision_id": f"review-{session_id}-{generation + 1}"}
-                        review.setdefault("candidates", {})[str(generation + 1)] = candidate
+                    if self._made_from(previous_candidate, next_prompts, next_options, batches, next_relationship):
+                        candidate = self._realias(review, previous_candidate, generation + 1)
                         break
             if candidate and candidate["generation"] == generation + 1 and candidate.get("preview_3d_ready"):
                 candidate["model_manifest_url"] = f"/api/cases/{case_id}/revisions/{candidate['revision_id']}/model-manifest"
@@ -764,7 +775,9 @@ class Store:
             chosen = None
             if kind == "review_predict":
                 applied = review["batches"][-1]["end"] if review["batches"] else 0
-                direct_replay = review["method"] == "direct" and bool(review["prompts"]) and not review.get("candidate")
+                # Marks with no result, as after an undo onto a step that has none stored (schema-1
+                # drafts), repeat their applied steps, in either method. Nothing need be pending.
+                rebuild = bool(review["prompts"]) and not review.get("candidate")
                 # Repeat the draft's exact Apply steps, usually to change card. Nothing need be
                 # pending, and a full refine with no marks is a step too, which must not become two.
                 step_replay = replay and review["method"] != "direct" and bool(review["batches"])
@@ -782,7 +795,7 @@ class Store:
                     reusable = None
                 if policy_only and not reusable and review["prompts"]:
                     policy_only = False
-                if len(review["prompts"]) <= applied and not full_refine and not policy_only and not direct_replay and not step_replay:
+                if len(review["prompts"]) <= applied and not full_refine and not policy_only and not rebuild and not step_replay:
                     raise ReviewConflict("Add or edit a prompt before applying again")
                 if not review["prompts"] and not full_refine and not policy_only and not step_replay:
                     raise ValueError("Add a positive or negative prompt before applying")
@@ -812,9 +825,10 @@ class Store:
                     payload["relationship_only"] = True
                     payload["reuse_candidate_revision_id"] = reusable["revision_id"] if reusable else None
                 else:
+                    # A Refine is a step of its own, so a rebuild that asks for one still adds it.
                     payload["batches"] = (
                         review["batches"]
-                        if (direct_replay or step_replay) and len(review["prompts"]) <= applied
+                        if (rebuild or step_replay) and len(review["prompts"]) <= applied and not full_refine
                         else [*review["batches"], dict(end=len(review["prompts"]), autozoom=review["options"]["autozoom"], full_refine=full_refine)]
                     )
             payload["session_id"] = session_id
@@ -875,6 +889,17 @@ class Store:
                     error = (
                         job.get("error") or "Correction job cancelled; your prompts are saved" if job else "Correction job unavailable; your prompts are saved"
                     )
+                    candidate = review.get("candidate")
+                    # A step that added no marks, as Refine whole mask with none pending, leaves the
+                    # result before it exact. Under its old generation neither Save nor Run AI would
+                    # be allowed. A re-run adds no step, and another re-run is its way on.
+                    if (
+                        job
+                        and candidate
+                        and len(job["payload"].get("batches", [])) > len(review["batches"])
+                        and self._made_from(candidate, review["prompts"], review["options"], review["batches"], review["relationship"])
+                    ):
+                        review["candidate"] = self._realias(review, candidate, review["generation"])
                     review.update(status="ready" if review.get("candidate") else "draft", error=error, updated_at=now())
                     con.execute("UPDATE review_sessions SET data=? WHERE id=?", (json.dumps(review, allow_nan=False), session_id))
         return review

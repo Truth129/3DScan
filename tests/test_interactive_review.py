@@ -758,6 +758,50 @@ def fail_next_run(example):
     example[0].interactive_runtime.during = failure
 
 
+@pytest.mark.parametrize("history", ["stored", "none-stored", "none-stored-refine"])
+def test_undo_onto_an_earlier_run_restores_its_result_or_lets_run_ai_repeat_its_steps(example, history):
+    service, case, _, _ = example
+    draft = ran(example, marked(example))
+    add_mark(example, draft)
+    later = ran(example, draft)
+    if history != "stored":
+        # As in a schema-1 draft, no stored result matches the earlier step.
+        service.store.save("review_sessions", {**later, "candidates": {str(later["generation"]): later["candidate"]}})
+    calls = len(service.interactive_runtime.calls)
+    undone = service.reviews.update(case["id"], draft["id"], later["generation"], draft["prompts"])
+    assert undone["batches"] == draft["batches"]
+    if history == "stored":
+        assert undone["status"] == "ready" and not public_review(undone)["dirty"]
+        assert undone["candidate"]["mask_file"] == draft["candidate"]["mask_file"] and len(service.interactive_runtime.calls) == calls
+        assert service.reviews.accept(case["id"], draft["id"], undone["generation"])["kind"] == "review_accept"
+        return
+    assert undone["candidate"] is None
+    refine = history == "none-stored-refine"
+    job = queue(example, draft, full_refine=refine)
+    assert job["payload"]["batches"] == [*draft["batches"], *([{"end": 1, "autozoom": True, "full_refine": True}] if refine else [])]
+    assert execute_next(service, job)["status"] == "completed" and sent(example)[0] == draft["prompts"]
+
+
+@pytest.mark.parametrize("ending", ["failed", "cancelled", "interrupted"])
+def test_a_refine_with_nothing_pending_that_does_not_finish_leaves_the_last_result_saveable(example, ending):
+    service, case, _, _ = example
+    draft = ran(example, marked(example))
+    queued = queue(example, draft, full_refine=True)
+    if ending == "interrupted":
+        service.store.claim()
+        service.store.recover()
+    else:
+        if ending == "failed":
+            fail_next_run(example)
+        else:
+            service.interactive_runtime.during = lambda: service.store.update_job(queued["id"], cancel_requested=True)
+        assert execute_next(service, queued)["status"] == ending
+    state = current(example, draft)
+    assert state["status"] == "ready" and state["error"] and not public_review(state)["dirty"]
+    assert state["candidate"]["mask_file"] == draft["candidate"]["mask_file"] and state["batches"] == draft["batches"]
+    assert service.reviews.accept(case["id"], draft["id"], state["generation"])["kind"] == "review_accept"
+
+
 def test_only_a_published_result_binds_a_draft_to_its_card(example, paths):
     service, case, _, _ = example
     draft = marked(example)
