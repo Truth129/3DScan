@@ -2,10 +2,15 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { api } from '../lib/api';
 import {
+  AI_REWRITE_NOTE,
   agreementHeadline,
   agreementRows,
   basisLabels,
   countingNote,
+  editKindLabels,
+  editKindSummary,
+  editKindTotals,
+  editsLabel,
   formatDice,
   formatDistance,
   formatPercent,
@@ -52,6 +57,7 @@ const summary = ref<AgreementAggregate>(),
 const dialog = ref<HTMLDialogElement>(),
   opener = ref<HTMLButtonElement>();
 const rows = computed(() => agreementRows(report.value, showUnchanged.value));
+const kinds = computed(() => editKindTotals(report.value?.summary.edit_kinds));
 const baseline = computed(() => (report.value?.synthetic ? 'demo phantom' : 'model output'));
 const pools = computed(() => {
   const value = summary.value;
@@ -59,7 +65,12 @@ const pools = computed(() => {
   // Synthetic phantoms appear only when present, always as their own pool.
   return (['real', 'synthetic'] as AgreementPoolName[])
     .filter(name => name === 'real' || value.pools.synthetic.cases)
-    .map(name => ({ name, pool: value.pools[name], tasks: poolTasks(value.pools[name], query.value) }));
+    .map(name => ({
+      name,
+      pool: value.pools[name],
+      tasks: poolTasks(value.pools[name], query.value),
+      kinds: editKindTotals(value.pools[name].summary?.edit_kinds),
+    }));
 });
 let controller: AbortController | undefined, summaryController: AbortController | undefined;
 const failure = (reason: unknown, fallback: string) => (reason instanceof Error ? reason.message : fallback);
@@ -158,6 +169,12 @@ onBeforeUnmount(() => {
           <dd>{{ formatVolume(report.summary.abs_volume_change_ml_mean) }}</dd>
         </div>
       </dl>
+      <ul v-if="kinds.length" class="agreement-kinds" aria-label="Changed structures by kind of save">
+        <li v-for="item in kinds" :key="item.kind">
+          <strong>{{ editKindLabels[item.kind] }}</strong> {{ editKindSummary(item) }}
+        </li>
+      </ul>
+      <p v-if="report.summary.edit_kinds.ai_assisted" class="help agreement-note">{{ AI_REWRITE_NOTE }}</p>
       <div v-if="rows.length" class="agreement-table" role="region" aria-label="Agreement by structure" tabindex="0">
         <table>
           <caption class="sr-only">
@@ -169,6 +186,7 @@ onBeforeUnmount(() => {
           <thead>
             <tr>
               <th scope="col">Structure</th>
+              <th scope="col" class="agreement-kind">Change</th>
               <th scope="col">Dice</th>
               <th scope="col"><abbr title="Symmetric 95th-percentile surface distance, exact in patient millimetres">HD95</abbr></th>
               <th scope="col"><abbr title="Signed volume change, accepted minus original">ΔV</abbr></th>
@@ -187,6 +205,7 @@ onBeforeUnmount(() => {
                   {{ prettyName(row.name) }}
                 </button>
               </th>
+              <td class="agreement-kind" :title="editsLabel(row.edits)">{{ row.edit_kind ? editKindLabels[row.edit_kind] : '—' }}</td>
               <td>{{ formatDice(row.dice) }}</td>
               <td>{{ formatDistance(row.hd95_mm) }}</td>
               <td>{{ formatVolumeChange(row.volume_change_ml) }}</td>
@@ -226,7 +245,7 @@ onBeforeUnmount(() => {
       <h2 id="agreement-summary-title">Where reviewers changed the model.</h2>
       <p id="agreement-summary-description">
         Each case contributes its active revision once it is marked Reviewed or Corrected. Unchanged means the accepted mask equals the model output voxel for
-        voxel.
+        voxel. Changed masks are also counted by the kind of save that changed them.
       </p>
       <p v-if="summaryError" class="agreement-error" role="alert">
         {{ summaryError }} <button type="button" class="text-button" @click="openSummary">Retry</button>
@@ -268,6 +287,7 @@ onBeforeUnmount(() => {
                   <th scope="col">Task · structure</th>
                   <th scope="col">Reviewed</th>
                   <th scope="col">Unchanged</th>
+                  <th scope="col"><abbr :title="AI_REWRITE_NOTE">AI assist*</abbr></th>
                   <th scope="col" class="agreement-mean">Mean Dice</th>
                   <th scope="col">Median Dice</th>
                   <th scope="col">Mean |ΔV|</th>
@@ -278,6 +298,7 @@ onBeforeUnmount(() => {
                   <th scope="row">{{ task.task ?? 'Unknown task' }}</th>
                   <td>{{ task.reviewed }}</td>
                   <td>{{ formatPercent(task.unchanged_percent) }}</td>
+                  <td>{{ task.edit_kinds.ai_assisted?.changed ?? 0 }}</td>
                   <td class="agreement-mean">{{ formatDice(task.dice_mean) }}</td>
                   <td>{{ formatDice(task.dice_median) }}</td>
                   <td>{{ formatVolume(task.abs_volume_change_ml_mean) }}</td>
@@ -286,6 +307,7 @@ onBeforeUnmount(() => {
                   <th scope="row">{{ prettyName(row.name) }}</th>
                   <td>{{ row.reviewed }}</td>
                   <td>{{ formatPercent(row.unchanged_percent) }}</td>
+                  <td>{{ row.edit_kinds.ai_assisted?.changed ?? 0 }}</td>
                   <td class="agreement-mean">{{ formatDice(row.dice_mean) }}</td>
                   <td>{{ formatDice(row.dice_median) }}</td>
                   <td>{{ formatVolume(row.abs_volume_change_ml_mean) }}</td>
@@ -293,8 +315,14 @@ onBeforeUnmount(() => {
               </tbody>
             </table>
           </div>
+          <ul v-if="item.kinds.length" class="agreement-kinds" :aria-label="`${poolLabel(item.name)}: changed structures by kind of save`">
+            <li v-for="kind in item.kinds" :key="kind.kind">
+              <strong>{{ editKindLabels[kind.kind] }}</strong> {{ editKindSummary(kind) }}
+            </li>
+          </ul>
         </section>
         <p class="help">Task rows pool every structure of that task. Structures without a model original, such as reviewer-added segments, are not counted.</p>
+        <p class="help">{{ AI_REWRITE_NOTE }}</p>
       </template>
     </dialog>
   </section>
@@ -377,6 +405,32 @@ onBeforeUnmount(() => {
   margin: 0;
   font: 13px var(--mono);
   color: var(--white);
+}
+.agreement-kinds {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.agreement-kinds strong {
+  font-weight: 500;
+  color: var(--white);
+  margin-right: 4px;
+}
+.agreement-pool .agreement-kinds {
+  margin: 8px 0 0;
+}
+.agreement-panel .agreement-note {
+  margin: 0 0 8px;
+}
+th.agreement-kind,
+td.agreement-kind {
+  text-align: left;
+}
+td.agreement-kind {
+  font-family: inherit;
 }
 .agreement-table {
   overflow-x: auto;
@@ -568,7 +622,8 @@ tr.agreement-task td {
   td {
     font-size: 11px;
   }
-  .agreement-panel .help {
+  .agreement-panel .help,
+  .agreement-kinds {
     font-size: 11px;
   }
 }

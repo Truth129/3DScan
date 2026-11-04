@@ -21,6 +21,7 @@ from scan3d.demo import create_demo
 from scan3d.identity import EVERY_CASE
 from scan3d.service import Service
 from scan3d.store import identifier
+from test_interactive_review import FakeRuntime
 
 
 def physical(matrix):
@@ -227,15 +228,15 @@ def erase(history, revision, structure_id):
     )
 
 
-def paint(history, revision, structure_id=None, *, name=None):
-    """Accept a direct native-slice paint stroke, optionally as a reviewer-created segment."""
+def paint(history, revision, structure_id=None, *, name=None, method="direct", prompt=PAINT, relationship=None):
+    """Accept a direct native-slice paint stroke, or another method's prompt, optionally as a reviewer-created segment."""
     reviews, case_id = history.service.reviews, history.case["id"]
     draft = (
-        reviews.create_structure(case_id, revision["id"], name, method="direct")
+        reviews.create_structure(case_id, revision["id"], name, relationship=relationship, method=method)
         if name
-        else reviews.create(case_id, revision["id"], structure_id, method="direct")
+        else reviews.create(case_id, revision["id"], structure_id, method=method)
     )
-    draft = reviews.update(case_id, draft["id"], draft["generation"], [PAINT])
+    draft = reviews.update(case_id, draft["id"], draft["generation"], [prompt])
     execute(history.service, reviews.predict(case_id, draft["id"], draft["generation"]))
     draft = reviews.get(case_id, draft["id"])
     return produced(history.service, reviews.accept(case_id, draft["id"], draft["generation"]))
@@ -431,6 +432,58 @@ def test_aggregate_counts_decided_active_revisions_and_keeps_synthetic_cases_apa
     summary = aggregate_agreement(service, EVERY_CASE)
     assert summary["cases"]["skipped"]["unreviewed"] == 1
     assert summary["pools"]["real"] == {"cases": 0, "excluded": 0, "summary": None, "tasks": []}
+
+
+def test_ai_assisted_saves_are_told_apart_from_direct_edits_and_other_changes(history, monkeypatch):
+    service, case_id = history.service, history.case["id"]
+    monkeypatch.setattr(service, "_interactive", FakeRuntime)
+    first = segment_task(history, history.image, "total")
+    point = dict(id="point", kind="point", ras=imaging._world(GRID, [6, 7, 8]).tolist(), include=True)
+    assisted = paint(history, first, "total:liver", method="nninteractive", prompt=point)
+    assert rows(revision_agreement(service, case_id, assisted["id"]))["total:spleen"]["edit_kind"] is None
+    final = erase(history, paint(history, paint(history, assisted, "total:liver"), "total:spleen"), "total:kidney_left")
+    service.store.set_review_status(case_id, final["id"], "corrected")
+    report = revision_agreement(service, case_id, final["id"])
+    found = rows(report)
+    # A later direct edit does not take the model's rewrite out of a row.
+    assert {sid: (row["edit_kind"], row["edits"]) for sid, row in found.items()} == {
+        "total:liver": ("ai_assisted", ["nninteractive_correction", "direct_edit_correction"]),
+        "total:spleen": ("direct_edit", ["direct_edit_correction"]),
+        "total:kidney_left": ("other", ["refinement"]),
+    }
+    liver = found["total:liver"]
+    expected = {"changed": 1, "dice_mean": liver["dice"], "dice_median": liver["dice"], "abs_volume_change_ml_mean": abs(liver["volume_change_ml"])}
+    assert list(report["summary"]["edit_kinds"]) == ["direct_edit", "ai_assisted", "other"]
+    assert report["summary"]["edit_kinds"]["ai_assisted"] == expected
+    task = aggregate_agreement(service, EVERY_CASE)["pools"]["real"]["tasks"][0]
+    assert task["edit_kinds"]["ai_assisted"] == expected and task["edit_kinds"]["direct_edit"]["changed"] == 1
+    assert {row["id"]: list(row["edit_kinds"]) for row in task["structures"]}["total:liver"] == ["ai_assisted"]
+
+
+class InsideLiver(FakeRuntime):
+    """Proposes a box inside the fixture's first liver, whatever the prompt."""
+
+    def predict(self, ct_path, mask_path, prompts, output_path, *args, **kwargs):
+        image, _ = imaging._image(ct_path)
+        imaging._save_mask(box((3, 4, 4), (7, 8, 8), image.shape), image, output_path)
+        return {"engine": "fake-nninteractive", "version": "test", "checkpoint_sha256": "a" * 64, "device": "test-boundary"}
+
+
+def test_new_segments_that_carve_a_model_mask_take_their_method_kind(history, monkeypatch):
+    service, case_id = history.service, history.case["id"]
+    monkeypatch.setattr(service, "_interactive", InsideLiver)
+    first = segment_task(history, history.image, "total")
+    point = dict(id="point", kind="point", ras=imaging._world(GRID, [4, 5, 5]).tolist(), include=True)
+    exclusive = lambda sid: {"kind": "subdivision", "exclusive_with": [sid]}
+    assisted = paint(history, first, name="Segment", method="nninteractive", prompt=point, relationship=exclusive("total:liver"))
+    spleen_stroke = {**PAINT, "vertices": [[11.0, 4.0], [12.0, 6.0]]}
+    final = paint(history, assisted, name="Patch", prompt=spleen_stroke, relationship=exclusive("total:spleen"))
+    found = rows(revision_agreement(service, case_id, final["id"]))
+    assert {sid: (found[sid]["edit_kind"], found[sid]["edits"]) for sid in ("total:liver", "total:spleen")} == {
+        "total:liver": ("ai_assisted", ["nninteractive_new_structure"]),
+        "total:spleen": ("direct_edit", ["direct_edit_new_structure"]),
+    }
+    assert found["total:liver"]["removed_voxels"] == 64 and found["total:spleen"]["removed_voxels"] > 0
 
 
 @pytest.fixture

@@ -490,14 +490,21 @@ original. **Details** opens the table:
 
 | Column         | Meaning                                        |
 | -------------- | ---------------------------------------------- |
+| **Change**     | **Direct edit**, **AI assist\*** or **Other**. |
 | **Dice**       | Voxel overlap. 1 is identical.                 |
 | **HD95**       | Larger 95th-percentile surface distance in mm. |
 | **ΔV**         | Accepted volume minus original volume.         |
 | **Voxels +/−** | Voxels added and removed.                      |
 
 **All cases ↗** pools the active revision of each case marked **Reviewed** or **Corrected**, by
-task and structure: how often the model was accepted unchanged, Dice and mean absolute ΔV.
-Synthetic demo cases form a separate pool.
+task and structure: how often the model was accepted unchanged, how many were AI-assisted saves,
+Dice and mean absolute ΔV. Synthetic demo cases form a separate pool.
+
+Both views also total changed masks by kind of save. An AI-assisted save keeps the model's own
+rewrite away from your marks, so **AI assist\*** figures overstate your change. A mask counts as
+**AI assist\*** if any save since its original used AI assist, **Direct edit** if every save was a
+direct edit, and **Other** otherwise, such as after a refinement or Slicer import. A save that adds
+a segment counts for each mask it took voxels from.
 
 - These numbers measure reviewer edits, not ground truth. An uncorrected mask can still be wrong.
 - Review status covers a whole revision, so a structure nobody inspected counts as accepted.
