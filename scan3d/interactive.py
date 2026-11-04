@@ -412,7 +412,7 @@ class InteractiveRuntime:
                 and normalized[: len(self._applied)] == self._applied
                 and (history is None or (len(history) >= len(self._applied_batches) and history[: len(self._applied_batches)] == self._applied_batches))
             )
-            restored, refused = None, None
+            restored = refused = check = replay_check = None
             if not prefix:
                 progress("Initializing correction from the saved segmentation")
                 baseline, _, _ = _binary(mask_path, image, affine)
@@ -423,10 +423,12 @@ class InteractiveRuntime:
                 self._session.set_target_buffer(self._target)
                 initial = np.zeros_like(baseline) if settings["start_empty"] else baseline
                 if stored is not None:
-                    refused = self._refusal(stored, history)
-                    if refused is None:
+                    use, refused = self._stored_use(stored, history)
+                    if use == "restore":
                         initial, _, _ = _binary(stored["mask_path"], image, affine)
                         restored = stored
+                    elif use == "compare":
+                        check = stored
                 self._session.add_initial_seg_interaction(initial, run_prediction=False)
                 # Fail before any prompt if an upstream version changes initial
                 # mask semantics. Slab comparisons bound temporary memory even
@@ -446,6 +448,8 @@ class InteractiveRuntime:
                     keep_marks(self._session, _marks(normalized[:end], affine, image.shape), cancelled)
                     self._applied, self._applied_batches = normalized[:end], history[:count]
             prepare_seconds = time.monotonic() - prepare_started
+            # Marks this request did not run again: warm, restored, or none on a replay.
+            started_from = len(self._applied)
             applied_now = 0
             changed_bbox = None
             prediction_started = time.monotonic()
@@ -493,6 +497,9 @@ class InteractiveRuntime:
                     self._cancel(cancelled)
                     self._applied = normalized[:end]
                     self._applied_batches.append(batch)
+                    if check is not None and len(self._applied_batches) == check["batches"]:
+                        # The reader saw the stored result of this step; say how far the replay moved from it.
+                        replay_check = {"batches": check["batches"], "changed_voxels": self._changed_since(check, image, affine)}
             prediction_seconds = time.monotonic() - prediction_started
             self._cancel(cancelled)
             if self._target.dtype != np.uint8 or self._target.min() < 0 or self._target.max() > 1:
@@ -513,6 +520,8 @@ class InteractiveRuntime:
                 "reused_prompt_prefix": prefix,
                 "restored": {"batches": restored["batches"], "mask_sha256": restored["mask_sha256"]} if restored else None,
                 "stored_result_refused": refused,
+                "replay_check": replay_check,
+                "started_from_prompts": started_from,
                 "last_changed_bbox_ijk": changed_bbox,
                 "source_ct_sha256": _sha256(ct_identity),
                 "input_mask_sha256": _sha256(mask_identity),
@@ -535,16 +544,21 @@ class InteractiveRuntime:
         finally:
             np.random.set_state(generator)  # noqa: NPY002
 
-    def _refusal(self, stored, history):
-        """Why a stored result cannot rebuild this session, or None when it can."""
-        if any(batch["legacy"] for batch in history[: stored["batches"]]):
-            return "Pointwise steps from before per-step results always replay"
-        if any(self._model_provenance.get(key) != stored["engine"].get(key) for key in RESULT_IDENTITY):
-            return "Another model, card or build made the stored result"
+    def _stored_use(self, stored, history):
+        """Whether a stored result can rebuild this session ("restore") or only check a replay ("compare"), and why not restore."""
         path = stored["mask_path"]
         if not path.is_file() or _sha256(_identity(path)) != stored["mask_sha256"]:
-            return "The stored mask does not match its recorded hash"
-        return None
+            return None, "The stored mask does not match its recorded hash"
+        if any(batch["legacy"] for batch in history[: stored["batches"]]):
+            return "compare", "Pointwise steps from before per-step results always replay"
+        if any(self._model_provenance.get(key) != stored["engine"].get(key) for key in RESULT_IDENTITY):
+            return "compare", "Another model, card or build made the stored result"
+        return "restore", None
+
+    def _changed_since(self, stored, image, affine):
+        """Voxels of the target that differ from a stored result, in bounded slabs."""
+        expected, _, _ = _binary(stored["mask_path"], image, affine)
+        return sum(int(np.count_nonzero(self._target[offset : offset + 16] != expected[offset : offset + 16])) for offset in range(0, image.shape[0], 16))
 
     def release(self):
         """Free warm CT/model state before TotalSegmentator needs the GPU."""

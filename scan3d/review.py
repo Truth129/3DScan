@@ -824,6 +824,15 @@ class ReviewManager:
                 f"AI assist removed {far:.0%} of the original mask's interior more than {_FAR_FROM_MARKS_MM:.0f} mm from every mark; "
                 "check the whole structure before saving",
             )
+        # A stored result that could not be rebuilt from, as after a re-run on another card, was still
+        # compared with the replay at its step: those are voxels the reader already inspected.
+        if (check := provenance.get("replay_check")) and check["changed_voxels"]:
+            moved = check["changed_voxels"]
+            overlap["warnings"].insert(
+                0,
+                f"Repeating the earlier steps moved {moved:,} voxels ({moved * voxel_volume_ml:.2f} mL) of the result you saw "
+                f"after Apply step {check['batches']}; recheck the whole structure before saving",
+            )
         # For AI candidates too, so Candidate in 3D shows what Save keeps, including a loss far from the marks.
         preview = self._surface_preview(job, review, base, selected, overlap["affected_structures"], after, image, affine)
         del after

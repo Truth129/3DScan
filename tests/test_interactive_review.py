@@ -225,6 +225,45 @@ def test_ai_candidate_warns_when_it_removes_interior_far_from_every_mark(tmp_pat
     assert result["preview_3d_ready"] and result["surface_assets"][0]["key"] != base["surface_assets"][0]["key"]
 
 
+class ReplayCheckRuntime(FakeRuntime):
+    """Keeps the mask and reports how far a replay moved from a stored result it could not rebuild from."""
+
+    def __init__(self, moved):
+        super().__init__()
+        self.moved = moved
+
+    def predict(self, ct_path, mask_path, prompts, output_path, progress, cancelled, session_key, **kwargs):
+        image, affine = imaging._image(ct_path)
+        mask, _, _ = imaging._binary(mask_path, image, affine)
+        imaging._save_mask(mask, image, output_path)
+        return {"engine": "fake-nninteractive", "version": "test", "replay_check": {"batches": 1, "changed_voxels": self.moved}}
+
+
+@pytest.mark.parametrize("moved,warning", [(40, "Repeating the earlier steps moved 40 voxels (0.30 mL)"), (0, None)], ids=["moved", "exact"])
+def test_ai_candidate_warns_when_a_replay_moved_a_result_the_reader_saw(tmp_path, moved, warning):
+    service = Service(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist"))
+    case = service.new_case("Replay check fixture")
+    folder = service.store.case_dir(case["id"]) / "fixture"
+    folder.mkdir()
+    affine = np.diag([2.0, 1.5, 2.5, 1.0])
+    ct = nib.Nifti1Image(np.full((12, 8, 8), 45, dtype=np.int16), affine)
+    nib.save(ct, folder / "reference.nii.gz")
+    mask = np.zeros(ct.shape, dtype=np.uint8)
+    mask[2:10, 2:6, 2:6] = 1
+    imaging._save_mask(mask, ct, folder / "liver.nii.gz")
+    structure = dict(id="total:liver", name="liver", task="total", group="Abdominal organs", color="#d48a71", mask_file=str(folder / "liver.nii.gz"))
+    base = service.build_revision(case["id"], folder / "reference.nii.gz", [structure], source="synthetic_fixture")
+    service.store.commit_revision(base)
+    service.interactive_runtime = ReplayCheckRuntime(moved)
+    draft = service.reviews.create(case["id"], base["id"], structure["id"])
+    point = dict(id="point-1", kind="point", ras=imaging._world(affine, [5, 3, 3]).tolist(), include=True)
+    draft = service.reviews.update(case["id"], draft["id"], 0, [point])
+    assert execute_next(service, service.reviews.predict(case["id"], draft["id"], draft["generation"]))["status"] == "completed"
+    warnings = service.reviews.get(case["id"], draft["id"])["candidate"]["warnings"]
+    expected = f"{warning} of the result you saw after Apply step 1; recheck the whole structure before saving"
+    assert warnings == ([expected] if warning else [])
+
+
 def test_point_validation_uses_oblique_reflected_grid_and_rejects_bad_prompts(example):
     service, case, base, prompt = example
     draft = service.reviews.create(case["id"], base["id"], "total:liver")

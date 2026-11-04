@@ -524,10 +524,22 @@ def test_a_stored_result_rebuilds_a_cold_session_with_every_mark_and_runs_only_l
     np.testing.assert_array_equal(session.initials[0], nib.load(after_refine).dataobj)
     assert session.calls[0]["evidence"] == warm_session.calls[-1]["evidence"]
     np.testing.assert_array_equal(nib.load(tmp_path / "restored.nii.gz").dataobj, nib.load(tmp_path / "warm-3.nii.gz").dataobj)
-    # A mask that no longer matches its hash, or one another card made, replays every step instead.
-    for change, reason in (({"mask_sha256": "0" * 64}, "hash"), ({"engine": {**stored()["engine"], "gpu_name": "Other GPU"}}, "card")):
+    # A mask that no longer matches its hash, or one another card made, replays every step instead;
+    # only a trusted one is then compared with the replay at its step.
+    later = tmp_path / "warm-3.nii.gz"
+    other = {**stored()["engine"], "gpu_name": "Other GPU"}
+    for change, reason, check in (
+        ({"mask_sha256": "0" * 64}, "hash", None),
+        ({"engine": other}, "card", {"batches": 2, "changed_voxels": 0}),
+        (
+            {"engine": other, "mask_path": str(later), "mask_sha256": interactive._sha256(interactive._identity(later))},
+            "card",
+            {"batches": 2, "changed_voxels": 1},
+        ),
+    ):
         replayed = predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts, "replayed.nii.gz", batches=history, stored=stored(**change))
         assert replayed["restored"] is None and reason in replayed["stored_result_refused"] and replayed["predictions_this_request"] == 4
+        assert replayed["replay_check"] == check and replayed["started_from_prompts"] == 0
 
 
 def test_each_step_draws_from_its_own_seed_in_warm_runs_and_replays_and_numpy_is_left_as_it_was(batch_runtime_files, tmp_path, monkeypatch):
