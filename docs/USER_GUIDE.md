@@ -357,6 +357,10 @@ noncommercial use only. Inference stays on your computer and never trains the mo
 2. Mark with **Point**, **Hint brush**, **Lasso** or **Box** (2D, on one native slice).
 3. Choose **Run AI · N** once for all pending marks. This can take a minute or more, even on a GPU.
 
+A warning beside **Exit review** says when a result removes 5% or more of the mask's interior, the
+part over 2 mm inside, more than 40 mm from every mark. The volume line can hide such a loss, so
+check the whole structure on the CT and in 3D before saving.
+
 **Options +** holds:
 
 - **Native slice planes**, required for hint brush, lasso and box

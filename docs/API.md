@@ -333,6 +333,9 @@ jobs omit it, including direct and relationship-only `review_predict`.
 - `affected_structures`: `{id, name, role: "target" | "exclusive_sibling", summary, metadata_only,
   relationship}`.
 - `overlaps`: `{id, name, voxel_count, volume_ml, policy: "removed" | "preserved", reason}`.
+- `warnings`: lines to show the reader, copied into the saved revision's `qc`. An nnInteractive
+  candidate adds one when it removes 5% or more of the saved mask's interior, voxels over 2 mm
+  deep, more than 40 mm from every mark.
 - `gpu_name`: the GPU the run measured, when the job named a path and the run reported one. A
   relationship-only Apply keeps the one it reuses.
 
@@ -676,8 +679,7 @@ A candidate's `revision_id` is `review-<session>-<generation>`. It works on the 
 [route index](#route-index), never appears in history and cannot supply exports.
 
 `GET .../revisions/{alias}` returns a read-only view whose `source` is `direct_edit_candidate` or
-`nninteractive_candidate`. Direct candidates set `preview_3d_ready` and `model_manifest_url`.
-nnInteractive candidates have no prepared surfaces.
+`nninteractive_candidate`. Both kinds set `preview_3d_ready` and `model_manifest_url`.
 
 ## Segment relationships
 
