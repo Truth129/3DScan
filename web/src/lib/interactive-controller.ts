@@ -346,7 +346,7 @@ export class InteractiveController {
       } catch (reason) {
         this.error = reason instanceof Error ? reason.message : String(reason);
         if (reason instanceof ApiError && reason.status === 409) this.conflict = true;
-        else if (reason instanceof ApiError && reason.status === 400 && requested) this.withdraw(requested);
+        else if (reason instanceof ApiError && reason.status === 400 && requested) this.withdraw(requested, reason.message);
         throw reason;
       } finally {
         this.saving = false;
@@ -357,20 +357,31 @@ export class InteractiveController {
     return this.writing;
   }
   /**
-   * Takes out the marks a refused save added, such as a drawing that covers no voxel centre. Every
-   * later save would carry them and be refused too. Their steps leave the history as well, so Undo
-   * cannot bring one back.
+   * Takes out the mark a refused save added, such as a drawing that covers no voxel centre. Every
+   * later save would carry it and be refused too. Its steps leave the history as well, so Undo
+   * cannot bring it back. Other marks in the same save stay and go out with the next one.
    */
-  private withdraw(requested: Snapshot) {
+  private withdraw(requested: Snapshot, reason: string) {
     const value = this.review;
     if (!value) return;
     const held = new Set(value.prompts.map(item => item.id)),
-      refused = new Set(requested.prompts.filter(item => !held.has(item.id)).map(item => item.id)),
-      keep = (prompts: InteractivePrompt[]) => prompts.filter(item => !refused.has(item.id)),
-      rest = signature(snapshot(keep(requested.prompts), requested.options, requested.relationship));
+      added = requested.prompts.filter(item => !held.has(item.id)),
+      unmarked = signature(
+        snapshot(
+          requested.prompts.filter(item => held.has(item.id)),
+          requested.options,
+          requested.relationship,
+        ),
+      );
     // Only a save that added nothing but marks was refused for one of them. A draft started with a
     // relationship holds it before this page's first save does, so the record counts as saved too.
-    if (!refused.size || (rest !== this.persisted && rest !== saved(value))) return;
+    if (!added.length || (unmarked !== this.persisted && unmarked !== saved(value))) return;
+    // The server names the first bad mark by its position in the request ("Lasso mark 2 covers ...").
+    // A message without that names no one mark, so every added mark goes, as before.
+    const number = Number(/(\d+) covers no voxel centre/.exec(reason)?.[1]),
+      named = requested.prompts[number - 1],
+      refused = new Set(named && !held.has(named.id) ? [named.id] : added.map(item => item.id)),
+      keep = (prompts: InteractivePrompt[]) => prompts.filter(item => !refused.has(item.id));
     const history: Snapshot[] = [];
     let cursor = 0;
     this.history.forEach((item, index) => {
