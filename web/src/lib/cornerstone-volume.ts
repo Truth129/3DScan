@@ -2,6 +2,7 @@ import type { Geometry, Plane, Point, SliceMeta } from '../types';
 import { inverseAffine, transformPoint, validateDescriptor, type VolumeDescriptor, type VolumeValues } from './ct-reslice';
 import { lpsToRas, rasToLps } from './cornerstone-frame';
 import { GPU_VOLUME_SLAB_BYTES, type GPUVolumeSource } from './gpu-volume-data';
+import { NATIVE_DEPTH_TOLERANCE, NATIVE_TILT_TOLERANCE } from './interactive-review';
 
 export type NativeAxis = 0 | 1 | 2;
 export interface CornerstoneVolumeGeometry {
@@ -93,8 +94,13 @@ export function cornerstoneMPRDisplayMeta(
   const nativeAxis = ([0, 1, 2] as const).find(axis => {
     const index = Math.round(voxel[axis]);
     // Check the entire viewport, not only a one-pixel step that can disguise a
-    // rotated plane at high zoom. This is the prompt validator's voxel tolerance.
-    return index >= 0 && index < geometry.shape[axis] && Math.abs(voxel[axis] - index) + Math.abs(vx[axis]) * width + Math.abs(vy[axis]) * height <= 1e-5;
+    // rotated plane at high zoom. These are the prompt validator's voxel bounds.
+    return (
+      index >= 0 &&
+      index < geometry.shape[axis] &&
+      Math.abs(voxel[axis] - index) <= NATIVE_DEPTH_TOLERANCE &&
+      Math.abs(vx[axis]) * width + Math.abs(vy[axis]) * height <= NATIVE_TILT_TOLERANCE
+    );
   });
   const center = lpsToRas(canvasToWorldLPS([width / 2, height / 2]));
   return {

@@ -136,6 +136,12 @@ export function newReviewPrompt(ras: Point, include: boolean): InteractivePrompt
   return { id: crypto.randomUUID(), ras: [...ras], include };
 }
 
+/** Voxel bounds on a drawing plane. Cornerstone reads a pane's depth back through a Float32
+ * projection, which moves it by up to a few 1e-5 voxel on ordinary CT grids. Tilt within
+ * the plane has no such error, so it stays tight. */
+export const NATIVE_DEPTH_TOLERANCE = 1e-3,
+  NATIVE_TILT_TOLERANCE = 1e-5;
+
 /** Drawing gestures remain in one native plane; patient-MPR drawings are rejected. */
 export function createReviewGesture(
   geometry: Geometry,
@@ -157,9 +163,11 @@ export function createReviewGesture(
   const { axis, index } = meta.native,
     [u, v] = [0, 1, 2].filter(value => value !== axis),
     inverse = inverseAffine(geometry.affine_ras);
+  const depth = transformPoint(inverse, pixelToRas(meta.pixel_to_ras, 0, 0))[axis];
   const vertices = pixels.map(pixel => {
     const voxel = transformPoint(inverse, pixelToRas(meta.pixel_to_ras, ...pixel));
-    if (Math.abs(voxel[axis] - index) > 1e-5) throw new Error('The annotation plane does not match the reference CT');
+    if (Math.abs(depth - index) > NATIVE_DEPTH_TOLERANCE || Math.abs(voxel[axis] - depth) > NATIVE_TILT_TOLERANCE)
+      throw new Error('The annotation plane does not match the reference CT');
     return [Math.max(0, Math.min(geometry.shape[u] - 1, voxel[u])), Math.max(0, Math.min(geometry.shape[v] - 1, voxel[v]))] as [number, number];
   });
   if (tool === 'scribble' && vertices.length === 1) vertices.push([...vertices[0]]);

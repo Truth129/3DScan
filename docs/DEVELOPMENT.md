@@ -81,6 +81,8 @@ first.
 | `dicom_view_export_smoke.py`       | 3D view export to Orthanc                                 |
 
 - Gates that take `--stage` start their own server and chromedriver on that build, under `/tmp`.
+- `native_review_smoke.py --suite grid` opens review on a 512×512×312 CT at 0.7/0.7/0.625 mm.
+  Cornerstone's Float32 camera depth on that grid once refused drawing on its panes.
 - The others take `--base-url` and `--driver-url`. Start chromedriver and
   `uvicorn web.tests.interactive_test_server:create_test_app --factory --port 9012`, with
   `SCAN3D_DATA_DIR` set to a temporary directory and `SCAN3D_TEST_WEB_DIR` to the build.
