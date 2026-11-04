@@ -214,6 +214,24 @@ def test_direct_rejects_ai_prompts_and_full_refine_and_method_is_immutable(direc
         service.reviews.create(case["id"], base["id"], base["structures"][0]["id"], method="other")
 
 
+def test_a_stroke_that_covers_no_voxel_centre_is_refused_when_saved_and_named_when_an_older_draft_runs(direct_case):
+    service, case, base, _ = direct_case
+    # 0.5 mm around a point midway between centres reaches none of them on this grid.
+    missed = stroke("missed", include=False, vertices=[[2.5, 3.5], [2.5, 3.5]], radius=0.5)
+    draft = service.reviews.create(case["id"], base["id"], base["structures"][0]["id"], method="direct")
+    with TestClient(create_app(service.settings), base_url="http://127.0.0.1") as client:
+        refused = client.patch(f"/api/cases/{case['id']}/reviews/{draft['id']}", json={"expected_generation": 0, "prompts": [stroke(), missed]})
+    assert refused.status_code == 400 and refused.json()["detail"] == "Erase stroke 2 covers no voxel centre on its slice. Draw it larger."
+    assert service.reviews.get(case["id"], draft["id"])["prompts"] == []
+    # A draft saved before the check still saves, and its Apply names the stroke.
+    service.store.save("review_sessions", {**draft, "prompts": [missed]})
+    draft = service.reviews.update(case["id"], draft["id"], 0, [missed, stroke()])
+    queued = service.reviews.predict(case["id"], draft["id"], draft["generation"])
+    service.execute(service.store.claim())
+    assert service.store.get("jobs", queued["id"])["status"] == "failed"
+    assert service.reviews.get(case["id"], draft["id"])["error"] == "Erase stroke 1 covers no voxel centre on its slice"
+
+
 def test_queued_and_running_direct_edits_cannot_publish_after_superseding_generation(direct_case, monkeypatch):
     service, case, base, _ = direct_case
     draft = service.reviews.create(case["id"], base["id"], base["structures"][0]["id"], method="direct")

@@ -376,7 +376,7 @@ class InteractiveRuntime:
                     applied_now += 1
             else:
                 from .interactive_batch import register_and_predict, refine_whole_mask
-                from .interactive_prompts import materialize_prompt
+                from .interactive_prompts import mark_name, materialize_prompt
 
                 for batch in history[len(self._applied_batches) :]:
                     self._cancel(cancelled)
@@ -390,7 +390,10 @@ class InteractiveRuntime:
                             self._cancel(cancelled)
                             applied_now += 1
                     elif pending:
-                        materialized = [materialize_prompt(prompt, affine, image.shape) for prompt in pending]
+                        # A draft saved before such marks were refused can hold one; name it.
+                        materialized = [
+                            materialize_prompt(prompt, affine, image.shape, mark_name(prompt, start + number)) for number, prompt in enumerate(pending, 1)
+                        ]
                         stats = register_and_predict(self._session, materialized, progress, cancelled, autozoom=batch["autozoom"])
                         batch_statistics.append(stats)
                         changed_bbox = stats.get("changed_bbox_ijk", changed_bbox)

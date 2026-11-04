@@ -334,6 +334,7 @@ crosshairs pause, until **Exit review**.
   you save.
 - Mark only a settled, full-resolution view.
 - **↶ Undo** and **↷ Redo** step through your marks.
+- A drawing that covers no voxel centre is not saved. It disappears, and a message names it.
 
 ### Direct edit
 

@@ -656,6 +656,9 @@ completed candidates survive a restart.
 - **Points** must lie inside the reference grid. An omitted `kind` means `point`.
 - **Drawings.** `axis` is native i, j or k (0, 1, 2), and `index` an integer slice. u, v are the two
   remaining axes in increasing order, as continuous voxel-centre coordinates within `[0, shape-1]`.
+- **Coverage.** Saving a new `lasso` or `scribble` that selects no voxel centre is 400, naming the
+  mark, as in `Lasso mark 2 covers no voxel centre on its slice. Draw it larger.` A draft from an
+  older build can hold one. It still saves, and a run fails naming that mark.
 - **Boxes** span exactly one slice. 3D boxes are not supported, and a patient-aligned rectangle on
   an oblique plane never becomes a native box.
 - **Direct edits** accept `scribble` (`include: true` paints, `false` erases) and `scissors` only.

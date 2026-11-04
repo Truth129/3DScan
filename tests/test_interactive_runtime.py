@@ -550,4 +550,8 @@ def test_runtime_materializes_all_drawing_tools_into_one_apply_without_ras_axis_
         assert array.shape == tuple(b - a for a, b in bounds)
         assert array.dtype == np.uint8 and array.max() == 1 and array.size < fixture.values.size
     assert result["prompts"][0]["voxel"] == [7, 8, 9]
+    # A draft saved before such marks were refused can hold one, and the run names it.
+    missed = {"id": "missed", "kind": "lasso", "include": True, "axis": 2, "index": 6, "vertices": [[2.2, 2.2], [2.8, 2.2], [2.5, 2.8]]}
+    with pytest.raises(ValueError, match="^Lasso mark 5 covers no voxel centre"):
+        predict(runtime, fixture, tmp_path, [*prompts, missed], "missed.nii.gz", batches=[boundary(4), boundary(5)])
     runtime.release()
