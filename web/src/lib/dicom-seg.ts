@@ -1,5 +1,10 @@
 import type { InteractiveReview, Job, Revision, Structure } from '../types';
 
+/** Both formats share one dialog, queue and delivery history; the job kind says which one a job made. */
+export type DicomSegFormat = 'seg' | 'osirix_roi';
+export const DICOM_SEG_KIND = 'orthanc_export';
+export const DICOM_ROI_KIND = 'orthanc_roi_export';
+
 export interface DicomSegDestination {
   id: string;
   name: string;
@@ -12,7 +17,10 @@ export interface DicomSegExportResult {
   sent: boolean;
   destination?: string;
   segments_count: number;
-  instance_count: number;
+  /** One for a SEG. For OsiriX ROIs, one report per CT slice that has any, known only once encoded. */
+  instance_count?: number;
+  /** OsiriX ROIs only: one brush ROI per mask on each slice it touches. */
+  roi_count?: number;
   structure_ids: string[];
   destination_id?: string;
   overlap_priority?: string[];
@@ -21,7 +29,7 @@ export interface DicomSegExportResult {
   file?: boolean;
 }
 export interface DicomSegExportJob extends Job {
-  result?: { dicom_seg?: DicomSegExportResult };
+  result?: { dicom_seg?: DicomSegExportResult; osirix_roi?: DicomSegExportResult };
   /** Orthanc holds the send now, and cancelling this job cannot stop it. */
   delivery_started?: boolean;
 }
@@ -33,6 +41,8 @@ export interface DicomSegAvailability {
   destinations: DicomSegDestination[];
   exports?: DicomSegExportJob[];
   file?: { available: boolean; reason?: string };
+  /** Present when the server can make OsiriX ROIs. They need what archive and send need, so `available` covers them. */
+  osirix_roi?: { encoding_version: number };
 }
 export interface DicomSegExportRequest {
   structure_ids: string[];
@@ -40,6 +50,8 @@ export interface DicomSegExportRequest {
   resend?: boolean;
   overlap_priority?: string[];
   delivery?: 'file';
+  /** Sent only for OsiriX ROIs, so a SEG request stays as it was. */
+  format?: 'osirix_roi';
 }
 
 /** Export only a clearly displayed saved revision, independently of its renderer. */
@@ -81,33 +93,40 @@ export function moveOverlapRank(order: string[], selected: string[], id: string,
   return order.map(item => (item === id ? neighbour : item === neighbour ? id : item));
 }
 
-/** A retry must repeat an unfinished export's ranking: any other ranking is a different SEG. */
-export const unfinishedOverlapRanking = (job?: DicomSegExportJob) =>
-  job && ['failed', 'queued', 'running'].includes(job.status) ? job.result?.dicom_seg?.overlap_priority : undefined;
+export const exportFormat = (job: Job): DicomSegFormat => (job.kind === DICOM_ROI_KIND ? 'osirix_roi' : 'seg');
+export const exportResult = (job?: DicomSegExportJob) => job?.result?.dicom_seg ?? job?.result?.osirix_roi;
+const unfinished = (job?: DicomSegExportJob): job is DicomSegExportJob => !!job && ['failed', 'queued', 'running'].includes(job.status);
+
+/** A retry must repeat an unfinished export's ranking: any other ranking is a different SEG. OsiriX ROIs take none. */
+export const unfinishedOverlapRanking = (job?: DicomSegExportJob) => (unfinished(job) ? job.result?.dicom_seg?.overlap_priority : undefined);
+/** A retry reuses an unfinished ROI export's instances only for the same masks. */
+export const unfinishedRoiSelection = (job?: DicomSegExportJob) =>
+  unfinished(job) && exportFormat(job) === 'osirix_roi' ? job.result?.osirix_roi?.structure_ids : undefined;
 
 export const pendingDicomSegExport = (job?: Job) => !!job && ['queued', 'running'].includes(job.status);
 export const cancellableDicomSegExport = (job?: DicomSegExportJob) => pendingDicomSegExport(job) && !job?.delivery_started;
 export const matchesDicomSegExport = (job: Job, caseId: string, revisionId: string) =>
-  job.kind === 'orthanc_export' && job.case_id === caseId && job.revision_id === revisionId;
+  (job.kind === DICOM_SEG_KIND || job.kind === DICOM_ROI_KIND) && job.case_id === caseId && job.revision_id === revisionId;
 
 const sameExport = (result: DicomSegExportResult, structureIds: string[], encodingVersion?: number, overlapPriority?: string[]) =>
   (encodingVersion === undefined || (result.encoding_version ?? 1) === encodingVersion) &&
   JSON.stringify([...result.structure_ids].sort()) === JSON.stringify([...new Set(structureIds)].sort()) &&
   JSON.stringify(result.overlap_priority ?? null) === JSON.stringify(overlapPriority ?? null);
 
-/** A new delivery needs a separate click, scoped to the exact earlier selection and ranking. */
+/** A new delivery needs a separate click, scoped to the exact earlier format, selection and ranking. */
 export function successfulDicomSegDelivery(
   jobs: DicomSegExportJob[],
   structureIds: string[],
   destination: string,
   encodingVersion?: number,
   overlapPriority?: string[],
+  format: DicomSegFormat = 'seg',
 ): boolean {
   const latest = jobs.find(job => {
-    const result = job.result?.dicom_seg;
-    return result?.destination_id === destination && sameExport(result, structureIds, encodingVersion, overlapPriority);
+    const result = exportResult(job);
+    return exportFormat(job) === format && result?.destination_id === destination && sameExport(result, structureIds, encodingVersion, overlapPriority);
   });
-  return latest?.status === 'completed' && latest.result?.dicom_seg?.sent === true;
+  return latest?.status === 'completed' && exportResult(latest)?.sent === true;
 }
 
 /** The prepared file for this exact selection and ranking, unless a newer attempt failed. */
@@ -118,10 +137,10 @@ export function preparedDicomSegFile(
   overlapPriority?: string[],
 ): DicomSegExportResult | undefined {
   const latest = jobs.find(job => {
-    const result = job.result?.dicom_seg;
-    return result?.file && sameExport(result, structureIds, encodingVersion, overlapPriority);
+    const result = exportResult(job);
+    return exportFormat(job) === 'seg' && result?.file && sameExport(result, structureIds, encodingVersion, overlapPriority);
   });
-  return latest?.status === 'completed' ? latest.result?.dicom_seg : undefined;
+  return latest?.status === 'completed' ? exportResult(latest) : undefined;
 }
 
 function overlapSummary(result: DicomSegExportResult): string {
@@ -132,8 +151,27 @@ function overlapSummary(result: DicomSegExportResult): string {
   return ` ${voxels.toLocaleString()} overlapping ${voxels === 1 ? 'voxel' : 'voxels'} removed from ${removed.length} ${removed.length === 1 ? 'mask' : 'masks'} in this export. Saved masks are unchanged.`;
 }
 
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+/** The counts come from the encoder, so a job that never encoded names only the format. */
+const roiCounts = (result: DicomSegExportResult) =>
+  result.roi_count === undefined || result.instance_count === undefined
+    ? 'OsiriX ROIs'
+    : `${plural(result.roi_count, 'OsiriX ROI', 'OsiriX ROIs')} on ${plural(result.instance_count, 'slice', 'slices')}`;
+
+function roiExportSummary(job: DicomSegExportJob): string {
+  const result = exportResult(job);
+  if (job.status === 'cancelled')
+    return result?.archived ? 'Export cancelled. The OsiriX ROIs had already reached Orthanc and stay there. Nothing was sent.' : 'Export cancelled.';
+  if (job.status !== 'completed' || !result) return '';
+  const masks = plural(result.segments_count, 'mask', 'masks');
+  if (result.sent) return `${masks} sent to ${result.destination || 'the configured destination'} as ${roiCounts(result)}.`;
+  if (result.archived) return `${masks} archived in Orthanc as ${roiCounts(result)}. Nothing was sent to another viewer.`;
+  return 'Export finished. Delivery has not been confirmed.';
+}
+
 export function dicomSegExportSummary(job: DicomSegExportJob): string {
-  const result = job.result?.dicom_seg;
+  if (exportFormat(job) === 'osirix_roi') return roiExportSummary(job);
+  const result = exportResult(job);
   if (job.status === 'cancelled')
     return result?.archived ? 'Export cancelled. The SEG had already reached Orthanc and stays there. Nothing was sent.' : 'Export cancelled.';
   if (job.status !== 'completed' || !result) return '';

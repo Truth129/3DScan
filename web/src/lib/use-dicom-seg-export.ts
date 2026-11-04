@@ -9,6 +9,7 @@ import {
   type DicomSegAvailability,
   type DicomSegExportJob,
   type DicomSegExportRequest,
+  type DicomSegFormat,
 } from './dicom-seg';
 
 /** Export jobs never activate a revision or enter the processing/review job poller. */
@@ -36,8 +37,11 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     records.splice(index < 0 ? records.length : index, 0, current);
     return records;
   });
-  const alreadySent = (structureIds: string[], destination: string, overlapPriority?: string[]) =>
-    successfulDicomSegDelivery(history.value, structureIds, destination, availability.value?.encoding_version, overlapPriority);
+  /** Each format has its own encoding version, so a SEG update never asks for fresh OsiriX ROIs. */
+  const encodingVersion = (format: DicomSegFormat) =>
+    format === 'osirix_roi' ? availability.value?.osirix_roi?.encoding_version : availability.value?.encoding_version;
+  const alreadySent = (structureIds: string[], destination: string, overlapPriority?: string[], format: DicomSegFormat = 'seg') =>
+    successfulDicomSegDelivery(history.value, structureIds, destination, encodingVersion(format), overlapPriority, format);
   const preparedFile = (structureIds: string[], overlapPriority?: string[]) =>
     preparedDicomSegFile(history.value, structureIds, availability.value?.encoding_version, overlapPriority);
   const sourceKey = computed(() => JSON.stringify([options.source().caseId, options.source().revisionId]));
@@ -146,16 +150,20 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       }
     }
   }
-  async function start(structureIds: string[], destination: string | null, resend = false, overlapPriority?: string[]) {
+  async function start(structureIds: string[], destination: string | null, resend = false, overlapPriority?: string[], format: DicomSegFormat = 'seg') {
+    const roi = format === 'osirix_roi';
+    // OsiriX ROIs keep overlapping masks as they are, so they never carry a ranking.
+    if (roi) overlapPriority = undefined;
     if (
       disposed ||
       options.blocked() ||
       locked.value ||
       statusError.value ||
       !availability.value?.available ||
+      (roi && !availability.value.osirix_roi) ||
       !structureIds.length ||
       (destination !== null && !availability.value.destinations.some(item => item.id === destination)) ||
-      (resend && (destination === null || !alreadySent(structureIds, destination, overlapPriority)))
+      (resend && (destination === null || !alreadySent(structureIds, destination, overlapPriority, format)))
     )
       return;
     await submit(
@@ -164,6 +172,7 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
         destination,
         ...(resend ? { resend: true } : {}),
         ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
+        ...(roi ? { format: 'osirix_roi' as const } : {}),
       },
       'Refresh export status before trying again; the request may already have reached the workstation.',
     );

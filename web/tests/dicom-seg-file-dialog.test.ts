@@ -206,12 +206,46 @@ describe('a case that cannot produce a file', () => {
 });
 
 describe('a case imported from a reachable Orthanc', () => {
-  const orthanc = () =>
+  const orthanc = (values: Partial<DicomSegAvailability> = {}) =>
     availability({
       available: true,
       reason: undefined,
       destinations: [{ id: 'osirix', name: 'OsiriX' }],
+      osirix_roi: { encoding_version: 1 },
+      ...values,
     });
+  type RoiResult = NonNullable<NonNullable<DicomSegExportJob['result']>['osirix_roi']>;
+  const roiJob = (status: DicomSegExportJob['status'], result: Partial<RoiResult> = {}, values: Partial<DicomSegExportJob> = {}): DicomSegExportJob => ({
+    ...fileJob(status),
+    kind: 'orthanc_roi_export',
+    result: {
+      osirix_roi: {
+        encoding_version: 1,
+        export_id: 'roi-a',
+        archived: true,
+        sent: true,
+        segments_count: 2,
+        roi_count: 37,
+        instance_count: 20,
+        structure_ids: ['heart', 'lung'],
+        destination: 'OsiriX',
+        destination_id: 'osirix',
+        ...result,
+      },
+    },
+    ...values,
+  });
+  const radio = (view: Awaited<ReturnType<typeof dialog>>, value: string) =>
+    view.all(element => element.tagName === 'INPUT' && (element as unknown as { _value: string })._value === value)[0] as unknown as HTMLInputElement;
+  async function choose(view: Awaited<ReturnType<typeof dialog>>, format: string, destination?: string) {
+    radio(view, format).dispatchEvent(new Event('change'));
+    if (destination) {
+      const select = view.all(element => element.tagName === 'SELECT')[0] as unknown as HTMLSelectElement;
+      for (const option of select.options) option.selected = (option as unknown as { _value: string })._value === destination;
+      select.dispatchEvent(new Event('change'));
+    }
+    await settled();
+  }
 
   it('offers the file beside archive and send', async () => {
     const view = await dialog(orthanc());
@@ -225,5 +259,47 @@ describe('a case imported from a reachable Orthanc', () => {
     const view = await dialog(availability({ reason: 'The configured Orthanc archive is unavailable. Retry its connection.' }));
     expect(disabled(view.button('Prepare SEG file'))).toBe(false);
     expect(view.text()).toContain('Archive and send are unavailable. The configured Orthanc archive is unavailable.');
+  });
+  it('offers OsiriX ROIs only when archive and send are ready', async () => {
+    expect(radio(await dialog(availability({ osirix_roi: { encoding_version: 1 } })), 'osirix_roi'), 'a folder case').toBeUndefined();
+    expect(radio(await dialog(orthanc({ osirix_roi: undefined })), 'osirix_roi'), 'a server without them').toBeUndefined();
+    const view = await dialog(orthanc());
+    expect(radio(view, 'seg').checked).toBe(true);
+    expect(view.text()).toContain('Archive and send can also make OsiriX ROIs.');
+  });
+  it('drops the file and the ranking for OsiriX ROIs, and asks for the format alone', async () => {
+    const view = await dialog(orthanc()),
+      create = vi.spyOn(api, 'exportDicomSeg').mockResolvedValue(roiJob('completed', { sent: false, destination: undefined, destination_id: undefined }));
+    const overlaps = view.all(element => element.tagName === 'INPUT' && element.parentNode?.textContent === 'Resolve overlaps in this export')[0];
+    (overlaps as unknown as HTMLInputElement).checked = true;
+    overlaps.dispatchEvent(new Event('change'));
+    await settled();
+    expect(view.text()).toContain('Where masks overlap');
+    await choose(view, 'osirix_roi');
+    expect(view.button('Prepare SEG file')).toBeUndefined();
+    expect(view.text()).not.toContain('Resolve overlaps');
+    expect(view.text()).toContain('Experimental: check them in OsiriX.');
+    click(view.button('Archive in Orthanc'));
+    await settled();
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      'case-a',
+      'revision-a',
+      { structure_ids: ['heart', 'lung'], destination: null, format: 'osirix_roi' },
+      expect.any(AbortSignal),
+    );
+    expect(view.text()).toContain('2 masks archived in Orthanc as 37 OsiriX ROIs on 20 slices.');
+  });
+  it('reopens on OsiriX ROIs after sending them, and offers Send again for them alone', async () => {
+    const view = await dialog(orthanc({ exports: [roiJob('completed')] }));
+    expect(radio(view, 'osirix_roi').checked).toBe(true);
+    await choose(view, 'osirix_roi', 'osirix');
+    expect(view.button('Send again to OsiriX')).toBeDefined();
+    await choose(view, 'seg');
+    expect(view.button('Send to OsiriX')).toBeDefined();
+  });
+  it('restores the masks of an unfinished ROI export, so a retry reuses its instances', async () => {
+    const view = await dialog(orthanc({ exports: [roiJob('failed', { structure_ids: ['lung'] })] }));
+    expect(radio(view, 'osirix_roi').checked).toBe(true);
+    expect(view.text()).toContain('Masks · 1 of 2 selected');
   });
 });

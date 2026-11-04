@@ -9,6 +9,7 @@ import {
   preparedDicomSegFile,
   savedRevisionExportBlockReason,
   unfinishedOverlapRanking,
+  unfinishedRoiSelection,
   successfulDicomSegDelivery,
   type DicomSegAvailability,
   type DicomSegExportJob,
@@ -40,6 +41,27 @@ const seg = (status: DicomSegExportJob['status'], result: Partial<SegResult> = {
         segments_count: 2,
         instance_count: 1,
         structure_ids: ['heart', 'lung'],
+        destination_id: 'osirix',
+        ...result,
+      },
+    },
+    ...values,
+  });
+/** An OsiriX ROI job; by default heart and lung as 37 ROIs on 20 slices, archived and sent to OsiriX. */
+const roi = (status: DicomSegExportJob['status'], result: Partial<SegResult> = {}, values: Partial<DicomSegExportJob> = {}) =>
+  job(status, {
+    kind: 'orthanc_roi_export',
+    result: {
+      osirix_roi: {
+        export_id: 'roi-a',
+        encoding_version: 1,
+        archived: true,
+        sent: true,
+        segments_count: 2,
+        roi_count: 37,
+        instance_count: 20,
+        structure_ids: ['heart', 'lung'],
+        destination: 'OsiriX',
         destination_id: 'osirix',
         ...result,
       },
@@ -502,6 +524,55 @@ describe('cancelling an export', () => {
     await state.cancel();
     expect(state.job.value?.id).toBe('export-1');
     expect(state.error.value).toContain('different job');
+    scope.stop();
+  });
+});
+
+describe('OsiriX ROI export', () => {
+  it('reports ROI counts, archive and cancellation in its own words', () => {
+    expect(dicomSegExportSummary(roi('completed'))).toBe('2 masks sent to OsiriX as 37 OsiriX ROIs on 20 slices.');
+    expect(dicomSegExportSummary(roi('completed', { sent: false, segments_count: 1, roi_count: 1, instance_count: 1 }))).toBe(
+      '1 mask archived in Orthanc as 1 OsiriX ROI on 1 slice. Nothing was sent to another viewer.',
+    );
+    expect(dicomSegExportSummary(roi('cancelled'))).toBe('Export cancelled. The OsiriX ROIs had already reached Orthanc and stay there. Nothing was sent.');
+    expect(dicomSegExportSummary(roi('cancelled', { archived: false }))).toBe('Export cancelled.');
+  });
+  it('counts a send only for the format that made it, and keeps an unfinished ROI selection', () => {
+    expect(successfulDicomSegDelivery([roi('completed')], ['heart', 'lung'], 'osirix', 1, undefined, 'osirix_roi')).toBe(true);
+    expect(successfulDicomSegDelivery([roi('completed')], ['heart', 'lung'], 'osirix')).toBe(false);
+    expect(successfulDicomSegDelivery([seg('completed')], ['heart', 'lung'], 'osirix', undefined, undefined, 'osirix_roi')).toBe(false);
+    expect(successfulDicomSegDelivery([roi('failed'), seg('completed')], ['heart', 'lung'], 'osirix'), 'a failed ROI send is not a failed SEG one').toBe(true);
+    expect(unfinishedRoiSelection(roi('failed'))).toEqual(['heart', 'lung']);
+    expect(unfinishedRoiSelection(roi('completed'))).toBeUndefined();
+    expect(unfinishedRoiSelection(seg('failed'))).toBeUndefined();
+    expect(unfinishedOverlapRanking(roi('failed'))).toBeUndefined();
+  });
+  it('posts the format with no ranking, and checks each format against its own encoding version', async () => {
+    const { scope, state, create } = await loaded(
+      availability({ encoding_version: 3, osirix_roi: { encoding_version: 1 }, exports: [roi('completed', { structure_ids: ['heart'] })] }),
+    );
+    expect(state.alreadySent(['heart'], 'osirix', undefined, 'osirix_roi')).toBe(true);
+    expect(state.alreadySent(['heart'], 'osirix')).toBe(false);
+    await state.start(['heart'], 'osirix', true);
+    expect(create, 'a ROI send is not a SEG to send again').not.toHaveBeenCalled();
+    await state.start(['heart'], 'osirix', true, undefined, 'osirix_roi');
+    expect(create).toHaveBeenLastCalledWith(
+      'case-a',
+      'revision-a',
+      { structure_ids: ['heart'], destination: 'osirix', resend: true, format: 'osirix_roi' },
+      expect.any(AbortSignal),
+    );
+    await state.start(['heart', 'lung'], null, false, ['lung', 'heart'], 'osirix_roi');
+    expect(create).toHaveBeenLastCalledWith(
+      'case-a',
+      'revision-a',
+      { structure_ids: ['heart', 'lung'], destination: null, format: 'osirix_roi' },
+      expect.any(AbortSignal),
+    );
+    vi.mocked(api.dicomSegAvailability).mockResolvedValue(availability());
+    await state.load();
+    await state.start(['heart'], null, false, undefined, 'osirix_roi');
+    expect(create, 'a server that offers no OsiriX ROIs gets no request for them').toHaveBeenCalledTimes(2);
     scope.stop();
   });
 });

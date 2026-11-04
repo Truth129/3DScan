@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { dicomSegFileUrl } from '../lib/api';
-import { defaultOverlapOrder, dicomSegExportSummary, moveOverlapRank, nonemptySavedStructures, unfinishedOverlapRanking } from '../lib/dicom-seg';
+import {
+  defaultOverlapOrder,
+  dicomSegExportSummary,
+  exportFormat,
+  moveOverlapRank,
+  nonemptySavedStructures,
+  unfinishedOverlapRanking,
+  unfinishedRoiSelection,
+  type DicomSegFormat,
+} from '../lib/dicom-seg';
 import { prettyName } from '../lib/geometry';
 import { sessionFailure, startDownload } from '../lib/session';
 import { useDicomSegExport } from '../lib/use-dicom-seg-export';
@@ -16,7 +25,9 @@ const dialog = ref<HTMLDialogElement>(),
   selected = ref<string[]>([]),
   destination = ref(''),
   resolveOverlaps = ref(false),
-  overlapOrder = ref<string[]>([]);
+  overlapOrder = ref<string[]>([]),
+  format = ref<DicomSegFormat>('seg'),
+  formatName = useId();
 const structures = computed(() => nonemptySavedStructures(props.revision.structures));
 const visibleIds = computed(() => visibleVolumeMaskIds(structures.value, props.display));
 const {
@@ -45,19 +56,24 @@ const {
 const disabled = computed(() => props.disabledReason || (!structures.value.length ? 'This saved revision has no nonempty masks to export.' : ''));
 const orthancReady = computed(() => !!availability.value?.available);
 const fileReady = computed(() => !!availability.value?.file?.available);
+/** OsiriX ROIs go only through Orthanc, and only when this server can make them. */
+const roiReady = computed(() => orthancReady.value && !!availability.value?.osirix_roi);
+const roi = computed(() => roiReady.value && format.value === 'osirix_roi');
+const chosenFormat = computed<DicomSegFormat>(() => (roi.value ? 'osirix_roi' : 'seg'));
+const roiJob = computed(() => !!job.value && exportFormat(job.value) === 'osirix_roi');
 const blocked = computed(() => !!disabled.value || locked.value || !!statusError.value || !selected.value.length);
 const actionDisabled = computed(() => blocked.value || !orthancReady.value);
 /** Hide what this case cannot use, unless the disabled buttons are all that is left to explain it, with no reason given. */
 const showOrthanc = computed(() => orthancReady.value || (!fileReady.value && !availability.value?.reason));
 const description = computed(() =>
   orthancReady.value
-    ? 'Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.'
+    ? `Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.${roiReady.value ? ' Archive and send can also make OsiriX ROIs.' : ''}`
     : 'Choose the masks from this saved revision, then save them as a DICOM SEG file.',
 );
 const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
 const ranked = computed(() => overlapOrder.value.filter(id => selected.value.includes(id)));
-const overlapPriority = computed(() => (resolveOverlaps.value && ranked.value.length > 1 ? ranked.value : undefined));
-const repeatDelivery = computed(() => !!target.value && alreadySent(selected.value, target.value.id, overlapPriority.value));
+const overlapPriority = computed(() => (!roi.value && resolveOverlaps.value && ranked.value.length > 1 ? ranked.value : undefined));
+const repeatDelivery = computed(() => !!target.value && alreadySent(selected.value, target.value.id, overlapPriority.value, chosenFormat.value));
 const prepared = computed(() => preparedFile(selected.value, overlapPriority.value));
 const unfinishedRanking = computed(() => unfinishedOverlapRanking(job.value));
 const retryMatches = computed(() => JSON.stringify(unfinishedRanking.value) === JSON.stringify(overlapPriority.value));
@@ -86,7 +102,10 @@ async function open() {
   await nextTick();
   dialog.value?.querySelector<HTMLButtonElement>('[aria-label="Close DICOM SEG export"]')?.focus();
   await load();
-  if (first) restoreUnfinishedRanking();
+  if (first) {
+    restoreUnfinishedRanking();
+    restoreRoiExport();
+  }
 }
 /** The job's retry text promises its exact SEG, which a reset panel would not request. */
 function restoreUnfinishedRanking() {
@@ -95,6 +114,13 @@ function restoreUnfinishedRanking() {
   selected.value = [...ranking];
   overlapOrder.value = [...new Set([...ranking, ...overlapOrder.value])];
   resolveOverlaps.value = true;
+}
+/** Reopen on the format last used here, and on an unfinished ROI export's masks, so a retry reuses its instances. */
+function restoreRoiExport() {
+  if (!roiJob.value) return;
+  format.value = 'osirix_roi';
+  const ids = unfinishedRoiSelection(job.value);
+  if (ids?.every(id => structures.value.some(item => item.id === id))) selected.value = [...ids];
 }
 function close() {
   dialog.value?.close();
@@ -119,14 +145,8 @@ onBeforeUnmount(() => dialog.value?.close());
 </script>
 
 <template>
-  <button
-    class="button secondary compact dicom-seg-action"
-    type="button"
-    :disabled="!!disabled"
-    :title="disabled || 'Export saved masks as DICOM SEG.'"
-    @click="open"
-  >
-    {{ pending ? 'Exporting SEG…' : 'Export SEG…' }}
+  <button class="button secondary compact dicom-seg-action" type="button" :disabled="!!disabled" :title="disabled || 'Export saved masks.'" @click="open">
+    {{ pending ? (roiJob ? 'Exporting ROIs…' : 'Exporting SEG…') : 'Export SEG…' }}
   </button>
   <dialog
     ref="dialog"
@@ -172,7 +192,13 @@ onBeforeUnmount(() => dialog.value?.close());
         <template v-if="structures.length !== revision.structures.length">Empty masks are excluded. </template>The anatomy list changes this selection only when
         you choose Select visible.
       </p>
-      <div v-if="selected.length > 1" class="overlap-options">
+      <fieldset v-if="roiReady" class="format-options">
+        <legend>Format</legend>
+        <label><input v-model="format" type="radio" :name="formatName" value="seg" /><span>DICOM SEG</span></label
+        ><label><input v-model="format" type="radio" :name="formatName" value="osirix_roi" /><span>OsiriX ROIs</span></label>
+        <p v-if="roi" class="help">One native OsiriX brush ROI per mask on each CT slice, for OsiriX MD. Experimental: check them in OsiriX.</p>
+      </fieldset>
+      <div v-if="selected.length > 1 && !roi" class="overlap-options">
         <label class="overlap-toggle"><input v-model="resolveOverlaps" type="checkbox" /><span>Resolve overlaps in this export</span></label>
         <template v-if="resolveOverlaps">
           <p class="help">
@@ -216,7 +242,9 @@ onBeforeUnmount(() => dialog.value?.close());
       <template v-if="pending"
         ><span class="spinner"></span>
         <div>
-          <strong>{{ cancelling ? 'Cancelling export' : job.status === 'queued' ? 'Export queued' : 'Exporting DICOM SEG' }}</strong>
+          <strong>{{
+            cancelling ? 'Cancelling export' : job.status === 'queued' ? 'Export queued' : roiJob ? 'Exporting OsiriX ROIs' : 'Exporting DICOM SEG'
+          }}</strong>
           <p>{{ job.stage }}</p>
         </div>
         <button
@@ -234,7 +262,7 @@ onBeforeUnmount(() => dialog.value?.close());
       <template v-else-if="job.status === 'failed'">{{ job.error || 'The export failed. Refresh status before retrying.' }}</template>
       <template v-else>{{ summary }}</template>
     </div>
-    <p v-if="fileReady" class="help">A saved file carries the CT's patient details, so handle it like the study.</p>
+    <p v-if="fileReady && !roi" class="help">A saved file carries the CT's patient details, so handle it like the study.</p>
     <p v-if="pending" class="help">
       {{
         cancellable
@@ -243,7 +271,7 @@ onBeforeUnmount(() => dialog.value?.close());
       }}
     </p>
     <p v-else-if="repeatDelivery" class="help">This selection has already been sent. Send again starts a new delivery of the same DICOM instances.</p>
-    <p v-else-if="unfinishedRanking" class="help">
+    <p v-else-if="unfinishedRanking && !roi" class="help">
       {{ retryMatches ? 'A retry repeats this ranking and reuses the same SEG.' : 'These settings differ from the unfinished export, so they make a new SEG.' }}
     </p>
     <p v-if="error" class="export-error" role="alert">{{ error }}</p>
@@ -260,16 +288,16 @@ onBeforeUnmount(() => dialog.value?.close());
     <footer>
       <button class="button secondary" type="button" @click="close">Close</button>
       <div class="export-actions">
-        <button v-if="fileReady" class="button" :class="orthancReady ? 'secondary' : 'primary'" type="button" :disabled="blocked" @click="saveFile">
+        <button v-if="fileReady && !roi" class="button" :class="orthancReady ? 'secondary' : 'primary'" type="button" :disabled="blocked" @click="saveFile">
           {{ prepared ? 'Download SEG file' : 'Prepare SEG file' }}</button
         ><template v-if="showOrthanc"
-          ><button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null, false, overlapPriority)">
+          ><button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null, false, overlapPriority, chosenFormat)">
             {{ submitting ? 'Queuing…' : 'Archive in Orthanc' }}</button
           ><button
             class="button primary"
             type="button"
             :disabled="actionDisabled || !target"
-            @click="target && start(selected, target.id, repeatDelivery, overlapPriority)"
+            @click="target && start(selected, target.id, repeatDelivery, overlapPriority, chosenFormat)"
           >
             {{ target ? `${repeatDelivery ? 'Send again' : 'Send'} to ${target.name}` : 'Send to viewer' }}
           </button></template
@@ -359,6 +387,26 @@ legend {
 }
 .overlap-options {
   margin-top: 14px;
+}
+.format-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 14px 0 0;
+}
+.format-options legend {
+  padding: 0 0 8px;
+}
+.format-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.format-options .help {
+  flex-basis: 100%;
+  margin: 0;
 }
 .overlap-toggle {
   display: flex;
