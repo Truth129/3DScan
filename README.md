@@ -48,29 +48,21 @@ Open <http://127.0.0.1:9010> and choose **Explore synthetic demo**, or import a 
 
 ## Documentation
 
-| Read this                                | For                                            |
-| ---------------------------------------- | ---------------------------------------------- |
-| [Install](docs/INSTALL.md)               | Linux setup, GPUs, AI models                   |
-| [Configuration](docs/CONFIGURATION.md)   | Every setting in `scan3d.env`                  |
-| [User guide](docs/USER_GUIDE.md)         | Importing, reviewing, correcting and exporting |
-| [Orthanc](docs/ORTHANC.md)               | Connecting to a DICOM archive                  |
-| [Archives](docs/ARCHIVES.md)             | DICOMweb archives and direct DICOM sends       |
-| [Architecture](docs/ARCHITECTURE.md)     | How the system works                           |
-| [API](docs/API.md)                       | HTTP API and data model                        |
-| [Development](docs/DEVELOPMENT.md)       | Tests, checks and project rules                |
+| Read this                              | For                                            |
+| -------------------------------------- | ---------------------------------------------- |
+| [Install](docs/INSTALL.md)             | Linux setup, GPUs, AI models                   |
+| [Configuration](docs/CONFIGURATION.md) | Every setting in `scan3d.env`                  |
+| [User guide](docs/USER_GUIDE.md)       | Importing, reviewing, correcting and exporting |
+| [Orthanc](docs/ORTHANC.md)             | Connecting to an Orthanc archive               |
+| [Archives](docs/ARCHIVES.md)           | DICOMweb archives and direct DICOM sends       |
+| [Architecture](docs/ARCHITECTURE.md)   | How the system works                           |
+| [API](docs/API.md)                     | HTTP API and data model                        |
+| [Development](docs/DEVELOPMENT.md)     | Tests, checks and project rules                |
 
 ## Platform support
 
-3DScan runs on Linux.
-
-| Setup                                                | Status                                                        |
-| ---------------------------------------------------- | ------------------------------------------------------------- |
-| Ubuntu 24.04 and 26.04, CPU                          | Verified on clean machines. Slow on full-size CTs             |
-| AMD GPU (gfx1201) with ROCm                          | Used extensively                                              |
-| NVIDIA RTX 5070 Ti beside an AMD Radeon AI PRO R9700 | Supported as a [second GPU](docs/INSTALL.md#add-a-second-gpu), for TotalSegmentator and AI assist |
-| NVIDIA as the only GPU (`--torch cuda`)              | Untested                                                      |
-| Other Linux distributions, arm64                     | Expected to work, untested unless listed in the install guide |
-| macOS, Windows                                       | Not supported                                                 |
+3DScan runs on Linux, not macOS or Windows. [INSTALL.md](docs/INSTALL.md) lists the tested
+distributions and GPUs.
 
 ## Safety and privacy
 

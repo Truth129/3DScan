@@ -14,130 +14,111 @@ empty Library and in the import dialog, opens a phantom with ready-made masks an
 
 ## Sign in
 
-On the default `127.0.0.1` address sign-in is off and the app opens directly. On any other address,
-or with `SCAN3D_AUTH=password`, everyone needs an account. See
-[configuration](CONFIGURATION.md#sign-in).
+Sign-in is off on the default `127.0.0.1` address. On any other address, or with
+`SCAN3D_AUTH=password`, everyone needs an account: see [configuration](CONFIGURATION.md#sign-in).
+Over a network, use the HTTPS address.
 
-**First account.** The app shows this command until an account exists. Run it on the workstation:
+**First account.** Until an account exists, the app shows this command. Run it on the workstation:
 
 ```bash
 .venv/bin/scan3d users add NAME --admin
 ```
 
-It asks for a password of 10 to 1,024 characters, twice. `--display-name` sets the name shown in the
-header. The first admin receives every case that has no owner.
+It asks for a password of 10 to 1,024 characters. `--display-name` sets the name in the header.
 
-**Setting your password.** An admin sends you a link from **People**. Open it, type a password of
-10 to 1,024 characters twice and choose **Set password**. That signs you in, in place of anyone
-signed in on this browser. The link works once, within a day; if it has expired or was used, ask
-for a new one. Set your password as soon as you open the link: the browser's history keeps the link,
-which works until it is used, and an admin's new link ends one left unused.
+**Setting your password.** Open the link an admin sent you, type a password twice and choose **Set
+password**. That signs you in, in place of anyone signed in on this browser. The link works once,
+within a day, and the browser's history keeps it until then, so use it promptly. If it has expired
+or was used, ask for a new one.
 
-**Signing in.** Enter your username and password. Over a network, use the HTTPS address. Everyone
-signed in sees and works on the same cases. You land on the [Library](#library), and a reload stays
-on your case.
+**Signing in.** Everyone signed in sees and works on the same cases. A session lasts 30 days from
+its last use. If it ends while you work, sign in again as the same person to carry on with your
+marks intact. Signing in as someone else reloads the page.
 
 **Shared computer.** Tick this on a computer other people use. You are signed out when the browser
-closes, and after 12 hours at most, and the browser stores no scan data for this session.
+closes, or after 12 hours at most, and the browser stores no scan data for the session.
 
-**Signing out.** Choose your name in the header, then **Sign out**. **Sign out other devices** ends
-this account's other sessions and keeps this one.
+Choose your name in the header for **Sign out**, or **Sign out other devices** to end this account's
+other sessions. For a forgotten password, ask an admin for a reset link; an admin with nobody to ask
+uses `scan3d users passwd` on the [command line](#command-line).
 
-**People.** An admin adds people on the Library's **People** tab. Enter a username, an optional
-display name and a role, choose **Add and make link**, then **Copy link** and send it to the person.
-The link works once, within a day, and lets them set their password. Make it through the HTTPS
-address, because a link made on `127.0.0.1` works only on that computer.
+Anyone with a shell on the machine can still read every file, so protect the machine and the data
+directory as well.
+
+### People
+
+An admin adds people on the Library's **People** tab. Enter a username, an optional display name
+and a role, choose **Add and make link**, then **Copy link** and send it. Make links through the
+HTTPS address, because a link made on `127.0.0.1` works only on that computer.
 
 A member works on every case but has no People or Storage tab, cannot delete forever and cannot
-change the TotalSegmentator key. **Turn archive off** stops a person using Orthanc. Each row shows
-the role, archive access, and when the person was last seen or until when their link works. The tab
-reads the list again when you return to it, and stops showing a link once it no longer works.
+change the TotalSegmentator key. Changes on a person's row apply from their next request:
 
-**Reset link** makes a new link and ends any earlier one, for a forgotten password or a link sent to
-the wrong place. A reset link for yourself changes your own password. **Sign out everywhere** ends
-the person's sessions, and **Disable** also ends their links and stops them signing in until
-**Enable**. Jobs they started still finish. The links an admin made end for good when they are
-disabled, made a member or given a new password.
+| Control                                            | Effect                                                                                            |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Make member** or **Make administrator**          | Changes the role.                                                                                 |
+| **Turn archive off**                               | Stops Orthanc, DICOMweb and direct DICOM sends for the person. Files still download.              |
+| **Reset link** (**New invite link** for an invite) | Makes a new link and ends any earlier one. For yourself, it changes your own password.            |
+| **Sign out everywhere**                            | Ends the person's sessions.                                                                       |
+| **Disable**                                        | Also ends their links and stops them signing in until **Enable**. Jobs they started still finish. |
 
-Changes apply from the person's next request. Nobody changes their own role or disables themselves,
-and the last admin who can sign in cannot be made a member or disabled.
-
-**When a session ends.** A session lasts 30 days from its last use. If yours ends while you work, a
-sign-in screen covers the page. Sign in as the same person and the page carries on with your marks
-intact. Signing in as someone else reloads the page.
-
-**Forgotten password.** Ask an admin for a reset link from **People**. An admin with nobody to ask
-runs this on the workstation. It also signs the account out everywhere and ends links for or by it:
-
-```bash
-.venv/bin/scan3d users passwd NAME
-```
-
-`.venv/bin/scan3d users list` shows the accounts, with role, archive access and state. Anyone with
-a shell on the machine can still read every file, so protect the machine and the data directory as
-well.
+Nobody changes their own role or disables themselves, and the last admin who can sign in cannot be
+made a member or disabled. The links an admin made stop working when that admin is disabled, made a
+member or given a new password.
 
 ## Library
 
-The Library lists every case, the ones you opened last first. A case someone else added says
-**Added by** and their name. Cases made on the command line name the oldest admin. Choose the case
-name in the header to open it, over the case you are working on. **Esc** or **×** returns to that
-case exactly as you left it, and choosing the case's own row does the same.
+The Library lists every case, the ones you opened last first, with **Added by** on cases someone
+else added. Cases made on the command line or with sign-in off name the oldest admin. Choose the
+case name in the header to open the Library; **Esc** or **×** returns to your case.
 
-**Finding a case.** Type in **Search cases**. Every word must appear in the case name, who added it,
-a series description or modality, or the status. **Enter** opens the first match. A search stays in
-your browser.
+- **Search cases:** every word must appear in the case name, who added it, a series description or
+  modality, or the status. **Enter** opens the first match.
+- **Rename**, then **Save**. Do not put patient identifiers in a case name. A case still importing
+  can be renamed once the import finishes.
+- **Move to Trash** deletes nothing and asks for no confirmation. It saves marks in progress first,
+  and the message says if any could not be. **Undo** shows for 10 seconds and reopens the case if
+  it was open and you have not opened another; after that, anyone can choose **Restore** on the
+  shared **Trash** tab.
 
-**Renaming.** Choose **Rename** on a row, then **Save**. Do not put patient identifiers in a case
-name. A case that is still importing can be renamed when the import finishes.
-
-**Moving to Trash.** Choose **Move to Trash** on a row. Nothing is deleted, so it asks for no
-confirmation. **Undo** shows for 10 seconds, and reopens the case if it was open and you have not
-opened another. After that, choose **Restore** on the **Trash** tab. Marks in progress are saved
-first, and the message says if any could not be.
-
-A case in Trash still uses disk space until an admin deletes it forever. Trash is shared, and anyone
-can restore a case from it. Moving a case to Trash stops its jobs and they do not restart, but a send
-Orthanc has started finishes. While a case is in Trash, importing it from Orthanc again makes a new
+A case in Trash keeps its disk space. Its jobs stop and do not restart, but a send already started,
+through Orthanc or to a DICOM node, finishes. Importing it from Orthanc again meanwhile makes a new
 case.
 
-**Deleting forever.** Only an admin can. On the **Trash** tab, choose **Delete forever** on a row,
-or **Empty Trash** for every case in Trash, whatever the search shows. With sign-in on, enter your
-password. This cannot be undone. Nothing leaves Trash on its own, so the **Cases** tab tells an
-admin when a case has been there for over 30 days. A member sees **Restore** only.
+**Deleting forever.** Only an admin can: **Delete forever** on a row of the **Trash** tab, or
+**Empty Trash** for every case in Trash, whatever the search shows. With sign-in on, it asks for
+your password. It cannot be undone, and it is an ordinary file delete, not secure erasure.
 
-The dialog lists what stays: studies in Orthanc and series already sent, earlier backups, your
-downloads and the source folder, images in browser caches, and the case ID in the activity log. A
-case whose job or send to Orthanc is still finishing is not deleted yet. The dialog says so, and
-**Try again** tries it again.
+The dialog lists the copies that stay, such as studies in Orthanc, backups and downloads. A case
+whose job or send to Orthanc is still finishing is not deleted yet; choose **Try again** later.
+Nothing leaves Trash on its own, so the **Cases** tab tells an admin about cases there for over 30
+days.
 
-**Storage.** Each row shows the size of its case. An admin also has the **Storage** tab, with the
-totals, the free space, and every case with who added it, its date and its size. Case sizes leave
-out shared caches, which several cases can use at once.
+**Storage.** Each row shows its case's size, leaving out caches that several cases share. An
+admin's **Storage** tab adds the totals, the free space, and every case with who added it, its date
+and its size.
 
-**Clear caches**, on the **Storage** tab, empties the caches that rebuild when next needed, so it
-frees space for a while. Saved surfaces and cases stay. It does not run while jobs run, images load,
-a backup runs or another 3DScan command runs, and the tab says what to wait for.
+**Clear caches**, on that tab, empties the caches that rebuild when next needed; saved surfaces and
+cases stay. It is refused while jobs run, images load, a backup runs or another 3DScan command runs,
+and the tab says what to wait for.
 
-If a case you have open is moved to Trash elsewhere, by someone else or in another tab, the page says
-so, points you to Trash and returns to the Library, within a minute or when you return to the tab.
-If a case will not open, the page says why and you return to the case you had open.
+If a case you have open is moved to Trash elsewhere, the page says so, points you to Trash and
+returns to the Library, within a minute or when you return to the tab. If a case will not open, the
+page says why and returns to the case you had open.
 
 ## Working on the same case
 
 Two people, or two tabs, can work on one case at once, and no saved version or draft is replaced
-unseen.
+unseen. A job or draft someone else started shows **started by** and their name.
 
-**A newer version.** When your page is not running its own work and someone else or another tab
-saves a newer version of the case you have open, the header says so within a minute, or when you
-return to the tab. **Show the newer version** opens it. Until then a refine, a correction, opening
-a series or **Activate** from your page is refused instead of replacing the newer work, and a
+When your page is not running its own work and someone else or another tab saves a newer version,
+the header says so within a minute, or when you return to the tab: choose **Show the newer
+version**. Until then a refine, a correction, opening a series or **Activate** is refused, and a
 correction made on the old version cannot be saved.
 
-**Someone else's job or draft.** A job someone else started says **started by** and their name in
-the header, and a draft they started says so in the review toolbar. **Discard** on their draft names
-them, because it ends their work. If they changed a draft you have open, your page says "Someone
-else or another tab…", offers **Reload saved work** and saves nothing over theirs.
+If another person or tab changed or ran a draft you have open, your page offers **Reload saved
+work** and saves nothing over theirs. If they started the draft first, a mark made here is not
+saved: **Reload saved work** or **Discard draft** opens their draft, so place the mark again there.
 
 ## Import a study
 
@@ -161,18 +142,16 @@ discards the staged files.
 2. Select a study, then one series under **Choose a reconstruction**.
 3. Choose **Import selected series →**.
 
-The series is copied locally and the archive stays unchanged. A series still arriving or
-incomplete cannot be imported. If the expected image count is unknown, 3DScan imports the listed
-images and says so: confirm that the acquisition is complete.
+The series is copied locally and the archive stays unchanged. See
+[Import a series](ORTHANC.md#import-a-series) for which series cannot be imported yet and what to
+confirm.
 
-**DICOMweb archive.** If one is [configured](ARCHIVES.md), it has its own tab with its name, and
-works the same way, with these differences:
+**DICOMweb archive.** A [configured](ARCHIVES.md) archive has a tab with its name and works the
+same way. Searches match exactly unless the archive allows `*` and `?`. A newly listed series shows
+**Import opens in N s** until its image list stays unchanged that long, then the list refreshes.
 
-- Searches match exactly unless the archive allows `*` and `?`.
-- A series newly listed shows **Import opens in N s**. It can be imported once its image list has
-  stayed unchanged that long. The list refreshes itself when the count ends.
-- **Import again** copies the series once more, as a new case. Use it if the archive may have
-  replaced files since the earlier import.
+On that tab, **Import again** copies a series once more as a new case. Use it if the archive may
+have replaced its files.
 
 ## Open a series
 
@@ -187,10 +166,8 @@ These fields are labels only: they change no pixels, rendering or tasks. **Selec
 toolbar opens another series and keeps your result, and **Source image** switches between opened
 images.
 
-**Add series from Orthanc** appears under the series list of a case imported from Orthanc, and
-**Add series from DICOM archive** under one from a DICOMweb archive. It lists the rest of that
-study, so several series can share one case. Each series opens on its own and keeps its own
-segments.
+For a case from an archive, **Add series from Orthanc** or **Add series from DICOM archive**, under
+the series list, adds another series of that study. Each series keeps its own segments.
 
 ## Run TotalSegmentator
 
@@ -205,20 +182,19 @@ Each run creates a revision that replaces that task's results **and** any segmen
 anatomical names, including manual corrections. Matching ignores capitalization, underscores and
 whitespace. Other segments are kept, and the earlier revision stays in **Revision history**.
 
-### Compare a second model
-
-**Whole body — MRSegmentator** is a separate model for CT and MRI, with 40 structures. Install it
-once with `scripts/download_segmentation_model.py mrsegmentator`.
-
-- Its segments sit in their own **MRSegmentator** group, named like **Liver (MRSegmentator)**.
-- A run replaces only that model's earlier segments, so TotalSegmentator's stay beside them. The same
-  applies the other way round.
-- It runs alone, without the crop or small-blob options, and always at full settings: five folds.
-
 A task's weights download on its first run. AI jobs run one at a time across all GPUs, on the device
 set by `SCAN3D_DEVICE` unless you [choose another GPU](#choose-a-gpu), and a CPU is much slower.
 Progress shows at the top of the window, with **Cancel job**. Imports, opening a CT, direct edits
 and saves run on a separate queue, so they do not wait behind a segmentation.
+
+### Compare a second model
+
+**Whole body — MRSegmentator** is a separate model for CT and MRI, with 40 structures. Install it
+once with `scripts/download_segmentation_model.py mrsegmentator`. It runs alone, not with other
+tasks, without the crop or small-blob options, and always with all five folds.
+
+Its segments sit in their own **MRSegmentator** group, named like **Liver (MRSegmentator)**. A run
+of either model replaces only that model's earlier segments, so the two sets stay side by side.
 
 ### TotalSegmentator license
 
@@ -237,8 +213,7 @@ stay. License changes wait for queued and running jobs.
 ### Choose a GPU
 
 With [a second GPU set up](INSTALL.md#add-a-second-gpu), **Run on** appears after **Task**. With
-one GPU, skip this section. An NVIDIA RTX 5070 Ti is supported as a second GPU beside an AMD Radeon
-AI PRO R9700, for segmentation and AI assist.
+one GPU, skip this section.
 
 **Run on** lists each GPU with its memory and starts on the default. Your browser remembers your
 choice, separately for segmentation and [AI assist](#choose-a-gpu-for-ai-assist). A line under the
@@ -292,8 +267,8 @@ Three linked planes share one position, with its patient RAS coordinates and HU 
   centre slice and pauses drawing. **Rotatable crosshairs** adds crosshairs you can rotate.
 - **Overlays:** **Segments** chooses what shows, **Use selected segment** follows the selection and
   **Clear overlays** shows CT alone. **Fill**, **Outline** and **2D overlay opacity** set the style.
-- **Colors:** bones are yellow so they show against bright bone. Change any color under
-  **Selected structure**. Your browser keeps it.
+- **Colors:** bones are yellow. Change any color under **Selected structure**; your browser keeps
+  it.
 
 Tilted-gantry (sheared) scans are straightened for display only. Your marks still map to the
 original voxels.
@@ -305,8 +280,9 @@ rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and 
 **Escape** returns.
 
 - **All segment opacity** works with **CT volume** visible: CT in front of a segment covers it,
-  and CT behind shows through. If the browser cannot do this, segments stay solid and the
-  **Rendering stack** says why.
+  and CT behind shows through. If the browser lacks a feature this needs or GPU memory runs short,
+  segments stay solid and the **Rendering stack** says why. If the GPU cannot compile the
+  see-through shader, the 3D view fails instead.
 - **CT plane** shows one native slice: choose **Native i**, **j** or **k**, move its slider, or use
   **Face plane**.
 - Tilted-gantry scans, MRI and the [portable HTML](#portable-offline-html) page use Three.js instead
@@ -324,7 +300,7 @@ These settings change the display only, never source images, masks or measuremen
   **Use visible** or the list, and set **Show volume** to inside or outside. **Display margin**
   retains thin walls.
 - **Color segments** (Cornerstone3D) tints the CT inside chosen segments with their anatomy-list
-  colors, blended by **Color strength**. Change a color under **Selected structure**.
+  colors, blended by **Color strength**.
 - **Lighting and shadows** (Cornerstone3D) sets the **Rendering method**: **Preset lighting**,
   **Standard**, **Cinematic (VolView Hybrid)** or **Ambient occlusion**. **Reset lighting** returns
   to the preset.
@@ -340,7 +316,7 @@ pick the target under **Structure**.
 
 Review opens on your main-page views, and slab projection and rotatable crosshairs pause until
 **Exit review**. **CT volume** starts as you last left it in review, off at first, and **Exit
-review** restores the main page's choice. MRI, tilted-gantry CT and the portable page keep it off.
+review** restores the main page's choice. MRI and tilted-gantry CT keep it off.
 
 - Planes lock to the native source slices.
 - Marks autosave into a draft that survives reloads and restarts. Accepted masks change only when
@@ -364,25 +340,23 @@ Then choose **Apply edits · N**.
 
 ### AI assist
 
-**AI assist** uses nnInteractive for larger corrections. It can change voxels far beyond your marks:
-one mark can remove other separate parts of the segment or loops of a folded tube, and an Exclude
-on a large leak can remove much of the organ.
-It needs the [model installed](INSTALL.md#ai-models), whose pretrained checkpoint is licensed for
-noncommercial use only. Inference stays on your computer and never trains the model.
+**AI assist** uses nnInteractive for larger corrections. It needs the
+[model installed](INSTALL.md#ai-models), whose pretrained checkpoint is licensed for noncommercial
+use only. Inference stays on your computer and never trains the model.
+
+It can change voxels far beyond your marks: one mark can remove other separate parts of the
+segment or loops of a folded tube, and an Exclude on a large leak can remove much of the organ.
 
 1. Choose **+ Include** or **− Exclude**.
 2. Mark with **Point**, **Hint brush**, **Lasso** or **Box** (2D, on one native slice).
 3. Choose **Run AI · N** once for all pending marks. This can take a minute or more, even on a GPU.
 
-- To keep separate parts or a long tube, mark every part, or points along the whole tube, in the
-  same **Run AI**.
-- Draw a long, thin structure as several shorter **Hint brush** strokes. One long stroke can update
-  only part of its length.
-- Prefer **Lasso** to **Box** on a large or irregular structure. A box can spread into its empty
-  corners and the neighbouring organs.
-- A new mark after **↶ Undo** continues from the stored result of the last whole **Run AI** before
-  it. Marks of a **Run AI** that the Undo went inside run again, which can move voxels you already
-  checked.
+- Mark every separate part, or points along the whole of a long tube, in one **Run AI**.
+- Draw a long, thin structure as several short **Hint brush** strokes, not one long one.
+- Prefer **Lasso** to **Box** on a large or irregular structure, where a box spreads into its
+  corners and neighbouring organs.
+- A mark after **↶ Undo** continues from the last whole **Run AI** before it, and reruns marks of a
+  run the Undo went inside, which can move voxels you already checked.
 
 A warning beside **Exit review** says when a result removes 5% or more of the mask's interior, the
 part over 2 mm inside, more than 40 mm from every mark. The volume line can hide such a loss, so
@@ -394,10 +368,8 @@ check the whole structure on the CT and in 3D before saving.
 - **Automatically focus inference**, on by default
 - **Start from an empty mask**, which leaves the saved mask unchanged
 - **Refine whole mask**, a slower extra model stage. The marks made before it keep guiding later
-  runs.
-
-If **Refine whole mask** fails or is cancelled with no marks waiting, the result before it stays
-and can be saved.
+  runs. If it fails or is cancelled with no marks waiting, the result before it stays and can be
+  saved.
 
 Save or discard your draft before switching between **Direct edit** and **AI assist**.
 
@@ -407,35 +379,27 @@ With [a second GPU set up](INSTALL.md#add-a-second-gpu), **Options +** adds **Ru
 same [status lines and **Check again**](#choose-a-gpu), and the toolbar shows **AI ·** and the GPU
 in use. Neither appears with one GPU or in **Direct edit**.
 
-The first AI result holds the draft on its GPU. **AI result from** beside **Exit review** names it,
-as does **Revision history** once you save. These free the draft and drop the current result:
+The first AI result holds the draft on its GPU, named by **AI result from** beside **Exit review**
+and, once you save, in **Revision history**. These free the draft and drop the current result:
 
 - **↶ Undo** past the first result, unless it came from **Refine whole mask** with no marks
 - changing **Automatically focus inference** or **Start from an empty mask**
 
 A held draft shows **Re-run draft on** instead of **Run on**. To move it, choose a GPU there, then
-**Re-run on this GPU**. A re-run:
+**Re-run on this GPU**. A re-run repeats every Apply step from the original mask, with any pending
+marks last, and replaces the current result only when it finishes.
 
-- repeats every Apply step from the original mask, with any pending marks last
-- replaces the current result only when it finishes
-- can change regions where you made no marks. If voxels of the result you saw moved, a warning beside
-  **Exit review** says how many, so inspect the new result before saving
+A re-run can change regions you did not mark: a warning beside **Exit review** counts any voxels of
+the result you saw that moved. If it fails or is cancelled, the old result stays visible but cannot
+be saved; re-run again or choose **Discard draft**. Your marks are never lost.
 
-If a re-run fails or is cancelled, the old result stays visible but cannot be saved. Choose
-**Re-run on this GPU** again, or **Discard draft**. Your marks are never lost.
+**If a GPU cannot be used**, a message beside **Exit review** says why, with **Check again**, and
+**Run AI** and **Refine whole mask** stop. Choose another GPU, or re-run or discard a draft that has
+a result. Work that needs no GPU continues.
 
-**If a GPU cannot be used**, a message beside **Exit review** gives the reason, with **Check
-again**. **Run AI** for marks and **Refine whole mask** stop until it is fixed. Choose another GPU,
-or re-run or discard a draft that has a result. Work that needs no GPU continues.
-
-**If a GPU has been removed**, **Run on** moves to the first available GPU and says so. A draft from
-that GPU keeps **Re-run on this GPU**, even with one GPU left. If the GPU comes back, **Check again**
-clears the message.
-
-**With a draft in two tabs or for two people**, if the other changed or ran the draft, this page
-offers **Reload saved work** and saves nothing over it. If the other started the draft first, a mark
-made here is not saved. **Reload saved work** or **Discard draft** opens that draft and clears the
-mark, so place it again there.
+**If a GPU has been removed**, **Run on** moves to the first available GPU and says so. A draft
+from the removed GPU keeps **Re-run on this GPU**, even with one GPU left. If the GPU comes back,
+**Check again** clears the message.
 
 ### Add a missing structure
 
@@ -445,31 +409,28 @@ Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a re
 ### Mark in the 3D view
 
 **Mark on**, under **Review tools**, selects **Surface point**, which locks picking to the target,
-**Volume point**, or **CT plane**, which takes all the drawing tools on a native slice. Right drag
-rotates while marking, and a 3D point moves the linked CT crosshair so you can confirm it. **Face
-plane** faces the CT plane at any time.
+**CT plane**, which takes all the drawing tools on a native slice, or, with **CT volume** on,
+**Volume point**. Right drag rotates while marking, and a 3D point moves the linked CT crosshair so
+you can confirm it. **Face plane** faces the CT plane at any time.
 
 With **CT volume** on in review:
 
-- **Volume point** takes the first point along your click where the volume turns half opaque, at
-  its nearest voxel centre. **Point** in AI assist adds it as an Include or Exclude point. Other
-  tools, Direct edit's included, move the crosshair there so you can draw on the slices.
+- **Volume point** marks the voxel centre nearest where your click first meets half-opaque volume.
+  In AI assist, **Point** adds it as an Include or Exclude; other tools move the crosshair there.
 - A click on no visible volume, or on an opaque surface or the CT plane in front of it, makes no
-  mark. See-through surfaces do not block it.
-- **Surface point** refuses a surface the volume covers.
+  mark; see-through surfaces do not block it. **Surface point** refuses a surface the volume covers.
 - While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps the
   whole CT in depth.
-- **Mask to segmentation**, **Color segments** and **Cinematic heart** stay off, because they would
-  follow the mask being edited. A Cinematic heart volume shows with the default preset, and
-  returns on **Exit review** unless you choose another preset.
+- **Mask to segmentation**, **Color segments** and **Cinematic heart** stay off. A Cinematic heart
+  volume shows the default preset, and returns on **Exit review** unless you choose another.
 
 **Review tools** starts folded. A mark cannot start underneath it, so fold it to reach that part of
 the view.
 
 ### Toolbar messages and panels
 
-Errors, warnings, results and 3D preview progress appear beside **Exit review**, errors first. Past
-two lines, scroll that area. Some errors carry a button, such as **Retry preview**.
+Errors, warnings, results and 3D preview progress appear beside **Exit review**, errors first, in an
+area that scrolls past two lines. Some errors carry a button, such as **Retry preview**.
 
 **+ Add segment**, **Relationship**, **Impact preview** and **Options +** open over the viewers. A
 mark cannot start underneath an open panel, so choose the button again to fold it.
@@ -500,14 +461,12 @@ existing segment empty at 0 mL, but empty new segments and empty AI candidates c
 ### Undo and revisions
 
 In **Revision history**, **↶ Undo to parent** restores the previous revision exactly, and
-**Activate** switches to any other, unless someone saved a newer version meanwhile; see
-[Working on the same case](#working-on-the-same-case). Nothing is deleted. **Current** and **Before** in the 3D header
+**Activate** switches to any other. Nothing is deleted. **Current** and **Before** in the 3D header
 compare surfaces with the parent, and **Compare CT overlay with parent** does so on the slices.
 
-On a case prepared from a series, once a segmentation is active, **Reset to scan** returns to the
-image with no segmentation by activating its image-only revision. Nothing is deleted, and an open
-draft stays with its version. The case leaves pooled agreement until a segmentation is active
-again. The demo has no image-only revision, so it does not offer this.
+Once a segmentation is active, **Reset to scan** activates the image-only revision, with no
+segmentation. Nothing is deleted, an open draft stays with its version, and the case leaves pooled
+agreement until a segmentation is active again. The demo does not offer it.
 
 To record your review, set **Revision status** under **Review status & tools** to **Unreviewed**,
 **Reviewed** or **Corrected**. It applies to the whole revision.
@@ -530,28 +489,27 @@ For 3D Slicer, expand **External correction with Slicer** under **Review status 
 Volumes are in millilitres, counted from mask voxels.
 
 **Model agreement**, at the top of **Revision history**, compares accepted masks with each
-structure's saved TotalSegmentator output. A later run that replaced a structure becomes its new
-original. **Details** opens the table:
+structure's saved model output. A later run that replaced a structure becomes its new original.
+**Details** opens the table:
 
-| Column         | Meaning                                        |
-| -------------- | ---------------------------------------------- |
-| **Change**     | **Direct edit**, **AI assist\*** or **Other**. |
-| **Dice**       | Voxel overlap. 1 is identical.                 |
-| **HD95**       | Larger 95th-percentile surface distance in mm. |
-| **ΔV**         | Accepted volume minus original volume.         |
-| **Voxels +/−** | Voxels added and removed.                      |
+| Column         | Meaning                                                                                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Change**     | **AI assist\*** if any save since the original used AI assist, **Direct edit** if every save was one, else **Other**, such as a refinement or Slicer import. |
+| **Dice**       | Voxel overlap. 1 is identical.                                                                                                                               |
+| **HD95**       | Larger 95th-percentile surface distance in mm.                                                                                                               |
+| **ΔV**         | Accepted volume minus original volume.                                                                                                                       |
+| **Voxels +/−** | Voxels added and removed.                                                                                                                                    |
 
 **All cases ↗** pools the active revision of each case marked **Reviewed** or **Corrected**, by
 task and structure: how often the model was accepted unchanged, how many were AI-assisted saves,
 Dice and mean absolute ΔV. Synthetic demo cases form a separate pool.
 
-Both views also total changed masks by kind of save. An AI-assisted save keeps the model's own
-rewrite away from your marks, so **AI assist\*** figures overstate your change. A mask counts as
-**AI assist\*** if any save since its original used AI assist, **Direct edit** if every save was a
-direct edit, and **Other** otherwise, such as after a refinement or Slicer import. A save that adds
-a segment counts for each mask it took voxels from.
+Both views also total changed masks by kind of save. A save that adds a segment counts for each
+mask it took voxels from.
 
 - These numbers measure reviewer edits, not ground truth. An uncorrected mask can still be wrong.
+- \*An AI-assisted save includes the model's own changes away from your marks, so its figures
+  overstate your edit.
 - Review status covers a whole revision, so a structure nobody inspected counts as accepted.
 - HD95 ignores the farthest 5% of the surface, so a small fix can show 0 mm while Dice is below 1.
 - Segments added by a reviewer are not compared.
@@ -562,36 +520,40 @@ The HTML, DICOM SEG and DICOM view exports read the saved revision: first save o
 draft, return to the current revision and turn off comparison. Exports can contain patient images
 and metadata, so treat them like the study itself.
 
+**DICOM ↗** and **Export SEG…** deliver to these places, depending on where the CT came from:
+
+| Delivery         | Choose                                                                                              | Needs                                                                                 |
+| ---------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| File             | **Prepare file**, then **Download file** (**Prepare SEG file** and **Download SEG file** for a SEG) | A CT prepared from DICOM, a folder or ZIP import included. No archive.                |
+| Orthanc          | **Archive in Orthanc**, or a **Send destination** and **Send to** it                                | A CT imported from a [configured Orthanc](ORTHANC.md).                                |
+| DICOMweb archive | **Archive in** and the archive's name                                                               | A CT imported from that [archive](ARCHIVES.md#archive-results).                       |
+| DICOM node       | A **Send destination** and **Send to** it                                                           | A CT not from Orthanc, and [configured destinations](ARCHIVES.md#direct-dicom-sends). |
+
+Archiving and sending need archive access on your account; files do not. **Send again**
+deliberately resends the same instances. A DICOM node that does not accept the object is sent
+nothing. If the dialog says a send to a DICOM node may have arrived, check the node before you
+retry, since a retry sends the same instances again.
+
 ### PNG
 
 **PNG ↗** in the 3D view saves the current view, including any review marks.
 
 ### DICOM view
 
-**DICOM ↗** in the 3D view saves the current view as a one-image DICOM file in the original patient
-and study, or adds it to that study in Orthanc as a new series.
-
-- **File.** Choose **Prepare file**, then **Download file**. It needs a CT prepared from DICOM, a
-  folder or ZIP import included, and no archive. The file carries the CT's patient details.
-- **Orthanc.** Choose **Archive in Orthanc**, or pick a **Send destination** and choose **Send to**
-  it. This needs a configured Orthanc, archive access and a CT imported from that archive. See
-  [send a 3D view back](ORTHANC.md#send-a-3d-view-back).
-- **DICOMweb archive.** For a CT imported from one, choose **Archive in** that archive.
-- **DICOM node.** For a CT not imported from Orthanc, pick a **Send destination** and choose **Send
-  to** it, if your site has [configured](ARCHIVES.md#direct-dicom-sends) any.
+**DICOM ↗** in the 3D view saves the current view as a one-image series in the original patient
+and study, delivered as in [Export](#export). For Orthanc, see
+[send a 3D view back](ORTHANC.md#send-a-3d-view-back).
 
 The image is a picture. It has no calibration and no orientation labels, so do not measure on it,
 and nothing in it marks left from right.
 
-- The button is disabled during review and for the same reasons as the other exports. A capture is
-  refused while the view is updating or showing an error.
-- Exporting an unchanged view again delivers nothing new. **Send again** deliberately resends it.
-- After a failure, retry from the dialog. If the dialog has gone, check the study in Orthanc and
-  capture the view again.
-- If the dialog says the outcome is unknown, press the same button again.
-- You can close the dialog during an export. The result appears as a notice, or in the error banner
-  if it fails or cannot be confirmed. A file that finishes after you close the dialog waits for the
-  next **DICOM ↗**, which reopens it with **Download file**.
+- The button is disabled during review and for the same reasons as the other exports, and a capture
+  is refused while the view is updating or showing an error.
+- Exporting an unchanged view again delivers nothing new.
+- After a failure, retry from the dialog, or if it has gone, check the study in Orthanc and capture
+  again. If the dialog says the outcome is unknown, press the same button again.
+- You can close the dialog during an export: the result appears as a notice or in the error banner.
+  A file that finishes meanwhile waits for the next **DICOM ↗**, with **Download file**.
 
 ### Portable offline HTML
 
@@ -614,39 +576,18 @@ overlap-preserving export for 3D Slicer.
 
 ### DICOM SEG
 
-**Export SEG…** works for classic CT from a folder, a ZIP or Orthanc. Selected masks go into one SEG
-object with overlaps preserved. All nonempty masks start selected. **Select visible** takes a
-snapshot of the masks switched on in the anatomy list.
+**Export SEG…** works for classic CT from any import. Selected masks go into one SEG object with
+overlaps preserved. All nonempty masks start selected, and **Select visible** takes a snapshot of
+the masks switched on in the anatomy list.
 
-A SEG uses the colors saved with the segmentation, not ones changed in your browser, so older
-segmentations keep ivory bones.
+Deliver it as in [Export](#export); a file can build with the dialog closed. For Orthanc, see
+[send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back). A SEG uses the colors
+saved with the segmentation, not ones changed in your browser.
 
-To save a file, with no Orthanc needed:
-
-1. Select the masks.
-2. Choose **Prepare SEG file**. You can close the dialog while it builds.
-3. When the button changes, choose **Download SEG file**.
-
-The file carries the CT's patient and study details, so handle it like the study.
-
-If the CT came from a configured Orthanc, you can also choose **Archive in Orthanc**, or pick a
-**Send destination** and choose **Send to** it. See
-[send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back). **Send again**
-deliberately resends the same instances.
-
-If the CT came from a [DICOMweb archive](ARCHIVES.md#archive-results), choose **Archive in** that
-archive.
-
-If the CT did not come from Orthanc and your site has [configured](ARCHIVES.md#direct-dicom-sends)
-DICOM destinations, pick a **Send destination** and choose **Send to** it. The node receives the
-same SEG as the file. If it does not accept SEG, nothing is sent. If the dialog says the send may
-have arrived, check the node before you retry: a retry sends the same SEG again.
-
-**Cancel export** stops an export in progress, but closing the dialog does not. A SEG that has
-reached Orthanc stays there, and a send cannot be stopped once Orthanc has started it.
-
-If the dialog says the CT has no verified original series, prepare its series again. The synthetic
-demo case has none.
+- **Cancel export** stops an export in progress, but closing the dialog does not. A SEG that has
+  reached Orthanc stays there, and a send cannot be stopped once it has started.
+- If the dialog says the CT has no verified original series, prepare its series again. The
+  synthetic demo case has none.
 
 To give each voxel to one structure, tick **Resolve overlaps in this export** and rank the masks
 with the arrows. The higher mask keeps overlapping voxels.
@@ -662,15 +603,14 @@ If the CT came from a configured Orthanc, **Format** also offers **OsiriX ROIs**
 brush ROIs, one per mask on each slice it touches. Choose it, select the masks, then choose
 **Archive in Orthanc** or **Send to** your OsiriX destination.
 
-- Overlaps stay as they are, so there is no ranking, and there is no file to download.
-- Sending ROIs does not count as sending a SEG of the same masks, or the reverse.
-- This format is experimental. It has been checked in OsiriX MD 14.3 on synthetic scans only, so
-  compare the ROIs with the masks before you rely on them.
+Overlaps stay, so there is no ranking, and there is no file. Sending ROIs and sending a SEG of the
+same masks count separately. The format is experimental, checked in OsiriX MD 14.3 on synthetic
+scans only, so compare the ROIs with the masks before you rely on them.
 
 ## Import existing DICOM SEG masks
 
-**Import DICOM SEG…** adds masks made elsewhere to an open CT, whether that CT came from a folder, a
-ZIP or Orthanc. It needs no AI and no Orthanc connection.
+**Import DICOM SEG…** adds masks made elsewhere to an open classic CT, from any import. It needs no
+AI and no archive connection.
 
 1. Open the original CT on its current revision, with no draft open.
 2. Choose **Import DICOM SEG…** and select up to 64 SEG files, 512 MiB in total, not a ZIP or the
@@ -691,18 +631,16 @@ different source. SEG stored in Orthanc is not attached automatically: select th
 ```
 
 Each run writes `scan3d-<UTC time>/` with a database snapshot, the case folders, the saved surfaces
-and a `manifest.json`, and nothing of a case deleted forever. The server can keep running.
+and a `manifest.json`. The server can keep running.
 
 To restore, stop the server and copy a snapshot's contents over the same data directory, since
-records store absolute paths. A snapshot from before November 2026 has no `scan3d.sqlite3-wal`, so
-first move any `scan3d.sqlite3-wal` and `scan3d.sqlite3-shm` out of the data directory.
+records store absolute paths. If the snapshot has no `scan3d.sqlite3-wal`, first move any
+`scan3d.sqlite3-wal` and `scan3d.sqlite3-shm` out of the data directory.
 
 A backup holds patient images, so protect it like the library. It does not cover anything held in
-Orthanc. It keeps cases in Trash, accounts and the audit log but no sessions or set-password links,
-so everyone signs in again after a restore.
-
-A backup taken before a case is deleted forever still holds it, and restoring that backup brings the
-case back. Delete forever is an ordinary file delete, not secure erasure.
+Orthanc. It keeps cases in Trash, accounts and the audit log, but no sessions or set-password links,
+so everyone signs in again after a restore. A case deleted forever stays in earlier backups, and
+restoring one brings it back.
 
 ## Experimental MRI
 
@@ -733,26 +671,32 @@ running, it does the work. Commands ignore Trash, but a job on a case in Trash s
 - `include-all` restores labels filtered out earlier, as a new revision that keeps corrections.
 - `optimize` prepares viewer assets for an older case without changing masks or revisions.
 - `archive-check` checks the configured DICOMweb archive without changing it, and sends C-ECHO to
-  each DICOM destination. See
-  [ARCHIVES.md](ARCHIVES.md#check-an-archive).
+  each DICOM destination. See [ARCHIVES.md](ARCHIVES.md#check-an-archive).
 
 A `refine` recipe is JSON in patient RAS millimetres:
 
 ```json
-{ "type": "erase_region", "bounds_ras": [[-80, -60, -40], [-40, 20, 30]] }
+{
+  "type": "erase_region",
+  "bounds_ras": [
+    [-80, -60, -40],
+    [-40, 20, 30]
+  ]
+}
 ```
 
 The operations are `keep_region` and `erase_region` with `bounds_ras`, and `keep_component` and
 `remove_component` with `seed_ras: [R, A, S]`. Operations with no effect, or that delete a whole
 structure, are rejected.
 
-Accounts can also be changed on the workstation. A change applies from the account's next request:
+Accounts can also be managed on the workstation, with the [People](#people) limits. A change
+applies from the account's next request. `passwd` and `disable` also end the account's sessions and
+links, including links it made, and `enable` brings back neither.
 
 ```bash
+.venv/bin/scan3d users list                 # role, archive access and state
+.venv/bin/scan3d users passwd NAME
 .venv/bin/scan3d users role NAME member     # or admin
 .venv/bin/scan3d users disable NAME
 .venv/bin/scan3d users enable NAME
 ```
-
-`disable` ends the account's sessions and links, and `enable` brings back neither. The last admin
-who can sign in cannot be made a member or disabled.

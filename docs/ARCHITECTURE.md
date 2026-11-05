@@ -7,7 +7,7 @@ and complements a diagnostic viewer rather than replacing one.
 
 [API.md](API.md) is the HTTP contract and data model. To run the software, see
 [INSTALL.md](INSTALL.md), [CONFIGURATION.md](CONFIGURATION.md), [USER_GUIDE.md](USER_GUIDE.md),
-[ORTHANC.md](ORTHANC.md) and [DEVELOPMENT.md](DEVELOPMENT.md).
+[ORTHANC.md](ORTHANC.md), [ARCHIVES.md](ARCHIVES.md) and [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ![3DScan system architecture](diagrams/architecture.svg)
 
@@ -26,42 +26,44 @@ and complements a diagnostic viewer rather than replacing one.
 
 ## Components
 
-| Where    | Component            | Role                                                                     |
-| -------- | -------------------- | ------------------------------------------------------------------------ |
-| Server   | API process          | `scan3d serve`: FastAPI, two lane threads, CPU pools, built viewer files |
-| Server   | TotalSegmentator     | A subprocess per task, started by the GPU lane in the job's interpreter  |
-| Server   | nnU-Net worker       | The same kind of subprocess for a pinned nnU-Net model                   |
-| Server   | nnInteractive worker | A long-lived supervised child with the warm model for one inference path |
-| Browser  | Main thread          | Vue 3 workspace, Cornerstone3D, vtk.js and Three.js rendering            |
-| Browser  | CT worker            | Web Worker that decodes slabs, holds the source and reslices frames      |
-| Optional | Orthanc              | A separate DICOM server, reached only over its REST API                  |
+| Where    | Component            | Role                                                                                  |
+| -------- | -------------------- | ------------------------------------------------------------------------------------- |
+| Server   | API process          | `scan3d serve`: FastAPI, two lane threads, the janitor, CPU pools, built viewer files |
+| Server   | TotalSegmentator     | A subprocess per task, started by the GPU lane in the job's interpreter               |
+| Server   | nnU-Net worker       | The same kind of subprocess for a pinned nnU-Net model                                |
+| Server   | nnInteractive worker | A long-lived supervised child with the warm model for one inference path              |
+| Browser  | Main thread          | Vue 3 workspace, Cornerstone3D, vtk.js and Three.js rendering                         |
+| Browser  | CT worker            | Web Worker that decodes slabs, holds the source and reslices frames                   |
+| Optional | Orthanc              | A separate DICOM server, reached only over its REST API                               |
+| Optional | DICOMweb archive     | Any archive reached over QIDO-RS, WADO-RS and STOW-RS                                 |
+| Optional | DICOM nodes          | Receivers of direct sends by C-STORE                                                  |
 
 ### Code map
 
-| Path                                                                    | Contents                                               |
-| ----------------------------------------------------------------------- | ------------------------------------------------------ |
-| `scan3d/api.py`, `api_*.py`, `api_models.py`                            | HTTP app, error mapping, routes, request bodies        |
-| `scan3d/access.py`, `accounts.py`, `identity.py`                        | Route rules, accounts, sessions, audit, password hash  |
-| `scan3d/service.py`, `store.py`, `config.py`, `__main__.py`             | Lanes, revision building, SQLite, settings, the CLI    |
-| `scan3d/dicom.py`, `enhanced_mr.py`, `modalities.py`, `image_assets.py` | Series validation, conversion, image identity          |
-| `scan3d/segmentation*.py`                                               | TotalSegmentator runs, task catalog, result merging    |
-| `scan3d/nnunet_models.py`, `nnunet_worker.py`                           | Pinned nnU-Net models and their worker                 |
-| `scan3d/review.py`, `relationships.py`, `direct_edit.py`, `scissors.py` | Correction sessions and deterministic edits            |
-| `scan3d/interactive*.py`                                                | nnInteractive engine, worker, batching, prompts        |
-| `scan3d/inference_paths.py`                                             | Inference paths: discovery, binding, child environment |
-| `scan3d/imaging.py`, `surfaces.py`, `surface_glb.py`                    | Masks, measurements, slice geometry, GLB surfaces      |
-| `scan3d/review_volume.py`, `volume_mask_union.py`                       | Volume and frame transport, display unions             |
-| `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange       |
-| `scan3d/disk_usage.py`                                                  | Case sizes and the storage report                      |
-| `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX ROIs     |
-| `scan3d/archive/`                                                        | DICOMweb client, records, imports, STOW exports and C-STORE sends |
-| `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                |
-| `web/src/components/AuthGate.vue`, `web/src/lib/session.ts`             | Sign-in form, overlay and session state                |
-| `web/src/components/CaseLibrary.vue`, `web/src/lib/library.ts`          | The Library: search, rename, Trash and storage         |
-| `web/src/lib/ct-volume.ts`, `ct-worker.ts`                              | Source session and worker                              |
-| `web/src/lib/cornerstone-*.ts`, `vtk-*.ts`                              | Slice review, MPR and the native 3D view               |
-| `web/src/lib/scene.ts`, `ct-volume-renderer.ts`, `gpu-ct-plane.ts`      | The Three.js renderer                                  |
-| `web/src/lib/volume-memory-budget.ts`, `portable-viewer.ts`             | Client memory ledger, offline viewer                   |
+| Path                                                                    | Contents                                                |
+| ----------------------------------------------------------------------- | ------------------------------------------------------- |
+| `scan3d/api.py`, `api_*.py`, `api_models.py`                            | HTTP app, error mapping, routes, request bodies         |
+| `scan3d/access.py`, `accounts.py`, `identity.py`                        | Route rules, accounts, sessions, audit, password hash   |
+| `scan3d/service.py`, `store.py`, `config.py`, `__main__.py`             | Lanes, revision building, SQLite, settings, the CLI     |
+| `scan3d/janitor.py`, `activity.py`, `disk_usage.py`                     | Delete forever, Clear caches, requests in flight, sizes |
+| `scan3d/dicom.py`, `enhanced_mr.py`, `modalities.py`, `image_assets.py` | Series validation, conversion, image identity           |
+| `scan3d/segmentation*.py`                                               | TotalSegmentator runs, task catalog, result merging     |
+| `scan3d/nnunet_models.py`, `nnunet_worker.py`                           | Pinned nnU-Net models and their worker                  |
+| `scan3d/review.py`, `relationships.py`, `direct_edit.py`, `scissors.py` | Correction sessions and deterministic edits             |
+| `scan3d/interactive*.py`                                                | nnInteractive engine, worker, batching, prompts         |
+| `scan3d/inference_paths.py`                                             | Inference paths: discovery, binding, child environment  |
+| `scan3d/imaging.py`, `surfaces.py`, `surface_glb.py`                    | Masks, measurements, slice geometry, GLB surfaces       |
+| `scan3d/review_volume.py`, `volume_mask_union.py`                       | Volume and frame transport, display unions              |
+| `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange        |
+| `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX ROIs      |
+| `scan3d/archive/`                                                       | DICOMweb client, imports, STOW exports, C-STORE sends   |
+| `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                 |
+| `web/src/components/AuthGate.vue`, `web/src/lib/session.ts`             | Sign-in form, overlay and session state                 |
+| `web/src/components/CaseLibrary.vue`, `web/src/lib/library.ts`          | The Library: search, rename, Trash and storage          |
+| `web/src/lib/ct-volume.ts`, `ct-worker.ts`                              | Source session and worker                               |
+| `web/src/lib/cornerstone-*.ts`, `vtk-*.ts`                              | Slice review, MPR and the native 3D view                |
+| `web/src/lib/scene.ts`, `ct-volume-renderer.ts`, `gpu-ct-plane.ts`      | The Three.js renderer                                   |
+| `web/src/lib/volume-memory-budget.ts`, `portable-viewer.ts`             | Client memory ledger, offline viewer                    |
 
 ## Data flow
 
@@ -111,10 +113,10 @@ All state lives under `SCAN3D_DATA_DIR`:
 ```text
 scan3d.sqlite3           Records, in WAL mode
 worker.lock              Held by the process that runs jobs
-maintenance.lock         Shared by a backup and by demo, import and optimize; exclusive while files are deleted
+maintenance.lock         Shared by backup, demo, import and optimize; exclusive to delete files
 cases/<case>/
   dicom/                 Originals from uploads and local imports
-  sources/<job>/         Originals from Orthanc, with source-import.json
+  sources/<job>/         Originals from Orthanc or DICOMweb, with source-import.json
   converted/<sha256>/    Reference NIfTI and conversion log
   inference/<key>/       TotalSegmentator runs and their manifests
   revisions/<id>/        revision.json, model.glb and on-demand exports
@@ -123,106 +125,104 @@ cases/<case>/
   uploads/               Slicer corrections as received
   synthetic/             The demo phantom
 surface-cache/, review-cache/, analysis-cache/, agreement-cache/, cinematic-cache/
+orthanc-staging/         Archive downloads in progress; leftovers go at each start
 import-uploads/          Staged browser uploads, removed after a day of inactivity
 ```
 
 SQLite holds JSON records in `cases`, `image_assets`, `revisions`, `jobs` and `review_sessions`. A
-record is committed only after its files are complete. Records store absolute paths, so restore a
-`scan3d backup` into the same data directory.
-
-`case_summaries` is a derived copy of each case without its file paths, so listing cases parses only
-what the library shows. Any write to `cases` drops the copy, so a writer that skips it, such as an
-older build after a rollback, makes the list read the full record and never a stale one. Each `Store`
-keeps one idle connection open, because closing the last connection to a WAL database checkpoints it
-and adds milliseconds to every write.
-
-`users`, `sessions`, `one_time_codes`, `last_seen`, `case_access` and `audit_events` are ordinary
-tables beside those records. `cases` has no owner column and there are no foreign keys. A backup
-keeps users and audit and removes sessions and links, so a restore revives no sign-in.
-
-`case_opened` holds when each account last opened each case, which orders that account's list. A
-`trash` row hides its case and nothing on disk moves, so a restored case keeps its files and
-revisions.
-
-Delete forever moves a case's `trash` row from `trashed` to `purging`. Its first step,
-`Store.purge_case`, deletes every row of the case in one transaction, so only that row and the audit
-log keep its ID. While the row is `purging` or `purged`, triggers refuse any insert for its ID, in
-this build or an older one, so a deleted case never comes back.
-
-The janitor, a thread of the API server that holds `worker.lock`, does the rest under an exclusive
-`maintenance.lock`. It removes the case's folder, the uploads that became it and the review-cache
-entries naming it at once, then empties the write log. A file it cannot remove keeps only its own
-case `purging`, and is tried again each minute.
-
-The shared steps wait until no job runs, no request is in flight and no review volume is being
-written, so while any job runs they and `purged` wait. They remove review entries naming no current
-case, the caches rebuilt on a miss and every surface asset no record names. Then the janitor empties
-the log again and sets `purged`, and the idle GPU lane releases the warm engine. A shared file it
-cannot remove is logged and the other steps still run, but those cases stay `purging` and are tried
-again each minute.
-
-Every step can run again, so a purge resumes at the next start. Each start also removes Orthanc
-staging leftovers, and once a run the janitor removes any folder of a purged case that came back.
-
-Each review-cache entry's record names its case, outside its key, so Delete forever can find the
-entry. A backup leaves out the folder of a deleted case, any surface asset its snapshot does not
-name, and the contour and agreement caches, which rebuild on a miss.
+record is committed only after its files are complete. Records store absolute paths.
 
 - **Image assets** describe one source image and never change. Child revisions must keep the same
   source image.
-- **Added series.** A series added from Orthanc keeps its own source record in `added_sources`, so
-  an export binds to that series' files. It must come from the case's own study.
+- **Added series.** A series added from Orthanc or a DICOMweb archive keeps its own source record in
+  `added_sources`, so an export binds to that series' files. It must come from the case's own study.
 - **Revisions** form a tree through `parent_id`.
 - **Structures** are a revision's segments, each with a stable ID and a private mask file. Masks are
   independent, so overlaps are preserved.
 - **Activation.** A case has one active revision. `Store.commit_revision` publishes a revision,
   activates it and completes its job in one transaction, guarded by the expected active revision.
-- **Replacing results.** A segmentation run replaces every structure from its task, plus structures
-  of other tasks with an exactly matching anatomical name, so `total_v3:liver` replaces
-  `total:liver`. Voxels are never subtracted. A conflicting result fails before anything is
-  published.
+  Activate and prepare send the active revision the page shows, so a stale page cannot replace a
+  newer save.
+- **Replacing results.** A segmentation run replaces every structure from its task, plus any other
+  structure, reviewer-added or not, whose anatomical name matches ignoring case, underscores and
+  whitespace, so `total_v3:liver` replaces `total:liver`. Voxels are never subtracted. A
+  conflicting result fails before anything is published.
 - **Comparing models.** A pinned nnU-Net model's structures match only that model's, so
   `mrsegmentator:liver` and `total:liver` stay side by side. Its run has the source `nnunet_model`.
+
+Other tables:
+
+- **`case_summaries`** holds each case without its file paths, for the case list. Triggers drop a
+  summary on any write to `cases`, so a writer that skips it makes the list read the full record,
+  never a stale one.
+- **Accounts** live in `users`, `sessions`, `one_time_codes`, `last_seen`, `case_access` and
+  `audit_events`, with no foreign keys and no owner column in `cases`.
+- **`case_opened`** orders each account's case list. A **`trash`** row hides its case, and nothing
+  on disk moves until Delete forever.
+
+Each `Store` keeps one idle connection open, because closing the last connection to a WAL database
+checkpoints it and slows every write.
+
+A **backup** leaves out sessions, links, the folder of a case deleted forever, unnamed surface
+assets, the caches that rebuild (review, analysis, agreement, cinematic and contour), staged
+uploads and archive staging. [USER_GUIDE.md](USER_GUIDE.md#back-up-the-case-library) says how to
+restore one.
+
+**Delete forever** (`scan3d/janitor.py`) runs in steps that can each run again, so a purge resumes
+at the next start:
+
+1. `Store.purge_case` deletes every row of the case in one transaction and marks its `trash` row
+   `purging`. Triggers then refuse any insert for a `purging` or `purged` ID, from any build.
+2. The janitor, a thread of the API server once it holds `worker.lock`, takes an exclusive
+   `maintenance.lock`, removes the case's folder, uploads and review-cache entries, and empties the
+   write log.
+3. When no job runs, no request is in flight and no review volume is being written, it removes
+   orphaned review entries, the caches rebuilt on a miss and unnamed surface assets. It empties the
+   log again and marks the case `purged`, and the idle GPU lane drops its warm engine.
+
+What the janitor cannot remove keeps its cases `purging`, tried again each minute. Each start also
+removes any folder of a purged case that came back.
 
 ## Jobs and lanes
 
 Jobs are SQLite rows. `Service.start` locks `worker.lock` and runs one thread per lane, so one
-process per data directory executes jobs.
+process per data directory executes jobs. [API.md](API.md#job) lists the job kinds.
 
-| Lane | Job kinds                                                                                                                                                                                                      |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GPU  | `segment`; `review_predict` that runs nnInteractive                                                                                                                                                            |
-| CPU  | `process`, `orthanc_import`, `archive_import`, `orthanc_export`, `orthanc_roi_export`, `orthanc_view_export`, `view_file_export`, `archive_seg_export`, `archive_view_export`, `direct_seg_export`, `direct_view_export`, `dicom_seg_import`, `refine`, `correction`, `include_all`, `review_accept`; `review_predict` for direct edits or relationship-only Apply |
+| Lane | Job kinds                                                                                |
+| ---- | ---------------------------------------------------------------------------------------- |
+| GPU  | `segment`; `review_predict` that runs nnInteractive                                      |
+| CPU  | Every other kind, including `review_predict` for direct edits or relationship-only Apply |
 
 - GPU jobs never overlap, whichever GPU they use, which keeps TotalSegmentator's shared settings and
-  first-time weight downloads safe.
-- CPU work never waits behind a segmentation.
-- The GPU lane still runs when inference uses the CPU device.
-- Review jobs run before queued batch work in each lane.
+  first-time weight downloads safe. The lane runs even when inference uses the CPU device.
+- CPU work never waits behind a segmentation. Review jobs run before queued batch work in each lane.
 - A correction saved during a segmentation stays active. The segmentation fails at commit, and a
   retry from the current revision reuses its cached inference.
 
 **Restart.** Running jobs fail as `Interrupted`, and draft sessions return to an editable state.
-Queued jobs stay queued, except DICOM SEG and view exports, which fail locally because a send must
-be requested explicitly.
+Queued jobs stay queued, except DICOM exports, file exports included, which fail locally because a
+send must be requested explicitly.
 
-**Cancellation** stops a queued job at once and a running job at its next check. Trash cancels a
-case's jobs, and a job that starts afterwards stops at its first check.
+**Cancellation** stops a queued job at once and a running job at its next check, but a send already
+started finishes. Trash cancels a case's jobs this way, and a job that starts afterwards stops at
+its first check.
 
-**Requests in flight.** The gate counts each admitted request, in all and per case, until its
-response is sent. Public routes and the API docs are not counted, and Restore and Delete forever
-count in all only. A request that makes a case counts it from before its row exists, and a volume
-build counts its case until its thread ends. The counts live in memory, so a restart resets them.
+**Requests in flight** are counted in memory (`scan3d/activity.py`) by `SessionGate`, for each
+request it admits, in all and per case, so a purge waits for its case and the shared cache steps
+for everything. Public routes and the API docs are not counted, and Restore and Delete forever
+count in all only.
+
+A request that makes a case counts it before its row exists, and a volume build counts its case
+until its thread ends.
 
 ## Inference
 
-`SCAN3D_DEVICE` selects the device on the default [inference path](#inference-paths), and
-[INSTALL.md](INSTALL.md) lists its values. `auto` prefers a discrete GPU, then the most reported
-memory, and uses the CPU if PyTorch sees no GPU. A GPU request never falls back, and a
+`SCAN3D_DEVICE` selects the device on the default [inference path](#inference-paths), as
+[INSTALL.md](INSTALL.md#choosing-how-ai-runs) describes. A GPU request never falls back, and a
 TotalSegmentator report that shows CPU execution after one is rejected.
 
-`scripts/check_gpu.py` writes a proof file, which `/api/health` reports without loading PyTorch.
-`ready` means a verified GPU, so a CPU installation reports `ready: false` by design.
+`scripts/check_gpu.py` writes a proof file, which [`/api/health`](API.md#system-routes) reports
+without loading PyTorch.
 
 The API process never imports PyTorch. Before it runs the model, a `segment` job checks its device
 in a short-lived child, `python -P -m scan3d.segmentation`, from the job's interpreter, and no
@@ -239,14 +239,11 @@ and because only process exit returns all GPU memory.
 - **Cancellation** is cooperative first. After 10 seconds its process group is killed.
 - **Failure.** A crash, a GPU or model failure, or 600 seconds without progress
   (`SCAN3D_NNINTERACTIVE_STALL_SECONDS`) fails that job only. The next prediction starts a fresh
-  worker, which rebuilds the draft from its latest stored result.
-- **Restore.** A request may name the stored result of its first Apply steps. Without warm state
-  the worker loads that mask as upstream's initial mask and registers every applied mark again
-  with no forward pass, which gives the warm session's state byte for byte. It checks the mask's
-  hash and its own model, card and build first, and replays from the original mask otherwise. A
-  trusted result it cannot rebuild from, such as another card's, is compared with the replay at its
-  step, and moved voxels add a candidate warning. The field is optional, so the protocol stays 1:
-  an older worker ignores it and replays.
+  worker.
+- **Restore.** A request may name the stored result of its first Apply steps. If its hash and the
+  worker's model, card and build match, a cold worker loads it and registers those marks with no
+  forward pass; otherwise it replays from the original mask
+  ([API.md](API.md#what-a-run-records)). An older worker ignores the field, so the protocol stays 1.
 - **Exit.** The worker exits before a `segment` job, at shutdown, if the API process dies, and when
   a request names another [inference path](#inference-paths). The next worker starts only after
   that exit, so one inference process exists across all GPUs. The job reports
@@ -257,10 +254,8 @@ The model is pinned, and its checkpoint hash is verified on load. Requests never
 ### Inference paths
 
 A PyTorch build drives one vendor's GPUs, so with two vendors' cards a choice of card is a choice
-of interpreter. An inference path is that pair: an interpreter and a device. An RTX 5070 Ti is
-supported as a second GPU beside an AMD Radeon AI PRO R9700, for TotalSegmentator and AI assist.
-
-`scan3d/inference_paths.py` holds the rules. [API.md](API.md#inference-paths) has the rows, requests
+of interpreter. An inference path is that pair: an interpreter and a device.
+`scan3d/inference_paths.py` holds the rules, [API.md](API.md#inference-paths) has the rows, requests
 and refusals, and [INSTALL.md](INSTALL.md#add-a-second-gpu) adds a path.
 
 - **`default`** is the API's own interpreter with `SCAN3D_DEVICE` and the proof in
@@ -270,19 +265,15 @@ and refusals, and [INSTALL.md](INSTALL.md#add-a-second-gpu) adds a path.
   `scripts/check_gpu.py --path ID` from inside that interpreter. The file is the whole
   registration, so adding one needs no restart, and moving it out removes the path.
 
-With one path, the viewer shows no chooser and its requests name no path, except for a draft whose
-added path was removed, which keeps its re-run control.
-
-**Discovery.** `rows()` reads the folder on every call, with no PyTorch and no child process,
-because opening a panel must never touch a busy card. A row is `available` when what its proof
-records is still installed and its last check passed. That never means a scan will fit: the device
+**Discovery.** `rows()` reads the folder on every call, with no PyTorch and no child process, so
+opening a panel never touches a busy card. `available` never means a scan will fit: the device
 check at job start is the live authority.
 
 **Frozen at enqueue, checked at execution.**
 
 - `binding()` refuses an unknown or unavailable path with no job row. The job stores
-  `{id, label, identity}` at its top level.
-- `require()` compares that identity with the current proof as the job starts.
+  `{id, label, identity}` at its top level, and `require()` compares that identity with the current
+  proof as the job starts.
 - An added path never re-routes: a job runs on its card or fails naming it.
 - `InferencePath.confirm` must see the proven card and build, before TotalSegmentator starts and
   after an nnInteractive prediction, where a mismatch keeps no result.
@@ -305,28 +296,24 @@ it starts:
 - **Direct** edits (paint, erase, 3D scissors) are deterministic, run on the CPU lane, and replay in
   order from the immutable source mask.
 - **nnInteractive** takes include and exclude prompts on the GPU lane: points in RAS, and boxes,
-  scribbles and lassos on native slices. It can also refine a whole mask. Upstream's refinement
-  resets every prompt channel, so the adapter registers the draft's marks again after it, and they
-  keep guiding later runs. Upstream's refinement can fall back to random sampling, so each Apply
-  step seeds NumPy's generator from the draft and the step's place, and restores the generator
-  after the request. On one card and build a replay has then matched the warm run byte for byte;
-  another card or build can still differ.
+  scribbles and lassos on native slices. It can also refine a whole mask.
+
+Upstream's refinement resets every prompt channel, so the adapter registers the draft's marks again
+after it, and they keep guiding later runs. It can also sample at random, so each Apply step seeds
+NumPy's generator from the draft and the step's place, then restores the generator.
 
 Prompts autosave and never run inference. **Apply** queues one job for all pending marks and
 produces an immutable candidate, `review-<session>-<generation>`. It works on the read-only image,
 mask and frame routes and never appears in revision history.
 
 **One open draft per target.** The create route returns an open draft for the same revision,
-structure and method rather than start a second. A save replaces the whole prompt list, so:
+structure and method rather than start a second. A save replaces the whole prompt list, so a page
+with unsaved changes refuses a draft that holds work, and a run that opened a draft stops there,
+because its marks have not been seen.
 
-- A page with unsaved changes refuses a draft that holds work. A reload shows that draft and clears
-  the page's changes.
-- A run that opened a draft stops there, because its marks have not been seen.
-
-**Inference paths in a draft.** A draft can use any [path](#inference-paths) until its first
-published result, then stays on that card, so every step of a saved correction ran on one card. To
-change card, a client re-runs the draft with `replay: true`. [API.md](API.md#choosing-a-path) has
-the rules.
+Generation checks never read the account, so a stale page gets 409 across accounts as across tabs.
+A draft stays on the card of its first published result unless re-run with `replay: true`, so a
+saved correction ran on one card. [API.md](API.md#choosing-a-path) has the rules.
 
 **Relationships** define who owns overlapping voxels. Display groups, names and geometric
 intersection never authorize a removal. [API.md](API.md#segment-relationships) has the rules.
@@ -395,28 +382,28 @@ context and memory reservation, shared by MPR and 3D, because a separate rendere
 second GPU copy of the CT.
 
 - **Surfaces** load from quantized GLBs into vtk actors. Over a drawn CT, see-through surfaces are
-  peeled into four depth-ordered layers, or two while the camera moves or memory is short, and the
-  CT ray merges them by depth (`vtk-surface-layers.ts`). Faces past the last layer share one
-  weighted layer. Opaque surfaces and the CT plane end the ray. Without WebGL 2 float targets, 13
-  texture units, the memory or a working merge, surfaces stay solid and the view says why. A failed
-  merge holds until the viewer is rebuilt; a tile size the memory refuses holds until the size
-  changes.
+  peeled into four depth-ordered layers, or two while the camera moves or memory is short, plus one
+  weighted layer for faces beyond. The CT ray merges them by depth (`vtk-surface-layers.ts`), and
+  opaque surfaces and the CT plane end it.
+- **Solid fallback.** Without WebGL 2 float targets, 13 texture units, the memory or a working
+  merge, surfaces stay solid and the view says why. A failed merge holds until the viewer is
+  rebuilt, and a tile size the memory refuses until the size changes.
 - **Mask to segmentation** uses one cropped OR union of the chosen structures, built on the server,
   with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a boundary by
   a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong tissue.
 - **Color segments** tints the CT before lighting from a label union, largest structure first.
 - **Review** can show the CT volume, with masking, colouring and Cinematic heart off because they
-  would follow the candidate mask. The default preset stands in for Cinematic heart on screen
-  only, so edits there keep the main page's preset and reference HU. While the reader marks on the CT
-  plane, the crop plane on its axis moves to the slice to cut away the camera's side, because vtk.js volume
-  shaders take six clipping planes.
-- **Volume point** marches the click's ray on the CPU through the shared ImageVolume's voxels
+  would follow the candidate mask. While the reader marks on the CT plane, the crop plane on its
+  axis moves to the slice to cut away the camera's side, because vtk.js volume shaders take six
+  clipping planes.
+- **Volume point** marches the click's ray on the CPU through the shared ImageVolume
   (`volume-ray.ts`), because vtk.js cannot pick a shared GPU volume. It samples trilinearly every
-  half smallest spacing, corrects each sample's opacity to the step as vtk.js does, and takes the
-  first sample where accumulated opacity reaches 0.5. It honours the mapper's clipping planes and
-  the camera's near and far planes, and stops at opaque surfaces and the CT plane. See-through
-  surfaces neither stop nor dim it. Gradient opacity and lighting are not modelled. The same
-  march refuses a Surface point behind volume by more than one coarsest voxel, and at least 1 mm.
+  half smallest spacing and takes the first sample where opacity, accumulated as vtk.js does,
+  reaches 0.5, within the clipping, near and far planes and before opaque surfaces and the CT plane.
+- **Volume point limits.** See-through surfaces neither stop nor dim it, and gradient opacity and
+  lighting are not modelled.
+- **Surface point** is refused when visible volume lies in front of it by more than the coarsest
+  voxel spacing or 1 mm, whichever is larger.
 
 Masking and colouring patch exact shader anchors through a factory local to one actor. That bridge
 checks the installed versions (Cornerstone3D 5.13.1, vtk.js 36.4.1) and throws on a mismatch.
@@ -451,43 +438,48 @@ fails before allocating, and the viewer explains it and offers Retry.
 | MIP and MinIP slab                | 200 mm                                        |
 | Native **Color segments**         | 64 structures                                 |
 
-## Orthanc connector
+## Archive connectors
 
-The connector is optional and off unless `SCAN3D_ORTHANC_URL` is set. 3DScan is only a REST client
-and runs no DICOM listener. See [ORTHANC.md](ORTHANC.md).
+Both are optional. Orthanc is off unless `SCAN3D_ORTHANC_URL` is set and is reached only over its
+REST API ([ORTHANC.md](ORTHANC.md)). A DICOMweb archive is off unless `SCAN3D_DICOMWEB_URL` is set
+([ARCHIVES.md](ARCHIVES.md)).
 
 - The backend holds the credentials. Identity fields travel in POST bodies, and connector responses
   use `Cache-Control: no-store`.
-- An import binds an immutable snapshot of the series. A CPU job downloads it into staging and
-  verifies hashes and DICOM identities before publishing the originals. Interrupted transfers never
-  resume automatically.
+- An import binds an immutable snapshot of one series. A CPU job downloads it into staging and
+  checks its DICOM identities, and Orthanc's file hashes, before publishing the originals.
+  Interrupted transfers never resume automatically.
 - The launch route finds the library's matching import, whoever made it, but creates nothing.
 
 ## DICOM SEG and other exchange
 
-[ORTHANC.md](ORTHANC.md#send-a-saved-segmentation-back) covers delivery.
+Each DICOM export is a CPU job whose kind names its delivery: through Orthanc (`orthanc_*`), to the
+DICOMweb archive by STOW-RS (`archive_*`) or to a DICOM node by C-STORE (`direct_*`). A SEG file is
+an `orthanc_export` and a view file a `view_file_export`. A file, an archived and a sent SEG of the
+same masks are one instance.
 
-**SEG export** turns chosen structures of a saved revision into one binary SEG instance, on the CPU
-lane as job kind `orthanc_export`. It never changes the revision, and it reads source headers, never
-source pixels. A manifest pins the hashes before any upload, and Orthanc keeps and sends the same
-bytes to allowlisted modality IDs.
+**SEG export** turns chosen structures of a saved revision into one binary SEG instance. It never
+changes the revision, and it reads source headers, never source pixels. A manifest pins the hashes
+before any upload, and a ranked export resolves overlaps in that SEG only.
 
-A ranked export resolves overlaps in that SEG only: the saved masks remain the authority.
+Orthanc keeps and sends the same bytes to allowlisted modality IDs, and a DICOMweb archive must
+return every stored instance on read-back ([ORTHANC.md](ORTHANC.md#send-a-saved-segmentation-back),
+[ARCHIVES.md](ARCHIVES.md#archive-results)).
 
 **View export** turns one capture of the 3D view into a Secondary Capture series in the source
 study. `orthanc_view_exports.py` subclasses the SEG manager. The instance is a picture with no frame
 of reference, and nothing measures from it.
 
-**SEG import** takes a local upload and needs no Orthanc connection. It accepts only binary,
-uncompressed segmentations on the exact native grid, after source-identity checks, and appends them
-as a new unreviewed revision. Anything that would need thresholding or resampling is refused.
+**OsiriX ROI export** is a second format of SEG export, through Orthanc only. `osirix_roi.py` writes
+one native brush report per source slice that a selected mask touches, and `osirix_roi_exports.py`
+checks that they all land in the source study.
+
+**SEG import** takes a local upload and needs no archive. It accepts only binary, uncompressed
+segmentations on the exact native grid, after source-identity checks, and appends them as a new
+unreviewed revision. Anything that would need thresholding or resampling is refused.
 
 **Slicer exchange** exports a ZIP with the reference image, `segmentation.seg.nrrd` and a stable ID
 mapping, and imports corrected segmentations after geometry and identity checks.
-
-**OsiriX ROI export** is a second format of SEG export. `osirix_roi.py` writes one native OsiriX
-brush report per source slice, and `osirix_roi_exports.py` subclasses the SEG manager to archive and
-send those reports, with the view export's check that they land in the source study.
 
 ## Modalities
 
@@ -504,100 +496,81 @@ holds the adapters. Other modalities have none.
 ## Security boundaries
 
 `SCAN3D_ALLOWED_HOSTS` restricts `Host` headers, and mutations from another browser origin are
-refused. Files are written with umask 077, and public records omit filesystem paths.
+refused. Files are written with umask 077, and public records omit filesystem paths. An inference
+path's proof names an interpreter that the app will run, so protect its folder as the checkout.
 
-**Sign-in mode.** `off` is allowed only on loopback, and the app refuses to start otherwise. See
-[CONFIGURATION.md](CONFIGURATION.md#sign-in).
+**Sign-in.** `off` is allowed only on loopback, and the app refuses to start otherwise
+([CONFIGURATION.md](CONFIGURATION.md#sign-in)). `SessionGate` in `scan3d/access.py` finds the route
+the router will pick and applies its default-deny rule before the route reads a body, in both
+modes. [API.md](API.md#access-rules) lists the rules, and
+[DEVELOPMENT.md](DEVELOPMENT.md#project-rules) says how to add one.
 
-**The gate.** `SessionGate` in `scan3d/access.py` finds the route the router will pick and applies
-its rule before the route reads a body. Rules are default-deny, in both modes.
-[API.md](API.md#sign-in) lists them.
+- **One shared library.** Any account opens any case that exists and is not in Trash. A case route
+  needs the case to exist, so no handler makes a folder for an ID that names none.
+- **Admin rights are checked again under the write lock**, by `Store.purge_case` and by each People
+  change in `Accounts`. The last active admin cannot be demoted or disabled, and nobody changes
+  their own role or disables themselves.
+- **Owners.** An owner row records who added a case, shown as "Added by". Work with nobody signed
+  in goes to the oldest admin not disabled, as does a case with no owner when an account is added
+  or at startup in password mode.
 
-- `check_policy` stops the app from starting if a route has no rule.
-- One shared library: any account opens any case that exists, unless it is in Trash, in both modes.
-  A case route needs the case to exist, so no handler makes a folder for an ID that names none.
-- Delete forever is of kind `trashed_admin`: a member gets 403 before the body is read. The password
-  check after the gate can wait, so `Store.purge_case` checks the role again under its write lock.
-- People routes exist only in `password` mode. Each change in `Accounts` checks again under its
-  write lock that the caller is still an active admin: `admin`, not disabled, with a password. The
-  last one cannot be demoted or disabled, and nobody changes their own role or disables themselves.
-- Every account's case scope is `EVERY_CASE`. A user ID scope still works, so private cases can
-  return, and `None` is never a scope.
-- `storage_rows` reads every case. Under a user ID scope another owner's row gives only owner, date
-  and size. The janitor's `existing_case_ids` also reads every case, for IDs only.
-- An owner row records who added a case, and the lists show it as "Added by". Work with nobody
-  signed in, such as the command line or sign-in off, goes to the oldest admin not disabled. A case
-  with no owner goes to that admin when an account is added, or at startup in password mode.
+**Sessions and passwords.** Only the SHA-256 of a session token is stored. Passwords use scrypt,
+with n=2^17, r=8 and p=1. `last_seen` records each sign-in, set-password and session slide, because
+session rows go at sign-out.
 
-**Sessions and passwords.** Only the SHA-256 of a session token is stored. Passwords use scrypt, with
-n=2^17, r=8 and p=1. `last_seen` records each person's sign-in, set-password and session slide,
-because session rows go at sign-out.
+**One-time links** ([API.md](API.md#people-routes)). `one_time_codes` keeps only the SHA-256 of each
+code, at most one per person. Disabling or demoting the maker deletes their links in the same
+transaction. Redeeming uses sign-in's hashing slots under a throttle key of its own, and checks the
+link again under the write lock.
 
-**One-time links.** A People link sets a password. `one_time_codes` keeps only the SHA-256 of its
-code, and each person has at most one. It works once, for 24 hours, while its maker is still an
-active admin and its person is not disabled. Disabling or demoting the maker deletes it in the same
-transaction, so restoring their rights revives none; the read checks the maker as a second guard.
-Redeeming hashes in the sign-in slots under a key of its own, and checks the link again under the
-write lock, so of two uses at once only the first wins. A new password, from a link or
-`scan3d users passwd`, ends every link for or by that person. The server knows no public address, so
-the admin's page builds the link from its own, with the code in the fragment, which no request, log
-or Referer carries. The page that opens it takes the code out of the address before any request,
-and sends it only in the redeem body.
+The server knows no public address, so the admin's page builds the link from its own, with the code
+in the fragment, which no request, log or Referer carries. The page that opens it removes the code
+from the address before any request and sends it only in the redeem body.
 
-**An open tab.** Each session read, every 60 seconds and on focus, also reads the open case. A tab
-closes a case that answers `Case not found`, and takes only the label from any other answer. Lost
-connections and server errors never close a case. When the answer names another active revision and
-the tab is not busy with its own work, it offers **Show the newer version**.
-
-**Two people on one case.** The generation checks never read the actor, so a stale page gets 409
-across accounts as across tabs. Segment, refine, correction, include-all, review accept and DICOM SEG
-import save only while their starting revision is still active, and Activate and prepare send the
-active revision the page shows, so a page behind someone else's save cannot replace it unseen.
+**Open tabs.** Each session read, every 60 seconds and on focus, also reads the open case. A tab
+closes the case only on `Case not found`, never on a lost connection or a server error.
 
 **Audit.** `audit_events` is append-only, enforced by triggers. Rows hold IDs and counts, never a
 label, search term or typed username. A row means a request was allowed to start, and a failed write
 fails the request. The actions are:
 
-- `session.sign_in`, `session.sign_in_failed`, `session.sign_out`, `session.sign_out_others`
-- `user.link_used`, with `session.sign_in`, when a link sets a password
-- `user.add`, `user.password`, `case.adopt`, `case.import`, `license.change`, `cache.clear`
-- `user.invite`, `user.invite_link`, `user.reset_link`, `user.make_admin`, `user.make_member`,
-  `user.archive_on`, `user.archive_off`, `user.disable`, `user.enable`, `user.sign_out_everywhere`,
-  each written with the change itself and the person as target
-- `case.open`, once per session and case
-- `case.rename`
-- `case.trash`, `case.restore`, `case.purge`, each written with the change itself
-- `case.purge_password_failed`
-- `archive.query`, `archive.launch`
-- `export.slicer`, `export.html`, `export.seg`, `export.seg_file`, `export.view`, `export.view_file`
+- Sessions: `session.sign_in`, `session.sign_in_failed`, `session.sign_out`,
+  `session.sign_out_others`, and `user.link_used` with `session.sign_in` when a link sets a password
+- People, each written with the change and the person as target: `user.invite`, `user.invite_link`,
+  `user.reset_link`, `user.make_admin`, `user.make_member`, `user.archive_on`, `user.archive_off`,
+  `user.disable`, `user.enable`, `user.sign_out_everywhere`
+- Administration: `user.add`, `user.password`, `case.adopt`, `license.change`, `cache.clear`
+- Cases: `case.import`, `case.open` (once per session and case), `case.rename`,
+  `case.purge_password_failed`, and `case.trash`, `case.restore` and `case.purge`, each written with
+  the change
+- Archive and export: `archive.query`, `archive.launch`, `export.slicer`, `export.html`,
+  `export.seg`, `export.seg_file`, `export.view`, `export.view_file`
 
-An inference path's proof names an interpreter that the app will run, so its folder needs the same
-protection as the checkout.
+**Network.** 3DScan runs no DICOM listener and sends no scan to a model or license host. It makes
+only these outbound connections:
 
-Scans stay on the server. Outbound calls are limited to the configured Orthanc, license validation
-when a TotalSegmentator key is saved, and model downloads.
+- Orthanc's REST API, when `SCAN3D_ORTHANC_URL` is set
+- the DICOMweb archive by QIDO-RS and WADO-RS, and STOW-RS unless `SCAN3D_DICOMWEB_STORE=false`,
+  when `SCAN3D_DICOMWEB_URL` is set
+- DICOM nodes by C-STORE, and C-ECHO from `scan3d archive-check`, when
+  `SCAN3D_DICOM_DESTINATIONS_FILE` is set
+- TotalSegmentator's license check when a key is saved, and its weight download the first time a
+  task runs
+- the nnInteractive and nnU-Net model downloads, only when `scripts/download_interactive_model.py`
+  or `scripts/download_segmentation_model.py` runs
+
+DICOM sends are unencrypted unless a destination sets `tls`, and Orthanc and DICOMweb traffic is
+unencrypted on an http URL. DICOMweb credentials need https unless the archive is on this machine,
+and search terms reach the archive's own logs.
 
 ## Known limitations
 
-- With sign-in off, anything that can reach the port can read every case. With it on, anyone with
-  a shell on the machine can still read every file.
-- The library is shared, with no private cases and no per-case rights.
-- A case in Trash keeps its disk space, and importing it again from Orthanc makes a second copy.
-- Delete forever is an ordinary file delete, not secure erasure. Backups, Orthanc and browser caches
-  keep their copies, and restoring a backup taken before the deletion brings the case back.
-- Case sizes leave out shared caches, which several cases can use at once.
-- The app shows who started another person's job or draft, but a revision records no reviewer and a
-  review status no author. The audit log has no viewer.
-- The service does not scale out, and it runs on Linux only.
-- A second GPU adds a choice, not capacity. Results from the two cards are not identical.
-- Installing NVIDIA as the only GPU with `--torch cuda` is a different route and is untested.
-- Review status belongs to a revision, not to a structure.
-- CPU inference is much slower than a GPU.
-- A large CT with MPR and all surfaces can exceed the client memory limits. Closing a view frees
-  capacity.
+- A case in Trash keeps its disk space until Delete forever, and importing it again from an archive
+  makes a second copy.
+- Delete forever is an ordinary file delete, not secure erasure. Backups, archives, nodes sent to
+  and browser caches keep their copies, and restoring an older backup brings the case back.
+- A revision records no reviewer and a review status no author, and the audit log has no viewer.
+- The service does not scale out. [INSTALL.md](INSTALL.md#what-is-not-supported) lists unsupported
+  platforms and setups, and [Choosing how AI runs](INSTALL.md#choosing-how-ai-runs) the untested
+  GPU routes.
 - Native 3D surfaces cast no shadows into the volume.
-- SEG archive and send need an original classic CT imported through Orthanc, or for archive only,
-  through a DICOMweb archive. A SEG file needs only the case's own copy of that CT.
-- The nnInteractive checkpoint is licensed CC BY-NC-SA 4.0 (noncommercial), and some
-  TotalSegmentator tasks need a separate license.
-- 3DScan has not been evaluated for clinical accuracy and is not a medical device.

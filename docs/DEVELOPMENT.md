@@ -28,7 +28,11 @@ npm run lint
 npm run format:check
 npx vue-tsc --noEmit
 npx vitest run
+npx vite build --outDir /tmp/scan3d-check/dist --emptyOutDir
+npx vite build --config vite.offline.config.ts --outDir /tmp/scan3d-check/dist
 ```
+
+Check-only builds go outside `web/dist`, which `scan3d serve` serves.
 
 `npm run format` and `ruff format` apply the formatting. `pre-commit install` runs the same tools
 on each commit.
@@ -98,10 +102,9 @@ build.
     scope is `EVERY_CASE`, and a user ID scope still works. `Store.list` refuses `"cases"`.
     `storage_rows` reads every case. The only other reader of every case is the janitor's
     `existing_case_ids`, which gives IDs only.
-- **Errors.** `errors.NotFound` maps to 404, `ValueError` to 400, `errors.Forbidden` to 403,
-  `ReviewConflict`, `ImportConflict` and `errors.Conflict` to 409, and schema errors to 422. An
-  `IntegrityError` reading `purged` is 404 `Case not found`. Any other exception, another
-  `IntegrityError` included, is a logged 500, so do not raise a bare `KeyError` for "not found".
+- **Errors.** Raise the exceptions that [API.md](API.md#errors) maps to each status, never a bare
+  `KeyError` for "not found". An `IntegrityError` reading `purged` is 404 `Case not found`, and any
+  other is a logged 500.
 - **Jobs.**
   - Work that never touches the GPU runs on the CPU lane.
   - TotalSegmentator, pinned nnU-Net models and nnInteractive share the serialized GPU lane.
@@ -115,10 +118,8 @@ build.
   because it makes the folder.
 - **Inference paths.** See [ARCHITECTURE.md](ARCHITECTURE.md#inference-paths).
   - Spell the name `inference_path` everywhere. `path`, `runtime` and `target` collide with locals.
-  - A child of an added path takes its environment only from `InferencePath.environment()`.
   - The default path passes no new keyword, so its command, environment and fingerprint never change.
   - A job carries its path at the top level, never in `payload`, which `public_job` strips.
-  - An added path is never re-routed. A job runs on its card or fails naming it.
   - Never set `CUDA_VISIBLE_DEVICES` or any other visibility variable. HIP reads
     `CUDA_VISIBLE_DEVICES` too.
 - **Vue templates.** Vue drops a space between two inline elements once Prettier breaks them onto

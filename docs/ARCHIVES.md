@@ -20,8 +20,8 @@ SCAN3D_DICOMWEB_TOKEN_FILE=/etc/scan3d/pacs.token
 
 - Set `SCAN3D_DICOMWEB_ID` before the first import. Case records name the archive by it, so a
   server that moves keeps its cases. Without it, the URL names the archive.
-- A token file can be refreshed by the provider's own tool. 3DScan reads it again whenever it
-  changes, and once more after a 401.
+- The provider's own tool can refresh a token file. 3DScan reads it again whenever it changes, and
+  once more after a 401.
 - Do not point 3DScan at a de-identified research copy and expect results to reach the clinical
   archive: they go to the study they came from.
 
@@ -29,10 +29,10 @@ SCAN3D_DICOMWEB_TOKEN_FILE=/etc/scan3d/pacs.token
 
 Import, Add series, launch links and archiving were tested on these, with synthetic data only:
 
-| Archive                         | `SCAN3D_DICOMWEB_URL`                               | Notes                                                                                     |
-| ------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Orthanc 1.13.0, DICOMweb plugin | `http://<host>:8042/dicom-web`                      | Keeps the first copy of a SOP stored twice. Use the [Orthanc integration](ORTHANC.md) where you can. |
-| dcm4chee-arc 5.35.2             | `http://<host>:8080/dcm4chee-arc/aets/DCM4CHEE/rs` | Gives an issuer to a patient ID stored without one, so archived copies verify as re-encoded. Image listings leave out the Frame of Reference, which import reads from the files. |
+| Archive                         | `SCAN3D_DICOMWEB_URL`                              | Notes                                                                                                |
+| ------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Orthanc 1.13.0, DICOMweb plugin | `http://<host>:8042/dicom-web`                     | Keeps the first copy of a SOP stored twice. Use the [Orthanc integration](ORTHANC.md) where you can. |
+| dcm4chee-arc 5.35.2             | `http://<host>:8080/dcm4chee-arc/aets/DCM4CHEE/rs` | Gives an issuer to a patient ID stored without one, so archived copies verify as re-encoded.         |
 
 Other archives are untested. Run `scan3d archive-check` on them first.
 
@@ -43,10 +43,13 @@ Other archives are untested. Run `scan3d archive-check` on them first.
 ```
 
 This checks the connection and the archive's identity, whether searches honour `limit` and
-`offset`, and the listing of series and images. It also retrieves one image and deletes it, and
-sends C-ECHO to each [direct send destination](#direct-dicom-sends). It changes nothing in the
-archive, and prints only counts, the archive key, transfer syntaxes and destination names, so the
-output can go into a support ticket. It exits 1 if any check fails.
+`offset`, and the listing of series and images. It retrieves one image to a temporary file and
+deletes that copy, and sends C-ECHO to each [direct send destination](#direct-dicom-sends).
+
+It changes nothing in the archive, and prints only counts, the archive key, transfer syntaxes and
+destination names, so the output can go into a support ticket. It exits 1 if any check fails,
+including a file a setting names that is invalid or cannot be read, and 2 if a setting is invalid
+or neither `SCAN3D_DICOMWEB_URL` nor `SCAN3D_DICOM_DESTINATIONS_FILE` is set.
 
 `--write-synthetic` also stores one synthetic image, in a new study for patient
 `SCAN3D-ARCHIVE-CHECK`, and reads it back. Use it only on a scratch archive: DICOMweb cannot delete
@@ -63,9 +66,9 @@ the image.
 Import runs on the CPU and is bound to the selected snapshot, like an
 [Orthanc import](ORTHANC.md#import-a-series), with these differences:
 
-- DICOMweb cannot say that a series is still arriving. A series can be imported once its image
-  list has stayed the same for `SCAN3D_DICOMWEB_QUIET_SECONDS`, counted from when this server
-  first listed it. Before that, import answers 409 with the seconds left. A restart counts again.
+- DICOMweb cannot say that a series is still arriving, so a series can be imported once its image
+  list has stayed the same for `SCAN3D_DICOMWEB_QUIET_SECONDS`, counted from when this server first
+  listed it. Before that, import answers 409 with the seconds left. A restart counts again.
 - The image list is read again before and after the transfer. A change fails the import.
 - Every file must carry the study, series, SOP identity and patient seen when the series was
   listed. The patient is kept only as a key salted with the archive, never shown.
@@ -117,9 +120,6 @@ A viewer or worklist can open a series in 3DScan with:
 <3DScan root>#dicom-study=<StudyInstanceUID>&dicom-series=<SeriesInstanceUID>&dicom-source=<key>
 ```
 
-- `<key>` names the archive and is not a secret. `scan3d archive-check` prints it. A link for
-  another archive is refused.
-- The identities stay in the URL fragment, so the browser does not send them in the page request.
-- 3DScan shows the patient and series, then reopens an earlier import of it or offers
-  **Import selected series**. A link never prepares a CT or runs segmentation.
-- A link with `#orthanc-*` keys is read as an Orthanc link, and its `#dicom-*` keys are ignored.
+It behaves as an [Orthanc launch link](ORTHANC.md#open-in-3dscan-from-orthanc-explorer-2). `<key>`,
+which `scan3d archive-check` prints, names the DICOMweb archive. A link with `#orthanc-*` keys is
+read as an Orthanc link, and its `#dicom-*` keys are ignored.
