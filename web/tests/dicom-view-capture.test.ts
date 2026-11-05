@@ -568,6 +568,36 @@ describe('viewport capture through Cornerstone', () => {
   });
 });
 
+describe('see-through segments over the native CT', () => {
+  it('follow the CT as drawn, and say why segments stay solid over it', async () => {
+    const shown = await viewport({ localSession: session() }),
+      reason = 'This GPU has 8 texture units and 13 are needed.';
+    shown.toggle('Show segmentation', true);
+    await settled();
+    const mode = () =>
+      JSON.parse(shown.all(element => element.getAttribute('data-native-surface-layers') !== null)[0].getAttribute('data-native-surface-layers')!).mode;
+    const slider = () => shown.labelled('All segment opacity') as unknown as HTMLInputElement;
+    // A pending mask hides the CT, and vtk's own translucency applies until a mask draws it.
+    fake.viewer.isVolumeDrawn = false;
+    fake.viewer.options.onVolumeDrawn(false);
+    await settled();
+    expect(mode()).toBe('stock');
+    fake.viewer.isVolumeDrawn = true;
+    fake.viewer.options.onVolumeDrawn(true);
+    await settled();
+    expect(mode()).toBe('layered');
+    expect(slider().disabled).toBe(false);
+    fake.viewer.armSurfaceLayers = () => {
+      throw new Error(reason);
+    };
+    fake.viewer.options.onSurfaceLayersChanged(reason);
+    await settled();
+    expect(mode()).toBe('solid');
+    expect(slider().disabled).toBe(true);
+    expect(shown.text()).toContain(reason);
+  });
+});
+
 describe('Cinematic heart in Cornerstone review', () => {
   async function reviewing() {
     const shown = await viewport({ localSession: session() });
