@@ -2446,7 +2446,6 @@ numpy==2.3.5 \
     #   tifffile
     #   torchvision
     #   totalsegmentator
-    #   trimesh
     #   trx-python
     # from https://pypi.org/simple
 orderly-set==5.5.0 \
@@ -3095,14 +3094,6 @@ pytest==8.4.2 \
     # via
     #   -c requirements/rocm10-py314-baseline.constraints
     #   -r requirements/rocm10-py314.in
-    #   pytest-asyncio
-    # from https://pypi.org/simple
-pytest-asyncio==1.2.0 \
-    --hash=sha256:8e17ae5e46d8e7efe51ab6494dd2010f4ca8dae51652aa3c8d55acf50bfb2e99 \
-    --hash=sha256:c609a64a2a8768462d0c99811ddb8bd2583c33fd33cf7f21af1c142e824ffb57
-    # via
-    #   -c requirements/rocm10-py314-baseline.constraints
-    #   -r requirements/rocm10-py314.in
     # from https://pypi.org/simple
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
@@ -3622,13 +3613,6 @@ traceback2==1.4.0 \
     # via
     #   -c requirements/rocm10-py314-baseline.constraints
     #   unittest2
-    # from https://pypi.org/simple
-trimesh==4.9.0 \
-    --hash=sha256:934265a1de4b472bee21094c4e88d0a7522054b9911adb06e9b8062bb8757178 \
-    --hash=sha256:ad907a223867f614ef1598d85a4c978845f39365cb7ccc93fa5800901fba3ef9
-    # via
-    #   -c requirements/rocm10-py314-baseline.constraints
-    #   -r requirements/rocm10-py314.in
     # from https://pypi.org/simple
 triton==3.8.0+git669b31ac.rocm10.1.0 \
     --hash=sha256:3d0c082a0cc7109618ae43550ac3ddf80427543ef20e9c83248db417475e2cba
