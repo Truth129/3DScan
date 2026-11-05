@@ -83,6 +83,7 @@ _ARTIFACT = TypeAdapter(_RoiArtifact)
 
 class OsirixRoiExports(OrthancExports):
     kind = "orthanc_roi_export"
+    shared_kinds = ()
     result_key = "osirix_roi"
     encoding_version = ROI_ENCODING_VERSION
     label = "OsiriX ROI"

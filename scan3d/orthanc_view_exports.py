@@ -78,6 +78,7 @@ class OrthancViewExports(OrthancExports):
     lost_job_error = "Orthanc no longer has the delivery job, so the view may already have arrived. Check the destination."
     offers_file = False
     artifact_adapter = _ARTIFACT
+    shared_kinds = ()
     # A file export reaches no archive, so it needs neither Orthanc nor an archive import.
     file_delivery = False
 

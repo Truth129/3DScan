@@ -25,6 +25,7 @@ from .fileio import atomic_json
 from .identity import actor_id
 from .image_assets import reference_image
 from .orthanc import OrthancError
+from .archive import models as web_models
 from .orthanc_models import DicomUID, Digest, OrthancID, Positive, SourceManifest, json_record, parse_source, series_source
 from .store import identifier, now, public_job
 
@@ -36,6 +37,10 @@ ARCHIVE_OFF = "Your account cannot use the archive. An administrator can turn it
 
 class ExportUnavailable(ValueError):
     """A deliberately public, patient-independent explanation."""
+
+
+# How to read each kind of retained archive source, and serialize it for its manifest check.
+_SOURCE_READERS = {"orthanc": (parse_source, json_record), "archive": (web_models.parse_source, web_models.json_record)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +228,12 @@ class OrthancExports:
     partial_error = None
     offers_file = True
     artifact_adapter = _ARTIFACT
+    # Which retained source a delivery reads: an Orthanc import's, or a DICOMweb archive's.
+    transport = "orthanc"
+    # Kinds whose artifacts this one reuses, and whose saved inputs its guard checks: a DICOMweb
+    # case's SEG file and its archived SEG are one instance, as an Orthanc case's are.
+    shared_kinds = ("archive_seg_export",)
+    no_source_error = "This saved revision has no verified original Orthanc CT source. Reimport and prepare its original CT before export."
 
     def __init__(self, service):
         self.service = service
@@ -239,8 +250,8 @@ class OrthancExports:
         store = self.service.store
         revision = store.revision(case_id, revision_id)
         case = store.get("cases", case_id)
-        if archive and not self.service.settings.orthanc_url:
-            raise ExportUnavailable(f"Configure Orthanc before exporting {self.noun}.")
+        if archive:
+            self._require_transport()
         try:
             reference = reference_image(revision)
         except (KeyError, OSError, ValueError):
@@ -297,7 +308,12 @@ class OrthancExports:
         source_metadata = reference["source"]
         try:
             retained = series_source(case, source_metadata["series_uid"])
-            source = parse_source(retained["orthanc"])
+            # A DICOMweb import keeps its own record. A file can bind to either; a delivery needs its transport's.
+            kind = "archive" if "archive" in retained else "orthanc"
+            if connect and kind != self.transport:
+                raise ValueError()
+            parse, record = _SOURCE_READERS[kind]
+            source = parse(retained[kind])
             directory = Path(retained["source_dir"])
             manifest_path = directory.parent / "source-import.json"
             if (
@@ -306,7 +322,7 @@ class OrthancExports:
                 or manifest_path.is_symlink()
                 or not manifest_path.is_file()
                 or _hash(manifest_path) != source_metadata["source_manifest_sha256"]
-                or json.loads(manifest_path.read_text()) != json_record(source)
+                or json.loads(manifest_path.read_text()) != record(source)
                 or source.content_digest != source_metadata["source_content_sha256"]
                 or source.snapshot.source_key != source_metadata["source_archive_key"]
                 or source.snapshot.series_uid != source_metadata["series_uid"]
@@ -316,14 +332,20 @@ class OrthancExports:
             ):
                 raise ValueError()
             if connect:
-                with self.service.orthanc.client() as client:
+                with self._transport_client() as client:
                     if client.source_key != source.snapshot.source_key:
                         raise ValueError()
         except (KeyError, OSError, ValueError):
-            raise ExportUnavailable(
-                "This saved revision has no verified original Orthanc CT source. Reimport and prepare its original CT before export."
-            ) from None
+            raise ExportUnavailable(self.no_source_error) from None
         return source, directory
+
+    def _require_transport(self):
+        """Refuse an archive delivery that this workstation has no archive for."""
+        if not self.service.settings.orthanc_url:
+            raise ExportUnavailable(f"Configure Orthanc before exporting {self.noun}.")
+
+    def _transport_client(self):
+        return self.service.orthanc.client()
 
     def availability(self, case_id, revision_id, *, archive=True, kinds=None):
         """``kinds`` lets one dialog list the jobs of every format it offers, newest first."""
@@ -448,11 +470,15 @@ class OrthancExports:
         artifact_key, export_key = fields["artifact_key"], fields["export_key"]
         with self.service.store.connection() as con:
             con.execute("BEGIN IMMEDIATE")
-            rows = con.execute("SELECT data FROM jobs WHERE case_id=? AND json_extract(data,'$.kind')=? ORDER BY rowid DESC", (case_id, self.kind)).fetchall()
+            kinds = (self.kind, *self.shared_kinds)
+            rows = con.execute(
+                f"SELECT data FROM jobs WHERE case_id=? AND json_extract(data,'$.kind') IN ({','.join('?' * len(kinds))}) ORDER BY rowid DESC",
+                (case_id, *kinds),
+            ).fetchall()
             previous = [json.loads(row["data"]) for row in rows]
             if guard:
                 guard(previous)
-            matching = next((job for job in previous if job["payload"]["export_key"] == export_key), None)
+            matching = next((job for job in previous if job["kind"] == self.kind and job["payload"]["export_key"] == export_key), None)
             if matching and matching["status"] in {"queued", "running"}:
                 return matching
             if resend and not (matching and matching["status"] == "completed" and matching.get("result", {}).get(self.result_key, {}).get("sent")):
@@ -522,8 +548,14 @@ class OrthancExports:
 
     def _verify_source(self, inputs, job):
         """The source files must still hold the bytes this export binds to."""
-        if inputs.source is not None:
-            self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=lambda: self.service.cancelled(job))
+
+        def cancelled():
+            return self.service.cancelled(job)
+
+        if isinstance(inputs.source, web_models.WebSource):
+            self.service.archive_imports._verify(inputs.source_dir, inputs.source.snapshot, inputs.source.files, cancelled=cancelled)
+        elif inputs.source is not None:
+            self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=cancelled)
         elif _hash_series(inputs.seg_source.paths, lambda: self.service.cancelled(job)) != inputs.seg_source.content_sha256:
             raise ExportUnavailable("The original CT files no longer match the saved reference image. Reimport and prepare the CT before export.")
 
@@ -767,27 +799,31 @@ class OrthancExports:
             result["removed_voxels"] = {segment.structure_id: segment.removed_voxel_count for segment in segments}
         return {"dicom_seg": result}
 
-    def run(self, job):
+    def _prepare_directory(self, job):
+        """The export's directory, or a fresh one when an encoder finished before publishing its manifest."""
         directory = self._directory(job["case_id"], job["payload"]["export_id"])
+        directory.mkdir(parents=True, exist_ok=True)
+        if not (directory / "export.json").exists() and (directory / "dicom").exists():
+            # Keep those orphan bytes; no network operation could have begun.
+            job["payload"]["export_id"] = identifier()
+            job["payload"].pop("artifact_manifest_sha256", None)
+            self.service.store.update_job(job["id"], payload=job["payload"])
+            directory = self._directory(job["case_id"], job["payload"]["export_id"])
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def run(self, job):
         artifact, receipt, sending = None, None, False
         destination = job["payload"]["destination"]
         file_delivery = job["payload"].get("delivery") == "file"
-        receipt_path = directory / "delivery.json"
+        receipt_path = None
 
         def save_receipt():
             atomic_json(receipt_path, _RECEIPT.dump_python(receipt, mode="json"))
 
         try:
-            directory.mkdir(parents=True, exist_ok=True)
-            if not (directory / "export.json").exists() and (directory / "dicom").exists():
-                # An encoder completed before its manifest was published. Keep
-                # those orphan bytes; no network operation could have begun.
-                job["payload"]["export_id"] = identifier()
-                job["payload"].pop("artifact_manifest_sha256", None)
-                self.service.store.update_job(job["id"], payload=job["payload"])
-                directory = self._directory(job["case_id"], job["payload"]["export_id"])
-                directory.mkdir(parents=True, exist_ok=True)
-                receipt_path = directory / "delivery.json"
+            directory = self._prepare_directory(job)
+            receipt_path = directory / "delivery.json"
             if receipt_path.exists() and not file_delivery:
                 try:
                     receipt = _RECEIPT.validate_json(receipt_path.read_bytes())
