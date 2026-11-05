@@ -71,7 +71,9 @@ const BLEND_ANCHOR = 'void applyBlend(vec3 rayOriginVC, vec3 rayDirVC, float min
 const MARCH_FIRST = '    vec4 firstColor = getColorAtPos(firstPosVC);';
 const MARCH_LAST = '    gl_FragData[0] = vec4(color.rgb / color.a, color.a);';
 // vtk's composite march, with each sample passed through scan3dStep. getColorAtPos runs exactly as
-// before, so masking, colouring, occlusion and shadows are untouched.
+// before, so masking, colouring, occlusion and shadows are untouched. Adapted from vtkVolumeFS.glsl
+// in vtk.js, Copyright (c) 2016, Kitware Inc., and Copyright (c) Ken Martin, Will Schroeder, Bill
+// Lorensen, under the BSD-3-Clause terms in web/public/licenses/vtk.js-LICENSE.txt.
 const MARCH = `    vec4 firstColor = getColorAtPos(firstPosVC);
     vec4 color = vec4(0.0); scan3dNext = 0; scan3dFetch();
     scan3dUntil(color, minDistance);
