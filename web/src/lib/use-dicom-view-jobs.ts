@@ -1,13 +1,22 @@
 import { onScopeDispose, shallowReactive } from 'vue';
 import { api, ApiError } from './api';
 import { caseIsGone } from './jobs';
-import { DICOM_VIEW_KIND, dicomViewDelivered, dicomViewExportSummary, pendingDicomViewExport, type DicomViewExportJob } from './dicom-view';
+import {
+  DELIVERED_VIEW_KINDS,
+  dicomViewDelivered,
+  dicomViewExportSummary,
+  dicomViewFileReady,
+  pendingDicomViewExport,
+  type DicomViewExportJob,
+} from './dicom-view';
 
 interface DicomViewJobOptions {
   activeCaseId: () => string | undefined;
   caseLabel: (caseId: string) => string | undefined;
   /** True while the open dialog is presenting this job, so it needs no second report. */
   showing: (jobId: string) => boolean;
+  /** True while a closed dialog's capture is kept for this job, so DICOM ↗ can reopen it. */
+  held: (jobId: string) => boolean;
   success: (message: string) => void;
   failure: (message: string) => void;
 }
@@ -35,7 +44,17 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     parked.delete(job.id);
     jobs.set(job.id, job);
     if (options.showing(job.id)) return;
-    if (dicomViewDelivered(job)) options.success(named(dicomViewExportSummary(job), job.case_id));
+    // A file is saved from its dialog, so say where that is, or that it went with a dialog nobody can reopen.
+    if (dicomViewFileReady(job))
+      options.success(
+        named(
+          options.held(job.id)
+            ? `${dicomViewExportSummary(job)} Choose DICOM ↗ to save it.`
+            : 'A DICOM view file was prepared after its dialog closed. Choose DICOM ↗ and prepare it again to save it.',
+          job.case_id,
+        ),
+      );
+    else if (dicomViewDelivered(job)) options.success(named(dicomViewExportSummary(job), job.case_id));
     else {
       const reason =
         job.status === 'failed'
@@ -123,7 +142,7 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       }
       // A person hears how their own sends ended.
       for (const job of listed)
-        if (job.kind === DICOM_VIEW_KIND && job.case_id === caseId && pendingDicomViewExport(job) && !job.started_by && !disposed) follow(job);
+        if (DELIVERED_VIEW_KINDS.includes(job.kind) && job.case_id === caseId && pendingDicomViewExport(job) && !job.started_by && !disposed) follow(job);
     } catch {
       /* The next opening of the case looks again. */
     }

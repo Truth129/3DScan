@@ -178,6 +178,10 @@ describe('saved mask export scope', () => {
     expect(successfulDicomSegDelivery([delivered], ['heart', 'lung'], 'osirix', 2)).toBe(false);
     expect(successfulDicomSegDelivery([current, delivered], ['heart', 'lung'], 'osirix', 2)).toBe(true);
     expect(successfulDicomSegDelivery([{ ...current, status: 'failed' }, current], ['heart', 'lung'], 'osirix', 2)).toBe(false);
+    // A direct destination moved under the same id is a new destination, which nothing has reached yet.
+    const direct = seg('completed', { destination_key: 'old-address' });
+    expect(successfulDicomSegDelivery([direct], ['heart', 'lung'], 'osirix', undefined, undefined, 'seg', 'old-address')).toBe(true);
+    expect(successfulDicomSegDelivery([direct], ['heart', 'lung'], 'osirix', undefined, undefined, 'seg', 'new-address')).toBe(false);
   });
   it('finds a prepared file only for the exact selection, ranking and encoding', () => {
     const file = { archived: false, sent: false, file: true, destination_id: undefined, structure_ids: ['lung', 'heart'], encoding_version: 3 };

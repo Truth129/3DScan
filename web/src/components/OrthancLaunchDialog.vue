@@ -1,20 +1,45 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
-import { orthancDate, useOrthancLaunch, waitForOrthancPoll, type OrthancLaunch } from '../lib/orthanc';
+import { ARCHIVE_LAUNCH, useQuietCountdown, type ArchiveLaunchRequest } from '../lib/archive';
+import { orthancDate, orthancImportBlockReason, useOrthancLaunch, waitForOrthancPoll, type OrthancLaunchRequest, type SeriesLaunch } from '../lib/orthanc';
 import { ARCHIVE_OFF, canUseArchive } from '../lib/session';
 import type { Case } from '../types';
 
-const props = defineProps<{ launch: Exclude<OrthancLaunch, { kind: 'none' }> }>();
+// `source` says which link opened this: Explorer 2's `#orthanc-*` or a DICOMweb archive's `#dicom-*`.
+const props = withDefaults(
+  defineProps<{ launch: SeriesLaunch<OrthancLaunchRequest> | SeriesLaunch<ArchiveLaunchRequest>; source?: 'orthanc' | 'dicomweb' }>(),
+  { source: 'orthanc' },
+);
 const emit = defineEmits<{ close: []; opened: [id: string]; imported: [result: Case] }>();
 const dialog = ref<HTMLElement>(),
   previousFocus = document.activeElement;
-const { result, job, busy, error, blockReason, canImport, resolve, start } = useOrthancLaunch({
-  launch: props.launch,
-  reader: { resolve: api.orthancLaunch, import: api.importOrthanc, job: api.job, case: api.case, wait: waitForOrthancPoll },
-  opened: id => emit('opened', id),
-  imported: next => emit('imported', next),
-});
+const dicomweb = props.source === 'dicomweb';
+const common = { opened: (id: string) => emit('opened', id), imported: (next: Case) => emit('imported', next) };
+const statusReader = { job: api.job, case: api.case, wait: waitForOrthancPoll };
+const { result, job, busy, error, canImport, resolve, start } = dicomweb
+  ? useOrthancLaunch({
+      launch: props.launch as SeriesLaunch<ArchiveLaunchRequest>,
+      reader: { resolve: api.archiveLaunch, import: api.importArchive, ...statusReader },
+      source: ARCHIVE_LAUNCH,
+      ...common,
+    })
+  : useOrthancLaunch({
+      launch: props.launch as SeriesLaunch<OrthancLaunchRequest>,
+      reader: { resolve: api.orthancLaunch, import: api.importOrthanc, ...statusReader },
+      ...common,
+    });
+// A DICOMweb series may wait out its quiet period; the launch is checked again when the wait ends.
+const { remaining } = useQuietCountdown(
+  () => (result.value ? [result.value.series] : []),
+  () => {
+    // Without the archive the server would refuse, so the dialog asks it nothing.
+    if (!canUseArchive.value) return false;
+    void resolve();
+    return true;
+  },
+);
+const blockReason = computed(() => (result.value ? orthancImportBlockReason(result.value.series, remaining(result.value.series)) : ''));
 const patient = computed(() => result.value?.study.patient_name?.replaceAll('^', ' ').trim() || 'Patient name unavailable');
 watch([busy, error], async () => {
   await nextTick();
@@ -53,7 +78,8 @@ onBeforeUnmount(() => {
   <div class="dialog-backdrop" @click.self="emit('close')" @keydown="keyboard">
     <section ref="dialog" class="import-dialog orthanc-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="orthanc-launch-title">
       <header>
-        <span class="eyebrow">ORTHANC SERIES</span><button type="button" class="icon-button" aria-label="Close Orthanc launch" @click="emit('close')">×</button>
+        <span class="eyebrow">{{ dicomweb ? 'ARCHIVE SERIES' : 'ORTHANC SERIES' }}</span
+        ><button type="button" class="icon-button" :aria-label="dicomweb ? 'Close archive launch' : 'Close Orthanc launch'" @click="emit('close')">×</button>
       </header>
       <h2 id="orthanc-launch-title">Open in 3DScan</h2>
       <p v-if="!canUseArchive" class="launch-message error" role="status">{{ ARCHIVE_OFF }}</p>
@@ -90,7 +116,8 @@ onBeforeUnmount(() => {
             <dt>Images</dt>
             <dd>
               {{ result.series.modality }} · {{ result.series.instance_count
-              }}{{ result.series.expected_instances != null ? ` / ${result.series.expected_instances} expected` : '' }}
+              }}{{ result.series.expected_instances != null ? ` / ${result.series.expected_instances} expected` : ''
+              }}{{ result.series.reported_instances != null ? ` / ${result.series.reported_instances} reported` : '' }}
             </dd>
           </div>
         </dl>
@@ -100,7 +127,12 @@ onBeforeUnmount(() => {
         </p>
         <p class="muted">Confirm the patient and reconstruction before importing. Opening the CT and starting segmentation are separate actions.</p>
       </template>
-      <progress v-if="job && busy" :value="job.progress?.completed" :max="job.progress?.total || 1" aria-label="Orthanc launch import progress"></progress>
+      <progress
+        v-if="job && busy"
+        :value="job.progress?.completed"
+        :max="job.progress?.total || 1"
+        :aria-label="dicomweb ? 'Archive launch import progress' : 'Orthanc launch import progress'"
+      ></progress>
       <p v-if="error" class="launch-message error" role="alert">{{ error }}</p>
       <p v-if="job" class="launch-message">Closing this panel stops status checks. An import already started continues on the workstation.</p>
       <footer>

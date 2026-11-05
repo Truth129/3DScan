@@ -46,8 +46,6 @@ class _ViewArtifact:
     reference_sha256: Digest
     source_manifest_sha256: Digest
     source_content_sha256: Digest
-    source_snapshot: Digest
-    archive_key: Digest
     source_kind: str
     series_instance_uid: DicomUID
     study_instance_uid: DicomUID
@@ -57,6 +55,9 @@ class _ViewArtifact:
     created_at: str
     files: Annotated[tuple[_ViewFile, ...], Field(min_length=1, max_length=1)]
     encoding_version: Positive
+    # A file of a folder or ZIP import was never in an archive, so it has neither.
+    source_snapshot: Digest | None = None
+    archive_key: Digest | None = None
 
 
 _ARTIFACT = TypeAdapter(_ViewArtifact)
@@ -76,11 +77,24 @@ class OrthancViewExports(OrthancExports):
     still_active_error = "An earlier Orthanc delivery may still be active. Check the destination."
     lost_job_error = "Orthanc no longer has the delivery job, so the view may already have arrived. Check the destination."
     offers_file = False
+    artifact_adapter = _ARTIFACT
+    shared_kinds = ()
+    # A file export reaches no archive, so it needs neither Orthanc nor an archive import.
+    file_delivery = False
+
+    @property
+    def archive_bound(self):
+        """Whether a capture binds to an archive and its record, rather than to the case's own copy of the CT."""
+        return not self.file_delivery
 
     def _inputs(self, case_id, revision_id, structure_ids=None):
-        revision, case, reference = self._reference(case_id, revision_id)
-        source, directory = self._source(case_id, case, reference)
-        return _Inputs(revision, reference, source, directory, ())
+        revision, case, reference = self._reference(case_id, revision_id, archive=self.archive_bound)
+        source, directory, seg_source = self._series_source(case_id, case, revision, reference, connect=self.archive_bound)
+        return _Inputs(revision, reference, source, directory, (), seg_source)
+
+    def _payload_fields(self, inputs):
+        """What a queued job records about its source, and must find unchanged when it runs."""
+        return {"orthanc_study_id": inputs.source.snapshot.study_id}
 
     def _captures(self, case_id):
         return self.service.store.case_dir(case_id) / "dicom-view-captures"
@@ -129,18 +143,21 @@ class OrthancViewExports(OrthancExports):
             identity = {
                 "revision_id": revision_id,
                 "reference_image_id": inputs.reference["id"],
-                "source_manifest_sha256": inputs.reference["source"]["source_manifest_sha256"],
+                "source_manifest_sha256": inputs.seg_source.manifest_sha256,
                 "png_sha256": png_sha256,
             }
             encoding = {**identity, "encoding_version": self.encoding_version}
             artifact_key = hashlib.sha256(json.dumps(encoding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            export_key = hashlib.sha256((artifact_key + ":" + (destination or "")).encode()).hexdigest()
-            fields = {**encoding, "orthanc_study_id": inputs.source.snapshot.study_id, "artifact_key": artifact_key, "export_key": export_key}
+            export_key = self._export_key(artifact_key, destination, self.file_delivery)
+            fields = {**encoding, **self._payload_fields(inputs), "artifact_key": artifact_key, "export_key": export_key}
+            extras = {"delivery": "file"} if self.file_delivery else {}
 
             def summarize(payload):
                 summary = {"export_id": payload["export_id"], "encoding_version": self.encoding_version, "archived": False, "sent": False, "instance_count": 1}
                 if destination:
                     summary.update(destination=display_name, destination_id=destination)
+                if self.file_delivery:
+                    summary["file"] = True
                 return summary
 
             def publish(_payload):
@@ -149,7 +166,7 @@ class OrthancViewExports(OrthancExports):
                 if not self._retained_intact(case_id, png_sha256):
                     os.replace(staging, self._retained(case_id, png_sha256))
 
-            return self._enqueue(case_id, revision_id, fields, {}, destination, display_name, resend, summarize, publish=publish)
+            return self._enqueue(case_id, revision_id, fields, extras, destination, display_name, resend, summarize, publish=publish)
         finally:
             staging.unlink(missing_ok=True)
 
@@ -160,13 +177,13 @@ class OrthancViewExports(OrthancExports):
         inputs = self._inputs(job["case_id"], job["revision_id"])
         if (
             inputs.reference["id"] != payload["reference_image_id"]
-            or inputs.reference["source"]["source_manifest_sha256"] != payload["source_manifest_sha256"]
-            or inputs.source.snapshot.study_id != payload["orthanc_study_id"]
+            or inputs.seg_source.manifest_sha256 != payload["source_manifest_sha256"]
+            or any(payload.get(key) != value for key, value in self._payload_fields(inputs).items())
         ):
             raise ExportUnavailable("The saved revision changed after this export was queued. Capture the view again.")
         if not self._retained_intact(job["case_id"], payload["png_sha256"], lambda: self.service.cancelled(job)):
             raise ExportUnavailable("The retained view image is unavailable or changed. Capture the view again.")
-        self.service.orthanc._verify(inputs.source_dir, inputs.source.snapshot, inputs.source, cancelled=lambda: self.service.cancelled(job))
+        self._verify_source(inputs, job)
         return inputs
 
     def _artifact(self, job, directory):
@@ -181,7 +198,7 @@ class OrthancViewExports(OrthancExports):
             self.service.stage(job, "Encoding view as DICOM")
             try:
                 result = export_view(
-                    [inputs.source_dir / item.path for item in inputs.source.files],
+                    list(inputs.seg_source.paths),
                     self._retained(job["case_id"], payload["png_sha256"]),
                     directory / "dicom",
                     revision_id=job["revision_id"],
@@ -196,10 +213,10 @@ class OrthancViewExports(OrthancExports):
                 revision_id=job["revision_id"],
                 reference_image_id=inputs.reference["id"],
                 reference_sha256=inputs.reference["content_sha256"],
-                source_manifest_sha256=inputs.reference["source"]["source_manifest_sha256"],
-                source_content_sha256=inputs.source.content_digest,
-                source_snapshot=inputs.source.snapshot.snapshot,
-                archive_key=inputs.source.snapshot.source_key,
+                source_manifest_sha256=inputs.seg_source.manifest_sha256,
+                source_content_sha256=inputs.seg_source.content_sha256,
+                source_snapshot=inputs.seg_source.snapshot,
+                archive_key=inputs.seg_source.archive_key,
                 source_kind=inputs.revision["source"],
                 series_instance_uid=result.series_instance_uid,
                 study_instance_uid=result.study_instance_uid,
@@ -222,12 +239,12 @@ class OrthancViewExports(OrthancExports):
             or artifact.revision_id != job["revision_id"]
             or artifact.reference_image_id != inputs.reference["id"]
             or artifact.reference_sha256 != inputs.reference["content_sha256"]
-            or artifact.source_manifest_sha256 != inputs.reference["source"]["source_manifest_sha256"]
-            or artifact.source_content_sha256 != inputs.source.content_digest
-            or artifact.source_snapshot != inputs.source.snapshot.snapshot
-            or artifact.archive_key != inputs.source.snapshot.source_key
+            or artifact.source_manifest_sha256 != inputs.seg_source.manifest_sha256
+            or artifact.source_content_sha256 != inputs.seg_source.content_sha256
+            or artifact.source_snapshot != inputs.seg_source.snapshot
+            or artifact.archive_key != inputs.seg_source.archive_key
             or artifact.source_kind != inputs.revision["source"]
-            or artifact.study_instance_uid != inputs.source.snapshot.study_uid
+            or artifact.study_instance_uid != inputs.seg_source.study_uid
             or artifact.png_sha256 != payload["png_sha256"]
         ):
             raise ExportUnavailable("The cached DICOM view export differs from its frozen source or saved revision.")

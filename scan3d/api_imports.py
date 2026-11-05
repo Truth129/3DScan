@@ -5,7 +5,7 @@ import zipfile
 from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
-from .api_models import ImportLocal, ImportStart, OrthancAddSeries, OrthancImport, OrthancLaunch, OrthancQuery, import_manifest
+from .api_models import ImportLocal, ImportStart, OrthancAddSeries, OrthancImport, OrthancLaunch, OrthancQuery, import_manifest, study_query
 from .fileio import extract_zip, safe_relative
 from .store import public_case, public_job
 from .uploads import Uploads
@@ -28,9 +28,7 @@ def add_routes(app, service):
 
     @app.post("/api/orthanc/studies/query")
     def orthanc_studies(body: OrthancQuery):
-        names = {"patient_id": "PatientID", "patient_name": "PatientName", "accession_number": "AccessionNumber", "study_date": "StudyDate"}
-        query = {tag: value.strip() for name, tag in names.items() if (value := getattr(body, name)) and value.strip()}
-        return JSONResponse(service.orthanc.studies(query, body.offset, body.limit), headers={"Cache-Control": "no-store"})
+        return JSONResponse(service.orthanc.studies(study_query(body), body.offset, body.limit), headers={"Cache-Control": "no-store"})
 
     @app.get("/api/orthanc/studies/{study_id}/series")
     def orthanc_series(study_id: str):

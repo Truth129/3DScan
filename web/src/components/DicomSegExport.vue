@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { dicomSegFileUrl } from '../lib/api';
 import {
+  DICOM_DIRECT_SEG_KIND,
   defaultOverlapOrder,
   dicomSegExportSummary,
   exportFormat,
@@ -47,6 +48,7 @@ const {
   load,
   resume,
   start,
+  sendDirect,
   prepareFile,
   cancel,
 } = useDicomSegExport({
@@ -65,15 +67,26 @@ const blocked = computed(() => !!disabled.value || locked.value || !!statusError
 const actionDisabled = computed(() => blocked.value || !orthancReady.value);
 /** Hide what this case cannot use, unless the disabled buttons are all that is left to explain it, with no reason given. */
 const showOrthanc = computed(() => orthancReady.value || (!fileReady.value && !availability.value?.reason));
-const description = computed(() =>
-  orthancReady.value
-    ? `Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.${roiReady.value ? ' Archive and send can also make OsiriX ROIs.' : ''}`
-    : 'Choose the masks from this saved revision, then save them as a DICOM SEG file.',
-);
-const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
+/** A case from a DICOMweb archive archives there, and sends only from here. */
+const archiveName = computed(() => availability.value?.archive_name);
+/** A case not from Orthanc sends from this workstation to a configured DICOM node, when the server lists any. */
+const direct = computed(() => availability.value?.direct);
+const sends = computed(() => (direct.value ? direct.value.available : showOrthanc.value && !archiveName.value));
+const sendList = computed(() => (direct.value ? direct.value.destinations : (availability.value?.destinations ?? [])));
+const description = computed(() => {
+  const send = direct.value?.available ? 'send them to a configured DICOM node' : '';
+  if (!orthancReady.value) return `Choose the masks from this saved revision, then save them as a DICOM SEG file${send ? ` or ${send}` : ''}.`;
+  if (archiveName.value)
+    return `Choose the masks from this saved revision. Save them as a DICOM SEG file, ${send ? `archive them in ${archiveName.value}, or ${send}` : `or archive them in ${archiveName.value}`}.`;
+  return `Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.${roiReady.value ? ' Archive and send can also make OsiriX ROIs.' : ''}`;
+});
+const target = computed(() => sendList.value.find(item => item.id === destination.value));
+const sendDisabled = computed(() => blocked.value || !target.value || (direct.value ? !direct.value.available : !orthancReady.value));
 const ranked = computed(() => overlapOrder.value.filter(id => selected.value.includes(id)));
 const overlapPriority = computed(() => (!roi.value && resolveOverlaps.value && ranked.value.length > 1 ? ranked.value : undefined));
-const repeatDelivery = computed(() => !!target.value && alreadySent(selected.value, target.value.id, overlapPriority.value, chosenFormat.value));
+const repeatDelivery = computed(
+  () => !!target.value && alreadySent(selected.value, target.value.id, overlapPriority.value, chosenFormat.value, target.value.key),
+);
 const prepared = computed(() => preparedFile(selected.value, overlapPriority.value));
 const unfinishedRanking = computed(() => unfinishedOverlapRanking(job.value));
 const retryMatches = computed(() => JSON.stringify(unfinishedRanking.value) === JSON.stringify(overlapPriority.value));
@@ -141,6 +154,11 @@ function saveFile() {
     error.value = sessionFailure(reason);
   });
 }
+function send() {
+  if (!target.value) return;
+  if (direct.value) void sendDirect(selected.value, target.value.id, repeatDelivery.value, overlapPriority.value);
+  else void start(selected.value, target.value.id, repeatDelivery.value, overlapPriority.value, chosenFormat.value);
+}
 onBeforeUnmount(() => dialog.value?.close());
 </script>
 
@@ -169,7 +187,7 @@ onBeforeUnmount(() => dialog.value?.close());
     </p>
     <p v-if="disabled" class="export-error" role="status">{{ disabled }}</p>
 
-    <fieldset :disabled="locked || !!disabled || (!orthancReady && !fileReady)">
+    <fieldset :disabled="locked || !!disabled || (!orthancReady && !fileReady && !direct?.available)">
       <legend>Masks · {{ selected.length }} of {{ structures.length }} selected</legend>
       <div class="selection-actions">
         <button type="button" class="text-button" @click="selected = structures.map(item => item.id)">Select all</button
@@ -224,18 +242,22 @@ onBeforeUnmount(() => dialog.value?.close());
           </ol>
         </template>
       </div>
-      <template v-if="showOrthanc">
+      <template v-if="sends">
         <label class="destination-field"
           >Send destination<select v-model="destination">
             <option value="">Choose a destination…</option>
-            <option v-for="item in availability?.destinations ?? []" :key="item.id" :value="item.id">
-              {{ item.name }}{{ item.aet ? ` · ${item.aet}` : '' }}
-            </option>
+            <option v-for="item in sendList" :key="item.id" :value="item.id">{{ item.name }}{{ item.aet ? ` · ${item.aet}` : '' }}</option>
           </select></label
         >
-        <p v-if="availability && !availability.destinations.length" class="help">No send destination is configured. You can still archive in Orthanc.</p>
+        <p v-if="availability && !sendList.length" class="help">
+          {{ direct ? 'No DICOM destination is configured.' : 'No send destination is configured. You can still archive in Orthanc.' }}
+        </p>
       </template>
-      <p v-else-if="availability?.reason" class="help">Archive and send are unavailable. {{ availability.reason }}</p>
+      <p v-if="direct && !direct.available" class="help">Sending is unavailable. {{ direct.reason }}</p>
+      <p v-if="!(showOrthanc && !archiveName) && availability?.reason" class="help">
+        {{ archiveName ? 'Archiving is unavailable.' : direct ? 'Archiving in Orthanc is unavailable.' : 'Archive and send are unavailable.' }}
+        {{ availability.reason }}
+      </p>
     </fieldset>
 
     <div v-if="job" class="export-status" :class="{ 'export-error': job.status === 'failed' }" role="status" aria-live="polite">
@@ -267,7 +289,9 @@ onBeforeUnmount(() => dialog.value?.close());
       {{
         cancellable
           ? 'You may close this panel. Closing does not cancel the export.'
-          : 'You may close this panel. Orthanc has started this send, so it can no longer be cancelled.'
+          : job?.kind === DICOM_DIRECT_SEG_KIND
+            ? 'You may close this panel. The send has started, so it can no longer be cancelled.'
+            : 'You may close this panel. Orthanc has started this send, so it can no longer be cancelled.'
       }}
     </p>
     <p v-else-if="repeatDelivery" class="help">This selection has already been sent. Send again starts a new delivery of the same DICOM instances.</p>
@@ -292,16 +316,11 @@ onBeforeUnmount(() => dialog.value?.close());
           {{ prepared ? 'Download SEG file' : 'Prepare SEG file' }}</button
         ><template v-if="showOrthanc"
           ><button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null, false, overlapPriority, chosenFormat)">
-            {{ submitting ? 'Queuing…' : 'Archive in Orthanc' }}</button
-          ><button
-            class="button primary"
-            type="button"
-            :disabled="actionDisabled || !target"
-            @click="target && start(selected, target.id, repeatDelivery, overlapPriority, chosenFormat)"
-          >
-            {{ target ? `${repeatDelivery ? 'Send again' : 'Send'} to ${target.name}` : 'Send to viewer' }}
+            {{ submitting ? 'Queuing…' : `Archive in ${archiveName ?? 'Orthanc'}` }}
           </button></template
-        >
+        ><button v-if="sends" class="button primary" type="button" :disabled="sendDisabled" @click="send">
+          {{ target ? `${repeatDelivery ? 'Send again' : 'Send'} to ${target.name}` : 'Send to viewer' }}
+        </button>
       </div>
     </footer>
   </dialog>

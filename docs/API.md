@@ -29,15 +29,15 @@ or an unexpected 500 is plain text.
 | 403    | Mutation from another browser origin, access this account lacks, such as a member on an admin route, or a wrong password on Delete forever | Same-origin middleware, `SessionGate`, `errors.Forbidden`, `POST /api/trash/{id}/purge` |
 | 404    | Record is absent, belongs to another case, is in Trash, has been deleted forever, or this account cannot open it | `errors.NotFound`, `SessionGate`, a stay-purged trigger |
 | 406    | No acceptable GLB encoding                              | `Accept-Encoding` negotiation             |
-| 409    | Stale state; reload before retrying. Or work under way must finish first, or a People change would leave no admin | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever, Clear caches and People |
+| 409    | Stale state; reload before retrying. Or work under way must finish first, or a People change would leave no admin | `ReviewConflict`, `ImportConflict`, `OrthancChanged`, `ArchiveChanged`, a license change while jobs are active, `errors.Conflict` for Delete forever, Clear caches and People |
 | 410    | A set-password link no longer works                     | `POST /api/session/redeem`                |
-| 411    | Captured view, sign-in or set-password without a plain `Content-Length` | `dicom-view` upload, sign-in and set-password checks |
-| 413    | Offline HTML export, captured view, sign-in or set-password over a size limit | `ExportTooLarge`, `dicom-view` upload, sign-in and set-password checks |
+| 411    | Captured view, sign-in or set-password without a plain `Content-Length` | `dicom-view` and `dicom-view-file` uploads, sign-in and set-password checks |
+| 413    | Offline HTML export, captured view, sign-in or set-password over a size limit | `ExportTooLarge`, `dicom-view` and `dicom-view-file` uploads, sign-in and set-password checks |
 | 422    | Schema validation failed                                | FastAPI                                   |
 | 429    | Too many password attempts, or no hashing slot in a second | `POST /api/session`, `POST /api/session/redeem`, `POST /api/trash/{id}/purge` |
 | 499    | Client left while a mask or label union was being built | `volume-mask`, `volume-labels`            |
 | 500    | Unexpected exception, logged without internal detail    | Anything else, including a bare `KeyError` |
-| 502    | The configured Orthanc failed                           | `OrthancError`                            |
+| 502    | The configured Orthanc or DICOMweb archive failed       | `OrthancError`, `ArchiveError`            |
 | 503    | A cached surface or viewer bundle is missing            | Surface and export routes                 |
 
 The license, sign-in, set-password and Delete forever routes' validation messages are fixed, so a
@@ -49,9 +49,9 @@ paths.
 
 - **Origin.** A non-GET request whose `Origin` differs from `Host` gets 403. Hosts must appear in
   `SCAN3D_ALLOWED_HOSTS`.
-- **Private responses.** `/api/session`, `/api/session/redeem`, `/api/people`, `/api/orthanc/*`, the
-  license route, `.../dicom-seg`, a prepared `segment.dcm` and `.../dicom-view` use
-  `Cache-Control: no-store`, errors included.
+- **Private responses.** `/api/session`, `/api/session/redeem`, `/api/people`, `/api/orthanc/*`, `/api/archive/*`, the
+  license route, `.../dicom-seg`, a prepared `segment.dcm`, `.../dicom-view`, `.../dicom-view-file`
+  and a prepared `view.dcm` use `Cache-Control: no-store`, errors included.
   Candidate records, descriptors, agreement reports and frames use `private, no-store`. So does any
   other `/api/` response that sets no header of its own.
 - **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces and `model.glb` use
@@ -130,9 +130,9 @@ with no session gets the 401, and a signed-in one the other.
 | Public    | `GET /api/health`, `GET`, `POST`, `DELETE /api/session`, `POST /api/session/redeem`, the viewer files | None                  |
 | Signed in | `GET /api/cases`, `GET /api/agreement`, `GET /api/trash`, `GET /api/sizes`, `POST /api/cases/demo`, `POST /api/cases/import`, `POST /api/imports`, `POST /api/session/sign-out-others`, `GET /api/segmentation-options`, `GET /api/imaging-capabilities`, `GET /api/interactive/status`, `GET /api/totalsegmentator/license` | 401 `Sign in to continue` |
 | Admin     | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license`, the [People routes](#people-routes) | 401, 403 `Administrator access is required` |
-| Archive   | `GET /api/orthanc/status`, `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch` | 401, 403 `This account cannot use the archive` |
+| Archive   | `GET /api/orthanc/status`, `POST /api/orthanc/studies/query`, `GET /api/orthanc/studies/{id}/series`, `POST /api/orthanc/imports`, `POST /api/orthanc/launch`, and the same five under `/api/archive/` | 401, 403 `This account cannot use the archive` |
 | Case      | Every route with a case ID in its path, for a case not in Trash         | 401, 404 `Case not found`                      |
-| Case and archive | `GET`, `POST /api/cases/{id}/orthanc-series`, `GET`, `POST .../dicom-view` | 401, 404 `Case not found`, 403 `This account cannot use the archive` |
+| Case and archive | `GET`, `POST /api/cases/{id}/orthanc-series`, `GET`, `POST /api/cases/{id}/archive-series`, `GET`, `POST .../dicom-view` | 401, 404 `Case not found`, 403 `This account cannot use the archive` |
 | Trashed   | `POST /api/trash/{id}/restore`                                          | 401, 404 `Case not found`                      |
 | Admin, in Trash | `POST /api/trash/{id}/purge`                                      | 401, 403 `Administrator access is required`, 404 `Case not found` |
 | Job       | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`         | 401, 404 `Job not found`                       |
@@ -144,8 +144,8 @@ with no session gets the 401, and a signed-in one the other.
   `Job not found` or `Upload not found`.
 - A malformed case, job or upload ID is also 404 here, so a refusal never shows whether an ID
   exists.
-- `POST .../dicom-seg` with `delivery: "orthanc"`, the default, also needs archive access. A file
-  does not.
+- `POST .../dicom-seg` with `delivery: "orthanc"`, the default, or `"direct"` also needs archive
+  access. A file does not.
 - A job follows its case, and so does a finished upload. An unfinished upload belongs to whoever
   started it, and one with no owner, or started with sign-in off, to any admin.
 - A session cookie on a request other than GET, HEAD or OPTIONS with no `Origin` gets 403
@@ -283,14 +283,15 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
 - `status`: `queued`, `running`, `completed`, `failed` or `cancelled`. A restart fails running jobs
   with stage `Interrupted`. `stage` is display text.
 - `kind`: `process`, `segment`, `refine`, `correction`, `include_all` (only from
-  `scan3d include-all`), `review_predict`, `review_accept`, `orthanc_import`, `orthanc_export`
-  (every SEG export, file-only included), `orthanc_roi_export` (OsiriX ROIs), `orthanc_view_export`
-  or `dicom_seg_import`.
+  `scan3d include-all`), `review_predict`, `review_accept`, `orthanc_import`, `archive_import`
+  (DICOMweb), `orthanc_export` (every SEG export, file-only included), `orthanc_roi_export` (OsiriX
+  ROIs), `orthanc_view_export`, `view_file_export`, `archive_seg_export`, `archive_view_export`
+  (DICOMweb), `direct_seg_export`, `direct_view_export` (C-STORE) or `dicom_seg_import`.
   [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists the lanes.
 - `revision_id`: the new revision once committed, or the exported one for `orthanc_export`,
   `orthanc_roi_export` and `orthanc_view_export`.
-- `delivery_started`: `true` once an export has started a send through Orthanc. Cancelling cannot
-  then stop it.
+- `delivery_started`: `true` once an export has started a send, through Orthanc or directly.
+  Cancelling cannot then stop it.
 - `inference_path`: the [inference path](#inference-paths) frozen at queue time. `identity` is
   `default` or `<id>|<device>|<gpu_name>`; compare it whole, never parse it.
 - `started_by`: on `GET /api/jobs/{id}` and `GET /api/cases/{id}/jobs` only, the display name of
@@ -363,6 +364,7 @@ jobs omit it, including direct and relationship-only `review_predict`.
 | `GET /api/orthanc/studies/{id}/series`               | List series with snapshots              |
 | `POST /api/orthanc/imports`, `POST .../launch`       | Import a snapshot, resolve a launch     |
 | `GET`, `POST /api/cases/{id}/orthanc-series`         | List or add series of the case's study  |
+| `/api/archive/*`, `GET`, `POST .../archive-series`   | The same for a [DICOMweb archive](#dicomweb-archive) |
 | `POST /api/cases/{id}/process`                       | Prepare a series                        |
 | `POST /api/cases/{id}/segment`                       | Run TotalSegmentator                    |
 | `POST /api/cases/{id}/refinements`, `.../corrections` | Mask operation, Slicer correction      |
@@ -398,6 +400,8 @@ Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 | `GET`, `POST .../dicom-seg`                        | SEG and OsiriX ROI export        | No              |
 | `GET .../dicom-seg/{export_id}/segment.dcm`        | Prepared SEG file                | No              |
 | `GET`, `POST .../dicom-view`                       | 3D view export status and start  | No              |
+| `GET`, `POST .../dicom-view-file`                  | 3D view file status and start    | No              |
+| `GET .../dicom-view-file/{export_id}/view.dcm`     | Prepared 3D view file            | No              |
 
 ## System routes
 
@@ -458,6 +462,26 @@ day are removed.
 
 **`POST /api/cases/demo`** creates a synthetic phantom with masks, for tests. `synthetic: true`
 keeps it out of real agreement statistics.
+
+### DICOMweb archive
+
+These mirror the Orthanc routes for the archive in [ARCHIVES.md](ARCHIVES.md). UIDs travel in
+request bodies, never in paths.
+
+| Route                                    | Body                                                     | Returns                              |
+| ---------------------------------------- | -------------------------------------------------------- | ------------------------------------ |
+| `GET /api/archive/status`                |                                                          | `{configured, connected, name, wildcards?, error}` |
+| `POST /api/archive/studies/query`        | As `POST /api/orthanc/studies/query`                     | `{studies, offset, limit, has_more}` |
+| `POST /api/archive/studies/series`       | `{study_uid}`                                            | `{study, series}`                    |
+| `POST /api/archive/imports`              | `{study_uid, series_uid, snapshot, label?, reimport?}`   | An `archive_import` Job              |
+| `POST /api/archive/launch`               | `{study_uid, series_uid, source_key}`                    | `{study, series, case_id, job}`      |
+| `GET /api/cases/{id}/archive-series`     |                                                          | `{study, series}`, each with `in_case` |
+| `POST /api/cases/{id}/archive-series`    | `{study_uid, series_uid, snapshot}`                      | An `archive_import` Job              |
+
+- A series row has `snapshot`, `stable`, `completeness` (`receiving` or `unknown`) and `ready_in`,
+  the seconds until an unchanged series can be imported. Import before then is a 409.
+- `reimport: true` makes a new case even when this snapshot was imported before.
+- A case's `import_source` has the Orthanc keys, with `kind: "dicomweb"`.
 
 ## Preparation and segmentation
 
@@ -527,9 +551,9 @@ over 128 characters is a 422.
 list, and returns `{id}`. With sign-in off, a case that does not exist answers 404 `Case not found`.
 
 **`POST /api/cases/{id}/trash`** hides the case, stops its jobs and returns `{id, jobs_stopped,
-sends_continuing}`, where `sends_continuing` counts sends Orthanc has started, which finish. Nothing
-on disk moves. Trash is never refused for a job, a draft or a stuck import. With sign-in off, a case
-that does not exist answers 404 `Case not found`.
+sends_continuing}`, where `sends_continuing` counts sends already started, through Orthanc or
+directly, which finish. Nothing on disk moves. Trash is never refused for a job, a draft or a stuck
+import. With sign-in off, a case that does not exist answers 404 `Case not found`.
 
 **`GET /api/trash`** lists every case in Trash, last trashed first. Each is a Case with
 `trashed_at`.
@@ -1262,6 +1286,53 @@ image, source manifest, PNG hash and encoding version.
 **Result.** `result.dicom_view` has `export_id`, `encoding_version`, `archived`, `sent`,
 `instance_count` and optional `destination` and `destination_id`, with no patient fields or PNG
 hash.
+
+### DICOM view file
+
+The same capture becomes a file to download, and nothing is archived or sent. It needs only the case:
+any CT prepared from DICOM, a folder or ZIP import included, and no archive access.
+
+- **`GET .../dicom-view-file`** returns `{available, reason?, exports: Job[], encoding_version}`.
+- **`POST .../dicom-view-file`** takes multipart `image` and `reference_image_id`, with the limits
+  above, and returns a `view_file_export` job. Identical bytes reuse one job and SOP.
+- **`GET .../dicom-view-file/{export_id}/view.dcm`** serves a completed file's verified bytes, or 404.
+- The encoding and identity rules are the ones above, with no archive checks. `result.dicom_view`
+  adds `file: true`.
+
+## DICOMweb archive export
+
+For a case whose `import_source.kind` is `dicomweb`, the SEG and view routes above archive in the
+[DICOMweb archive](ARCHIVES.md#archive-results) instead of Orthanc. Files are unchanged.
+
+- `GET .../dicom-seg` and `GET .../dicom-view` add `archive_name`, have no `destinations`, and
+  `dicom-seg` has no `osirix_roi`. `available` and `reason` describe archiving there.
+- `POST .../dicom-seg` without `delivery: "file"` returns an `archive_seg_export` job, and
+  `POST .../dicom-view` an `archive_view_export` job. A `destination` or `resend` is refused.
+- The job stores each instance with STOW-RS, then reads it back. `export.json` is as above, and
+  `delivery-v2.json` records each stored SOP by archive, with `verified` (`bytes` or `canonical`,
+  the same identity, patient and decoded pixels) and any STOW warning codes. `delivery.json` is
+  never written.
+- The result adds `archive`, the archive's name.
+
+## Direct DICOM send
+
+With `SCAN3D_DICOM_DESTINATIONS_FILE` set, a case whose `import_source.kind` is not `orthanc` can
+also [send](ARCHIVES.md#direct-dicom-sends) its SEG or view to a configured node with C-STORE.
+
+- `GET .../dicom-seg` and `GET .../dicom-view` add `direct: {available, reason?, destinations:
+  [{id, name, aet, key}]}`, absent when nothing is configured or the case came from Orthanc. `exports`
+  includes these jobs. `key` names the destination's address, as `destination_key` does in a direct
+  job's result, so a send to an earlier address of the same `id` is not a send to this one.
+- `POST .../dicom-seg` with `delivery: "direct"` and a `destination` returns a `direct_seg_export`
+  job. `POST .../dicom-view` takes form field `delivery=direct` and returns a `direct_view_export`
+  job. Either needs archive access, and is 400 for a case from Orthanc.
+- The SEG is the same instance as a file or archived SEG of the same masks. `export_key` names the
+  destination by AE title, host, port and TLS, so a moved destination is a new export, and a job
+  queued before the move fails without sending.
+- `delivery-v2.json` records per destination its `state` (`starting`, `success`, `failure`,
+  `refused` or `unknown`), its attempt, and each SOP's status and transfer syntax. `starting` is
+  written before connecting, and a restart turns it into `unknown`, stage `Delivery not confirmed`.
+  A retry of `unknown` sends the same instance again.
 
 ## Orthanc routes
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { shallowReactive } from 'vue';
 import DicomViewExport from '../src/components/DicomViewExport.vue';
 import { api, ApiError, request as apiRequest } from '../src/lib/api';
@@ -95,6 +95,8 @@ async function dialog(values: Record<string, unknown> = {}) {
 }
 const disabled = (element: MountedElement | undefined) => (element as unknown as HTMLButtonElement).disabled;
 
+// A file is offered only where a test says so, so the archive tests read as they did before view files.
+beforeEach(() => void vi.spyOn(api, 'dicomViewFileAvailability').mockResolvedValue({ available: false }));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -239,6 +241,47 @@ describe('the dialog', () => {
     expect(view.root.children[0].open).toBe(true);
     expect(api.dicomViewAvailability, 'and nothing else until a button is pressed').toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it('offers an account without the archive only a file, and saves it in a second click', async () => {
+    vi.spyOn(api, 'dicomViewAvailability').mockRejectedValue(new ApiError(403, 'This account cannot use the archive'));
+    vi.spyOn(api, 'dicomViewFileAvailability').mockResolvedValue({ available: true, exports: [] });
+    const fileJob = (status: DicomViewExportJob['status']) =>
+        job(status, { kind: 'view_file_export', result: { dicom_view: { export_id: 'view-a', archived: false, sent: false, file: true, instance_count: 1 } } }),
+      prepare = vi.spyOn(api, 'exportDicomViewFile').mockResolvedValue(fileJob('queued')),
+      view = await dialog();
+    expect(view.button('Archive in Orthanc')).toBeUndefined();
+    expect(view.all(element => element.tagName === 'SELECT')).toEqual([]);
+    expect(view.text()).toContain('Save this image as a DICOM file');
+    expect(view.text()).toContain('Archive and send are unavailable. This account cannot use the archive');
+    click(view.button('Prepare file'));
+    await settled();
+    expect(prepare).toHaveBeenCalledExactlyOnceWith('case-a', 'revision-a', { image: capture.image, referenceImageId: 'image-a' });
+    expect(view.state.follow).toHaveBeenCalledOnce();
+    view.state.job = fileJob('completed');
+    await settled();
+    expect(view.text()).toContain('View ready as a DICOM file. Nothing was archived or sent.');
+    const links: string[] = [],
+      create = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
+      const element = create(tag) as unknown as HTMLAnchorElement;
+      if (tag === 'a') {
+        element.click = () => void links.push(element.href);
+        element.remove = () => undefined;
+      }
+      return element;
+    }) as typeof document.createElement);
+    // The test document's body has no append of its own.
+    const body = document.body as unknown as { append?: unknown };
+    body.append = () => undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ mode: 'off', user: { id: 'local' }, setup_required: false })),
+    );
+    click(view.button('Download file'));
+    await settled();
+    delete body.append;
+    expect(links).toEqual([expect.stringContaining('/api/cases/case-a/revisions/revision-a/dicom-view-file/view-a/view.dcm')]);
+    expect(prepare).toHaveBeenCalledOnce();
   });
   it('archives with no destination', async () => {
     const posts = server(),
@@ -441,6 +484,20 @@ describe('the dialog', () => {
     });
     it('leaves a lasting warning if it closes with the outcome still unknown', async () => {
       const view = await lost();
+      view.unmount();
+      expect(view.state.report).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Check the study in Orthanc'), capture);
+    });
+    it('keeps a lost archive unknown when only a file is answered', async () => {
+      vi.spyOn(api, 'dicomViewAvailability').mockResolvedValue(availability());
+      vi.spyOn(api, 'dicomViewFileAvailability').mockResolvedValue({ available: true, exports: [] });
+      vi.spyOn(api, 'exportDicomView').mockRejectedValueOnce(new TypeError('Connection closed'));
+      const file = vi.spyOn(api, 'exportDicomViewFile').mockResolvedValue(job('queued', { id: 'file', kind: 'view_file_export' }));
+      const view = await dialog();
+      click(view.button('Archive in Orthanc'));
+      await settled();
+      click(view.button('Prepare file'));
+      await settled();
+      expect(file).toHaveBeenCalledOnce();
       view.unmount();
       expect(view.state.report).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('Check the study in Orthanc'), capture);
     });

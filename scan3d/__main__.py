@@ -83,6 +83,8 @@ def main():
     serve.add_argument("--host", default=os.environ.get("SCAN3D_HOST", DEFAULT_HOST))
     serve.add_argument("--port", type=int, default=int(os.environ.get("SCAN3D_PORT", DEFAULT_PORT)))
     sub.add_parser("doctor")
+    check = sub.add_parser("archive-check", help="Check the DICOMweb archive and C-ECHO each DICOM destination. Read-only, and prints no patient data")
+    check.add_argument("--write-synthetic", action="store_true", help="Also store one synthetic image there and read it back: scratch archives only")
     backup = sub.add_parser("backup", help="Snapshot the database and case files into DESTINATION/scan3d-<UTC time>")
     backup.add_argument("destination", type=Path)
     users = sub.add_parser("users", help="Manage sign-in accounts")
@@ -150,6 +152,11 @@ def main():
 
         print(json.dumps({**diagnose(), "inference_paths": rows()}, indent=2))
         return
+    if args.command == "archive-check":
+        # Needs no Service, so it runs beside a live server.
+        from .archive.check import main as archive_check
+
+        raise SystemExit(archive_check(write_synthetic=args.write_synthetic))
     if args.command == "backup":
         # Only reads the live database and files, so it is safe while the service runs.
         from .backup import backup as write_backup

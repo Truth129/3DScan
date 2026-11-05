@@ -140,6 +140,61 @@ Orthanc is optional, and the integration is off until `SCAN3D_ORTHANC_URL` is se
 | `SCAN3D_ORTHANC_USERNAME`            | unset   | REST API user.                                                |
 | `SCAN3D_ORTHANC_PASSWORD`            | unset   | REST API password.                                            |
 | `SCAN3D_ORTHANC_EXPORT_DESTINATIONS` | unset   | Orthanc modality identifiers offered for SEG and view export. |
+| `SCAN3D_ORTHANC_CA_BUNDLE`           | unset   | Absolute path to a PEM file, for an Orthanc with a private CA. |
+
+### DICOMweb archive
+
+A DICOMweb archive is optional, and off until `SCAN3D_DICOMWEB_URL` is set.
+[ARCHIVES.md](ARCHIVES.md) explains importing from one.
+
+| Variable                         | Default         | Purpose                                                                                     |
+| -------------------------------- | --------------- | ------------------------------------------------------------------------------------------- |
+| `SCAN3D_DICOMWEB_URL`            | unset           | The archive's DICOMweb root. Not on the same host and port as `SCAN3D_ORTHANC_URL`.          |
+| `SCAN3D_DICOMWEB_NAME`           | `DICOM archive` | The name shown in 3DScan.                                                                   |
+| `SCAN3D_DICOMWEB_ID`             | unset           | The archive's name in case records: letters, digits, `.`, `_` or `-`. Set it before the first import; without it, the URL is used. |
+| `SCAN3D_DICOMWEB_AUTH`           | `none`          | `none`, `basic` or `bearer`. Credentials need https unless the archive is on this machine.  |
+| `SCAN3D_DICOMWEB_USERNAME`       | unset           | User, for `basic`.                                                                          |
+| `SCAN3D_DICOMWEB_PASSWORD`       | unset           | Password, for `basic`.                                                                      |
+| `SCAN3D_DICOMWEB_TOKEN_FILE`     | unset           | Absolute path to the token, for `bearer`. Read again whenever the file changes.             |
+| `SCAN3D_DICOMWEB_CA_BUNDLE`      | unset           | Absolute path to a PEM file, for an archive with a private CA.                              |
+| `SCAN3D_DICOMWEB_TIMEOUT`        | `30`            | Request timeout in seconds, 1 to 300.                                                       |
+| `SCAN3D_DICOMWEB_QUIET_SECONDS`  | `60`            | Seconds, 0 to 3600, that a series' image list must stay unchanged before it can be imported. |
+| `SCAN3D_DICOMWEB_WILDCARDS`      | `false`         | `true` lets searches use `*` and `?`.                                                       |
+| `SCAN3D_DICOMWEB_STORE`          | `true`          | `false` keeps the archive read-only: SEG and views are not archived there.                  |
+
+The server refuses to start if the token or CA file cannot be read.
+
+### Direct DICOM sends
+
+3DScan can send SEG and 3D views of cases not imported from Orthanc straight to DICOM nodes with
+C-STORE. It is off until `SCAN3D_DICOM_DESTINATIONS_FILE` is set.
+[ARCHIVES.md](ARCHIVES.md#direct-dicom-sends) explains sending.
+
+| Variable                          | Default  | Purpose                                                                   |
+| --------------------------------- | -------- | ------------------------------------------------------------------------- |
+| `SCAN3D_DICOM_DESTINATIONS_FILE`  | unset    | Absolute path to a JSON list of destinations.                             |
+| `SCAN3D_DICOM_AE_TITLE`           | `SCAN3D` | The AE title 3DScan sends as. Each destination must accept it.            |
+
+Each destination in the file:
+
+```json
+[{ "id": "pacs", "name": "Hospital PACS", "ae_title": "PACS", "host": "pacs.example.test", "port": 104 }]
+```
+
+| Key          | Required | Meaning                                                                     |
+| ------------ | -------- | --------------------------------------------------------------------------- |
+| `id`         | yes      | 1 to 64 letters, digits, `_` or `-`, unique in the file.                    |
+| `ae_title`   | yes      | The node's AE title.                                                        |
+| `host`       | yes      | Host name or address.                                                       |
+| `port`       | yes      | 1 to 65535.                                                                 |
+| `name`       | no       | The name shown in 3DScan; `id` by default.                                  |
+| `calling_ae` | no       | The AE title to send as to this node, instead of `SCAN3D_DICOM_AE_TITLE`.   |
+| `timeout`    | no       | Seconds, 1 to 300; `30` by default.                                         |
+| `tls`        | no       | `true` for DICOM over TLS.                                                  |
+| `ca_bundle`  | no       | Absolute path to a PEM file, with `tls`, for a node with a private CA.      |
+
+The file is read when the server starts, which refuses an invalid one or an unreadable CA file,
+and again before each send.
 
 ## Examples
 

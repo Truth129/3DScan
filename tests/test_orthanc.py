@@ -320,6 +320,17 @@ def test_invalid_identifiers_urls_and_queries_never_make_a_request(archive):
     assert upstream.calls == []
 
 
+def test_a_private_ca_bundle_verifies_tls_and_a_missing_one_names_only_its_setting(tmp_path):
+    bundle = tmp_path / "private-ca.pem"
+    bundle.write_text("synthetic")
+    upstream = Archive()
+    OrthancClient("https://archive.example.test", ca_bundle=str(bundle), session=upstream).status()
+    assert upstream.calls[-1][2]["verify"] == str(bundle)
+    with pytest.raises(OrthancError, match="SCAN3D_ORTHANC_CA_BUNDLE") as refused:
+        OrthancClient("https://archive.example.test", ca_bundle=str(tmp_path / "missing.pem"))
+    assert str(tmp_path) not in str(refused.value)
+
+
 TRANSFER_JOB = "12345678-1234-1234-1234-123456789abc"
 
 

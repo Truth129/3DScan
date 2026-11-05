@@ -78,7 +78,7 @@ describe('trashMessage', () => {
   it('says only what happened', () => {
     expect(trashMessage(result(0, 0))).toBe('Moved to Trash.');
     expect(trashMessage(result(3, 0))).toBe('Moved to Trash. 3 jobs stopped.');
-    expect(trashMessage(result(0, 1))).toBe('Moved to Trash. A send Orthanc has started will finish.');
-    expect(trashMessage(result(1, 1), 'Alpha phantom')).toBe('“Alpha phantom” moved to Trash. 1 job stopped. A send Orthanc has started will finish.');
+    expect(trashMessage(result(0, 1))).toBe('Moved to Trash. A send already started will finish.');
+    expect(trashMessage(result(1, 1), 'Alpha phantom')).toBe('“Alpha phantom” moved to Trash. 1 job stopped. A send already started will finish.');
   });
 });

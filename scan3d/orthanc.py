@@ -105,7 +105,7 @@ def _number(value, *, optional=False):
 
 
 class OrthancClient:
-    def __init__(self, base_url, username="", password="", *, timeout=30, session=None):
+    def __init__(self, base_url, username="", password="", *, timeout=30, session=None, ca_bundle=""):
         try:
             parsed = urlsplit(base_url)
             port = parsed.port
@@ -130,6 +130,10 @@ class OrthancClient:
         self.base_url = urlunsplit((parsed.scheme, host, parsed.path.rstrip("/"), "", ""))
         self.source_key = hashlib.sha256(self.base_url.encode()).hexdigest()
         self.timeout = (min(timeout, 10), timeout)
+        # requests trusts its bundled public CAs, not the system store, so a private CA needs its own file.
+        if ca_bundle and not Path(ca_bundle).is_file():
+            raise OrthancError("The Orthanc CA bundle cannot be read. Check SCAN3D_ORTHANC_CA_BUNDLE.")
+        self.verify = ca_bundle or True
         self.session = session or requests.Session()
         # Never send archive credentials through ambient proxies or .netrc.
         self.session.trust_env = False
@@ -152,7 +156,7 @@ class OrthancClient:
                 auth=self.auth,
                 timeout=self.timeout,
                 allow_redirects=False,
-                verify=True,
+                verify=self.verify,
                 stream=True,
                 **kwargs,
             )

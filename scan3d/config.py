@@ -2,6 +2,10 @@ from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .archive.settings import DicomSendSettings, DicomWebSettings
 
 ROOT = Path(__file__).resolve().parent.parent
 # Local, git-ignored settings; scan3d.env.example documents every variable.
@@ -89,6 +93,19 @@ def device_request() -> str:
     return os.environ.get("SCAN3D_DEVICE", "").strip() or DEFAULT_DEVICE
 
 
+def _dicomweb_settings():
+    """Imported here, so GPU child processes that read settings never load the archive package."""
+    from .archive.settings import DicomWebSettings
+
+    return DicomWebSettings.from_env(orthanc_url=os.environ.get("SCAN3D_ORTHANC_URL", "").strip())
+
+
+def _dicom_send_settings():
+    from .archive.settings import DicomSendSettings
+
+    return DicomSendSettings.from_env()
+
+
 # One captured view. Multipart parsing buffers a body in RAM-backed /tmp before
 # any handler runs, so this also bounds what one request can make the server hold.
 VIEW_UPLOAD_LIMIT = 128 * 1024**2
@@ -107,6 +124,9 @@ class Settings:
     orthanc_password: str = field(default="", repr=False)
     orthanc_export_destinations: tuple[str, ...] = ()
     auth: str = "off"
+    orthanc_ca_bundle: str = ""
+    dicomweb: "DicomWebSettings | None" = None
+    dicom_send: "DicomSendSettings | None" = None
 
     @classmethod
     def from_env(cls):
@@ -118,6 +138,9 @@ class Settings:
         destinations = tuple(dict.fromkeys(part.strip() for part in os.environ.get("SCAN3D_ORTHANC_EXPORT_DESTINATIONS", "").split(",") if part.strip()))
         if any(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", part) is None for part in destinations):
             raise ValueError("SCAN3D_ORTHANC_EXPORT_DESTINATIONS must list configured Orthanc modality identifiers")
+        ca_bundle = os.environ.get("SCAN3D_ORTHANC_CA_BUNDLE", "").strip()
+        if ca_bundle and not Path(ca_bundle).is_absolute():
+            raise ValueError("SCAN3D_ORTHANC_CA_BUNDLE must be an absolute path to a PEM file")
         allowed_hosts = tuple(p.strip() for p in os.environ.get("SCAN3D_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if p.strip())
         host = os.environ.get("SCAN3D_HOST", DEFAULT_HOST).strip()
         return cls(
@@ -131,6 +154,9 @@ class Settings:
             orthanc_password=os.environ.get("SCAN3D_ORTHANC_PASSWORD", ""),
             orthanc_export_destinations=destinations,
             auth=resolve_auth(os.environ.get("SCAN3D_AUTH"), (*allowed_hosts, host)),
+            orthanc_ca_bundle=ca_bundle,
+            dicomweb=_dicomweb_settings(),
+            dicom_send=_dicom_send_settings(),
         )
 
     @property

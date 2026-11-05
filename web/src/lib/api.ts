@@ -35,8 +35,15 @@ import type {
   OrthancStudyPage,
   OrthancStudyQuery,
 } from './orthanc';
+import type { ArchiveImportRequest, ArchiveLaunchRequest } from './archive';
 import type { DicomSegAvailability, DicomSegExportJob, DicomSegExportRequest } from './dicom-seg';
-import { DICOM_VIEW_MAX_BYTES, type DicomViewAvailability, type DicomViewExportJob, type DicomViewExportRequest } from './dicom-view';
+import {
+  DICOM_VIEW_MAX_BYTES,
+  type DicomViewAvailability,
+  type DicomViewExportJob,
+  type DicomViewExportRequest,
+  type DicomViewFileAvailability,
+} from './dicom-view';
 import { apiFetch } from './api-fetch';
 
 export class ApiError extends Error {
@@ -65,6 +72,8 @@ const personUrl = (id: string) => `/api/people/${encodeURIComponent(id)}`;
 const reviewUrl = (id: string, session: string) => `${caseUrl(id)}/reviews/${encodeURIComponent(session)}`;
 export const revisionUrl = (id: string, rid: string) => `${caseUrl(id)}/revisions/${encodeURIComponent(rid)}`;
 export const dicomSegFileUrl = (id: string, rid: string, exportId: string) => `${revisionUrl(id, rid)}/dicom-seg/${encodeURIComponent(exportId)}/segment.dcm`;
+export const dicomViewFileUrl = (id: string, rid: string, exportId: string) =>
+  `${revisionUrl(id, rid)}/dicom-view-file/${encodeURIComponent(exportId)}/view.dcm`;
 export interface CinematicReference {
   schema_version: 1;
   myocardium_hu: number;
@@ -76,6 +85,20 @@ export interface CinematicReference {
   blood_source: 'aorta' | 'left_heart';
   method: 'median_hu_above_minus900';
 }
+async function uploadView(url: string, value: DicomViewExportRequest, signal?: AbortSignal) {
+  // An oversized body is refused before the server reads it, which the browser can
+  // report as a reset connection. That reads like a lost request, so stop it here.
+  if (value.image.size > DICOM_VIEW_MAX_BYTES) throw new ApiError(413, 'This image is too large to export. Make the 3D view smaller and capture it again.');
+  const data = new FormData();
+  data.append('image', value.image, 'view.png');
+  data.append('reference_image_id', value.referenceImageId);
+  // The server reads a field that is present as a chosen destination, even the text "null".
+  if (value.destination) data.append('destination', value.destination);
+  if (value.resend) data.append('resend', 'true');
+  if (value.delivery) data.append('delivery', value.delivery);
+  return request<DicomViewExportJob>(url, { method: 'POST', body: data, signal });
+}
+
 export const api = {
   cases: () => request<Case[]>('/api/cases'),
   orthancStatus: (signal?: AbortSignal) => request<OrthancStatus>('/api/orthanc/status', { signal }),
@@ -87,22 +110,27 @@ export const api = {
   caseOrthancSeries: (id: string, signal?: AbortSignal) => request<OrthancCaseSeriesPage>(`${caseUrl(id)}/orthanc-series`, { signal }),
   addOrthancSeries: (id: string, data: Omit<OrthancImportRequest, 'label'>, signal?: AbortSignal) =>
     request<Job>(`${caseUrl(id)}/orthanc-series`, { ...json('POST', data), signal }),
+  // A DICOMweb archive: the same shapes, with UIDs in bodies rather than paths.
+  archiveStatus: (signal?: AbortSignal) => request<OrthancStatus>('/api/archive/status', { signal }),
+  archiveLaunch: (data: ArchiveLaunchRequest, signal?: AbortSignal) => request<OrthancLaunchResult>('/api/archive/launch', { ...json('POST', data), signal }),
+  archiveStudies: (query: OrthancStudyQuery, signal?: AbortSignal) =>
+    request<OrthancStudyPage>('/api/archive/studies/query', { ...json('POST', query), signal }),
+  archiveSeries: (study_uid: string, signal?: AbortSignal) =>
+    request<OrthancSeriesPage>('/api/archive/studies/series', { ...json('POST', { study_uid }), signal }),
+  importArchive: (data: ArchiveImportRequest, signal?: AbortSignal) => request<Job>('/api/archive/imports', { ...json('POST', data), signal }),
+  caseArchiveSeries: (id: string, signal?: AbortSignal) => request<OrthancCaseSeriesPage>(`${caseUrl(id)}/archive-series`, { signal }),
+  addArchiveSeries: (id: string, data: Omit<ArchiveImportRequest, 'label' | 'reimport'>, signal?: AbortSignal) =>
+    request<Job>(`${caseUrl(id)}/archive-series`, { ...json('POST', data), signal }),
   dicomSegAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomSegAvailability>(`${revisionUrl(id, rid)}/dicom-seg`, { signal }),
   exportDicomSeg: (id: string, rid: string, data: DicomSegExportRequest, signal?: AbortSignal) =>
     request<DicomSegExportJob>(`${revisionUrl(id, rid)}/dicom-seg`, { ...json('POST', data), signal }),
   dicomViewAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomViewAvailability>(`${revisionUrl(id, rid)}/dicom-view`, { signal }),
-  async exportDicomView(id: string, rid: string, value: DicomViewExportRequest, signal?: AbortSignal) {
-    // An oversized body is refused before the server reads it, which the browser can
-    // report as a reset connection. That reads like a lost request, so stop it here.
-    if (value.image.size > DICOM_VIEW_MAX_BYTES) throw new ApiError(413, 'This image is too large to export. Make the 3D view smaller and capture it again.');
-    const data = new FormData();
-    data.append('image', value.image, 'view.png');
-    data.append('reference_image_id', value.referenceImageId);
-    // The server reads a field that is present as a chosen destination, even the text "null".
-    if (value.destination) data.append('destination', value.destination);
-    if (value.resend) data.append('resend', 'true');
-    return request<DicomViewExportJob>(`${revisionUrl(id, rid)}/dicom-view`, { method: 'POST', body: data, signal });
-  },
+  dicomViewFileAvailability: (id: string, rid: string, signal?: AbortSignal) =>
+    request<DicomViewFileAvailability>(`${revisionUrl(id, rid)}/dicom-view-file`, { signal }),
+  exportDicomView: (id: string, rid: string, value: DicomViewExportRequest, signal?: AbortSignal) =>
+    uploadView(`${revisionUrl(id, rid)}/dicom-view`, value, signal),
+  exportDicomViewFile: (id: string, rid: string, value: Pick<DicomViewExportRequest, 'image' | 'referenceImageId'>, signal?: AbortSignal) =>
+    uploadView(`${revisionUrl(id, rid)}/dicom-view-file`, value, signal),
   importDicomSeg(id: string, rid: string, files: readonly File[], signal?: AbortSignal) {
     const data = new FormData();
     data.append('revision_id', rid);

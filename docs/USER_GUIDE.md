@@ -165,6 +165,15 @@ The series is copied locally and the archive stays unchanged. A series still arr
 incomplete cannot be imported. If the expected image count is unknown, 3DScan imports the listed
 images and says so: confirm that the acquisition is complete.
 
+**DICOMweb archive.** If one is [configured](ARCHIVES.md), it has its own tab with its name, and
+works the same way, with these differences:
+
+- Searches match exactly unless the archive allows `*` and `?`.
+- A series newly listed shows **Import opens in N s**. It can be imported once its image list has
+  stayed unchanged that long. The list refreshes itself when the count ends.
+- **Import again** copies the series once more, as a new case. Use it if the archive may have
+  replaced files since the earlier import.
+
 ## Open a series
 
 1. On **Choose the right series.**, select one series. Expand the checks under an unavailable
@@ -178,9 +187,10 @@ These fields are labels only: they change no pixels, rendering or tasks. **Selec
 toolbar opens another series and keeps your result, and **Source image** switches between opened
 images.
 
-**Add series from Orthanc** appears under the series list of a case imported from Orthanc. It lists
-the rest of that study, so several series can share one case. Each series opens on its own and
-keeps its own segments.
+**Add series from Orthanc** appears under the series list of a case imported from Orthanc, and
+**Add series from DICOM archive** under one from a DICOMweb archive. It lists the rest of that
+study, so several series can share one case. Each series opens on its own and keeps its own
+segments.
 
 ## Run TotalSegmentator
 
@@ -558,10 +568,17 @@ and metadata, so treat them like the study itself.
 
 ### DICOM view
 
-**DICOM ↗** in the 3D view adds the current view to the original study as a new one-image series.
-It needs a configured Orthanc and a CT imported from that archive. Choose **Archive in Orthanc**, or
-pick a **Send destination** and choose **Send to** it. See
-[send a 3D view back](ORTHANC.md#send-a-3d-view-back).
+**DICOM ↗** in the 3D view saves the current view as a one-image DICOM file in the original patient
+and study, or adds it to that study in Orthanc as a new series.
+
+- **File.** Choose **Prepare file**, then **Download file**. It needs a CT prepared from DICOM, a
+  folder or ZIP import included, and no archive. The file carries the CT's patient details.
+- **Orthanc.** Choose **Archive in Orthanc**, or pick a **Send destination** and choose **Send to**
+  it. This needs a configured Orthanc, archive access and a CT imported from that archive. See
+  [send a 3D view back](ORTHANC.md#send-a-3d-view-back).
+- **DICOMweb archive.** For a CT imported from one, choose **Archive in** that archive.
+- **DICOM node.** For a CT not imported from Orthanc, pick a **Send destination** and choose **Send
+  to** it, if your site has [configured](ARCHIVES.md#direct-dicom-sends) any.
 
 The image is a picture. It has no calibration and no orientation labels, so do not measure on it,
 and nothing in it marks left from right.
@@ -573,7 +590,8 @@ and nothing in it marks left from right.
   capture the view again.
 - If the dialog says the outcome is unknown, press the same button again.
 - You can close the dialog during an export. The result appears as a notice, or in the error banner
-  if it fails or cannot be confirmed.
+  if it fails or cannot be confirmed. A file that finishes after you close the dialog waits for the
+  next **DICOM ↗**, which reopens it with **Download file**.
 
 ### Portable offline HTML
 
@@ -615,6 +633,14 @@ If the CT came from a configured Orthanc, you can also choose **Archive in Ortha
 **Send destination** and choose **Send to** it. See
 [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back). **Send again**
 deliberately resends the same instances.
+
+If the CT came from a [DICOMweb archive](ARCHIVES.md#archive-results), choose **Archive in** that
+archive.
+
+If the CT did not come from Orthanc and your site has [configured](ARCHIVES.md#direct-dicom-sends)
+DICOM destinations, pick a **Send destination** and choose **Send to** it. The node receives the
+same SEG as the file. If it does not accept SEG, nothing is sent. If the dialog says the send may
+have arrived, check the node before you retry: a retry sends the same SEG again.
 
 **Cancel export** stops an export in progress, but closing the dialog does not. A SEG that has
 reached Orthanc stays there, and a send cannot be stopped once Orthanc has started it.
@@ -706,6 +732,9 @@ running, it does the work. Commands ignore Trash, but a job on a case in Trash s
 - `segment --inference-path ID` runs on [an added GPU](#choose-a-gpu). `scan3d doctor` lists the IDs.
 - `include-all` restores labels filtered out earlier, as a new revision that keeps corrections.
 - `optimize` prepares viewer assets for an older case without changing masks or revisions.
+- `archive-check` checks the configured DICOMweb archive without changing it, and sends C-ECHO to
+  each DICOM destination. See
+  [ARCHIVES.md](ARCHIVES.md#check-an-archive).
 
 A `refine` recipe is JSON in patient RAS millimetres:
 

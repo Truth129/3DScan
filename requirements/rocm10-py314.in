@@ -5,6 +5,7 @@ scipy==1.16.3
 nibabel==5.3.2
 pydicom==3.0.1
 highdicom==0.28.2
+pynetdicom==3.0.4
 pyjpegls==1.5.1
 python-gdcm==3.2.6
 pynrrd==1.1.3

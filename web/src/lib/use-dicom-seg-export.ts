@@ -40,8 +40,8 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
   /** Each format has its own encoding version, so a SEG update never asks for fresh OsiriX ROIs. */
   const encodingVersion = (format: DicomSegFormat) =>
     format === 'osirix_roi' ? availability.value?.osirix_roi?.encoding_version : availability.value?.encoding_version;
-  const alreadySent = (structureIds: string[], destination: string, overlapPriority?: string[], format: DicomSegFormat = 'seg') =>
-    successfulDicomSegDelivery(history.value, structureIds, destination, encodingVersion(format), overlapPriority, format);
+  const alreadySent = (structureIds: string[], destination: string, overlapPriority?: string[], format: DicomSegFormat = 'seg', key?: string) =>
+    successfulDicomSegDelivery(history.value, structureIds, destination, encodingVersion(format), overlapPriority, format, key);
   const preparedFile = (structureIds: string[], overlapPriority?: string[]) =>
     preparedDicomSegFile(history.value, structureIds, availability.value?.encoding_version, overlapPriority);
   const sourceKey = computed(() => JSON.stringify([options.source().caseId, options.source().revisionId]));
@@ -177,6 +177,32 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
       'Refresh export status before trying again; the request may already have reached the workstation.',
     );
   }
+  /** C-STORE from this workstation, for a case not from Orthanc. It makes the same SEG a file of these masks would be. */
+  async function sendDirect(structureIds: string[], destination: string, resend = false, overlapPriority?: string[]) {
+    const direct = availability.value?.direct,
+      chosen = direct?.destinations.find(item => item.id === destination);
+    if (
+      disposed ||
+      options.blocked() ||
+      locked.value ||
+      statusError.value ||
+      !direct?.available ||
+      !structureIds.length ||
+      !chosen ||
+      (resend && !alreadySent(structureIds, destination, overlapPriority, 'seg', chosen.key))
+    )
+      return;
+    await submit(
+      {
+        structure_ids: [...new Set(structureIds)],
+        destination,
+        delivery: 'direct',
+        ...(resend ? { resend: true } : {}),
+        ...(overlapPriority ? { overlap_priority: [...overlapPriority] } : {}),
+      },
+      'Refresh export status before trying again; the request may already have reached the workstation.',
+    );
+  }
   async function prepareFile(structureIds: string[], overlapPriority?: string[]) {
     if (disposed || options.blocked() || locked.value || statusError.value || !availability.value?.file?.available || !structureIds.length) return;
     await submit(
@@ -260,6 +286,7 @@ export function useDicomSegExport(options: { source: () => { caseId: string; rev
     load,
     resume,
     start,
+    sendDirect,
     prepareFile,
     cancel,
   };

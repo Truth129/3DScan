@@ -15,6 +15,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, api_cases, api_imports, api_people, api_reviews, api_session, api_system, api_viewer
 from .access import SessionGate, check_policy
+from .archive import api as api_archive
+from .archive.errors import ArchiveChanged, ArchiveError
 from .config import Settings
 from .errors import Conflict, Forbidden, NotFound
 from .orthanc import OrthancChanged, OrthancError
@@ -55,7 +57,7 @@ class SelectiveGZip:
     Level 5 is within 0.5% of level 9's size on the viewer bundles at half the CPU.
     """
 
-    _skip = re.compile(r"/(?:slicer\.zip|export\.html|segment\.dcm)$")
+    _skip = re.compile(r"/(?:slicer\.zip|export\.html|segment\.dcm|view\.dcm)$")
     _glb = re.compile(r"^/api/cases/[^/]+/revisions/[^/]+/(?:model\.glb|surfaces/[^/]+\.glb)$")
 
     def __init__(self, app):
@@ -125,6 +127,12 @@ def _is_purge_path(request):
 
 def create_app(settings: Settings | None = None):
     service = Service(settings)
+    # Checked here rather than with the other settings, so a backup never stops for a missing token.
+    if service.settings.dicomweb and (missing := service.settings.dicomweb.missing_files()):
+        raise ValueError(f"{' and '.join(missing)} cannot be read")
+    # Reading the destinations file refuses an invalid one now, not at the first send.
+    if service.settings.dicom_send and (missing := service.settings.dicom_send.missing_files()):
+        raise ValueError(f"{' and '.join(missing)} cannot be read")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -171,6 +179,8 @@ def create_app(settings: Settings | None = None):
         (Conflict, 409, None),
         (OrthancChanged, 409, no_store),
         (OrthancError, 502, no_store),
+        (ArchiveChanged, 409, no_store),
+        (ArchiveError, 502, no_store),
     ):
         app.add_exception_handler(error, _error_response(status, headers))
 
@@ -186,15 +196,16 @@ def create_app(settings: Settings | None = None):
         # Local filesystem endpoints must not be callable by an unrelated browser origin.
         # scope["path"] is what routing matches. request.url.path would stop at
         # an encoded "?" in an earlier segment, and miss the upload check below.
-        view_export = request.scope["path"].endswith("/dicom-view")
+        # A final newline reaches the same handler, because a route's $ also matches before one.
+        view_export = request.scope["path"].removesuffix("\n").endswith(("/dicom-view", "/dicom-view-file"))
         session = _is_session_path(request)
         redeem = _is_redeem_path(request)
         private = (
             session
             or redeem
             or request.url.path == "/api/totalsegmentator/license"
-            or request.url.path.startswith("/api/orthanc/")
-            or request.url.path.endswith(("/dicom-seg", "/segment.dcm"))
+            or request.url.path.startswith(("/api/orthanc/", "/api/archive/"))
+            or request.url.path.endswith(("/dicom-seg", "/segment.dcm", "/view.dcm"))
             or view_export
             or _is_purge_path(request)
             # A People answer can carry a link's code.
@@ -223,7 +234,7 @@ def create_app(settings: Settings | None = None):
             response.headers.setdefault("Cache-Control", "private, no-store")
         return response
 
-    for module in (api_system, api_session, api_people, api_imports, api_cases, api_reviews, api_viewer):
+    for module in (api_system, api_session, api_people, api_imports, api_archive, api_cases, api_reviews, api_viewer):
         module.add_routes(app, service)
 
     if service.settings.web_dir.is_dir():

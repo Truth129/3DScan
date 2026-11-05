@@ -508,6 +508,12 @@ def test_a_chunked_body_is_refused_before_the_handler(view, monkeypatch):
     assert response.status_code == 411 and response.headers["cache-control"] == "no-store" and not calls
 
 
+@pytest.mark.parametrize("route", ["dicom-view", "dicom-view-file"])
+def test_an_encoded_final_newline_does_not_slip_past_the_size_check(view, route):
+    response = view.http.post(f"{view.url.removesuffix('dicom-view')}{route}%0A", content=b"x", headers={"content-length": str(300 * 1024**2)})
+    assert response.status_code == 413
+
+
 def test_an_encoded_question_mark_does_not_slip_past_the_size_check(view, monkeypatch):
     calls = spy_on_start(view, monkeypatch)
     response = view.http.post(f"/api/cases/abc%3Fx/revisions/{view.revision['id']}/dicom-view", content=b"x", headers={"content-length": str(300 * 1024**2)})

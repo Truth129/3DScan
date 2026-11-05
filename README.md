@@ -15,8 +15,8 @@ other service.
 
 ## Features
 
-- **Import:** browser upload, `scan3d import` or an optional [Orthanc](docs/ORTHANC.md)
-  archive. Static MRI is experimental and opt-in.
+- **Import:** browser upload, `scan3d import`, an optional [Orthanc](docs/ORTHANC.md), or any
+  [DICOMweb archive](docs/ARCHIVES.md). Static MRI is experimental and opt-in.
 - **Segmentation:** selected TotalSegmentator tasks on a GPU or the CPU, plus optional
   MRSegmentator to compare beside them. With
   [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
@@ -26,8 +26,8 @@ other service.
   Delete forever. An administrator adds people with a link.
 - **Viewer:** linked slices and 3D volume rendering.
 - **Measurements:** mask volumes and AI-agreement metrics.
-- **Exchange:** DICOM SEG import and export, native OsiriX ROIs, 3D views as new DICOM series, 3D
-  Slicer, PNG and portable offline HTML.
+- **Exchange:** DICOM SEG import and export, native OsiriX ROIs, 3D views as new DICOM series,
+  archiving by DICOMweb, direct DICOM sends, 3D Slicer, PNG and portable offline HTML.
 
 ## Quick start
 
@@ -54,6 +54,7 @@ Open <http://127.0.0.1:9010> and choose **Explore synthetic demo**, or import a 
 | [Configuration](docs/CONFIGURATION.md)   | Every setting in `scan3d.env`                  |
 | [User guide](docs/USER_GUIDE.md)         | Importing, reviewing, correcting and exporting |
 | [Orthanc](docs/ORTHANC.md)               | Connecting to a DICOM archive                  |
+| [Archives](docs/ARCHIVES.md)             | DICOMweb archives and direct DICOM sends       |
 | [Architecture](docs/ARCHITECTURE.md)     | How the system works                           |
 | [API](docs/API.md)                       | HTTP API and data model                        |
 | [Development](docs/DEVELOPMENT.md)       | Tests, checks and project rules                |
