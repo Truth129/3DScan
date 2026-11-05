@@ -178,11 +178,34 @@ def undecodable(data):
     return output.getvalue()
 
 
+def patient(**tags):
+    """The archive's own patient attributes, as dcm4che gives an issuer to an instance stored without one."""
+
+    def change(data):
+        ds = pydicom.dcmread(BytesIO(data))
+        for key, value in tags.items():
+            setattr(ds, key, value)
+        output = BytesIO()
+        ds.save_as(output, enforce_file_format=True)
+        return output.getvalue()
+
+    return change
+
+
 DIFFERENT = "The archive holds a different DICOM SEG under this instance's identity. Check the study in the archive."
 UNCHECKED = "The archive returned this DICOM SEG in a form that could not be checked here. Check the study in the archive."
 
 
-@pytest.mark.parametrize(("altered", "outcome"), [(implicit, "canonical"), (other_pixels, DIFFERENT), (undecodable, UNCHECKED)])
+@pytest.mark.parametrize(
+    ("altered", "outcome"),
+    [
+        (implicit, "canonical"),
+        (patient(IssuerOfPatientID="DCM4CHEE.SYNTHETIC.null"), "canonical"),
+        (patient(PatientID="ANOTHER-PATIENT"), DIFFERENT),
+        (other_pixels, DIFFERENT),
+        (undecodable, UNCHECKED),
+    ],
+)
 def test_an_archive_may_re_encode_the_instance_but_not_change_it(rig, altered, outcome):
     rig.archive.altered = altered
     job = run(rig, rig.http.post(rig.seg, json={}))

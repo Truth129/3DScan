@@ -60,6 +60,15 @@ def _patient(dataset):
     return str(dataset.get("PatientID") or ""), str(dataset.get("IssuerOfPatientID") or "")
 
 
+def _kept_patient(sent, held):
+    """The archive kept the patient: the same ID, and the same issuer or one it assigned where none was sent.
+
+    dcm4che, for one, gives every instance stored without an issuer its own default issuer.
+    """
+    (sent_id, sent_issuer), (held_id, held_issuer) = _patient(sent), _patient(held)
+    return sent_id == held_id and (sent_issuer == held_issuer or not sent_issuer)
+
+
 def _same_patient(source_key, wanted, patient_id, issuer):
     # A study listing may leave IssuerOfPatientID out, as at import.
     return wanted in {patient_key(source_key, patient_id, issuer), patient_key(source_key, patient_id, "")}
@@ -84,7 +93,7 @@ def _same_content(sent, held):
     try:
         a, b = (pydicom.dcmread(path, stop_before_pixels=True) for path in (sent, held))
         tags = ("SOPInstanceUID", "SOPClassUID", "StudyInstanceUID", "SeriesInstanceUID")
-        if any(str(a.get(tag)) != str(b.get(tag)) for tag in tags) or _patient(a) != _patient(b):
+        if any(str(a.get(tag)) != str(b.get(tag)) for tag in tags) or not _kept_patient(a, b):
             return False
         # Uncompressed little-endian pixels are the same bytes whichever VR encoding carries them.
         native = {str(a.file_meta.TransferSyntaxUID), str(b.file_meta.TransferSyntaxUID)} <= _NATIVE

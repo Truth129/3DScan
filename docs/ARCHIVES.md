@@ -21,6 +21,17 @@ SCAN3D_DICOMWEB_TOKEN_FILE=/etc/scan3d/pacs.token
 - Set `SCAN3D_DICOMWEB_ID` before the first import. Case records name the archive by it, so a
   server that moves keeps its cases. Without it, the URL names the archive.
 
+## Tested archives
+
+Import, Add series, launch links and archiving were tested on these, with synthetic data only:
+
+| Archive                         | `SCAN3D_DICOMWEB_URL`                               | Notes                                                                                     |
+| ------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Orthanc 1.13.0, DICOMweb plugin | `http://<host>:8042/dicom-web`                      | Keeps the first copy of a SOP stored twice. Use the [Orthanc integration](ORTHANC.md) where you can. |
+| dcm4chee-arc 5.35.2             | `http://<host>:8080/dcm4chee-arc/aets/DCM4CHEE/rs` | Gives an issuer to a patient ID stored without one, so archived copies verify as re-encoded. Image listings leave out the Frame of Reference, which import reads from the files. |
+
+Other archives are untested. Run `scan3d archive-check` on them first.
+
 ## Check an archive
 
 ```bash
