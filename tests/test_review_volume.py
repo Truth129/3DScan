@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 import gzip
 import json
 import os
-from pathlib import Path
 import threading
 import uuid
 

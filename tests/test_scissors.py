@@ -1,6 +1,5 @@
 """Voxel-centre 3D scissors geometry, ordering and immutable surface previews."""
 
-from copy import deepcopy
 from pathlib import Path
 
 from fastapi.testclient import TestClient

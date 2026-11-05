@@ -1,7 +1,6 @@
 import builtins
 from contextlib import nullcontext
 from importlib import metadata
-from pathlib import Path
 from types import SimpleNamespace
 
 import nibabel as nib

@@ -11,8 +11,8 @@ export default defineConfig({
   optimizeDeps: { esbuildOptions: { plugins: [vtkRayGuardOptimizer()] } },
   // Workers are bundled separately and do not inherit the plugins above.
   worker: { plugins: () => [vtkRayGuard(), workerNotices()] },
-  // Cornerstone metadata evaluates an XML builder whose EventEmitter base
-  // needs the small browser package rather than Vite's Node builtin stub.
+  // vtk.js's XML reader, which Cornerstone's mesh cache and orientation marker import, uses
+  // xmlbuilder2, whose EventEmitter base needs the small browser package, not Vite's Node stub.
   resolve: { alias: { events: 'events/' } },
   server: { proxy: { '/api': `http://127.0.0.1:${process.env.SCAN3D_PORT ?? 9010}` } },
   build: { chunkSizeWarningLimit: 850 },

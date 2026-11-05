@@ -34,7 +34,7 @@ export default defineConfig([
       ],
       // Type-only defineProps<{ x?: T }>() leaves optional props undefined on purpose.
       'vue/require-default-prop': 'off',
-      // Style only: enable both in the formatting commit, where `eslint --fix` handles most hits.
+      // Style only, and off by choice.
       'vue/attributes-order': 'off',
       'prefer-const': 'off',
     },

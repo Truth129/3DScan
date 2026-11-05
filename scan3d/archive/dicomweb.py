@@ -416,14 +416,6 @@ class DicomWebClient:
                     raise
                 self._sleep(min(1.0, remaining))
 
-    def find_instance(self, study_uid, series_uid, sop_uid) -> bool:
-        sop_uid = _uid(sop_uid)
-        try:
-            rows = self._qido(f"/studies/{_uid(study_uid)}/series/{_uid(series_uid)}/instances", [("SOPInstanceUID", sop_uid)])
-        except NotFound:
-            return False
-        return any(dicomjson.uid(row, _SOP_UID) == sop_uid for row in rows)
-
     def store(self, path, *, expected_sha256, max_bytes=512 * 1024**2) -> Stored:
         """STOW-RS one immutable file. A duplicate is reported, not overwritten; the caller reads back.
 

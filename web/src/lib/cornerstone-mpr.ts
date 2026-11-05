@@ -634,9 +634,6 @@ export class CornerstoneMPR {
     if (this.slabMode !== 'mpr') delete meta.native;
     return meta;
   }
-  canEdit(plane: Plane) {
-    return this.slabMode === 'mpr' && !!this.displayMeta(plane)?.native;
-  }
   canvasToRas(plane: Plane, point: [number, number]): Point {
     return lpsToRas(this.viewport(plane).canvasToWorld(point));
   }
@@ -986,10 +983,6 @@ export class CornerstoneMPR {
   }
   get isDisposed() {
     return this.disposed;
-  }
-  get renderingEngine() {
-    if (this.disposed || !this.engine) throw new Error('The shared source has been disposed.');
-    return this.engine;
   }
   get imageData() {
     if (this.disposed || !this.sourceVolume) throw new Error('The shared source has been disposed.');

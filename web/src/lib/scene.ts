@@ -655,12 +655,6 @@ export class AnatomyScene {
   get gpuCTReady() {
     return this.reviewPlane.gpuReady;
   }
-  get gpuCTKey() {
-    return this.reviewPlane.gpuKey;
-  }
-  get gpuCTBytes() {
-    return this.reviewPlane.gpuBytes;
-  }
   async prepareGPUCT(source: GPUVolumeSource, signal?: AbortSignal) {
     if (this.reviewPlane.gpuKey !== source.descriptor.key) this.volumeRenderer?.setVolume(undefined);
     await this.reviewPlane.prepareGPUCT(source, signal);

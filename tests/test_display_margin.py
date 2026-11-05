@@ -2,8 +2,6 @@
 
 import gzip
 import hashlib
-import json
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 import nibabel as nib
