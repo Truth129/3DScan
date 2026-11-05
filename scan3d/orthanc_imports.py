@@ -36,7 +36,7 @@ class OrthancImports:
     """Orthanc's transport, and the import lifecycle that another archive's subclass shares.
 
     A subclass changes these attributes and the transport methods: `client`, `status`, `studies`,
-    `series`, `launch`, `start`, `case_series`, `_check_addition`, `_launch_case` and `_transfer`.
+    `series`, `launch`, `start`, `case_series`, `_check_addition`, `_same_members` and `_transfer`.
     The kind is a constant, never input, so it is written into SQL, where SQLite can use the
     kind's partial index.
     """
@@ -49,6 +49,7 @@ class OrthancImports:
     cancelled_error = "Orthanc import cancelled"
     changed = OrthancChanged
     parse_snapshot = staticmethod(parse_snapshot)
+    parse_source = staticmethod(parse_source)
     json_record = staticmethod(json_record)
     fingerprint = staticmethod(snapshot_fingerprint)
 
@@ -106,12 +107,17 @@ class OrthancImports:
         return self._find_import(result, snapshot)
 
     def _find_import(self, result, snapshot):
-        """Point a launch at the newest readable import of this exact snapshot, changing nothing."""
+        """Point a launch at the newest readable import of this exact snapshot, changing nothing.
+
+        A failed or cancelled attempt is passed over, so a failed Import again never hides the
+        completed import before it.
+        """
         key = hashlib.sha256((snapshot.source_key + snapshot.snapshot).encode()).hexdigest()
         with self.service.store.connection() as con:
             row = con.execute(
                 "SELECT j.data AS job_data,c.data AS case_data FROM jobs j LEFT JOIN cases c ON c.id=j.case_id "
-                f"WHERE json_extract(j.data,'$.kind')='{self.kind}' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
+                f"WHERE json_extract(j.data,'$.kind')='{self.kind}' AND json_extract(j.data,'$.payload.import_key')=? "
+                f"AND j.status IN ('queued','running','completed') {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
                 (key,),
             ).fetchone()
         if not row:
@@ -180,23 +186,28 @@ class OrthancImports:
         if any(row["uid"] == snapshot.series_uid for row in case["series"]):
             raise ValueError("This series is already in this case")
 
+    @staticmethod
+    def _same_members(source, snapshot):
+        """Whether the retained files are exactly the snapshot's instances."""
+        expected = {item.id: (item.sop_instance_uid, item.size) for item in snapshot.instances}
+        return {item.instance_id: (item.sop_instance_uid, item.size) for item in source.files} == expected
+
     def _launch_case(self, case, job, snapshot):
-        source = parse_source(case["references"]["orthanc"])
+        source = self.parse_source(case["references"][self.reference])
         provenance = case["import_source"]
         if not isinstance(provenance, dict):
             return False
         root = self.service.store.directory / "cases" / case["id"]
         directory = root / "sources" / job["id"] / "dicom"
         manifest = directory.parent / "source-import.json"
-        expected = {item.id: (item.sop_instance_uid, item.size) for item in snapshot.instances}
         if (
             source.snapshot != snapshot
             or len(source.files) != snapshot.instance_count
             or len({item.path for item in source.files}) != len(source.files)
-            or {item.instance_id: (item.sop_instance_uid, item.size) for item in source.files} != expected
+            or not self._same_members(source, snapshot)
             or source.bytes != sum(item.size for item in source.files)
             or source.content_digest != content_digest(source.files)
-            or provenance.get("kind") != "orthanc"
+            or provenance.get("kind") != self.source_kind
             or provenance.get("source_key") != snapshot.source_key
             or provenance.get("snapshot") != snapshot.snapshot
             or provenance.get("study_uid") != snapshot.study_uid
@@ -217,7 +228,7 @@ class OrthancImports:
         # Check the small retained manifest, without rereading every CT instance
         # or revalidating image pixels merely to open an already imported case.
         encoded = manifest.read_bytes()
-        return hashlib.sha256(encoded).hexdigest() == provenance.get("manifest_sha256") and json.loads(encoded) == json_record(source)
+        return hashlib.sha256(encoded).hexdigest() == provenance.get("manifest_sha256") and json.loads(encoded) == self.json_record(source)
 
     def recover(self):
         """Reconcile interrupted imports after the worker lock and job recovery.
@@ -272,13 +283,20 @@ class OrthancImports:
             con.execute(
                 f"CREATE INDEX IF NOT EXISTS {self.kind}_key ON jobs(json_extract(data,'$.payload.import_key')) WHERE json_extract(data,'$.kind')='{self.kind}'"
             )
-            previous = con.execute(
-                f"SELECT j.data FROM jobs j WHERE json_extract(j.data,'$.kind')='{self.kind}' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
-                (key,),
-            ).fetchone()
-            previous = json.loads(previous["data"]) if previous else None
-            if previous and previous["status"] in {"queued", "running"} | (set() if reimport else {"completed"}):
-                return previous
+
+            def newest(*statuses):
+                row = con.execute(
+                    f"SELECT j.data FROM jobs j WHERE json_extract(j.data,'$.kind')='{self.kind}' AND json_extract(j.data,'$.payload.import_key')=? "
+                    f"AND j.status IN ({','.join('?' * len(statuses))}) {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
+                    (key, *statuses),
+                ).fetchone()
+                return json.loads(row["data"]) if row else None
+
+            # An attempt that serves wins over a newer failed one, such as a failed Import again.
+            if serving := newest("queued", "running", *(() if reimport else ("completed",))):
+                return serving
+            # The newest failed or cancelled attempt lends its empty case to the retry.
+            previous = newest("failed", "cancelled")
             case = None
             if case_id:
                 row = con.execute("SELECT data FROM cases WHERE id=?", (case_id,)).fetchone()
