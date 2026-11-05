@@ -37,6 +37,7 @@ Read before changing anything:
 The project's shell scripts are bash. Install with `scripts/bootstrap.sh`, then:
 
 ```bash
+.tools/bin/uv pip install --python .venv/bin/python --editable ".[test,lint]"   # once
 .venv/bin/pytest -q                        # backend tests; fakes, no GPU
 .venv/bin/ruff check && .venv/bin/ruff format --check
 
