@@ -444,7 +444,8 @@ With **CT volume** on in review:
 - **Volume point** takes the first point along your click where the volume turns half opaque, at
   its nearest voxel centre. **Point** in AI assist adds it as an Include or Exclude point. Other
   tools, Direct edit's included, move the crosshair there so you can draw on the slices.
-- A click on no visible volume, or on a surface or the CT plane in front of it, makes no mark.
+- A click on no visible volume, or on an opaque surface or the CT plane in front of it, makes no
+  mark. See-through surfaces do not block it.
 - **Surface point** refuses a surface the volume covers.
 - While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps the
   whole CT in depth.

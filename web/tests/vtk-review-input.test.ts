@@ -12,10 +12,13 @@ import {
   nativeReviewProjection,
   nativeReviewSurfacePoint,
   pickNativeReviewSurface,
+  VOLUME_COVERED_MESSAGE,
   VTKReviewInput,
+  type NativeReviewOptions,
   type NativeReviewState,
   type NativeReviewViewport,
 } from '../src/lib/vtk-review-input';
+import type { VolumeRaySource } from '../src/lib/volume-ray';
 
 class Element extends EventTarget {
   dataset: Record<string, string> = {};
@@ -165,7 +168,7 @@ function pointer(element: Element, type: string, x: number, y: number, button = 
   element.dispatchEvent(event);
   return event;
 }
-function inputFor(state = stateFor()) {
+function inputFor(state = stateFor(), options: Partial<NativeReviewOptions> = {}) {
   const document = new Document();
   vi.stubGlobal('document', document);
   vi.stubGlobal('ResizeObserver', Observer);
@@ -177,6 +180,7 @@ function inputFor(state = stateFor()) {
     actors: () => [],
     onGesture: prompt => prompts.push(prompt),
     onError: error => errors.push(error),
+    ...options,
   });
   input.setState(state);
   return {
@@ -259,6 +263,28 @@ describe('native review physical geometry', () => {
     expect(pickNativeReviewSurface(viewport, center, [actors[0]])).toBeUndefined();
     target.dispose();
     foreground.dispose();
+  });
+  it('marks the CT behind a see-through surface with Volume point, and refuses it behind an opaque one', () => {
+    const front = triangle(200),
+      notices: string[] = [],
+      volume: VolumeRaySource = { affine: geometry.affine_ras, shape: geometry.shape, sample: () => 1, opacity: () => 1, unitDistanceMM: 1 };
+    const test = inputFor(stateFor({ mode: 'volume', tool: 'point', planeMeta: undefined, showPlane: false }), {
+      actors: () => [{ id: 'front', actor: front.actor }],
+      volume: () => volume,
+      onNotice: message => notices.push(message),
+    });
+    test.renderer.addActor(front.actor);
+    const centre = test.viewport.worldToCanvas([0, 0, 0]),
+      click = () => (pointer(test.host, 'pointerdown', ...centre), pointer(test.host, 'pointerup', ...centre));
+    front.actor.getProperty().setOpacity(0.5);
+    click();
+    expect(test.prompts).toEqual([expect.objectContaining({ kind: 'point', include: true })]);
+    front.actor.getProperty().setOpacity(1);
+    click();
+    expect(test.prompts).toHaveLength(1);
+    expect(notices.at(-1)).toBe(VOLUME_COVERED_MESSAGE);
+    test.input.dispose();
+    front.dispose();
   });
 });
 

@@ -58,7 +58,7 @@ export interface NativeReviewOptions {
   onError(message: string): void;
 }
 export const VOLUME_MISSED_MESSAGE = 'No visible CT volume under the pointer.';
-export const VOLUME_COVERED_MESSAGE = 'A surface or the CT plane is in front of the CT volume here.';
+export const VOLUME_COVERED_MESSAGE = 'An opaque surface or the CT plane is in front of the CT volume here.';
 export const VOLUME_UNREADABLE_MESSAGE = 'The CT volume could not be read here; try again.';
 export const SURFACE_COVERED_MESSAGE = 'The CT volume covers this surface here. Use Volume point, or turn CT volume off.';
 const svgNS = 'http://www.w3.org/2000/svg';
@@ -287,12 +287,17 @@ export class VTKReviewInput {
       return null;
     }
   }
-  /** Opaque surfaces and the CT plane hide the volume behind them, so the ray stops at the nearest. */
+  /**
+   * Opaque surfaces and the CT plane hide the volume behind them, so the ray stops at the nearest.
+   * See-through surfaces neither stop nor dim it: the mark is a CT voxel, so only CT counts towards the threshold.
+   */
   private volumePoint(event: PointerEvent, state: NativeReviewState) {
     const source = this.options.volume?.();
     if (!source) return;
+    // Over the CT, see-through surfaces count as opaque to vtk, so only their opacity says which hide it.
+    const opaque = this.options.actors().filter(({ actor }) => actor.getProperty().getOpacity() >= 1);
     const ray = this.ray(event),
-      surface = pickNativeReviewSurface(this.viewport, this.canvasPoint(event), this.options.actors()),
+      surface = pickNativeReviewSurface(this.viewport, this.canvasPoint(event), opaque),
       plane = state.planeMeta && state.showPlane !== false ? intersectNativeReviewPlane(ray.origin, ray.direction, state.planeMeta) : undefined,
       depths = [surface, plane].flatMap(hit => (hit ? [dot(subtract(hit.ras, ray.origin), ray.direction)] : [])),
       limit = depths.length ? Math.min(...depths) : undefined,

@@ -411,9 +411,9 @@ second GPU copy of the CT.
   (`volume-ray.ts`), because vtk.js cannot pick a shared GPU volume. It samples trilinearly every
   half smallest spacing, corrects each sample's opacity to the step as vtk.js does, and takes the
   first sample where accumulated opacity reaches 0.5. It honours the mapper's clipping planes and
-  the camera's near and far planes, and stops at opaque surfaces and the CT plane. Gradient opacity
-  and lighting are not modelled. The same march refuses a Surface point behind volume by more than
-  one coarsest voxel, and at least 1 mm.
+  the camera's near and far planes, and stops at opaque surfaces and the CT plane. See-through
+  surfaces neither stop nor dim it. Gradient opacity and lighting are not modelled. The same
+  march refuses a Surface point behind volume by more than one coarsest voxel, and at least 1 mm.
 
 Masking and colouring patch exact shader anchors through a factory local to one actor. That bridge
 checks the installed versions (Cornerstone3D 5.13.1, vtk.js 36.4.1) and throws on a mismatch.
