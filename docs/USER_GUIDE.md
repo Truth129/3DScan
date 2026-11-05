@@ -722,6 +722,8 @@ running, it does the work. Commands ignore Trash, but a job on a case in Trash s
 - `segment --inference-path ID` runs on [an added GPU](#choose-a-gpu). `scan3d doctor` lists the IDs.
 - `include-all` restores labels filtered out earlier, as a new revision that keeps corrections.
 - `optimize` prepares viewer assets for an older case without changing masks or revisions.
+- `archive-check` checks the configured DICOMweb archive without changing it. See
+  [ARCHIVES.md](ARCHIVES.md#check-an-archive).
 
 A `refine` recipe is JSON in patient RAS millimetres:
 

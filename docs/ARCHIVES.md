@@ -20,6 +20,21 @@ SCAN3D_DICOMWEB_TOKEN_FILE=/etc/scan3d/pacs.token
 
 - Set `SCAN3D_DICOMWEB_ID` before the first import. Case records name the archive by it, so a
   server that moves keeps its cases. Without it, the URL names the archive.
+
+## Check an archive
+
+```bash
+.venv/bin/scan3d archive-check
+```
+
+This checks the connection and the archive's identity, whether searches honour `limit` and
+`offset`, and the listing of series and images. It also retrieves one image and deletes it. It
+changes nothing in the archive, and prints only counts, the archive key and transfer syntaxes, so
+the output can go into a support ticket. It exits 1 if any check fails.
+
+`--write-synthetic` also stores one synthetic image, in a new study for patient
+`SCAN3D-ARCHIVE-CHECK`, and reads it back. Use it only on a scratch archive: DICOMweb cannot delete
+the image.
 - A token file can be refreshed by the provider's own tool. 3DScan reads it again whenever it
   changes, and once more after a 401.
 
@@ -71,9 +86,8 @@ A viewer or worklist can open a series in 3DScan with:
 <3DScan root>#dicom-study=<StudyInstanceUID>&dicom-series=<SeriesInstanceUID>&dicom-source=<key>
 ```
 
-- `<key>` names the archive and is not a secret. With `SCAN3D_DICOMWEB_ID` set, it is
-  `printf 'dicomweb-id:%s' "$SCAN3D_DICOMWEB_ID" | sha256sum`. A link for another archive is
-  refused.
+- `<key>` names the archive and is not a secret. `scan3d archive-check` prints it. A link for
+  another archive is refused.
 - The identities stay in the URL fragment, so the browser does not send them in the page request.
 - 3DScan shows the patient and series, then reopens an earlier import of it or offers
   **Import selected series**. A link never prepares a CT or runs segmentation.

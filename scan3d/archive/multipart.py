@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import secrets
 
-from .errors import ArchiveError
+from .errors import ArchiveError, ArchiveTooLarge
 
 # RFC 2046 bchars: up to 70 characters, and the last may not be a space.
 _BOUNDARY = re.compile(r"[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]\Z")
@@ -77,7 +77,7 @@ def save_parts(chunks, content_type, target, *, max_parts, max_bytes, cancelled=
         size += len(data)
         received += len(data)
         if received > max_bytes:
-            raise ArchiveError("The archive file exceeds the import size limit.")
+            raise ArchiveTooLarge("The archive file exceeds the import size limit.")
         output.write(data)
         digest.update(data)
 

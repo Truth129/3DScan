@@ -16,7 +16,7 @@ from ..errors import NotFound
 from ..orthanc_imports import OrthancImports
 from ..orthanc_models import content_digest
 from ..store import now
-from .dicomweb import DicomWebClient
+from .dicomweb import client_for
 from .errors import ArchiveChanged, ArchiveError
 from .models import WebFile, WebInstance, WebSnapshot, WebSource, fingerprint, json_record, parse_snapshot, parse_source, patient_key
 from .stability import QuietPeriod
@@ -59,17 +59,7 @@ class WebImports(OrthancImports):
         settings = self.service.settings.dicomweb
         if settings is None:
             raise ValueError("A DICOMweb archive has not been configured on this workstation")
-        return DicomWebClient(
-            settings.url,
-            auth=settings.auth,
-            username=settings.username,
-            password=settings.password,
-            token_file=settings.token_file or None,
-            ca_bundle=settings.ca_bundle or None,
-            timeout=settings.timeout,
-            wildcards=settings.wildcards,
-            archive_id=settings.archive_id or None,
-        )
+        return client_for(settings)
 
     def status(self):
         settings = self.service.settings.dicomweb

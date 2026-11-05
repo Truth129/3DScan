@@ -85,6 +85,21 @@ def _meta_uid(meta, keyword):
     return value
 
 
+def client_for(settings):
+    """The client for this workstation's DICOMweb settings."""
+    return DicomWebClient(
+        settings.url,
+        auth=settings.auth,
+        username=settings.username,
+        password=settings.password,
+        token_file=settings.token_file or None,
+        ca_bundle=settings.ca_bundle or None,
+        timeout=settings.timeout,
+        wildcards=settings.wildcards,
+        archive_id=settings.archive_id or None,
+    )
+
+
 def _study(row):
     return {
         "study_uid": dicomjson.uid(row, _STUDY_UID),
@@ -289,6 +304,10 @@ class DicomWebClient:
             raise ValueError("This archive is set up for exact searches. Remove * and ? from the search.")
         rows = self._qido("/studies", [*query.items(), *_STUDY_PARAMS, ("limit", str(limit)), ("offset", str(offset))])
         return [_study(row) for row in rows[:limit]]
+
+    def study_page(self, *, limit, offset=0):
+        """The archive's own page of studies, untrimmed, as Study Instance UIDs: whether it honours limit and offset."""
+        return [dicomjson.uid(row, _STUDY_UID) for row in self._qido("/studies", [("limit", str(limit)), ("offset", str(offset))])]
 
     def study(self, study_uid):
         study_uid = _uid(study_uid)
