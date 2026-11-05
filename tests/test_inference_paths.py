@@ -143,7 +143,7 @@ def test_the_directory_follows_the_setting_per_call(tmp_path, monkeypatch):
     "recommended, setting, label, memory",
     [
         ("gpu:0", None, "Test Default GPU", 32),
-        ("gpu:1", None, "Test Second GPU", 8),  # The integrated GPU this workstation lost is still listed.
+        ("gpu:1", None, "Test Second GPU", 8),  # The proof's recommended card is named.
         ("gpu:0", "gpu:1", "Test Second GPU", 8),  # An explicit request outranks the recommendation.
         ("gpu:0", "cpu", "CPU", None),
     ],

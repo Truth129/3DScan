@@ -242,7 +242,7 @@ class Accounts:
             return [self._shown(row) for row in con.execute(_PEOPLE + " ORDER BY u.created_at,u.id", (_stamp(_utcnow()),))]
 
     def invite(self, actor_id, username, display_name=None, role="member"):
-        """A person with no password yet, and a link to set one. Archive access starts on, as the owner chose."""
+        """A person with no password yet, and a link to set one. Archive access starts on."""
         identity.check_username(username)
         name, user_id, moment = _display_name(username, display_name), identifier(), _utcnow()
         try:
