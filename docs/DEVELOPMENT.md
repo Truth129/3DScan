@@ -65,11 +65,11 @@ first.
 | Gate                               | Covers                                                    |
 | ---------------------------------- | --------------------------------------------------------- |
 | `cornerstone_primary_app_smoke.py` | The primary app                                           |
-| `native_review_smoke.py`           | Review in 3D, through the next four scripts               |
+| `native_review_smoke.py`           | Review and opacity in 3D, through the next four scripts   |
 | `direct_edit_smoke.py`             | Direct edits, with the saved voxels checked               |
 | `interactive_tools_smoke.py`       | AI assist and mixed gestures, on slices or in 3D          |
 | `scissors_smoke.py`                | 3D scissors, with the saved voxels checked                |
-| `native_surface_layers_smoke.py`   | Segment opacity over the CT volume in 3D                  |
+| `native_surface_layers_smoke.py`   | Segment opacity over the CT volume, on the main page      |
 | `custom_segment_smoke.py`          | Custom segments                                           |
 | `main_plane_smoke.py`              | The CT plane in the main viewer                           |
 | `browser_smoke.py`                 | CT slices, refine and undo, phone layout, portable export |
