@@ -6,7 +6,14 @@ interface JobReader {
   jobs(caseId: string): Promise<Job[]>;
 }
 /** Exporting a saved revision, to a file or elsewhere, never changes it, so the workspace does not wait for it. */
-export const outboundExportKinds = ['orthanc_export', 'orthanc_roi_export', 'orthanc_view_export', 'view_file_export'];
+export const outboundExportKinds = [
+  'orthanc_export',
+  'orthanc_roi_export',
+  'orthanc_view_export',
+  'view_file_export',
+  'archive_seg_export',
+  'archive_view_export',
+];
 const active = (job: Job, caseId: string) =>
   job.case_id === caseId && !['review_predict', ...outboundExportKinds].includes(job.kind) && ['queued', 'running'].includes(job.status);
 

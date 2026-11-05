@@ -4,6 +4,8 @@ import type { InteractiveReview, Job, Revision, Structure } from '../types';
 export type DicomSegFormat = 'seg' | 'osirix_roi';
 export const DICOM_SEG_KIND = 'orthanc_export';
 export const DICOM_ROI_KIND = 'orthanc_roi_export';
+/** A SEG stored in a DICOMweb archive, for a case imported from one. */
+export const DICOM_ARCHIVE_SEG_KIND = 'archive_seg_export';
 
 export interface DicomSegDestination {
   id: string;
@@ -27,6 +29,8 @@ export interface DicomSegExportResult {
   removed_voxels?: Record<string, number>;
   /** Prepared for download: nothing was archived or sent. */
   file?: boolean;
+  /** The DICOMweb archive it was stored in, by name; absent for Orthanc. */
+  archive?: string;
 }
 export interface DicomSegExportJob extends Job {
   result?: { dicom_seg?: DicomSegExportResult; osirix_roi?: DicomSegExportResult };
@@ -43,6 +47,8 @@ export interface DicomSegAvailability {
   file?: { available: boolean; reason?: string };
   /** Present when the server can make OsiriX ROIs. They need what archive and send need, so `available` covers them. */
   osirix_roi?: { encoding_version: number };
+  /** A case from a DICOMweb archive archives there, by this name, and sends nowhere. */
+  archive_name?: string;
 }
 export interface DicomSegExportRequest {
   structure_ids: string[];
@@ -106,7 +112,7 @@ export const unfinishedRoiSelection = (job?: DicomSegExportJob) =>
 export const pendingDicomSegExport = (job?: Job) => !!job && ['queued', 'running'].includes(job.status);
 export const cancellableDicomSegExport = (job?: DicomSegExportJob) => pendingDicomSegExport(job) && !job?.delivery_started;
 export const matchesDicomSegExport = (job: Job, caseId: string, revisionId: string) =>
-  (job.kind === DICOM_SEG_KIND || job.kind === DICOM_ROI_KIND) && job.case_id === caseId && job.revision_id === revisionId;
+  [DICOM_SEG_KIND, DICOM_ROI_KIND, DICOM_ARCHIVE_SEG_KIND].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId;
 
 const sameExport = (result: DicomSegExportResult, structureIds: string[], encodingVersion?: number, overlapPriority?: string[]) =>
   (encodingVersion === undefined || (result.encoding_version ?? 1) === encodingVersion) &&
@@ -171,15 +177,16 @@ function roiExportSummary(job: DicomSegExportJob): string {
 
 export function dicomSegExportSummary(job: DicomSegExportJob): string {
   if (exportFormat(job) === 'osirix_roi') return roiExportSummary(job);
-  const result = exportResult(job);
+  const result = exportResult(job),
+    archive = result?.archive ?? 'Orthanc';
   if (job.status === 'cancelled')
-    return result?.archived ? 'Export cancelled. The SEG had already reached Orthanc and stays there. Nothing was sent.' : 'Export cancelled.';
+    return result?.archived ? `Export cancelled. The SEG had already reached ${archive} and stays there. Nothing was sent.` : 'Export cancelled.';
   if (job.status !== 'completed' || !result) return '';
   const masks = `${result.segments_count} ${result.segments_count === 1 ? 'mask' : 'masks'}`,
     overlaps = overlapSummary(result);
   if (result.file) return `${masks} ready as one DICOM SEG file. Nothing was archived or sent.${overlaps}`;
   if (result.sent)
     return `${masks} sent to ${result.destination || 'the configured destination'} · ${result.instance_count} DICOM ${result.instance_count === 1 ? 'instance' : 'instances'}.${overlaps}`;
-  if (result.archived) return `${masks} archived in Orthanc. Nothing was sent to another viewer.${overlaps}`;
+  if (result.archived) return `${masks} archived in ${archive}. Nothing was sent to another viewer.${overlaps}`;
   return 'Export finished. Delivery has not been confirmed.';
 }

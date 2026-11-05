@@ -248,5 +248,6 @@ def test_the_orthanc_exporter_refuses_a_dicomweb_case(rig, monkeypatch):
     fake_convert(monkeypatch, case["series"][0]["files"])
     request = rig.http.post(f"/api/cases/{case['id']}/process", json={"series_uid": SERIES_UID, "profile": "chest_abdomen", "phase": "unknown"})
     revision = execute_cpu(rig, request.json()["id"])["revision_id"]
-    availability = rig.http.get(f"/api/cases/{case['id']}/revisions/{revision}/dicom-view").json()
+    # Directly, as code that predates the DICOMweb exporters would.
+    availability = rig.service.orthanc_view_exports.availability(case["id"], revision)
     assert availability["available"] is False and "Orthanc CT source" in availability["reason"]

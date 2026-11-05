@@ -1,7 +1,14 @@
 import { onScopeDispose, shallowReactive } from 'vue';
 import { api, ApiError } from './api';
 import { caseIsGone } from './jobs';
-import { DICOM_VIEW_KIND, dicomViewDelivered, dicomViewExportSummary, dicomViewFileReady, pendingDicomViewExport, type DicomViewExportJob } from './dicom-view';
+import {
+  DELIVERED_VIEW_KINDS,
+  dicomViewDelivered,
+  dicomViewExportSummary,
+  dicomViewFileReady,
+  pendingDicomViewExport,
+  type DicomViewExportJob,
+} from './dicom-view';
 
 interface DicomViewJobOptions {
   activeCaseId: () => string | undefined;
@@ -135,7 +142,7 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       }
       // A person hears how their own sends ended.
       for (const job of listed)
-        if (job.kind === DICOM_VIEW_KIND && job.case_id === caseId && pendingDicomViewExport(job) && !job.started_by && !disposed) follow(job);
+        if (DELIVERED_VIEW_KINDS.includes(job.kind) && job.case_id === caseId && pendingDicomViewExport(job) && !job.started_by && !disposed) follow(job);
     } catch {
       /* The next opening of the case looks again. */
     }

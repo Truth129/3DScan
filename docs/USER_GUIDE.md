@@ -573,6 +573,7 @@ and study, or adds it to that study in Orthanc as a new series.
 - **Orthanc.** Choose **Archive in Orthanc**, or pick a **Send destination** and choose **Send to**
   it. This needs a configured Orthanc, archive access and a CT imported from that archive. See
   [send a 3D view back](ORTHANC.md#send-a-3d-view-back).
+- **DICOMweb archive.** For a CT imported from one, choose **Archive in** that archive.
 
 The image is a picture. It has no calibration and no orientation labels, so do not measure on it,
 and nothing in it marks left from right.
@@ -627,6 +628,9 @@ If the CT came from a configured Orthanc, you can also choose **Archive in Ortha
 **Send destination** and choose **Send to** it. See
 [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back). **Send again**
 deliberately resends the same instances.
+
+If the CT came from a [DICOMweb archive](ARCHIVES.md#archive-results), choose **Archive in** that
+archive. It has no send destinations.
 
 **Cancel export** stops an export in progress, but closing the dialog does not. A SEG that has
 reached Orthanc stays there, and a send cannot be stopped once Orthanc has started it.

@@ -285,7 +285,8 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
 - `kind`: `process`, `segment`, `refine`, `correction`, `include_all` (only from
   `scan3d include-all`), `review_predict`, `review_accept`, `orthanc_import`, `archive_import`
   (DICOMweb), `orthanc_export` (every SEG export, file-only included), `orthanc_roi_export` (OsiriX
-  ROIs), `orthanc_view_export`, `view_file_export` or `dicom_seg_import`.
+  ROIs), `orthanc_view_export`, `view_file_export`, `archive_seg_export`, `archive_view_export`
+  (DICOMweb) or `dicom_seg_import`.
   [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists the lanes.
 - `revision_id`: the new revision once committed, or the exported one for `orthanc_export`,
   `orthanc_roi_export` and `orthanc_view_export`.
@@ -1297,6 +1298,21 @@ any CT prepared from DICOM, a folder or ZIP import included, and no archive acce
 - **`GET .../dicom-view-file/{export_id}/view.dcm`** serves a completed file's verified bytes, or 404.
 - The encoding and identity rules are the ones above, with no archive checks. `result.dicom_view`
   adds `file: true`.
+
+## DICOMweb archive export
+
+For a case whose `import_source.kind` is `dicomweb`, the SEG and view routes above archive in the
+[DICOMweb archive](ARCHIVES.md#archive-results) instead of Orthanc. Files are unchanged.
+
+- `GET .../dicom-seg` and `GET .../dicom-view` add `archive_name`, have no `destinations`, and
+  `dicom-seg` has no `osirix_roi`. `available` and `reason` describe archiving there.
+- `POST .../dicom-seg` without `delivery: "file"` returns an `archive_seg_export` job, and
+  `POST .../dicom-view` an `archive_view_export` job. A `destination` or `resend` is refused.
+- The job stores each instance with STOW-RS, then reads it back. `export.json` is as above, and
+  `delivery-v2.json` records each stored SOP by archive, with `verified` (`bytes` or `canonical`,
+  the same identity, patient and decoded pixels) and any STOW warning codes. `delivery.json` is
+  never written.
+- The result adds `archive`, the archive's name.
 
 ## Orthanc routes
 

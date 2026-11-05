@@ -303,3 +303,16 @@ describe('a case imported from a reachable Orthanc', () => {
     expect(view.text()).toContain('Masks · 1 of 2 selected');
   });
 });
+
+describe('a case from a DICOMweb archive', () => {
+  it('archives in that archive by name, offers no send, and says where the SEG went', async () => {
+    const archived = fileJob('completed', { kind: 'archive_seg_export' });
+    archived.result!.dicom_seg = { ...archived.result!.dicom_seg!, file: false, archived: true, archive: 'Synthetic PACS' };
+    const view = await dialog(availability({ available: true, reason: undefined, archive_name: 'Synthetic PACS', exports: [archived] }));
+    expect(view.button('Archive in Synthetic PACS')).toBeDefined();
+    expect(view.button('Archive in Orthanc')).toBeUndefined();
+    expect(view.all(element => element.tagName === 'SELECT')).toHaveLength(0);
+    expect(view.text()).not.toContain('Send to viewer');
+    expect(view.text()).toContain('2 masks archived in Synthetic PACS. Nothing was sent to another viewer.');
+  });
+});

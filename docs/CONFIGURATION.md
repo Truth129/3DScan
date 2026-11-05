@@ -160,7 +160,7 @@ A DICOMweb archive is optional, and off until `SCAN3D_DICOMWEB_URL` is set.
 | `SCAN3D_DICOMWEB_TIMEOUT`        | `30`            | Request timeout in seconds, 1 to 300.                                                       |
 | `SCAN3D_DICOMWEB_QUIET_SECONDS`  | `60`            | Seconds, 0 to 3600, that a series' image list must stay unchanged before it can be imported. |
 | `SCAN3D_DICOMWEB_WILDCARDS`      | `false`         | `true` lets searches use `*` and `?`.                                                       |
-| `SCAN3D_DICOMWEB_STORE`          | `true`          | Reserved for sending results to the archive, which is not built yet.                        |
+| `SCAN3D_DICOMWEB_STORE`          | `true`          | `false` keeps the archive read-only: SEG and views are not archived there.                  |
 
 The server refuses to start if the token or CA file cannot be read.
 

@@ -4,6 +4,10 @@ import type { DicomSegDestination } from './dicom-seg';
 export const DICOM_VIEW_KIND = 'orthanc_view_export';
 /** A file reaches no receiver, so it has its own kind and never counts as an earlier delivery. */
 export const DICOM_VIEW_FILE_KIND = 'view_file_export';
+/** A view stored in a DICOMweb archive, for a case imported from one. */
+export const DICOM_ARCHIVE_VIEW_KIND = 'archive_view_export';
+/** The kinds that deliver a view somewhere, which a file does not. */
+export const DELIVERED_VIEW_KINDS = [DICOM_VIEW_KIND, DICOM_ARCHIVE_VIEW_KIND];
 /** Mirrors the server's limit, so an oversized image stops before its upload starts. */
 export const DICOM_VIEW_MAX_BYTES = 128 * 1024 ** 2;
 export const VIEW_CHANGED_MESSAGE = 'The view changed during capture. Try again.';
@@ -20,6 +24,8 @@ export interface DicomViewExportResult {
   destination?: string;
   destination_id?: string;
   file?: boolean;
+  /** The DICOMweb archive it was stored in, by name; absent for Orthanc. */
+  archive?: string;
 }
 export interface DicomViewExportJob extends Job {
   result?: { dicom_view?: DicomViewExportResult };
@@ -30,6 +36,8 @@ export interface DicomViewAvailability {
   reason?: string;
   destinations: DicomSegDestination[];
   exports?: DicomViewExportJob[];
+  /** A case from a DICOMweb archive archives there, by this name, and sends nowhere. */
+  archive_name?: string;
 }
 /** A file needs only the case, so this answers for accounts and cases the archive does not. */
 export interface DicomViewFileAvailability {
@@ -137,7 +145,7 @@ export const pendingDicomViewExport = (job?: Job) => !!job && ['queued', 'runnin
 export const dicomViewFileReady = (job?: DicomViewExportJob) =>
   job?.kind === DICOM_VIEW_FILE_KIND && job.status === 'completed' && job.result?.dicom_view?.file === true;
 export const matchesDicomViewExport = (job: Job, caseId: string, revisionId: string) =>
-  [DICOM_VIEW_KIND, DICOM_VIEW_FILE_KIND].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId;
+  [...DELIVERED_VIEW_KINDS, DICOM_VIEW_FILE_KIND].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId;
 
 /** A second delivery needs its own click. Only this capture's own job can offer one: another capture is a different image. */
 export const dicomViewAlreadySent = (job: DicomViewExportJob | undefined, destination: string) =>
@@ -145,7 +153,7 @@ export const dicomViewAlreadySent = (job: DicomViewExportJob | undefined, destin
 
 /** The newest export of this revision, when it may still affect what a receiver holds. */
 export function unfinishedEarlierDicomView(jobs: DicomViewExportJob[], caseId: string, revisionId: string, current?: DicomViewExportJob) {
-  const latest = jobs.find(job => job.kind === DICOM_VIEW_KIND && matchesDicomViewExport(job, caseId, revisionId));
+  const latest = jobs.find(job => DELIVERED_VIEW_KINDS.includes(job.kind) && matchesDicomViewExport(job, caseId, revisionId));
   return latest && latest.id !== current?.id && (pendingDicomViewExport(latest) || latest.status === 'failed') ? latest : undefined;
 }
 
@@ -159,6 +167,6 @@ export function dicomViewExportSummary(job: DicomViewExportJob): string {
   if (result.file) return 'View ready as a DICOM file. Nothing was archived or sent.';
   if (result.sent)
     return `View sent to ${result.destination || 'the configured destination'} · ${result.instance_count} DICOM ${result.instance_count === 1 ? 'instance' : 'instances'}.`;
-  if (result.archived) return 'View archived in Orthanc. Nothing was sent to another viewer.';
+  if (result.archived) return `View archived in ${result.archive ?? 'Orthanc'}. Nothing was sent to another viewer.`;
   return 'Export finished. Delivery has not been confirmed.';
 }

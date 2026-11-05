@@ -44,6 +44,8 @@ const orthancReady = computed(() => !!availability.value?.available);
 const fileReady = computed(() => !!fileAvailability.value?.available);
 /** Archive and send stay in view, explaining themselves, unless a file is all this case and account can have. */
 const showOrthanc = computed(() => orthancReady.value || !fileReady.value);
+/** A case from a DICOMweb archive archives there and sends nowhere. */
+const archiveName = computed(() => availability.value?.archive_name);
 const actionDisabled = computed(() => locked.value || !!statusError.value || !orthancReady.value);
 const fileDisabled = computed(() => locked.value || !!statusError.value || !fileReady.value);
 /** A file of this capture that is ready to save again: only this dialog's own job holds this image. */
@@ -75,7 +77,8 @@ let requests: AbortController | undefined,
   gone = false,
   // A request with no answer, until the server answers one for that destination.
   lost: { message: string; destination?: string } | undefined;
-const unconfirmed = (message: string) => `${message} Check the study in Orthanc before exporting again; the request may already have reached the workstation.`;
+const unconfirmed = (message: string) =>
+  `${message} Check the study in ${archiveName.value ?? 'Orthanc'} before exporting again; the request may already have reached the workstation.`;
 
 async function load() {
   requests?.abort();
@@ -217,7 +220,9 @@ onBeforeUnmount(() => {
     <p v-if="availability && !orthancReady && (showOrthanc || !fileReady)" class="export-error" role="status">
       {{ (!fileReady && fileAvailability?.reason) || availability.reason || 'DICOM view export is unavailable for this saved revision.' }}
     </p>
-    <p v-else-if="availability?.reason && !orthancReady" class="help" role="status">Archive and send are unavailable. {{ availability.reason }}</p>
+    <p v-else-if="availability?.reason && !orthancReady" class="help" role="status">
+      {{ archiveName ? 'Archiving is unavailable.' : 'Archive and send are unavailable.' }} {{ availability.reason }}
+    </p>
     <p v-if="earlier" class="help" role="status">
       {{
         pendingDicomViewExport(earlier)
@@ -228,7 +233,7 @@ onBeforeUnmount(() => {
 
     <p v-if="earlierOutcome" class="help" role="status">An earlier export of this revision finished. {{ earlierOutcome }}</p>
 
-    <fieldset v-if="showOrthanc" :disabled="locked || !orthancReady">
+    <fieldset v-if="showOrthanc && !archiveName" :disabled="locked || !orthancReady">
       <label class="destination-field"
         >Send destination<select v-model="destination">
           <option value="">Choose a destination…</option>
@@ -271,9 +276,9 @@ onBeforeUnmount(() => {
           {{ preparedFile ? 'Download file' : 'Prepare file' }}
         </button>
         <button v-if="showOrthanc" class="button secondary" type="button" :disabled="actionDisabled" @click="start()">
-          {{ submitting ? 'Queuing…' : 'Archive in Orthanc' }}</button
+          {{ submitting ? 'Queuing…' : `Archive in ${archiveName ?? 'Orthanc'}` }}</button
         ><button
-          v-if="showOrthanc"
+          v-if="showOrthanc && !archiveName"
           class="button primary"
           type="button"
           :disabled="actionDisabled || !target"

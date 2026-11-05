@@ -52,6 +52,8 @@ class Service:
         self._osirix_roi_exports = None
         self._view_file_exports = None
         self._archive_imports = None
+        self._archive_seg_exports = None
+        self._archive_view_exports = None
         self._lane_guard = threading.Lock()
         self._running_lanes = 0
         self._preparation_slots = None
@@ -121,12 +123,34 @@ class Service:
     def _importer(self, kind):
         return {"orthanc_import": self.orthanc, "archive_import": self.archive_imports}.get(kind)
 
+    @property
+    def archive_seg_exports(self):
+        if self._archive_seg_exports is None:
+            from .archive.exports import ArchiveSegExports
+
+            self._archive_seg_exports = ArchiveSegExports(self)
+        return self._archive_seg_exports
+
+    @property
+    def archive_view_exports(self):
+        if self._archive_view_exports is None:
+            from .archive.exports import ArchiveViewExports
+
+            self._archive_view_exports = ArchiveViewExports(self)
+        return self._archive_view_exports
+
+    def from_archive(self, case_id):
+        """Whether a case came from the DICOMweb archive, so its exports are stored there rather than in Orthanc."""
+        return (self.store.get("cases", case_id).get("import_source") or {}).get("kind") == "dicomweb"
+
     def _exporter(self, kind):
         return {
             "orthanc_export": self.orthanc_exports,
             "orthanc_view_export": self.orthanc_view_exports,
             "orthanc_roi_export": self.osirix_roi_exports,
             "view_file_export": self.view_file_exports,
+            "archive_seg_export": self.archive_seg_exports,
+            "archive_view_export": self.archive_view_exports,
         }[kind]
 
     def _interactive(self):
@@ -167,6 +191,8 @@ class Service:
         self.orthanc_view_exports.recover()
         self.osirix_roi_exports.recover()
         self.view_file_exports.recover()
+        self.archive_seg_exports.recover()
+        self.archive_view_exports.recover()
         # Only a lane writes here, and none runs yet, so what is left came from a hard stop. It names no case.
         for leftover in (self.settings.data_dir / "orthanc-staging").glob("transfer-*"):
             try:

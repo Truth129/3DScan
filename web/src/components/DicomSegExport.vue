@@ -65,9 +65,13 @@ const blocked = computed(() => !!disabled.value || locked.value || !!statusError
 const actionDisabled = computed(() => blocked.value || !orthancReady.value);
 /** Hide what this case cannot use, unless the disabled buttons are all that is left to explain it, with no reason given. */
 const showOrthanc = computed(() => orthancReady.value || (!fileReady.value && !availability.value?.reason));
+/** A case from a DICOMweb archive archives there and sends nowhere. */
+const archiveName = computed(() => availability.value?.archive_name);
 const description = computed(() =>
   orthancReady.value
-    ? `Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.${roiReady.value ? ' Archive and send can also make OsiriX ROIs.' : ''}`
+    ? archiveName.value
+      ? `Choose the masks from this saved revision. Save them as a DICOM SEG file, or archive them in ${archiveName.value}.`
+      : `Choose the masks from this saved revision. Save them as a DICOM SEG file, archive them in Orthanc, or send them to a configured DICOM viewer.${roiReady.value ? ' Archive and send can also make OsiriX ROIs.' : ''}`
     : 'Choose the masks from this saved revision, then save them as a DICOM SEG file.',
 );
 const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
@@ -224,7 +228,7 @@ onBeforeUnmount(() => dialog.value?.close());
           </ol>
         </template>
       </div>
-      <template v-if="showOrthanc">
+      <template v-if="showOrthanc && !archiveName">
         <label class="destination-field"
           >Send destination<select v-model="destination">
             <option value="">Choose a destination…</option>
@@ -235,7 +239,9 @@ onBeforeUnmount(() => dialog.value?.close());
         >
         <p v-if="availability && !availability.destinations.length" class="help">No send destination is configured. You can still archive in Orthanc.</p>
       </template>
-      <p v-else-if="availability?.reason" class="help">Archive and send are unavailable. {{ availability.reason }}</p>
+      <p v-else-if="availability?.reason" class="help">
+        {{ archiveName ? 'Archiving is unavailable.' : 'Archive and send are unavailable.' }} {{ availability.reason }}
+      </p>
     </fieldset>
 
     <div v-if="job" class="export-status" :class="{ 'export-error': job.status === 'failed' }" role="status" aria-live="polite">
@@ -292,8 +298,9 @@ onBeforeUnmount(() => dialog.value?.close());
           {{ prepared ? 'Download SEG file' : 'Prepare SEG file' }}</button
         ><template v-if="showOrthanc"
           ><button class="button secondary" type="button" :disabled="actionDisabled" @click="start(selected, null, false, overlapPriority, chosenFormat)">
-            {{ submitting ? 'Queuing…' : 'Archive in Orthanc' }}</button
+            {{ submitting ? 'Queuing…' : `Archive in ${archiveName ?? 'Orthanc'}` }}</button
           ><button
+            v-if="!archiveName"
             class="button primary"
             type="button"
             :disabled="actionDisabled || !target"

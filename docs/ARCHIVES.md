@@ -1,10 +1,11 @@
 # DICOMweb archives
 
-3DScan can search and import from any archive that offers DICOMweb (QIDO-RS and WADO-RS), beside
-or instead of [Orthanc](ORTHANC.md). It is off until `SCAN3D_DICOMWEB_URL` is set, and
-[CONFIGURATION.md](CONFIGURATION.md#dicomweb-archive) lists the settings.
+3DScan can search, import from and archive results to any archive that offers DICOMweb (QIDO-RS,
+WADO-RS and STOW-RS), beside or instead of [Orthanc](ORTHANC.md). It is off until
+`SCAN3D_DICOMWEB_URL` is set, and [CONFIGURATION.md](CONFIGURATION.md#dicomweb-archive) lists the
+settings.
 
-Sending results to a DICOMweb archive is not built yet. Until then, send through
+Sending results to another DICOM viewer is not built yet for these cases. Send through
 [Orthanc as a gateway](ORTHANC.md#other-archives-through-orthanc), or save SEG and view files.
 
 ## Configure
@@ -47,6 +48,20 @@ Import runs on the CPU and is bound to the selected snapshot, like an
 
 [USER_GUIDE.md](USER_GUIDE.md#import-a-study) shows the screens, and the routes are in
 [API.md](API.md#dicomweb-archive).
+
+## Archive results
+
+For a case imported from the archive, **Export SEG…** and **DICOM ↗** offer **Archive in** the
+archive, which stores the SEG or view in the original study with STOW-RS. SEG and view files work
+as for any CT prepared from DICOM.
+
+- An archive's STOW answer does not show which bytes it keeps, so 3DScan reads every instance back.
+  It must return the same bytes, or the same identity, patient and decoded pixels after a
+  re-encode. Anything else fails the export, and the job says so.
+- Before and after storing, the archive must still list the original study under the same patient.
+  A merged or changed study stores nothing.
+- A retry stores the same instance again, which an archive keeps once.
+- `SCAN3D_DICOMWEB_STORE=false` keeps the archive read-only, and archiving is then refused.
 
 ## Launch links
 

@@ -156,6 +156,10 @@ def add_routes(app, service):
         # A file stays on this machine, so this still answers. Without the archive it stops short of Orthanc.
         # One dialog offers both formats, so it gets one history. ROIs need exactly what a SEG archive or send
         # needs, so `available` and `reason` answer for both without asking Orthanc twice.
+        if service.from_archive(case_id):
+            # A DICOMweb case archives there and makes files here; OsiriX ROIs need Orthanc, so it offers none.
+            archive = service.archive_seg_exports
+            return archive.availability(case_id, revision_id, archive=identity.current().archive_access, kinds=(service.orthanc_exports.kind, archive.kind))
         rois = service.osirix_roi_exports
         result = service.orthanc_exports.availability(
             case_id, revision_id, archive=identity.current().archive_access, kinds=(service.orthanc_exports.kind, rois.kind)
@@ -167,8 +171,14 @@ def add_routes(app, service):
         # The gate never reads a body, and a file stays on this machine, so only a send needs the archive.
         if body.delivery == "orthanc" and not identity.current().archive_access:
             raise HTTPException(403, ARCHIVE_REFUSED)
-        # ROIs refuse a file and a ranking themselves, before they reach Orthanc.
-        manager = service.osirix_roi_exports if body.format == "osirix_roi" else service.orthanc_exports
+        # ROIs refuse a file and a ranking themselves, before they reach Orthanc. A file is made the same way
+        # for every case, so only an archive delivery of a DICOMweb case goes there.
+        if body.format == "osirix_roi":
+            manager = service.osirix_roi_exports
+        elif body.delivery == "orthanc" and service.from_archive(case_id):
+            manager = service.archive_seg_exports
+        else:
+            manager = service.orthanc_exports
         return public_job(
             manager.start(
                 case_id, revision_id, body.structure_ids, body.destination, resend=body.resend, overlap_priority=body.overlap_priority, delivery=body.delivery
@@ -185,7 +195,10 @@ def add_routes(app, service):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view")
     def dicom_view_availability(case_id: str, revision_id: str):
-        return service.orthanc_view_exports.availability(case_id, revision_id)
+        return view_exporter(case_id).availability(case_id, revision_id)
+
+    def view_exporter(case_id):
+        return service.archive_view_exports if service.from_archive(case_id) else service.orthanc_view_exports
 
     # A plain def, so that decoding the capture never runs on the event loop.
     @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-view")
@@ -197,7 +210,7 @@ def add_routes(app, service):
         destination: str | None = Form(None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
         resend: bool = Form(False),
     ):
-        return public_job(service.orthanc_view_exports.start(case_id, revision_id, image.file, reference_image_id, destination, resend=resend))
+        return public_job(view_exporter(case_id).start(case_id, revision_id, image.file, reference_image_id, destination, resend=resend))
 
     # A file stays on this machine, so it needs neither the archive nor a CT imported from one.
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view-file")
