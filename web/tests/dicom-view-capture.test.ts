@@ -83,8 +83,11 @@ vi.mock('../src/lib/vtk-ct-plane', () => ({
 vi.mock('../src/lib/vtk-review-plane', () => ({
   VTKReviewPlane: class {
     actor = {};
+    frame: unknown;
     clear() {}
-    setFrame() {}
+    setFrame(frame: unknown) {
+      this.frame = frame;
+    }
     setVisible() {}
     dispose() {}
     stats() {}
@@ -389,6 +392,24 @@ describe('Cornerstone export capture', () => {
     await settled();
     frame.resolve('data:image/png;base64,stale');
     await expect(capture).rejects.toThrow(VIEW_NOT_READY_MESSAGE);
+  });
+  it('keeps the review plane ready after see-through segments fall back to solid', async () => {
+    const status = vi.fn(),
+      reason = 'The CT volume shader did not accept the segment layers.';
+    await view({ ...surfaces, reviewPlaneActive: true, reviewFrame: {}, reviewGeometry: { shape: [4, 4, 4] }, onReviewStatus: status });
+    expect(status).toHaveBeenLastCalledWith(expect.objectContaining({ planeReady: true }));
+    const frame = deferred<void>();
+    fake.viewer.render.mockReturnValue(frame.promise);
+    fake.viewer.armSurfaceLayers = () => {
+      throw new Error(reason);
+    };
+    fake.viewer.options.onSurfaceLayersChanged(reason);
+    await settled();
+    expect(status).toHaveBeenLastCalledWith(expect.objectContaining({ planeReady: false }));
+    // The corrected frame the viewer presents after a failure is the one plane marking waits for.
+    frame.resolve();
+    await settled();
+    expect(status).toHaveBeenLastCalledWith(expect.objectContaining({ planeReady: true }));
   });
   it('leaves PNG capture as it was, whatever the layers are doing', async () => {
     const shown = await view({ colors });

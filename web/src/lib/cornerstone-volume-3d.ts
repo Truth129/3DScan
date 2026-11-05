@@ -41,8 +41,8 @@ export interface CornerstoneVolume3DOptions {
   onBeforeDispose?: () => void;
   /** Whether the CT actor is drawn changed, for example when a pending mask hid it. */
   onVolumeDrawn?: (drawn: boolean) => void;
-  /** See-through surface layers stopped for good; the surfaces must go solid. */
-  onSurfaceLayersFailed?: (reason: string) => void;
+  /** See-through surface layers failed, so the surfaces must go solid, or were reallocated for a new tile. */
+  onSurfaceLayersChanged?: (failed?: string) => void;
 }
 type Libraries = { core: typeof Core; tools: typeof Tools };
 type SharedMapper = NonNullable<ReturnType<Core.Types.VolumeActor['getMapper']>> & { getScalarTexture(): unknown };
@@ -516,8 +516,8 @@ export class CornerstoneVolume3D {
           return;
         }
         const layers = this.layers?.settle();
-        if (layers?.failed) this.options.onSurfaceLayersFailed?.(layers.failed);
         if (layers?.rerender) {
+          this.options.onSurfaceLayersChanged?.(layers.failed);
           // The last frame dropped or misplaced the see-through surfaces; present the next one instead.
           this.engine.renderViewport(this.id);
           return;

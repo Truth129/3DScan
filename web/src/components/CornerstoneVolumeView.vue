@@ -300,9 +300,16 @@ async function initialize() {
           if (!disposed && id === generation && viewer === instance) fail(reason);
         });
       },
-      // The viewer presents a corrected frame itself; only the surfaces' mode has to change first.
-      onSurfaceLayersFailed: () => {
-        if (!disposed && id === generation && viewer) syncPresentation();
+      // The viewer presents a corrected frame itself. A reallocation only changes the layer count;
+      // a failure makes the surfaces solid, and the review plane waits for that corrected frame.
+      onSurfaceLayersChanged: failed => {
+        if (disposed || id !== generation || !viewer) return;
+        const instance = viewer;
+        if (!failed) return publishSurfaceLayerStatus({ ...surfaceLayerStatus.value, layers: instance.surfaceLayerCount });
+        syncPresentation();
+        void renderFeatures(instance, id).catch(reason => {
+          if (!disposed && id === generation && viewer === instance) fail(reason);
+        });
       },
     });
     if (disposed || active.signal.aborted || id !== generation) {
