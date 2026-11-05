@@ -130,6 +130,9 @@ def create_app(settings: Settings | None = None):
     # Checked here rather than with the other settings, so a backup never stops for a missing token.
     if service.settings.dicomweb and (missing := service.settings.dicomweb.missing_files()):
         raise ValueError(f"{' and '.join(missing)} cannot be read")
+    # Reading the destinations file refuses an invalid one now, not at the first send.
+    if service.settings.dicom_send and (missing := service.settings.dicom_send.missing_files()):
+        raise ValueError(f"{' and '.join(missing)} cannot be read")
 
     @asynccontextmanager
     async def lifespan(app):

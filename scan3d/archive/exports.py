@@ -7,7 +7,7 @@ every instance is read back, and its bytes must match, or else its identity and 
 pixels. The receipt is `delivery-v2.json`, so an Orthanc receipt is never read as one.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import logging
 from types import SimpleNamespace
@@ -43,6 +43,32 @@ class StoredInstance:
     warnings: tuple[Annotated[str, Field(pattern=r"^[0-9A-F]{4}$")], ...] = ()
 
 
+_PATH = Annotated[str, Field(pattern=r"^[a-z]+-[0-9]{4}\.dcm$")]
+
+
+@dataclass(frozen=True, slots=True)
+class SentInstance:
+    __pydantic_config__ = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    sop_instance_uid: DicomUID
+    # The C-STORE status: 0000, or a warning such as B000 that still counts as stored.
+    status: Annotated[str, Field(pattern=r"^[0-9A-F]{4}$")]
+    transfer_syntax_uid: DicomUID
+
+
+@dataclass(frozen=True, slots=True)
+class DirectDelivery:
+    """One send to one DICOM node. "starting" is written before connecting, so a lost send is never taken for none."""
+
+    __pydantic_config__ = ConfigDict(extra="forbid", revalidate_instances="always")
+
+    name: Annotated[str, Field(min_length=1, max_length=64)]
+    identity: Annotated[str, Field(min_length=1, max_length=300)]
+    attempt_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    state: Literal["starting", "success", "failure", "refused", "unknown"]
+    sent: dict[_PATH, SentInstance]
+
+
 @dataclass(frozen=True, slots=True)
 class ArchiveReceipt:
     __pydantic_config__ = ConfigDict(extra="forbid", revalidate_instances="always")
@@ -50,10 +76,34 @@ class ArchiveReceipt:
     version: Literal[2]
     manifest_sha256: Digest
     # By archive identity, so a reconfigured archive never counts another's copies as its own.
-    archives: dict[Digest, dict[Annotated[str, Field(pattern=r"^[a-z]+-[0-9]{4}\.dcm$")], StoredInstance]]
+    archives: dict[Digest, dict[_PATH, StoredInstance]]
+    # Direct sends, by the SHA-256 of the destination's identity.
+    destinations: dict[Digest, DirectDelivery] = field(default_factory=dict)
 
 
 _RECEIPT = TypeAdapter(ArchiveReceipt)
+
+
+def load_receipt(path, job, label):
+    """This artifact's archive and send record, new or as saved; one that does not match it blocks delivery."""
+    manifest = job["payload"]["artifact_manifest_sha256"]
+    if not path.exists():
+        return ArchiveReceipt(2, manifest, {}, {})
+    try:
+        receipt = _RECEIPT.validate_json(path.read_bytes())
+    except (OSError, ValidationError):
+        raise ExportUnavailable(f"The {label} delivery record cannot be verified. Delivery was blocked.") from None
+    if receipt.manifest_sha256 != manifest:
+        raise ExportUnavailable(f"The delivery record does not belong to this {label} artifact.")
+    return receipt
+
+
+def save_receipt(path, receipt):
+    data = _RECEIPT.dump_python(receipt, mode="json")
+    if not data["destinations"]:
+        # Left out, so a receipt without direct sends stays readable by the version before them.
+        del data["destinations"]
+    atomic_json(path, data)
 
 
 def _patient(dataset):
@@ -197,18 +247,6 @@ class _ArchiveDelivery:
         finally:
             held.unlink(missing_ok=True)
 
-    def _load_receipt(self, path, job):
-        manifest = job["payload"]["artifact_manifest_sha256"]
-        if not path.exists():
-            return ArchiveReceipt(2, manifest, {})
-        try:
-            receipt = _RECEIPT.validate_json(path.read_bytes())
-        except (OSError, ValidationError):
-            raise ExportUnavailable(f"The {self.label} archive record cannot be verified. Delivery was blocked.") from None
-        if receipt.manifest_sha256 != manifest:
-            raise ExportUnavailable(f"The archive record does not belong to this {self.label} artifact.")
-        return receipt
-
     def _archive_result(self, artifact, stored):
         # The Orthanc result reads only which paths are archived, and sends nowhere here.
         result = self._result(artifact, SimpleNamespace(uploaded=stored, destinations={}), None, None)
@@ -222,7 +260,7 @@ class _ArchiveDelivery:
             directory = self._prepare_directory(job)
             artifact = self._artifact(job, directory)
             receipt_path = directory / self.receipt_name
-            receipt = self._load_receipt(receipt_path, job)
+            receipt = load_receipt(receipt_path, job, self.label)
             source = self._web_source(job)
             name = self._archive_name()
             with self._transport_client() as client:
@@ -235,12 +273,12 @@ class _ArchiveDelivery:
                     path = directory / "dicom" / item.path
                     # An earlier attempt's proof no longer stands once this one stores again.
                     if record.pop(item.path, None):
-                        atomic_json(receipt_path, _RECEIPT.dump_python(receipt, mode="json"))
+                        save_receipt(receipt_path, receipt)
                     # Storing the same bytes again is harmless, and the read-back proves what the archive keeps.
                     answer = client.store(path, expected_sha256=item.sha256)
                     verified = self._read_back(client, artifact, item, path, directory)
                     record[item.path] = stored[item.path] = StoredInstance(item.sop_instance_uid, verified, answer.warnings)
-                    atomic_json(receipt_path, _RECEIPT.dump_python(receipt, mode="json"))
+                    save_receipt(receipt_path, receipt)
                 self._check_patient(client, source, None, stored=True)
             self.service.store.update_job(
                 job["id"], status="completed", stage=f"{self.noun} archived", error=None, completed_at=now(), result=self._archive_result(artifact, stored)
@@ -265,7 +303,7 @@ class _ArchiveDelivery:
 class ArchiveSegExports(_ArchiveDelivery, OrthancExports):
     kind = "archive_seg_export"
     # A SEG file of the same masks, which the Orthanc exporter makes, is this same instance.
-    shared_kinds = ("orthanc_export",)
+    shared_kinds = ("orthanc_export", "direct_seg_export")
     interrupted_error = "Export interrupted. Retry to reuse its exact SEG bytes."
 
 

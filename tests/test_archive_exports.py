@@ -1,6 +1,7 @@
 """DICOMweb archive exports through the routes, real encoders and a fake archive that keeps what it is sent."""
 
 import copy
+import dataclasses
 import hashlib
 from io import BytesIO
 import json
@@ -18,10 +19,11 @@ import pytest
 from scan3d.api import create_app
 from scan3d.archive.dicomweb import Retrieved, Stored
 from scan3d.archive.errors import ArchiveError
-from scan3d.archive.settings import DicomWebSettings
+from scan3d.archive.settings import DicomSendSettings, DicomWebSettings
 from scan3d.config import Settings
 from scan3d.store import identifier
 from test_archive_imports import FakeDicomWeb
+from test_cstore import Node
 from test_orthanc_imports import SERIES_UID, STUDY_UID, execute_cpu
 from test_orthanc_view_exports import PNG
 
@@ -134,6 +136,7 @@ def test_a_seg_is_stored_in_the_archive_and_proven_by_reading_it_back(rig):
     directory = export_directory(rig, job)
     receipt = json.loads((directory / "delivery-v2.json").read_text())
     (stored,) = receipt["archives"][rig.archive.source_key].values()
+    assert "destinations" not in receipt, "the version before direct sends refuses the key"
     assert stored["verified"] == "bytes" and rig.archive.stores == [stored["sop_instance_uid"]]
     # The Orthanc receipt is never written, so an older version never reads this as its own.
     assert not (directory / "delivery.json").exists()
@@ -249,3 +252,18 @@ def test_a_dicomweb_case_saves_its_files_on_this_machine_and_archives_the_same_s
     # Archiving the same masks stores the instance already saved as a file, not a second SEG.
     assert run(rig, rig.http.post(rig.seg, json={}))["status"] == "completed"
     assert rig.archive.stores == [str(saved.SOPInstanceUID)]
+
+
+def test_a_dicomweb_case_sends_the_seg_it_archives_straight_to_a_node(rig, tmp_path):
+    node = Node()
+    listed = tmp_path / "destinations.json"
+    listed.write_text(json.dumps([{"id": "pacs", "ae_title": "RECEIVER", "host": "127.0.0.1", "port": node.port}]))
+    rig.service.settings = dataclasses.replace(rig.service.settings, dicom_send=DicomSendSettings(destinations_file=str(listed)))
+    try:
+        assert rig.http.get(rig.seg).json()["direct"]["available"] is True
+        sent = run(rig, rig.http.post(rig.seg, json={"delivery": "direct", "destination": "pacs"}))
+        assert (sent["kind"], sent["status"]) == ("direct_seg_export", "completed"), sent["error"]
+        assert rig.archive.stores == [] and run(rig, rig.http.post(rig.seg, json={}))["status"] == "completed"
+        assert [sop for sop, _syntax in node.received] == rig.archive.stores
+    finally:
+        node.server.shutdown()

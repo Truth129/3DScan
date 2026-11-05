@@ -1,6 +1,7 @@
 """`scan3d archive-check` against a fake archive: what it reports, and that it reports no patient data."""
 
 from io import BytesIO
+import json
 
 import pydicom
 from pydicom.config import disable_value_validation
@@ -11,6 +12,7 @@ from scan3d.archive import check
 from scan3d.archive.errors import ArchiveTooLarge
 from scan3d.errors import NotFound
 from test_archive_exports import ArchiveStore
+from test_cstore import Node
 from test_orthanc_imports import SERIES_UID, STUDY_UID, instance_bytes
 
 URL = "https://archive.example.test/dicom-web"
@@ -48,7 +50,7 @@ def checked(monkeypatch, capsys, *, archive=None, write_synthetic=False, **envir
     """The exit status, each check's level by name, everything printed (both streams), and the fake archive."""
     archive = archive or CheckArchive()
     monkeypatch.setattr(check, "client_for", lambda settings: archive)
-    for name in ("SCAN3D_ORTHANC_URL", "SCAN3D_DICOMWEB_ID", "SCAN3D_DICOMWEB_TOKEN_FILE", "SCAN3D_DICOMWEB_AUTH"):
+    for name in ("SCAN3D_ORTHANC_URL", "SCAN3D_DICOMWEB_ID", "SCAN3D_DICOMWEB_TOKEN_FILE", "SCAN3D_DICOMWEB_AUTH", "SCAN3D_DICOM_DESTINATIONS_FILE"):
         monkeypatch.delenv(name, raising=False)
     for name, value in {"SCAN3D_DICOMWEB_URL": URL, **environment}.items():
         monkeypatch.setenv(name, value)
@@ -110,7 +112,26 @@ def test_a_wrong_path_and_a_large_first_image_are_explained(monkeypatch, capsys,
 
 def test_an_unconfigured_or_unreadable_archive_says_so(monkeypatch, capsys, tmp_path):
     monkeypatch.delenv("SCAN3D_DICOMWEB_URL", raising=False)
-    assert check.main() == 2 and "No DICOMweb archive is configured" in capsys.readouterr().out
+    monkeypatch.delenv("SCAN3D_DICOM_DESTINATIONS_FILE", raising=False)
+    assert check.main() == 2 and "No DICOMweb archive or DICOM destination is configured" in capsys.readouterr().out
     token = str(tmp_path / "missing.token")
     status, levels, output, _archive = checked(monkeypatch, capsys, SCAN3D_DICOMWEB_AUTH="bearer", SCAN3D_DICOMWEB_TOKEN_FILE=token)
     assert status == 1 and levels == {"Settings": "fail"} and "SCAN3D_DICOMWEB_TOKEN_FILE cannot be read." in output and token not in output
+
+
+def test_each_destination_is_echoed_without_printing_where_it_is(monkeypatch, capsys, tmp_path):
+    node = Node()
+    listed = tmp_path / "destinations.json"
+    entries = [("pacs", "RECEIVER", node.port), ("gone", "NOBODY", 1)]
+    listed.write_text(
+        json.dumps([{"id": key, "name": f"{key} node", "ae_title": aet, "host": "127.0.0.1", "port": port, "timeout": 2} for key, aet, port in entries])
+    )
+    monkeypatch.delenv("SCAN3D_DICOMWEB_URL", raising=False)
+    monkeypatch.setenv("SCAN3D_DICOM_DESTINATIONS_FILE", str(listed))
+    try:
+        status = check.main()
+    finally:
+        node.server.shutdown()
+    output = capsys.readouterr().out
+    assert status == 1 and "ok    Destination pacs: pacs node answers C-ECHO." in output
+    assert "fail  Destination gone: gone node could not be reached." in output and "127.0.0.1" not in output

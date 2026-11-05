@@ -1,12 +1,12 @@
-# DICOMweb archives
+# DICOMweb archives and direct sends
 
 3DScan can search, import from and archive results to any archive that offers DICOMweb (QIDO-RS,
 WADO-RS and STOW-RS), beside or instead of [Orthanc](ORTHANC.md). It is off until
 `SCAN3D_DICOMWEB_URL` is set, and [CONFIGURATION.md](CONFIGURATION.md#dicomweb-archive) lists the
 settings.
 
-Sending results to another DICOM viewer is not built yet for these cases. Send through
-[Orthanc as a gateway](ORTHANC.md#other-archives-through-orthanc), or save SEG and view files.
+It can also [send results straight to a DICOM node](#direct-dicom-sends) with C-STORE. A site with
+only a DIMSE PACS can also use [Orthanc as a gateway](ORTHANC.md#other-archives-through-orthanc).
 
 ## Configure
 
@@ -20,6 +20,10 @@ SCAN3D_DICOMWEB_TOKEN_FILE=/etc/scan3d/pacs.token
 
 - Set `SCAN3D_DICOMWEB_ID` before the first import. Case records name the archive by it, so a
   server that moves keeps its cases. Without it, the URL names the archive.
+- A token file can be refreshed by the provider's own tool. 3DScan reads it again whenever it
+  changes, and once more after a 401.
+- Do not point 3DScan at a de-identified research copy and expect results to reach the clinical
+  archive: they go to the study they came from.
 
 ## Tested archives
 
@@ -39,15 +43,14 @@ Other archives are untested. Run `scan3d archive-check` on them first.
 ```
 
 This checks the connection and the archive's identity, whether searches honour `limit` and
-`offset`, and the listing of series and images. It also retrieves one image and deletes it. It
-changes nothing in the archive, and prints only counts, the archive key and transfer syntaxes, so
-the output can go into a support ticket. It exits 1 if any check fails.
+`offset`, and the listing of series and images. It also retrieves one image and deletes it, and
+sends C-ECHO to each [direct send destination](#direct-dicom-sends). It changes nothing in the
+archive, and prints only counts, the archive key, transfer syntaxes and destination names, so the
+output can go into a support ticket. It exits 1 if any check fails.
 
 `--write-synthetic` also stores one synthetic image, in a new study for patient
 `SCAN3D-ARCHIVE-CHECK`, and reads it back. Use it only on a scratch archive: DICOMweb cannot delete
 the image.
-- A token file can be refreshed by the provider's own tool. 3DScan reads it again whenever it
-  changes, and once more after a 401.
 
 ## Search
 
@@ -88,6 +91,23 @@ as for any CT prepared from DICOM.
   A merged or changed study stores nothing.
 - A retry stores the same instance again, which an archive keeps once.
 - `SCAN3D_DICOMWEB_STORE=false` keeps the archive read-only, and archiving is then refused.
+
+## Direct DICOM sends
+
+With `SCAN3D_DICOM_DESTINATIONS_FILE` set, **Export SEG…** and **DICOM ↗** list its destinations
+for cases imported from a folder, a ZIP or a DICOMweb archive. **Send to** stores the SEG or view
+there with C-STORE. Cases from Orthanc keep sending through Orthanc.
+[CONFIGURATION.md](CONFIGURATION.md#direct-dicom-sends) shows the file.
+
+- A sent SEG is the same instance as a SEG file or archived SEG of the same masks.
+- 3DScan offers Explicit, then Implicit VR Little Endian, and records which the node took.
+- A node that does not accept SEG or Secondary Capture refuses the send, and nothing is sent.
+- A send cut off part way, by a lost connection or a restart, may still have arrived, and the job
+  says so. A retry sends the same instance again; nothing here can ask the node what it holds.
+- A destination whose AE title, host, port or TLS changes after a send is queued is not sent to.
+- No send needs the DICOMweb archive, but each needs archive access on the account.
+
+Tested with pynetdicom and Orthanc 1.13.0 as receivers, on synthetic data only.
 
 ## Launch links
 

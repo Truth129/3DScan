@@ -82,9 +82,14 @@ class OrthancViewExports(OrthancExports):
     # A file export reaches no archive, so it needs neither Orthanc nor an archive import.
     file_delivery = False
 
+    @property
+    def archive_bound(self):
+        """Whether a capture binds to an archive and its record, rather than to the case's own copy of the CT."""
+        return not self.file_delivery
+
     def _inputs(self, case_id, revision_id, structure_ids=None):
-        revision, case, reference = self._reference(case_id, revision_id, archive=not self.file_delivery)
-        source, directory, seg_source = self._series_source(case_id, case, revision, reference, connect=not self.file_delivery)
+        revision, case, reference = self._reference(case_id, revision_id, archive=self.archive_bound)
+        source, directory, seg_source = self._series_source(case_id, case, revision, reference, connect=self.archive_bound)
         return _Inputs(revision, reference, source, directory, (), seg_source)
 
     def _payload_fields(self, inputs):

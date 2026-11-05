@@ -1,7 +1,8 @@
-"""`scan3d archive-check`: what this workstation's DICOMweb archive does, read-only by default.
+"""`scan3d archive-check`: what this workstation's DICOMweb archive does, read-only by default,
+and whether each DICOM destination answers C-ECHO.
 
-It prints counts, the archive key and transfer syntaxes, never a patient name, ID, UID or
-search term, so its output can go into a support ticket. `--write-synthetic` also stores one
+It prints counts, the archive key, transfer syntaxes and destination names, never a patient
+name, ID, UID, search term, host or port, so its output can go into a support ticket. `--write-synthetic` also stores one
 synthetic image in a new synthetic study and reads it back. Use it on scratch archives only:
 DICOMweb has no way to delete it.
 """
@@ -20,6 +21,7 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian, SecondaryCaptureImageStorage, generate_uid
 
 from ..errors import NotFound
+from . import cstore
 from .dicomweb import client_for
 from .errors import ArchiveChanged, ArchiveError, ArchiveTooLarge
 from .exports import _same_content, _Unverifiable
@@ -164,28 +166,54 @@ def _images(client, study_uid):
     return [*results, Result("warn", "Images", "No series of the first study lists any images.")]
 
 
+def echo_checks(settings):
+    """C-ECHO each configured destination, named by its id and name alone."""
+    try:
+        destinations, missing = settings.destinations(), settings.missing_files()
+    except ValueError as exc:
+        return [Result("fail", "Destinations", str(exc))]
+    if missing:
+        return [Result("fail", "Destinations", f"{name} cannot be read.") for name in missing]
+    if not destinations:
+        return [Result("warn", "Destinations", "SCAN3D_DICOM_DESTINATIONS_FILE lists none.")]
+    results = []
+    for destination in destinations:
+        try:
+            cstore.echo(destination, settings.ae_title)
+        except _FAILURES as exc:
+            results.append(Result("fail", f"Destination {destination.id}", _reason(exc)))
+        else:
+            results.append(Result("ok", f"Destination {destination.id}", f"{destination.name} answers C-ECHO."))
+    return results
+
+
 def main(*, write_synthetic=False):
-    """Print each check, and return the exit status: 1 if any failed, 2 if no archive is configured."""
+    """Print each check, and return the exit status: 1 if any failed, 2 if nothing is configured."""
     from ..config import Settings
 
     try:
-        settings = Settings.from_env().dicomweb
+        settings = Settings.from_env()
     except ValueError as exc:
         print(f"fail  Settings: {exc}")
         return 2
-    if settings is None:
-        print("No DICOMweb archive is configured. Set SCAN3D_DICOMWEB_URL first.")
+    if settings.dicomweb is None and settings.dicom_send is None:
+        print("No DICOMweb archive or DICOM destination is configured. Set SCAN3D_DICOMWEB_URL or SCAN3D_DICOM_DESTINATIONS_FILE first.")
         return 2
     # pydicom warns about a non-conformant value by printing it, and a UID or name must never reach this output.
-    pydicom_log = logging.getLogger("pydicom")
-    level = pydicom_log.level
+    # pynetdicom names the host when a TLS certificate does not match it; each check says what failed instead.
+    pydicom_log, pynetdicom_log = logging.getLogger("pydicom"), logging.getLogger("pynetdicom")
+    level, propagate = pydicom_log.level, pynetdicom_log.propagate
     pydicom_log.setLevel(logging.ERROR)
+    pynetdicom_log.propagate = False
     try:
         with disable_value_validation(), warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            results = run_checks(settings, write_synthetic=write_synthetic)
+            results = run_checks(settings.dicomweb, write_synthetic=write_synthetic) if settings.dicomweb else []
+            if settings.dicom_send:
+                results.extend(echo_checks(settings.dicom_send))
     finally:
         pydicom_log.setLevel(level)
+        pynetdicom_log.propagate = propagate
     for result in results:
         print(f"{result.level:<5} {result.check}: {result.detail}")
     return 1 if any(result.level == "fail" for result in results) else 0

@@ -144,8 +144,8 @@ with no session gets the 401, and a signed-in one the other.
   `Job not found` or `Upload not found`.
 - A malformed case, job or upload ID is also 404 here, so a refusal never shows whether an ID
   exists.
-- `POST .../dicom-seg` with `delivery: "orthanc"`, the default, also needs archive access. A file
-  does not.
+- `POST .../dicom-seg` with `delivery: "orthanc"`, the default, or `"direct"` also needs archive
+  access. A file does not.
 - A job follows its case, and so does a finished upload. An unfinished upload belongs to whoever
   started it, and one with no owner, or started with sign-in off, to any admin.
 - A session cookie on a request other than GET, HEAD or OPTIONS with no `Origin` gets 403
@@ -286,12 +286,12 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
   `scan3d include-all`), `review_predict`, `review_accept`, `orthanc_import`, `archive_import`
   (DICOMweb), `orthanc_export` (every SEG export, file-only included), `orthanc_roi_export` (OsiriX
   ROIs), `orthanc_view_export`, `view_file_export`, `archive_seg_export`, `archive_view_export`
-  (DICOMweb) or `dicom_seg_import`.
+  (DICOMweb), `direct_seg_export`, `direct_view_export` (C-STORE) or `dicom_seg_import`.
   [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists the lanes.
 - `revision_id`: the new revision once committed, or the exported one for `orthanc_export`,
   `orthanc_roi_export` and `orthanc_view_export`.
-- `delivery_started`: `true` once an export has started a send through Orthanc. Cancelling cannot
-  then stop it.
+- `delivery_started`: `true` once an export has started a send, through Orthanc or directly.
+  Cancelling cannot then stop it.
 - `inference_path`: the [inference path](#inference-paths) frozen at queue time. `identity` is
   `default` or `<id>|<device>|<gpu_name>`; compare it whole, never parse it.
 - `started_by`: on `GET /api/jobs/{id}` and `GET /api/cases/{id}/jobs` only, the display name of
@@ -551,9 +551,9 @@ over 128 characters is a 422.
 list, and returns `{id}`. With sign-in off, a case that does not exist answers 404 `Case not found`.
 
 **`POST /api/cases/{id}/trash`** hides the case, stops its jobs and returns `{id, jobs_stopped,
-sends_continuing}`, where `sends_continuing` counts sends Orthanc has started, which finish. Nothing
-on disk moves. Trash is never refused for a job, a draft or a stuck import. With sign-in off, a case
-that does not exist answers 404 `Case not found`.
+sends_continuing}`, where `sends_continuing` counts sends already started, through Orthanc or
+directly, which finish. Nothing on disk moves. Trash is never refused for a job, a draft or a stuck
+import. With sign-in off, a case that does not exist answers 404 `Case not found`.
 
 **`GET /api/trash`** lists every case in Trash, last trashed first. Each is a Case with
 `trashed_at`.
@@ -1313,6 +1313,26 @@ For a case whose `import_source.kind` is `dicomweb`, the SEG and view routes abo
   the same identity, patient and decoded pixels) and any STOW warning codes. `delivery.json` is
   never written.
 - The result adds `archive`, the archive's name.
+
+## Direct DICOM send
+
+With `SCAN3D_DICOM_DESTINATIONS_FILE` set, a case whose `import_source.kind` is not `orthanc` can
+also [send](ARCHIVES.md#direct-dicom-sends) its SEG or view to a configured node with C-STORE.
+
+- `GET .../dicom-seg` and `GET .../dicom-view` add `direct: {available, reason?, destinations:
+  [{id, name, aet, key}]}`, absent when nothing is configured or the case came from Orthanc. `exports`
+  includes these jobs. `key` names the destination's address, as `destination_key` does in a direct
+  job's result, so a send to an earlier address of the same `id` is not a send to this one.
+- `POST .../dicom-seg` with `delivery: "direct"` and a `destination` returns a `direct_seg_export`
+  job. `POST .../dicom-view` takes form field `delivery=direct` and returns a `direct_view_export`
+  job. Either needs archive access, and is 400 for a case from Orthanc.
+- The SEG is the same instance as a file or archived SEG of the same masks. `export_key` names the
+  destination by AE title, host, port and TLS, so a moved destination is a new export, and a job
+  queued before the move fails without sending.
+- `delivery-v2.json` records per destination its `state` (`starting`, `success`, `failure`,
+  `refused` or `unknown`), its attempt, and each SOP's status and transfer syntax. `starting` is
+  written before connecting, and a restart turns it into `unknown`, stage `Delivery not confirmed`.
+  A retry of `unknown` sends the same instance again.
 
 ## Orthanc routes
 

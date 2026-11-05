@@ -22,7 +22,7 @@ from .fileio import atomic_json, atomic_text, code_fingerprint, extract_zip
 from .errors import Conflict
 from .janitor import Janitor, empty_rebuildable, generation_locks, maintenance_lock, remove_tree
 from .orthanc_models import series_source
-from .store import EXPORT_KINDS, LANES, OUTBOUND_KINDS, Store, identifier, job_lane, now
+from .store import DIRECT_KINDS, EXPORT_KINDS, LANES, OUTBOUND_KINDS, Store, identifier, job_lane, now
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ class Service:
         self._archive_imports = None
         self._archive_seg_exports = None
         self._archive_view_exports = None
+        self._direct_seg_exports = None
+        self._direct_view_exports = None
         self._lane_guard = threading.Lock()
         self._running_lanes = 0
         self._preparation_slots = None
@@ -139,9 +141,29 @@ class Service:
             self._archive_view_exports = ArchiveViewExports(self)
         return self._archive_view_exports
 
+    @property
+    def direct_seg_exports(self):
+        if self._direct_seg_exports is None:
+            from .archive.sends import DirectSegExports
+
+            self._direct_seg_exports = DirectSegExports(self)
+        return self._direct_seg_exports
+
+    @property
+    def direct_view_exports(self):
+        if self._direct_view_exports is None:
+            from .archive.sends import DirectViewExports
+
+            self._direct_view_exports = DirectViewExports(self)
+        return self._direct_view_exports
+
+    def import_kind(self, case_id):
+        """Where a case's images came from: "orthanc", "dicomweb", or None for a folder or ZIP."""
+        return (self.store.get("cases", case_id).get("import_source") or {}).get("kind")
+
     def from_archive(self, case_id):
         """Whether a case came from the DICOMweb archive, so its exports are stored there rather than in Orthanc."""
-        return (self.store.get("cases", case_id).get("import_source") or {}).get("kind") == "dicomweb"
+        return self.import_kind(case_id) == "dicomweb"
 
     def _exporter(self, kind):
         return {
@@ -151,6 +173,8 @@ class Service:
             "view_file_export": self.view_file_exports,
             "archive_seg_export": self.archive_seg_exports,
             "archive_view_export": self.archive_view_exports,
+            "direct_seg_export": self.direct_seg_exports,
+            "direct_view_export": self.direct_view_exports,
         }[kind]
 
     def _interactive(self):
@@ -193,6 +217,8 @@ class Service:
         self.view_file_exports.recover()
         self.archive_seg_exports.recover()
         self.archive_view_exports.recover()
+        self.direct_seg_exports.recover()
+        self.direct_view_exports.recover()
         # Only a lane writes here, and none runs yet, so what is left came from a hard stop. It names no case.
         for leftover in (self.settings.data_dir / "orthanc-staging").glob("transfer-*"):
             try:
@@ -422,8 +448,12 @@ class Service:
                 # The Trash transaction has already flagged this job, so a failed cancel only skips the tidy-up.
                 log.exception("Could not stop job %s", job["id"])
                 continue
-            # A send Orthanc has started finishes, and a queued one with a live receipt may too.
-            sending = job["kind"] in OUTBOUND_KINDS and (result["status"] == "failed" or (result.get("payload") or {}).get("delivery_state"))
+            # A send Orthanc has started finishes, and a queued one with a live receipt may too. So
+            # does a direct send that has begun.
+            state = (result.get("payload") or {}).get("delivery_state")
+            sending = (job["kind"] in OUTBOUND_KINDS and (result["status"] == "failed" or state)) or (
+                job["kind"] in DIRECT_KINDS and result["status"] == "running" and state == "starting"
+            )
             continuing += bool(sending)
             stopped += not sending
         return {"id": case_id, "jobs_stopped": stopped, "sends_continuing": continuing}

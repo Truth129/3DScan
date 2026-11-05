@@ -232,7 +232,7 @@ class OrthancExports:
     transport = "orthanc"
     # Kinds whose artifacts this one reuses, and whose saved inputs its guard checks: a DICOMweb
     # case's SEG file and its archived SEG are one instance, as an Orthanc case's are.
-    shared_kinds = ("archive_seg_export",)
+    shared_kinds = ("archive_seg_export", "direct_seg_export")
     no_source_error = "This saved revision has no verified original Orthanc CT source. Reimport and prepare its original CT before export."
 
     def __init__(self, service):

@@ -151,30 +151,45 @@ def add_routes(app, service):
         result = public_revision(service.ct_revision(case_id, revision_id))
         return JSONResponse(result, headers={"Cache-Control": "private, no-store"}) if revision_id.startswith("review-") else result
 
+    def direct_sender(case_id, manager):
+        """A direct send binds to the case's own CT, so an Orthanc case keeps sending through Orthanc."""
+        if service.import_kind(case_id) == "orthanc":
+            raise ValueError("This case came from Orthanc, so it sends through Orthanc's destinations.")
+        return manager
+
+    def with_direct(result, case_id, revision_id, manager):
+        # Absent until destinations are configured, so the dialogs stay as they were.
+        if service.settings.dicom_send and service.import_kind(case_id) != "orthanc":
+            result["direct"] = manager.direct_availability(case_id, revision_id, archive=identity.current().archive_access)
+        return result
+
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
     def dicom_seg_availability(case_id: str, revision_id: str):
         # A file stays on this machine, so this still answers. Without the archive it stops short of Orthanc.
         # One dialog offers both formats, so it gets one history. ROIs need exactly what a SEG archive or send
         # needs, so `available` and `reason` answer for both without asking Orthanc twice.
+        archive, direct = identity.current().archive_access, service.direct_seg_exports
         if service.from_archive(case_id):
             # A DICOMweb case archives there and makes files here; OsiriX ROIs need Orthanc, so it offers none.
-            archive = service.archive_seg_exports
-            return archive.availability(case_id, revision_id, archive=identity.current().archive_access, kinds=(service.orthanc_exports.kind, archive.kind))
-        rois = service.osirix_roi_exports
-        result = service.orthanc_exports.availability(
-            case_id, revision_id, archive=identity.current().archive_access, kinds=(service.orthanc_exports.kind, rois.kind)
-        )
-        return {**result, "osirix_roi": {"encoding_version": rois.encoding_version}}
+            manager = service.archive_seg_exports
+            result = manager.availability(case_id, revision_id, archive=archive, kinds=(service.orthanc_exports.kind, manager.kind, direct.kind))
+        else:
+            rois = service.osirix_roi_exports
+            result = service.orthanc_exports.availability(case_id, revision_id, archive=archive, kinds=(service.orthanc_exports.kind, rois.kind, direct.kind))
+            result["osirix_roi"] = {"encoding_version": rois.encoding_version}
+        return with_direct(result, case_id, revision_id, direct)
 
     @app.post("/api/cases/{case_id}/revisions/{revision_id}/dicom-seg")
     def dicom_seg_export(case_id: str, revision_id: str, body: DicomSegExport):
         # The gate never reads a body, and a file stays on this machine, so only a send needs the archive.
-        if body.delivery == "orthanc" and not identity.current().archive_access:
+        if body.delivery != "file" and not identity.current().archive_access:
             raise HTTPException(403, ARCHIVE_REFUSED)
         # ROIs refuse a file and a ranking themselves, before they reach Orthanc. A file is made the same way
         # for every case, so only an archive delivery of a DICOMweb case goes there.
         if body.format == "osirix_roi":
             manager = service.osirix_roi_exports
+        elif body.delivery == "direct":
+            manager = direct_sender(case_id, service.direct_seg_exports)
         elif body.delivery == "orthanc" and service.from_archive(case_id):
             manager = service.archive_seg_exports
         else:
@@ -195,7 +210,8 @@ def add_routes(app, service):
 
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view")
     def dicom_view_availability(case_id: str, revision_id: str):
-        return view_exporter(case_id).availability(case_id, revision_id)
+        exporter, direct = view_exporter(case_id), service.direct_view_exports
+        return with_direct(exporter.availability(case_id, revision_id, kinds=(exporter.kind, direct.kind)), case_id, revision_id, direct)
 
     def view_exporter(case_id):
         return service.archive_view_exports if service.from_archive(case_id) else service.orthanc_view_exports
@@ -209,8 +225,10 @@ def add_routes(app, service):
         reference_image_id: str = Form(..., min_length=1, max_length=128),
         destination: str | None = Form(None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"),
         resend: bool = Form(False),
+        delivery: str = Form("orthanc", pattern=r"^(orthanc|direct)$"),
     ):
-        return public_job(view_exporter(case_id).start(case_id, revision_id, image.file, reference_image_id, destination, resend=resend))
+        manager = direct_sender(case_id, service.direct_view_exports) if delivery == "direct" else view_exporter(case_id)
+        return public_job(manager.start(case_id, revision_id, image.file, reference_image_id, destination, resend=resend))
 
     # A file stays on this machine, so it needs neither the archive nor a CT imported from one.
     @app.get("/api/cases/{case_id}/revisions/{revision_id}/dicom-view-file")

@@ -83,7 +83,7 @@ def main():
     serve.add_argument("--host", default=os.environ.get("SCAN3D_HOST", DEFAULT_HOST))
     serve.add_argument("--port", type=int, default=int(os.environ.get("SCAN3D_PORT", DEFAULT_PORT)))
     sub.add_parser("doctor")
-    check = sub.add_parser("archive-check", help="Check what the DICOMweb archive supports. Read-only, and prints no patient data")
+    check = sub.add_parser("archive-check", help="Check the DICOMweb archive and C-ECHO each DICOM destination. Read-only, and prints no patient data")
     check.add_argument("--write-synthetic", action="store_true", help="Also store one synthetic image there and read it back: scratch archives only")
     backup = sub.add_parser("backup", help="Snapshot the database and case files into DESTINATION/scan3d-<UTC time>")
     backup.add_argument("destination", type=Path)
