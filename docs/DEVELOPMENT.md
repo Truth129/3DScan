@@ -46,60 +46,6 @@ Use a throwaway library so development never touches real cases:
 SCAN3D_DATA_DIR=/tmp/scan3d-dev SCAN3D_PORT=9011 .venv/bin/scan3d serve
 ```
 
-## Browser gates
-
-`web/tests/*_smoke.py` drive the built app in a real browser over WebDriver, using synthetic data
-and temporary directories. They are not part of CI.
-
-They need Chrome or Chromium and a matching chromedriver, found on `PATH`, through `SCAN3D_BROWSER`
-and `SCAN3D_CHROMEDRIVER`, or through `--binary` and `--driver`. They also need a built viewer:
-
-```bash
-cd web
-npx vite build --outDir /tmp/scan3d-stage/dist --emptyOutDir
-```
-
-All render with SwiftShader; where offered, `--native` uses a GPU. Read each script's `--help`
-first.
-
-| Gate                               | Covers                                                    |
-| ---------------------------------- | --------------------------------------------------------- |
-| `cornerstone_primary_app_smoke.py` | The primary app                                           |
-| `native_review_smoke.py`           | Review and opacity in 3D, through the next four scripts   |
-| `direct_edit_smoke.py`             | Direct edits, with the saved voxels checked               |
-| `interactive_tools_smoke.py`       | AI assist and mixed gestures, on slices or in 3D          |
-| `scissors_smoke.py`                | 3D scissors, with the saved voxels checked                |
-| `native_surface_layers_smoke.py`   | Segment opacity over the CT volume, on the main page      |
-| `custom_segment_smoke.py`          | Custom segments                                           |
-| `main_plane_smoke.py`              | The CT plane in the main viewer                           |
-| `browser_smoke.py`                 | CT slices, refine and undo, phone layout, portable export |
-| `mri_workspace_smoke.py`           | MR import and the MR workspace                            |
-| `inference_path_smoke.py`          | Choosing the card under **Run on**                        |
-| `sign_in_smoke.py`                 | Sign-in, a lost session, a member link, sign-out          |
-| `library_smoke.py`                 | Library, rename, Trash, restore, delete forever           |
-| `dicom_seg_import_smoke.py`        | DICOM SEG import                                          |
-| `dicom_seg_export_smoke.py`        | The DICOM SEG export dialog                               |
-| `dicom_view_export_smoke.py`       | 3D view export to Orthanc                                 |
-
-- Gates that take `--stage` start their own server and chromedriver on that build, under `/tmp`.
-- `native_review_smoke.py --suite grid` opens review on a 512×512×312 CT at 0.7/0.7/0.625 mm.
-  Cornerstone's Float32 camera depth on that grid once refused drawing on its panes.
-- The others take `--base-url` and `--driver-url`. Start chromedriver and
-  `uvicorn web.tests.interactive_test_server:create_test_app --factory --port 9012`, with
-  `SCAN3D_DATA_DIR` set to a temporary directory and `SCAN3D_TEST_WEB_DIR` to the build.
-  `native_review_smoke.py` shows the full environment. `mri_workspace_smoke.py` also needs
-  `SCAN3D_MODALITIES=CT,MR`.
-- `dicom_seg_export_smoke.py` loads its page from a Vite dev server in `web/` on port 9034.
-- `dicom_view_export_smoke.py` needs `--orthanc-binary`, a `--scratch` directory and `dcm2niix` on
-  `PATH`.
-- `sign_in_smoke.py` and `library_smoke.py` need a `--stage` under `/tmp`, and the repository and
-  `web/tests` on `PYTHONPATH`. Each starts a real `scan3d serve` in password mode, on a port from
-  9031 to 9034.
-
-A gate that starts its own server exits if a port it needs is in use. After SIGKILL, a chromedriver
-or server it started can still hold that port. Gates that take `--base-url` test whatever server
-you point them at.
-
 ## Testing inference paths
 
 No test needs a second GPU or a second real stack, and none runs on a real NVIDIA card or CUDA
@@ -108,12 +54,6 @@ build.
 - **`tests/conftest.py`** points `SCAN3D_INFERENCE_PATH_DIR` at an empty folder and
   `SCAN3D_GPU_PROOF` at a missing file, so every test and child sees one unproven row. A temporary
   data directory isolates neither. A test that wants added paths or a default proof sets its own.
-- **Browser gates** run outside pytest, so that fixture does not reach them.
-  - `web/tests/interactive_test_server.py`, `dicom_seg_import_smoke.py`,
-    `dicom_view_export_smoke.py`, `sign_in_smoke.py` and `library_smoke.py` point
-    `SCAN3D_INFERENCE_PATH_DIR` inside their temporary data.
-  - Without `SCAN3D_DEVICE=cpu`, a gate still shows this checkout's default card.
-  - A plain `scan3d serve` behind `--base-url` lists whatever the checkout has.
 - **`tests/inference_path_stub.py`** builds a real second interpreter with no second PyTorch.
   `stand_in()` makes a venv with package metadata and a passing proof, `activate()` makes it
   discoverable, and `shadow()` gives its children a module of your choice.
@@ -126,15 +66,8 @@ build.
   a child entry point gains an import the lock lacks, add the package to
   `requirements/cuda-py314.in` and recompile with the command at the top of the lock. Pins outside
   the GPU family must equal the AMD lock.
-- **`web/tests/fake-dom.ts`** is a small DOM for `*.mounted.test.ts` suites to render into.
-- **`web/tests/inference_path_smoke.py`** always renders with SwiftShader and starts its own server
-  and chromedriver, by default on ports 9035 and 9535. It refuses `web/dist`, so give it a scratch
-  build. It proves the viewer and its requests, not a card or a model. Run it from the repository
-  root:
-
-  ```bash
-  .venv/bin/python web/tests/inference_path_smoke.py --stage /tmp/scan3d-stage/dist
-  ```
+- **`web/tests/fake-dom.ts`** is the small DOM that the two inference-path mounted suites render into.
+  The other mounted suites use `web/tests/mounted.ts`.
 
 ## Project rules
 
@@ -145,8 +78,7 @@ build.
   although DICOM import refuses gantry-tilted CT. Masks are authoritative; meshes and display
   unions never feed measurements.
 - **Shaders.** Software rendering cannot prove a shader works on a real GPU.
-  - Check any shader or vtk.js change in an ordinary browser on real hardware. A gate's `--native`
-    uses Vulkan, a different driver path from a browser's default on Linux.
+  - Check any shader or vtk.js change in an ordinary browser on real hardware.
   - `web/vite-vtk-ray-guard.ts` patches the vtk.js ray division and ambient-occlusion kernel in every
     build. The build fails if either line moves or an unguarded copy ships. Keep each patch until
     vtk.js handles the case itself.

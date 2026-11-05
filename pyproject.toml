@@ -31,8 +31,8 @@ include = ["scan3d*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Tests import helpers from scripts/ and web/tests/, which the editable install does not
-# expose: it packages scan3d only. Without this, a bare `pytest` fails at collection.
+# Tests import helpers from scripts/, which the editable install does not expose: it
+# packages scan3d only. Without this, a bare `pytest` fails at collection.
 pythonpath = ["."]
 
 [tool.ruff]

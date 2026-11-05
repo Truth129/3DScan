@@ -9,5 +9,5 @@ src/lib/slicer-volume-presets.generated.ts
 # Test inputs compared as data
 tests/fixtures/
 
-# The fixture page the SEG export browser gate loads; keep it byte-stable
+# Test pages, kept byte-stable
 tests/*.html

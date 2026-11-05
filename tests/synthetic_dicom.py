@@ -16,7 +16,6 @@ from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
 from pydicom.valuerep import format_number_as_ds
 
-from scan3d import imaging
 
 UID_ROOT = "1.2.826.0.1.3680043.10.543.20261028"
 STUDY_UID = UID_ROOT + ".1"
@@ -146,17 +145,6 @@ def source_fixture():
     return images, pixels, masks
 
 
-def source_positions_ras(image):
-    row, column = np.indices((image.Rows, image.Columns))
-    directions = np.asarray(image.ImageOrientationPatient, dtype=float).reshape(2, 3)
-    lps = (
-        np.asarray(image.ImagePositionPatient, dtype=float)
-        + column[..., None] * float(image.PixelSpacing[1]) * directions[0]
-        + row[..., None] * float(image.PixelSpacing[0]) * directions[1]
-    )
-    return lps * [-1, -1, 1]
-
-
 def native_grid(images, pixels, masks):
     """An exact alternative storage grid, with columns reversed and axes permuted."""
     first = images[0]
@@ -169,24 +157,3 @@ def native_grid(images, pixels, masks):
     affine[:3, 3] = np.asarray(first.ImagePositionPatient) + (int(first.Columns) - 1) * column_step
     affine[:3] *= np.array([-1, -1, 1])[:, None]
     return pixels.transpose(2, 0, 1)[::-1], masks.transpose(2, 0, 1, 3)[::-1], affine
-
-
-def project_masks(images, masks, affine):
-    """Gather exact mask voxels by physical position, without interpolation."""
-    affine = np.asarray(affine, dtype=float)
-    if masks.ndim != 4 or affine.shape != (4, 4) or not np.isfinite(affine).all() or abs(np.linalg.det(affine[:3, :3])) < 1e-9:
-        raise ValueError("Invalid authoritative mask grid")
-    inverse = np.linalg.inv(affine)
-    result, errors = [], []
-    for image in images:
-        ras = source_positions_ras(image)
-        ijk = ras @ inverse[:3, :3].T + inverse[:3, 3]
-        integer = np.rint(ijk).astype(np.int64)
-        if not np.allclose(ijk, integer, rtol=0, atol=1e-4):
-            raise ValueError("Source pixels do not match integer authoritative mask voxels")
-        if np.any(integer < 0) or np.any(integer >= np.array(masks.shape[:3])):
-            raise ValueError("Source pixels fall outside the authoritative mask grid")
-        result.append(masks[tuple(integer.transpose(2, 0, 1))])
-        restored = integer @ affine[:3, :3].T + affine[:3, 3]
-        errors.append(float(np.linalg.norm(restored - ras, axis=-1).max()))
-    return np.stack(result), max(errors)
