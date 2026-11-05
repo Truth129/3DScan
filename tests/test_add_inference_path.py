@@ -371,6 +371,11 @@ def test_room_is_measured_where_the_environment_and_the_cache_will_go(rig):
     assert [call["arguments"][-1] for call in rig.calls() if call["tool"] == "df"] == [str(rig.elsewhere), str(cache.parent)]
 
 
+def test_exactly_20_gib_free_is_enough(rig):
+    rig.scenario["free"] = 20 * GIB
+    assert rig.run("nvidia", "--dry-run").returncode == 0
+
+
 # A dry run
 
 
@@ -408,6 +413,7 @@ TAKEN = {
     # A link that points nowhere still holds the name.
     "a-dangling-link": (lambda rig, target: target.symlink_to(rig.top / "nowhere"), "{target}/"),
     "a-marker-that-is-a-link": (an_environment_whose_marker_is_a_link, "{target}"),
+    "a-marker-that-is-a-directory": (lambda rig, target: (target / MARKER).mkdir(parents=True), "{target}"),
 }
 
 
@@ -420,6 +426,12 @@ def test_a_target_this_script_did_not_make_is_refused(rig, taken):
     completed = rig.run("nvidia", "--venv", spelling.format(target=target))
     assert completed.returncode == 1 and "already exists and this script did not make it" in completed.stderr
     assert rig.calls() == [] and rig.snapshot() == before
+
+
+def test_the_default_target_needs_the_marker_too(rig):
+    rig.venv.mkdir()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1 and "already exists and this script did not make it" in completed.stderr
 
 
 # A first run
@@ -466,6 +478,16 @@ def test_uv_settings_that_would_break_a_rebuild_are_overridden(rig):
     assert not any(unset & env.keys() for env in uv)
 
 
+def test_a_rebuild_stays_inside_the_rig(rig):
+    a_rebuild(rig)
+    assert rig.run("nvidia").returncode == 0
+    calls = rig.calls()
+    assert {call["env"]["PATH"] for call in calls} == {str(rig.bin)}
+    assert all(Path(call["cwd"]).is_relative_to(rig.top) for call in calls)
+    assert list(rig.tmp.iterdir()) == []
+    assert {entry.name for entry in rig.root.iterdir()} - {".cache"} == {".runtime", ".venv", ".venv-nvidia-py314", "requirements", "scan3d", "scripts"}
+
+
 # Running it again
 
 
@@ -486,14 +508,22 @@ def test_a_re_run_that_equals_the_real_lock_keeps_the_environment_and_repeats_th
     assert package.exists() and "nothing was installed" in completed.stdout
 
 
-def test_an_environment_without_pyvenv_cfg_is_rebuilt_without_asking_uv_what_it_holds(rig):
-    # Without pyvenv.cfg the link is the Python it points at, so what uv says would be about that.
+@pytest.mark.parametrize("lost", ["pyvenv.cfg", "bin/python"])
+def test_an_environment_that_lost_a_file_of_its_own_is_rebuilt_without_asking_uv_what_it_holds(rig, lost):
+    # Without pyvenv.cfg the link is the Python it points at, so uv would describe that Python, and without the link uv has nothing to read.
     installed(rig)
-    (rig.venv / "pyvenv.cfg").unlink()
+    (rig.venv / lost).unlink()
     completed = rig.run("nvidia")
     assert completed.returncode == 0, completed.stderr
     assert rig.steps() == [*LATER_PREFLIGHT, *TRIED]
-    assert (rig.venv / "pyvenv.cfg").is_file() and rig.packages() == LOCKED
+    assert (rig.venv / lost).is_file() and rig.packages() == LOCKED
+
+
+def test_a_package_the_lock_does_not_list_is_rebuilt_away(rig):
+    installed(rig)
+    (rig.venv / "installed.json").write_text(json.dumps({**rig.packages(), "cupy": "14.0"}))
+    assert rig.run("nvidia").returncode == 0
+    assert rig.steps() == REBUILT and rig.packages() == LOCKED
 
 
 def test_a_rebuild_empties_the_directory_but_the_marker_and_never_follows_a_link_out(rig):
@@ -631,12 +661,16 @@ def test_a_rebuild_that_fails_its_trial_leaves_a_finished_environment_alone(rig,
     assert list(rig.tmp.iterdir()) == [] and rig.in_the_cache() == []
 
 
-@pytest.mark.parametrize("stop, left", [(signal.SIGINT, 0), (signal.SIGKILL, 1)], ids=["ctrl-c", "kill"])
-def test_a_stopped_trial_leaves_the_environment_for_the_next_run(rig, stop, left):
-    # To the whole group, as a terminal sends it. Ctrl-C takes the trial's folder with it, and a kill
-    # leaves it, as links that `uv cache prune` removes.
+@pytest.mark.parametrize(
+    "step, stop, left",
+    [("uv trial", signal.SIGINT, 0), ("uv offline trial", signal.SIGHUP, 0), ("uv trial", signal.SIGKILL, 1)],
+    ids=["ctrl-c", "closed-terminal-in-the-offline-trial", "kill"],
+)
+def test_a_stopped_trial_leaves_the_environment_for_the_next_run(rig, step, stop, left):
+    # To the whole group, as a terminal sends it. Ctrl-C takes the trial's folder with it, and so does a
+    # closed terminal once uv has made it again offline, while a kill leaves it, as links that `uv cache prune` removes.
     a_rebuild(rig)
-    rig.scenario["during"] = {"uv trial": "hold()"}
+    rig.scenario["during"] = {step: "folder.mkdir(exist_ok=True); hold()"}
     first = rig.start("nvidia")
     rig.wait_until_held()
     before = rig.snapshot()
@@ -662,9 +696,35 @@ def test_a_busy_queue_stops_a_rebuild_before_anything_changes(rig):
     assert rig.snapshot() == before and rig.in_the_cache() == []
 
 
+def test_a_job_that_starts_during_the_trial_stops_the_rebuild(rig):
+    # A cold trial can take many minutes, so the queue is asked again after it.
+    a_rebuild(rig)
+    rig.scenario["during"] = {"uv trial": "(rig / 'scenario.json').write_text(json.dumps({**scenario, 'check': 'refused'}))"}
+    before = rig.snapshot()
+    completed = rig.run("nvidia")
+    assert completed.returncode == 1 and "can start only when the job queue can be read and is empty" in said(completed.stderr)
+    assert rig.steps() == [*LATER_PREFLIGHT, "uv pip freeze", *TRIAL]
+    assert rig.snapshot() == before and rig.in_the_cache() == []
+
+
 # One run at a time
 
 REFUSED_FOR_ANOTHER_RUN = "Another run is using this environment, so nothing was changed. Run this again when it has finished."
+
+
+@pytest.mark.parametrize("step", ["uv pip freeze", "venv-python"])
+def test_a_second_run_is_refused_for_as_long_as_the_first_is_running(rig, step):
+    a_rebuild(rig)
+    rig.scenario["during"] = {step: "hold()"}
+    first = rig.start("nvidia")
+    rig.wait_until_held()
+    rig.scenario["during"] = {}
+    rig.forget_calls()
+    second = rig.run("nvidia")
+    assert second.returncode == 1 and REFUSED_FOR_ANOTHER_RUN in said(second.stderr)
+    assert rig.steps() == LATER_PREFLIGHT  # Refused before it reads the environment.
+    rig.go_on()
+    assert first.wait(timeout=60) == 0 and rig.packages() == LOCKED
 
 
 def test_another_run_holds_the_environment_until_its_uv_has_gone(rig):
@@ -707,7 +767,33 @@ def test_a_lock_that_fails_is_not_called_another_run(rig):
     assert rig.snapshot() == before
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read and write anything")
+def test_the_lock_only_reads_the_marker_and_stops_when_it_cannot(rig):
+    # Opened to write, it could create a marker in a directory that took the name a moment ago.
+    a_rebuild(rig)
+    marker = rig.venv / MARKER
+    marker.chmod(0o400)
+    completed = rig.run("nvidia")
+    assert completed.returncode == 0, completed.stderr
+    assert rig.packages() == LOCKED
+    marker.chmod(0)
+    rig.forget_calls()
+    completed = rig.run("nvidia")
+    marker.chmod(0o600)
+    assert completed.returncode == 1 and f"{marker} cannot be read, so nothing was changed" in completed.stderr
+    assert rig.steps() == LATER_PREFLIGHT
+
+
 # What can happen to the target during a run
+
+
+def test_a_target_that_arrives_after_the_guard_is_refused_too(rig):
+    # It arrives during the settings read, the last step before mkdir.
+    target = rig.elsewhere / "target"
+    rig.scenario["during"] = {"system-python": f"target = Path({str(target)!r}); target.mkdir(); (target / 'precious').touch()"}
+    completed = rig.run("nvidia", "--venv", str(target))
+    assert completed.returncode == 1 and "already exists and this script did not make it" in completed.stderr
+    assert rig.steps() == PREFLIGHT and (target / "precious").exists() and not (target / MARKER).exists()
 
 
 def swapped_in(rig, step, marker=None):
