@@ -394,10 +394,12 @@ context and memory reservation, shared by MPR and 3D, because a separate rendere
 second GPU copy of the CT.
 
 - **Surfaces** load from quantized GLBs into vtk actors. Over a drawn CT, see-through surfaces are
-  peeled into four depth-ordered layers (two while the camera moves), and the CT ray merges them
-  by depth (`vtk-surface-layers.ts`). Faces past the fourth on a pixel share one weighted layer.
-  Opaque surfaces and the CT plane end the ray. Without float render targets, 13 texture units or
-  the memory, surfaces stay solid and the view says why.
+  peeled into four depth-ordered layers, or two while the camera moves or memory is short, and the
+  CT ray merges them by depth (`vtk-surface-layers.ts`). Faces past the last layer share one
+  weighted layer. Opaque surfaces and the CT plane end the ray. Without WebGL 2 float targets, 13
+  texture units, the memory or a working merge, surfaces stay solid and the view says why. A failed
+  merge holds until the viewer is rebuilt; a tile size the memory refuses holds until the size
+  changes.
 - **Mask to segmentation** uses one cropped OR union of the chosen structures, built on the server,
   with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a boundary by
   a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong tissue.

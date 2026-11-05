@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import volumeFragment from '@kitware/vtk.js/Rendering/OpenGL/glsl/vtkVolumeFS.glsl.js';
 import polyDataFragment from '@kitware/vtk.js/Rendering/OpenGL/glsl/vtkPolyDataFS.glsl.js';
-import { vtkSurfaceLayerPolyDataReplacements, vtkSurfaceLayerVolumeReplacements } from '../src/lib/vtk-surface-layers-glsl';
+import { PEEL_SOLID, vtkSurfaceLayerPolyDataReplacements, vtkSurfaceLayerVolumeReplacements } from '../src/lib/vtk-surface-layers-glsl';
 import { surfaceLayerBytes, VTKSurfaceLayers } from '../src/lib/vtk-surface-layers';
 import { vtkVolumeMaskShaderReplacements } from '../src/lib/vtk-volume-mask';
 import { vtkVolumeLabelShaderReplacements } from '../src/lib/vtk-volume-labels';
@@ -32,7 +32,8 @@ function fixture(reserve: (bytes: number) => void = () => {}) {
     disableCullFace: vi.fn(),
   };
   let hooks: VTKVolumeLayerHooks | undefined;
-  const node = { setLayerHooks: vi.fn((value?: VTKVolumeLayerHooks) => (hooks = value)) } as unknown as VTKMaskMapperNode;
+  const setLayerHooks = vi.fn((value?: VTKVolumeLayerHooks) => (hooks = value)),
+    node = { setLayerHooks } as unknown as VTKMaskMapperNode;
   const properties: { OpenGL?: { ShaderReplacements?: unknown[] } } = { OpenGL: { ShaderReplacements: ['mask'] } };
   const mapper = { getViewSpecificProperties: () => properties, modified: vi.fn(), getBlendMode: () => 0, getInputData: () => ({}) };
   const actor = { getVisibility: () => true, getProperty: () => ({ getOpacity: () => 0.5 }) };
@@ -49,8 +50,26 @@ function fixture(reserve: (bytes: number) => void = () => {}) {
     renderer: renderer(),
     zBufferTexture: { activate: vi.fn(), deactivate: vi.fn(), getTextureUnit: () => 2 },
   });
-  const program = (used = true) => ({ setUniformi: vi.fn(), isUniformUsed: () => used });
-  return { layers, arm, hooks: () => hooks!, properties, renderer, frame, program };
+  // As vtk.js 36.4.1 does: setUniformi caches a missing uniform as -1, which isUniformUsed then reads as used.
+  const program = (used = true) => {
+    const cached = new Map<string, number | null>();
+    return {
+      setUniformi: vi.fn((name: string) => {
+        if (!cached.has(name)) cached.set(name, used ? 1 : -1);
+        return used;
+      }),
+      isUniformUsed: (name: string) => {
+        if (!cached.has(name)) cached.set(name, used ? 1 : null);
+        return cached.get(name) !== null;
+      },
+    };
+  };
+  const surface = (actor: unknown) => {
+    const program = { setUniformi: vi.fn(), setUniformf: vi.fn() };
+    layers.binding.callback.callback(undefined, { getProgram: () => program }, undefined, actor as never);
+    return program;
+  };
+  return { layers, arm, hooks: () => hooks!, setLayerHooks, properties, renderer, frame, program, surface, actor };
 }
 
 describe('see-through surface shader patches', () => {
@@ -92,19 +111,35 @@ describe('see-through surface layers', () => {
     expect(() => none.arm()).toThrow('not enough GPU memory');
     expect(none.layers.isArmed).toBe(false);
   });
-  it('draw a mismatched tile as stock and resize after it', () => {
-    const { layers, arm, hooks, renderer } = fixture(),
-      program = fixture().program();
+  it('draw a mismatched tile solid and resize after it', () => {
+    const { layers, arm, hooks, renderer, program, surface, actor } = fixture(),
+      unpeeled = program();
     arm();
     hooks().begin(renderer(12, 8));
-    hooks().parameters(program);
-    expect(program.setUniformi).toHaveBeenCalledWith('scan3dLayerCount', 0);
+    hooks().parameters(unpeeled);
+    expect(unpeeled.setUniformi).toHaveBeenCalledWith('scan3dLayerCount', 0);
+    expect(surface(actor).setUniformi).toHaveBeenCalledWith('scan3dPeelMode', PEEL_SOLID);
     expect(layers.settle()).toEqual({ rerender: true });
     expect(layers.stats().size).toEqual([12, 8]);
   });
+  it('hold a tile the budget refuses until the requested size changes', () => {
+    const budget = (bytes: number) => {
+        if (bytes > surfaceLayerBytes(10, 8, 4)) throw new Error('over budget');
+      },
+      { layers, hooks, renderer, actor } = fixture(budget);
+    const arm = (width: number) => layers.arm(width, 8, () => [actor as never], budget);
+    arm(10);
+    hooks().begin(renderer(20, 8));
+    expect(layers.settle().failed).toContain('not enough GPU memory');
+    // Arming at the same size would only meet the refused tile again.
+    expect(() => arm(10)).toThrow('not enough GPU memory');
+    arm(9);
+    expect(layers.isArmed).toBe(true);
+  });
   it('peel two layers while the camera moves, then ask for one frame with all of them', () => {
     const { layers, arm, hooks, renderer, frame, program } = fixture(),
-      moving = program();
+      moving = program(),
+      still = program();
     arm();
     layers.setInteracting(true);
     hooks().begin(renderer());
@@ -112,10 +147,13 @@ describe('see-through surface layers', () => {
     hooks().parameters(moving);
     expect(moving.setUniformi).toHaveBeenCalledWith('scan3dLayerCount', 2);
     expect(layers.setInteracting(false)).toBe(true);
+    hooks().begin(renderer());
+    hooks().start(frame());
+    hooks().parameters(still);
+    expect(still.setUniformi).toHaveBeenCalledWith('scan3dLayerCount', 4);
   });
-  it('disarm for good when a layered frame never reached the CT shader, and release everything on dispose', () => {
-    const reserved: number[] = [];
-    const { layers, arm, hooks, properties, renderer, frame, program } = fixture(bytes => reserved.push(bytes));
+  it('disarm for good when a layered frame never reached the CT shader', () => {
+    const { layers, arm, hooks, properties, renderer, frame, program } = fixture();
     arm();
     expect(properties.OpenGL!.ShaderReplacements).toHaveLength(6);
     hooks().begin(renderer());
@@ -124,7 +162,14 @@ describe('see-through surface layers', () => {
     expect(layers.settle().failed).toContain('CT volume shader');
     expect(() => arm()).toThrow('CT volume shader');
     expect(properties.OpenGL!.ShaderReplacements).toEqual(['mask']);
+  });
+  it('release the memory, the CT patches and the hooks when disposed while armed', () => {
+    const reserved: number[] = [];
+    const { layers, arm, setLayerHooks, properties } = fixture(bytes => reserved.push(bytes));
+    arm();
     layers.dispose();
     expect(reserved.at(-1)).toBe(0);
+    expect(properties.OpenGL!.ShaderReplacements).toEqual(['mask']);
+    expect(setLayerHooks).toHaveBeenLastCalledWith(undefined);
   });
 });

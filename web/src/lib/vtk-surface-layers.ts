@@ -4,6 +4,7 @@ import {
   PEEL_LAYER,
   PEEL_NORMAL,
   PEEL_SKIP,
+  PEEL_SOLID,
   PEEL_TAIL,
   vtkSurfaceLayerPolyDataReplacements,
   vtkSurfaceLayerVolumeReplacements,
@@ -53,14 +54,19 @@ interface Resources {
 }
 interface Frame {
   layered: boolean;
+  /** Armed but not peeled, as after a resize: surfaces draw solid until the corrected frame. */
+  solid: boolean;
   layers: number;
   actors: Set<Actor>;
   peeled: boolean;
   merged: boolean;
-  /** Layered actors whose surface program reached a peel; a short list means a failed compile. */
+  /**
+   * Layered actors the peel drew. vtk.js 36.4.1 throws before this callback when a surface
+   * program fails to compile, so a short list means an actor the peel never reached.
+   */
   reached: Set<Actor>;
 }
-const idle = (): Frame => ({ layered: false, layers: 0, actors: new Set(), peeled: false, merged: false, reached: new Set() });
+const idle = (): Frame => ({ layered: false, solid: false, layers: 0, actors: new Set(), peeled: false, merged: false, reached: new Set() });
 
 /** Six native CT samplers, the mask, the label tint, four layer samplers and the surfaces' spare unit. */
 export const SURFACE_LAYER_TEXTURE_UNITS = 13;
@@ -76,7 +82,8 @@ export function surfaceLayerBytes(width: number, height: number, layers: number)
  * opacity are forced opaque in vtk's own passes, where they discard, so vtk's depth texture
  * holds only what really ends a CT ray. Just before the CT starts they are peeled, with vtk's
  * own programs, into ordered layers plus one weighted tail, which the CT march merges by
- * ray distance. Every failure ends in solid surfaces with a reason, never a broken viewer.
+ * ray distance. A failure seen here ends in solid surfaces with a reason. A surface shader that
+ * does not compile is not seen: vtk.js throws inside its own render, and the viewer fails.
  */
 export class VTKSurfaceLayers {
   private resources?: Resources;
@@ -94,6 +101,9 @@ export class VTKSurfaceLayers {
   private frame = idle();
   private peel?: { mode: number; previous: number; opaqueUnit: number; previousUnit: number; epsilon: number };
   private failure = '';
+  /** A tile the budget refused, held against the arm size that led to it; another size retries. */
+  private refused?: { width: number; height: number; reason: string };
+  private armSize: [number, number] = [0, 0];
   private resize?: [number, number];
   private actors: () => readonly Actor[] = () => [];
   private reserveMemory?: (bytes: number) => void;
@@ -156,6 +166,10 @@ export class VTKSurfaceLayers {
   arm(width: number, height: number, actors: () => readonly Actor[], reserveMemory?: (bytes: number) => void) {
     if (this.disposed) throw new Error('The surface layers have been disposed.');
     if (this.blocked) throw new Error(this.blocked);
+    if (this.refused && (this.refused.width !== width || this.refused.height !== height)) this.refused = undefined;
+    // Arming at this size would draw the refused tile again, and refuse it again, every frame.
+    if (this.refused) throw new Error(this.refused.reason);
+    this.armSize = [width, height];
     this.actors = actors;
     this.reserveMemory = reserveMemory;
     try {
@@ -304,12 +318,14 @@ export class VTKSurfaceLayers {
     if (!this.armed || !resources || !this.volumeActor.getVisibility() || !this.mapper.getInputData()) return;
     if (!renderer.getRenderable().getActiveCamera().getParallelProjection() || this.mapper.getBlendMode() !== COMPOSITE_BLEND) {
       this.failure ||= 'See-through segments need a parallel camera and composite CT blending.';
+      this.frame.solid = true;
       return;
     }
     const { usize, vsize } = renderer.getTiledSizeAndOrigin();
     if (usize !== resources.width || vsize !== resources.height) {
-      // Allocating belongs outside vtk's render; draw this frame as stock and resize after it.
+      // Allocating belongs outside vtk's render; draw this frame solid and resize after it.
       this.resize = [usize, vsize];
+      this.frame.solid = true;
       return;
     }
     const actors = this.actors().filter(actor => actor.getVisibility() && actor.getProperty().getOpacity() < 1);
@@ -418,14 +434,16 @@ export class VTKSurfaceLayers {
     if (!program || !this.resources) return;
     const unit = (key: object) => this.renderWindow.getTextureUnitForTexture(key),
       frame = this.frame,
-      count = frame.layered && frame.peeled ? frame.layers : 0;
+      count = frame.layered && frame.peeled ? frame.layers : 0,
+      // Asked first: once setUniformi has cached a missing uniform as -1, vtk reads it as used.
+      merged = program.isUniformUsed('scan3dLayerCount');
     program.setUniformi('scan3dLayerColor', unit(this.keys.color));
     program.setUniformi('scan3dLayerDepth', unit(this.keys.depth));
     program.setUniformi('scan3dTailColor', unit(this.keys.tailColor));
     program.setUniformi('scan3dTailAux', unit(this.keys.tailAux));
     program.setUniformi('scan3dLayerCount', count);
     program.setUniformi('scan3dFullQuad', count > 0 ? 1 : 0);
-    if (frame.layered) frame.merged = program.isUniformUsed('scan3dLayerCount');
+    if (frame.layered) frame.merged = merged;
   }
 
   private surfaceDraw(cell: { getProgram(): SurfaceProgram | null }, actor: Actor) {
@@ -441,7 +459,7 @@ export class VTKSurfaceLayers {
       program.setUniformi('scan3dPrevDepth', peel.previousUnit);
       return;
     }
-    program.setUniformi('scan3dPeelMode', this.frame.layered && this.frame.actors.has(actor) ? PEEL_SKIP : PEEL_NORMAL);
+    program.setUniformi('scan3dPeelMode', this.frame.layered && this.frame.actors.has(actor) ? PEEL_SKIP : this.frame.solid ? PEEL_SOLID : PEEL_NORMAL);
     program.setUniformi('scan3dPeelPrev', 0);
     // Framebuffer.bind() attaches its colour texture on whichever unit is active, possibly this
     // one, and a sampler on an attached texture drops the draw silently. Rebind on every draw.
@@ -458,7 +476,8 @@ export class VTKSurfaceLayers {
   /**
    * After each frame of this view, outside vtk's render. A layered frame that did not peel, did
    * not reach the CT shader or missed a surface program disarms for good and says why; a new
-   * tile size reallocates. `rerender` asks for one more frame.
+   * tile size reallocates, and a tile the budget refuses disarms until the arm size changes.
+   * `rerender` asks for one more frame.
    */
   settle(): { failed?: string; rerender: boolean } {
     if (!this.armed) return { rerender: false };
@@ -487,10 +506,10 @@ export class VTKSurfaceLayers {
       try {
         this.prepare(width, height);
       } catch (reason) {
-        // Held, so a budget that fits the requested size but not the tile cannot loop through arm.
-        this.failure = reason instanceof Error ? reason.message : 'The surface layers could not be resized.';
+        const failed = reason instanceof Error ? reason.message : 'The surface layers could not be resized.';
         this.disarm();
-        return { failed: this.failure, rerender: true };
+        this.refused = { width: this.armSize[0], height: this.armSize[1], reason: failed };
+        return { failed, rerender: true };
       }
       return { rerender: true };
     }
@@ -500,7 +519,7 @@ export class VTKSurfaceLayers {
   stats() {
     return {
       available: !this.unavailable,
-      reason: this.blocked,
+      reason: this.blocked || this.refused?.reason || '',
       armed: this.armed,
       layers: this.resources?.layers ?? 0,
       size: this.resources ? [this.resources.width, this.resources.height] : null,

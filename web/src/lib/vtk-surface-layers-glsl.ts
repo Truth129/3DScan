@@ -16,7 +16,8 @@ export const SURFACE_LAYER_EVENTS = 5;
 export const PEEL_SKIP = 0,
   PEEL_LAYER = 1,
   PEEL_TAIL = 2,
-  PEEL_NORMAL = 3;
+  PEEL_NORMAL = 3,
+  PEEL_SOLID = 4;
 
 // The CT march walks the peeled surfaces in ray order. A CT step that contains a surface is
 // split there with vtk's own step correction, so the CT in front of a surface covers it and
@@ -123,7 +124,9 @@ const PEEL_IMPL = `//VTK::DepthPeeling::Impl
     float s3w = max(0.01, pow(s3a + 0.01, 3.0) * 32.0) * exp(-4.0 * gl_FragCoord.z);
     gl_FragData[1] = vec4(gl_FragCoord.z * s3a * s3w, -log(1.0 - s3a), 0.0, 0.0);
     gl_FragData[0] = vec4(gl_FragData[0].rgb * s3a * s3w, s3a * s3w);
-  }`;
+  }
+  // A frame the layers cannot peel draws them solid, never see-through over a CT that ignores them.
+  else if (scan3dPeelMode == ${PEEL_SOLID}) gl_FragData[0].a = 1.0;`;
 
 function once(shader: string, anchor: string, what: string) {
   if (shader.split(anchor).length !== 2) throw new Error(`This vtk.js ${what} shader is incompatible with see-through segments over the CT volume.`);
