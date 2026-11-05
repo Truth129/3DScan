@@ -42,6 +42,13 @@ def uid(dataset, tag, *, optional=False):
     return values[0]
 
 
+def sequence(dataset, tag):
+    items = _values(dataset, tag)
+    if any(not isinstance(item, dict) for item in items):
+        raise ArchiveError("The archive returned an invalid DICOM JSON sequence.")
+    return items
+
+
 def _capped(value):
     return value if len(value) <= _TEXT_LIMIT else ""
 
