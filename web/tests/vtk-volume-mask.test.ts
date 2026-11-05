@@ -559,4 +559,24 @@ describe('native mapper hook composition', () => {
     node.delete();
     expect(texture.delete).not.toHaveBeenCalled();
   });
+  it('builds the layers on the prepass, starts them before the CT, binds them outermost and sets them last', () => {
+    const node = createVTKMaskMapperNode({ scalarTexture: {} }),
+      order: string[] = [];
+    node.setMaskHooks({ draw: () => order.push('mask'), parameters: () => order.push('mask parameters') });
+    node.setLabelHooks({ draw: draw => (order.push('labels'), draw()), parameters: () => order.push('label parameters') });
+    node.setLayerHooks({
+      begin: () => order.push('begin'),
+      start: frame => order.push(`start ${frame.zBufferTexture}`),
+      draw: draw => (order.push('layers'), draw()),
+      parameters: () => order.push('layer parameters'),
+    });
+    node.buildPass(true, {});
+    node.buildPass(false, {});
+    node.renderPieceDraw({}, {});
+    // The native start needs a real renderer, so it fails only after the layers have started.
+    expect(() => node.renderPieceStart({}, {})).toThrow();
+    node.setMapperShaderParameters({ getProgram: () => null }, {}, {});
+    expect(order).toEqual(['begin', 'layers', 'labels', 'mask', 'start null', 'mask parameters', 'label parameters', 'layer parameters']);
+    node.delete();
+  });
 });
