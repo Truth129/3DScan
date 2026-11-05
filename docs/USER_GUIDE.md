@@ -574,6 +574,8 @@ and study, or adds it to that study in Orthanc as a new series.
   it. This needs a configured Orthanc, archive access and a CT imported from that archive. See
   [send a 3D view back](ORTHANC.md#send-a-3d-view-back).
 - **DICOMweb archive.** For a CT imported from one, choose **Archive in** that archive.
+- **DICOM node.** For a CT not imported from Orthanc, pick a **Send destination** and choose **Send
+  to** it, if your site has [configured](ARCHIVES.md#direct-dicom-sends) any.
 
 The image is a picture. It has no calibration and no orientation labels, so do not measure on it,
 and nothing in it marks left from right.
@@ -630,7 +632,12 @@ If the CT came from a configured Orthanc, you can also choose **Archive in Ortha
 deliberately resends the same instances.
 
 If the CT came from a [DICOMweb archive](ARCHIVES.md#archive-results), choose **Archive in** that
-archive. It has no send destinations.
+archive.
+
+If the CT did not come from Orthanc and your site has [configured](ARCHIVES.md#direct-dicom-sends)
+DICOM destinations, pick a **Send destination** and choose **Send to** it. The node receives the
+same SEG as the file. If it does not accept SEG, nothing is sent. If the dialog says the send may
+have arrived, check the node before you retry: a retry sends the same SEG again.
 
 **Cancel export** stops an export in progress, but closing the dialog does not. A SEG that has
 reached Orthanc stays there, and a send cannot be stopped once Orthanc has started it.
@@ -722,7 +729,8 @@ running, it does the work. Commands ignore Trash, but a job on a case in Trash s
 - `segment --inference-path ID` runs on [an added GPU](#choose-a-gpu). `scan3d doctor` lists the IDs.
 - `include-all` restores labels filtered out earlier, as a new revision that keeps corrections.
 - `optimize` prepares viewer assets for an older case without changing masks or revisions.
-- `archive-check` checks the configured DICOMweb archive without changing it. See
+- `archive-check` checks the configured DICOMweb archive without changing it, and sends C-ECHO to
+  each DICOM destination. See
   [ARCHIVES.md](ARCHIVES.md#check-an-archive).
 
 A `refine` recipe is JSON in patient RAS millimetres:

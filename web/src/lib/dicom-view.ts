@@ -1,13 +1,15 @@
 import type { Job } from '../types';
-import type { DicomSegDestination } from './dicom-seg';
+import type { DicomSegDestination, DirectSendAvailability } from './dicom-seg';
 
 export const DICOM_VIEW_KIND = 'orthanc_view_export';
 /** A file reaches no receiver, so it has its own kind and never counts as an earlier delivery. */
 export const DICOM_VIEW_FILE_KIND = 'view_file_export';
 /** A view stored in a DICOMweb archive, for a case imported from one. */
 export const DICOM_ARCHIVE_VIEW_KIND = 'archive_view_export';
+/** A view sent from this workstation straight to a DICOM node, for a case not from Orthanc. */
+export const DICOM_DIRECT_VIEW_KIND = 'direct_view_export';
 /** The kinds that deliver a view somewhere, which a file does not. */
-export const DELIVERED_VIEW_KINDS = [DICOM_VIEW_KIND, DICOM_ARCHIVE_VIEW_KIND];
+export const DELIVERED_VIEW_KINDS = [DICOM_VIEW_KIND, DICOM_ARCHIVE_VIEW_KIND, DICOM_DIRECT_VIEW_KIND];
 /** Mirrors the server's limit, so an oversized image stops before its upload starts. */
 export const DICOM_VIEW_MAX_BYTES = 128 * 1024 ** 2;
 export const VIEW_CHANGED_MESSAGE = 'The view changed during capture. Try again.';
@@ -23,6 +25,8 @@ export interface DicomViewExportResult {
   instance_count: number;
   destination?: string;
   destination_id?: string;
+  /** Direct sends only: the address it went to, as `DicomSegDestination.key` names it. */
+  destination_key?: string;
   file?: boolean;
   /** The DICOMweb archive it was stored in, by name; absent for Orthanc. */
   archive?: string;
@@ -36,8 +40,9 @@ export interface DicomViewAvailability {
   reason?: string;
   destinations: DicomSegDestination[];
   exports?: DicomViewExportJob[];
-  /** A case from a DICOMweb archive archives there, by this name, and sends nowhere. */
+  /** A case from a DICOMweb archive archives there, by this name. */
   archive_name?: string;
+  direct?: DirectSendAvailability;
 }
 /** A file needs only the case, so this answers for accounts and cases the archive does not. */
 export interface DicomViewFileAvailability {
@@ -51,6 +56,7 @@ export interface DicomViewExportRequest {
   referenceImageId: string;
   destination?: string;
   resend?: boolean;
+  delivery?: 'direct';
 }
 
 /** The revision a capture must prove it shows. App freezes this before asking for a frame. */
@@ -148,8 +154,10 @@ export const matchesDicomViewExport = (job: Job, caseId: string, revisionId: str
   [...DELIVERED_VIEW_KINDS, DICOM_VIEW_FILE_KIND].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId;
 
 /** A second delivery needs its own click. Only this capture's own job can offer one: another capture is a different image. */
-export const dicomViewAlreadySent = (job: DicomViewExportJob | undefined, destination: string) =>
-  job?.status === 'completed' && job.result?.dicom_view?.sent === true && job.result.dicom_view.destination_id === destination;
+export const dicomViewAlreadySent = (job: DicomViewExportJob | undefined, destination: string, key?: string) =>
+  job?.status === 'completed' &&
+  job.result?.dicom_view?.sent === true &&
+  (key ? job.result.dicom_view.destination_key === key : job.result.dicom_view.destination_id === destination);
 
 /** The newest export of this revision, when it may still affect what a receiver holds. */
 export function unfinishedEarlierDicomView(jobs: DicomViewExportJob[], caseId: string, revisionId: string, current?: DicomViewExportJob) {

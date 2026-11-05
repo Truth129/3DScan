@@ -44,16 +44,21 @@ const orthancReady = computed(() => !!availability.value?.available);
 const fileReady = computed(() => !!fileAvailability.value?.available);
 /** Archive and send stay in view, explaining themselves, unless a file is all this case and account can have. */
 const showOrthanc = computed(() => orthancReady.value || !fileReady.value);
-/** A case from a DICOMweb archive archives there and sends nowhere. */
+/** A case from a DICOMweb archive archives there, and sends only from here. */
 const archiveName = computed(() => availability.value?.archive_name);
+/** A case not from Orthanc sends from this workstation to a configured DICOM node, when the server lists any. */
+const direct = computed(() => availability.value?.direct);
+const sends = computed(() => (direct.value ? direct.value.available : showOrthanc.value && !archiveName.value));
+const sendList = computed(() => (direct.value ? direct.value.destinations : (availability.value?.destinations ?? [])));
 const actionDisabled = computed(() => locked.value || !!statusError.value || !orthancReady.value);
+const sendDisabled = computed(() => locked.value || !!statusError.value || (direct.value ? !direct.value.available : !orthancReady.value));
 const fileDisabled = computed(() => locked.value || !!statusError.value || !fileReady.value);
 /** A file of this capture that is ready to save again: only this dialog's own job holds this image. */
 const preparedFile = computed(() =>
   job.value?.kind === DICOM_VIEW_FILE_KIND && job.value.status === 'completed' && job.value.result?.dicom_view?.file ? job.value : undefined,
 );
-const target = computed(() => availability.value?.destinations.find(item => item.id === destination.value));
-const repeatDelivery = computed(() => !!target.value && dicomViewAlreadySent(job.value, target.value.id));
+const target = computed(() => sendList.value.find(item => item.id === destination.value));
+const repeatDelivery = computed(() => !!target.value && dicomViewAlreadySent(job.value, target.value.id, target.value.key));
 const summary = computed(() => (job.value ? dicomViewExportSummary(job.value) : ''));
 const listed = computed(() => availability.value?.exports ?? []);
 const earlier = computed(() =>
@@ -76,9 +81,9 @@ let requests: AbortController | undefined,
   previousFocus: HTMLElement | undefined,
   gone = false,
   // A request with no answer, until the server answers one for that destination.
-  lost: { message: string; destination?: string } | undefined;
-const unconfirmed = (message: string) =>
-  `${message} Check the study in ${archiveName.value ?? 'Orthanc'} before exporting again; the request may already have reached the workstation.`;
+  lost: { message: string; destination?: string; direct: boolean } | undefined;
+const unconfirmed = (message: string, sent = false) =>
+  `${message} Check ${sent ? 'the destination' : `the study in ${archiveName.value ?? 'Orthanc'}`} before exporting again; the request may already have reached the workstation.`;
 
 async function load() {
   requests?.abort();
@@ -111,7 +116,8 @@ async function load() {
   }
 }
 async function start(chosen?: string, resend = false, file = false) {
-  if (file ? fileDisabled.value : actionDisabled.value || (chosen !== undefined && !availability.value?.destinations.some(item => item.id === chosen))) return;
+  const sent = !file && chosen !== undefined && !!direct.value;
+  if (file ? fileDisabled.value : chosen === undefined ? actionDisabled.value : sendDisabled.value || !sendList.value.some(item => item.id === chosen)) return;
   submitting.value = true;
   error.value = '';
   try {
@@ -124,6 +130,7 @@ async function start(chosen?: string, resend = false, file = false) {
           ...image,
           ...(chosen ? { destination: chosen } : {}),
           ...(resend ? { resend: true } : {}),
+          ...(sent ? { delivery: 'direct' as const } : {}),
         });
     if (!matchesDicomViewExport(queued, capture.caseId, capture.revisionId)) throw new ApiError(400, 'The export job does not match this capture.');
     props.follow(queued, capture);
@@ -136,7 +143,7 @@ async function start(chosen?: string, resend = false, file = false) {
     // A file leaves nothing outside this machine, so a lost answer needs no warning about a receiver.
     if (file) {
       if (!gone) error.value = refused ? message : `${message} Repeating it is safe: the server recognises this image.`;
-    } else if (gone) props.report(refused ? message : unconfirmed(message), capture);
+    } else if (gone) props.report(refused ? message : unconfirmed(message, sent), capture);
     else {
       // No listing can say which image a job holds, so only the repeat can find this capture's
       // own job. The server answers it with that job, because the image and destination match.
@@ -144,7 +151,7 @@ async function start(chosen?: string, resend = false, file = false) {
         ? message
         : `${message} The request may already have reached the workstation. Repeating it is safe: the server recognises this image and destination.`;
       if (!refused) {
-        lost = { message, destination: chosen };
+        lost = { message, destination: chosen, direct: sent };
         void load();
       }
     }
@@ -192,7 +199,7 @@ onBeforeUnmount(() => {
   requests?.abort();
   dialog.value?.close();
   // The listing may never have named the job, so this warning is all that is sure to remain.
-  if (lost) props.report(unconfirmed(lost.message), capture);
+  if (lost) props.report(unconfirmed(lost.message, lost.direct), capture);
 });
 </script>
 
@@ -210,7 +217,11 @@ onBeforeUnmount(() => {
     </header>
     <h2 id="dicom-view-title">Export this view.</h2>
     <p id="dicom-view-description">
-      {{ showOrthanc ? 'This image joins the original study as a new series.' : 'Save this image as a DICOM file in the original patient and study.' }}
+      {{
+        showOrthanc
+          ? 'This image joins the original study as a new series.'
+          : `Save this image as a DICOM file in the original patient and study${sends ? ', or send it to a configured DICOM node' : ''}.`
+      }}
       It is a picture: not calibrated, and not for measurement.
     </p>
     <img class="view-preview" :src="capture.url" :alt="`Captured 3D view of ${capture.caseLabel}`" />
@@ -221,7 +232,8 @@ onBeforeUnmount(() => {
       {{ (!fileReady && fileAvailability?.reason) || availability.reason || 'DICOM view export is unavailable for this saved revision.' }}
     </p>
     <p v-else-if="availability?.reason && !orthancReady" class="help" role="status">
-      {{ archiveName ? 'Archiving is unavailable.' : 'Archive and send are unavailable.' }} {{ availability.reason }}
+      {{ archiveName ? 'Archiving is unavailable.' : direct ? 'Archiving in Orthanc is unavailable.' : 'Archive and send are unavailable.' }}
+      {{ availability.reason }}
     </p>
     <p v-if="earlier" class="help" role="status">
       {{
@@ -233,17 +245,16 @@ onBeforeUnmount(() => {
 
     <p v-if="earlierOutcome" class="help" role="status">An earlier export of this revision finished. {{ earlierOutcome }}</p>
 
-    <fieldset v-if="showOrthanc && !archiveName" :disabled="locked || !orthancReady">
+    <p v-if="direct && !direct.available" class="help" role="status">Sending is unavailable. {{ direct.reason }}</p>
+    <fieldset v-if="sends" :disabled="locked || (!direct && !orthancReady)">
       <label class="destination-field"
         >Send destination<select v-model="destination">
           <option value="">Choose a destination…</option>
-          <option v-for="item in availability?.destinations ?? []" :key="item.id" :value="item.id">
-            {{ item.name }}{{ item.aet ? ` · ${item.aet}` : '' }}
-          </option>
+          <option v-for="item in sendList" :key="item.id" :value="item.id">{{ item.name }}{{ item.aet ? ` · ${item.aet}` : '' }}</option>
         </select></label
       >
-      <p v-if="availability?.available && !availability.destinations.length" class="help">
-        No send destination is configured. You can still archive in Orthanc.
+      <p v-if="(direct || availability?.available) && !sendList.length" class="help">
+        {{ direct ? 'No DICOM destination is configured.' : 'No send destination is configured. You can still archive in Orthanc.' }}
       </p>
     </fieldset>
 
@@ -272,18 +283,19 @@ onBeforeUnmount(() => {
     <footer>
       <button class="button secondary" type="button" @click="close">Close</button>
       <div class="export-actions">
-        <button v-if="fileReady" class="button" :class="showOrthanc ? 'secondary' : 'primary'" type="button" :disabled="fileDisabled" @click="saveFile">
+        <button
+          v-if="fileReady"
+          class="button"
+          :class="showOrthanc || sends ? 'secondary' : 'primary'"
+          type="button"
+          :disabled="fileDisabled"
+          @click="saveFile"
+        >
           {{ preparedFile ? 'Download file' : 'Prepare file' }}
         </button>
         <button v-if="showOrthanc" class="button secondary" type="button" :disabled="actionDisabled" @click="start()">
           {{ submitting ? 'Queuing…' : `Archive in ${archiveName ?? 'Orthanc'}` }}</button
-        ><button
-          v-if="showOrthanc && !archiveName"
-          class="button primary"
-          type="button"
-          :disabled="actionDisabled || !target"
-          @click="target && start(target.id, repeatDelivery)"
-        >
+        ><button v-if="sends" class="button primary" type="button" :disabled="sendDisabled || !target" @click="target && start(target.id, repeatDelivery)">
           {{ target ? `${repeatDelivery ? 'Send again' : 'Send'} to ${target.name}` : 'Send to viewer' }}
         </button>
       </div>

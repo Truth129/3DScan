@@ -13,6 +13,8 @@ export const outboundExportKinds = [
   'view_file_export',
   'archive_seg_export',
   'archive_view_export',
+  'direct_seg_export',
+  'direct_view_export',
 ];
 const active = (job: Job, caseId: string) =>
   job.case_id === caseId && !['review_predict', ...outboundExportKinds].includes(job.kind) && ['queued', 'running'].includes(job.status);

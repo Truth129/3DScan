@@ -95,6 +95,7 @@ async function uploadView(url: string, value: DicomViewExportRequest, signal?: A
   // The server reads a field that is present as a chosen destination, even the text "null".
   if (value.destination) data.append('destination', value.destination);
   if (value.resend) data.append('resend', 'true');
+  if (value.delivery) data.append('delivery', value.delivery);
   return request<DicomViewExportJob>(url, { method: 'POST', body: data, signal });
 }
 

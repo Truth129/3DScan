@@ -560,7 +560,7 @@ describe('the Library', () => {
       trashing({ jobs_stopped: 2, sends_continuing: 1 });
       const root = await openLibrary();
       await press(root.button('Move to Trash'));
-      expect(root.named('undo-toast')?.content).toContain(' moved to Trash. 2 jobs stopped. A send Orthanc has started will finish.');
+      expect(root.named('undo-toast')?.content).toContain(' moved to Trash. 2 jobs stopped. A send already started will finish.');
       await undo(root);
       expect(root.content).toContain('Case restored. Stopped jobs did not restart.');
     });

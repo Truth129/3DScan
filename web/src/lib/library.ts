@@ -36,7 +36,7 @@ export function caseDate(value: string | null | undefined) {
 export function trashMessage(result: TrashResult, label?: string) {
   const moved = label ? `“${label}” moved to Trash.` : 'Moved to Trash.',
     stopped = result.jobs_stopped === 1 ? ' 1 job stopped.' : result.jobs_stopped > 1 ? ` ${result.jobs_stopped} jobs stopped.` : '';
-  return `${moved}${stopped}${result.sends_continuing > 0 ? ' A send Orthanc has started will finish.' : ''}`;
+  return `${moved}${stopped}${result.sends_continuing > 0 ? ' A send already started will finish.' : ''}`;
 }
 
 /** Nothing leaves Trash on its own, so past this the Library says so. */

@@ -6,11 +6,21 @@ export const DICOM_SEG_KIND = 'orthanc_export';
 export const DICOM_ROI_KIND = 'orthanc_roi_export';
 /** A SEG stored in a DICOMweb archive, for a case imported from one. */
 export const DICOM_ARCHIVE_SEG_KIND = 'archive_seg_export';
+/** A SEG sent from this workstation straight to a DICOM node, for a case not from Orthanc. */
+export const DICOM_DIRECT_SEG_KIND = 'direct_seg_export';
 
 export interface DicomSegDestination {
   id: string;
   name: string;
   aet?: string;
+  /** Direct sends only: names the address, so a destination moved under the same id is a new one. */
+  key?: string;
+}
+/** Sending from this workstation with C-STORE: present only when destinations are configured and the case is not from Orthanc. */
+export interface DirectSendAvailability {
+  available: boolean;
+  reason?: string;
+  destinations: DicomSegDestination[];
 }
 export interface DicomSegExportResult {
   encoding_version?: number;
@@ -25,6 +35,8 @@ export interface DicomSegExportResult {
   roi_count?: number;
   structure_ids: string[];
   destination_id?: string;
+  /** Direct sends only: the address it went to, as `DicomSegDestination.key` names it. */
+  destination_key?: string;
   overlap_priority?: string[];
   removed_voxels?: Record<string, number>;
   /** Prepared for download: nothing was archived or sent. */
@@ -47,15 +59,16 @@ export interface DicomSegAvailability {
   file?: { available: boolean; reason?: string };
   /** Present when the server can make OsiriX ROIs. They need what archive and send need, so `available` covers them. */
   osirix_roi?: { encoding_version: number };
-  /** A case from a DICOMweb archive archives there, by this name, and sends nowhere. */
+  /** A case from a DICOMweb archive archives there, by this name. */
   archive_name?: string;
+  direct?: DirectSendAvailability;
 }
 export interface DicomSegExportRequest {
   structure_ids: string[];
   destination: string | null;
   resend?: boolean;
   overlap_priority?: string[];
-  delivery?: 'file';
+  delivery?: 'file' | 'direct';
   /** Sent only for OsiriX ROIs, so a SEG request stays as it was. */
   format?: 'osirix_roi';
 }
@@ -112,7 +125,9 @@ export const unfinishedRoiSelection = (job?: DicomSegExportJob) =>
 export const pendingDicomSegExport = (job?: Job) => !!job && ['queued', 'running'].includes(job.status);
 export const cancellableDicomSegExport = (job?: DicomSegExportJob) => pendingDicomSegExport(job) && !job?.delivery_started;
 export const matchesDicomSegExport = (job: Job, caseId: string, revisionId: string) =>
-  [DICOM_SEG_KIND, DICOM_ROI_KIND, DICOM_ARCHIVE_SEG_KIND].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId;
+  [DICOM_SEG_KIND, DICOM_ROI_KIND, DICOM_ARCHIVE_SEG_KIND, DICOM_DIRECT_SEG_KIND].includes(job.kind) &&
+  job.case_id === caseId &&
+  job.revision_id === revisionId;
 
 const sameExport = (result: DicomSegExportResult, structureIds: string[], encodingVersion?: number, overlapPriority?: string[]) =>
   (encodingVersion === undefined || (result.encoding_version ?? 1) === encodingVersion) &&
@@ -127,10 +142,16 @@ export function successfulDicomSegDelivery(
   encodingVersion?: number,
   overlapPriority?: string[],
   format: DicomSegFormat = 'seg',
+  /** A direct destination's address: a send to its old address does not count. */
+  key?: string,
 ): boolean {
   const latest = jobs.find(job => {
     const result = exportResult(job);
-    return exportFormat(job) === format && result?.destination_id === destination && sameExport(result, structureIds, encodingVersion, overlapPriority);
+    return (
+      exportFormat(job) === format &&
+      (key ? result?.destination_key === key : result?.destination_id === destination) &&
+      sameExport(result!, structureIds, encodingVersion, overlapPriority)
+    );
   });
   return latest?.status === 'completed' && exportResult(latest)?.sent === true;
 }

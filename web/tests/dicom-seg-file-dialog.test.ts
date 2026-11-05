@@ -316,3 +316,35 @@ describe('a case from a DICOMweb archive', () => {
     expect(view.text()).toContain('2 masks archived in Synthetic PACS. Nothing was sent to another viewer.');
   });
 });
+
+describe('a folder case with DICOM destinations configured', () => {
+  const direct = availability({ direct: { available: true, destinations: [{ id: 'pacs', name: 'Site PACS', aet: 'PACS' }] } });
+
+  it('sends straight to the chosen node and shows why it was refused', async () => {
+    const view = await dialog(direct),
+      refused = fileJob('failed', { kind: 'direct_seg_export', error: 'Site PACS does not accept this kind of DICOM object. Nothing was sent.' }),
+      create = vi.spyOn(api, 'exportDicomSeg').mockResolvedValue(refused);
+    expect(view.text()).toContain('save them as a DICOM SEG file or send them to a configured DICOM node.');
+    expect(view.text()).toContain('Archiving in Orthanc is unavailable.');
+    expect(view.button('Archive in Orthanc')).toBeUndefined();
+    const select = view.all(element => element.tagName === 'SELECT')[0] as unknown as HTMLSelectElement;
+    expect([...select.options].map(option => option.textContent)).toEqual(['Choose a destination…', 'Site PACS · PACS']);
+    select.options[1].selected = true;
+    select.dispatchEvent(new Event('change'));
+    await settled();
+    click(view.button('Send to Site PACS'));
+    await settled();
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      'case-a',
+      'revision-a',
+      { structure_ids: ['heart', 'lung'], destination: 'pacs', delivery: 'direct' },
+      expect.any(AbortSignal),
+    );
+    expect(view.text()).toContain('Site PACS does not accept this kind of DICOM object. Nothing was sent.');
+  });
+  it('says why sending is unavailable to this account', async () => {
+    const view = await dialog(availability({ direct: { available: false, reason: ARCHIVE_OFF, destinations: [] } }));
+    expect(view.text()).toContain(`Sending is unavailable. ${ARCHIVE_OFF}`);
+    expect(view.button('Send to viewer')).toBeUndefined();
+  });
+});
