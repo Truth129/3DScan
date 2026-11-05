@@ -393,7 +393,11 @@ vtk.js ray casting. `acquireCornerstoneSource` gives each CT session one image v
 context and memory reservation, shared by MPR and 3D, because a separate renderer would hold a
 second GPU copy of the CT.
 
-- **Surfaces** load from quantized GLBs into vtk actors, and are opaque with CT visible.
+- **Surfaces** load from quantized GLBs into vtk actors. Over a drawn CT, see-through surfaces are
+  peeled into four depth-ordered layers (two while the camera moves), and the CT ray merges them
+  by depth (`vtk-surface-layers.ts`). Faces past the fourth on a pixel share one weighted layer.
+  Opaque surfaces and the CT plane end the ray. Without float render targets, 13 texture units or
+  the memory, surfaces stay solid and the view says why.
 - **Mask to segmentation** uses one cropped OR union of the chosen structures, built on the server,
   with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a boundary by
   a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong tissue.

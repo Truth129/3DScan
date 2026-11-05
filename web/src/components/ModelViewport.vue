@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, shallowRef, onMounted, onBeforeUnmount, onErrorCaptured, useId, watch, type Component } from 'vue';
 import type { CornerstoneVolumeCameraRAS } from '../lib/cornerstone-volume-3d';
 import type { NativeReviewState } from '../lib/vtk-review-input';
+import type { NativeSurfaceLayerStatus } from '../lib/vtk-surface-scene';
 import {
   fitVolumeCameraBounds,
   fitVolumeCameraClipping,
@@ -154,6 +155,7 @@ const nativeReviewStatus = ref<NativeReviewStatus>({
 });
 const nativeMaskStatus = ref<VolumeMaskStatus>({ ready: false, loading: false, error: '' });
 const nativeColorStatus = ref<VolumeMaskStatus>({ ready: false, loading: false, error: '' });
+const nativeSurfaceLayers = ref<NativeSurfaceLayerStatus>({ mode: 'stock', layers: 0, reason: '' });
 let pendingVolumeCamera: CornerstoneVolumeCameraRAS | undefined;
 const viewport = ref<HTMLElement>(),
   expandButton = ref<HTMLButtonElement>();
@@ -297,6 +299,10 @@ const shownVolumeColors = computed(() =>
   segmentDrivenVolume.value ? volumeColorsRequest.value : { ...volumeColorsRequest.value, enabled: false, ids: [], colors: [] },
 );
 const volumeMarkAvailable = computed(() => vtkSelected.value && showVolume.value);
+/** Only when the native view says it cannot see through them: otherwise segment opacity works over the CT too. */
+const surfacesSolidOverCT = computed(
+  () => vtkSelected.value && showVolume.value && nativeSurfaceLayers.value.mode === 'solid' && !!nativeSurfaceLayers.value.reason,
+);
 const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!props.revisionId && !!props.point);
 const segmentationAvailable = computed(() => props.structures.length > 0 && props.availableLayers?.segmentation !== false);
 const ctVolumeAvailable = computed(() => planeAvailable.value && allows('volume_rendering') && props.availableLayers?.ct_volume !== false);
@@ -1790,6 +1796,7 @@ defineExpose({
       @camera="vtkCamera = $event"
       @mask-status="nativeMaskStatus = $event"
       @color-status="nativeColorStatus = $event"
+      @surface-layer-status="nativeSurfaceLayers = $event"
     />
     <div v-if="vtkSelected && vtkComponentFailed" class="viewport-state error-state" role="alert">
       <strong>Cornerstone3D unavailable</strong>
@@ -1831,7 +1838,9 @@ defineExpose({
       <section class="rendering-stack" aria-label="Rendering stack">
         <div class="rendering-stack-heading">Rendering stack <span>One aligned 3D view</span></div>
         <p v-if="vtkSelected" class="volume-preview-note" role="status">
-          With CT volume visible, segmentation surfaces are solid. Turn CT volume off to adjust surface transparency. PNG captures the current view.
+          {{
+            surfacesSolidOverCT ? `Segments stay solid over the CT volume here. ${nativeSurfaceLayers.reason} Turn CT volume off to adjust transparency. ` : ''
+          }}PNG captures the current view.
         </p>
         <div class="rendering-stack-layer">
           <label
@@ -1849,7 +1858,7 @@ defineExpose({
           <label
             class="rendering-stack-opacity"
             title="Set every segment’s opacity together. Visibility stays unchanged; 100% makes every visible segment opaque."
-            >{{ vtkSelected && showVolume ? 'Solid with CT' : 'All segment opacity' }}
+            >All segment opacity
             <input
               type="range"
               aria-label="All segment opacity"
@@ -1858,10 +1867,8 @@ defineExpose({
               max="1"
               step="0.01"
               v-model.number="segmentationOpacity"
-              :disabled="(vtkSelected && showVolume) || !segmentationAvailable || !showSegmentation"
-            /><output>{{
-              vtkSelected && showVolume ? 'Solid' : segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%`
-            }}</output></label
+              :disabled="surfacesSolidOverCT || !segmentationAvailable || !showSegmentation"
+            /><output>{{ surfacesSolidOverCT ? 'Solid' : segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%` }}</output></label
           >
         </div>
         <div v-if="ctVolumeAvailable && (!reviewActive || vtkSelected)" class="rendering-stack-layer">

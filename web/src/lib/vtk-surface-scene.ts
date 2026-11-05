@@ -8,6 +8,7 @@ import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { Point, Structure, StructureDisplay, SurfaceManifest } from '../types';
 import { decodeSurfaceGLB, type VTKSurfacePartData } from './vtk-surface-data';
 import { apiFetch } from './api-fetch';
+import type { VTKSurfaceLayerBinding } from './vtk-surface-layers';
 
 interface SurfacePart {
   id: string;
@@ -17,6 +18,19 @@ interface SurfacePart {
   bytes: number;
   triangles: number;
   gpuBytes: number;
+  /** The layer patch on this mapper, removed by identity. */
+  layered?: { binding: VTKSurfaceLayerBinding; remove(): void };
+}
+/**
+ * `stock`: the CT is not drawn, so vtk's own translucency applies. `layered`: the CT is drawn and
+ * see-through surfaces are peeled into it. `solid`: the CT is drawn and layers are unavailable.
+ */
+export type VTKSurfaceMode = 'stock' | 'layered' | 'solid';
+/** The mode a native view drew, its allocated layers, and why see-through surfaces fell back to solid. */
+export interface NativeSurfaceLayerStatus {
+  mode: VTKSurfaceMode;
+  layers: number;
+  reason: string;
 }
 interface GeometryMemory {
   cpuBytes: number;
@@ -75,7 +89,14 @@ export class VTKSurfaceScene {
   private disposed = false;
   private reused = 0;
   private reservedBytes = 0;
-  private presentation = { structures: [] as readonly Structure[], display: {} as StructureDisplay, selected: '', visible: true, opaque: true };
+  private presentation: {
+    structures: readonly Structure[];
+    display: StructureDisplay;
+    selected: string;
+    visible: boolean;
+    mode: VTKSurfaceMode;
+    binding?: VTKSurfaceLayerBinding;
+  } = { structures: [], display: {}, selected: '', visible: true, mode: 'solid' };
 
   constructor(
     private renderer: vtkRenderer,
@@ -87,6 +108,11 @@ export class VTKSurfaceScene {
 
   get actors() {
     return [...this.entries.values()].flatMap(entry => entry.parts.map(({ id, actor }) => ({ id, actor })));
+  }
+  /** Visible see-through surfaces, which are peeled into the CT; opaque ones end its rays as they are. */
+  layeredActors() {
+    if (this.presentation.mode !== 'layered') return [];
+    return this.actors.filter(({ actor }) => actor.getVisibility() && actor.getProperty().getOpacity() < 1).map(({ actor }) => actor);
   }
   private assertAlive() {
     if (this.disposed) throw new Error('The native surfaces have been disposed.');
@@ -120,7 +146,9 @@ export class VTKSurfaceScene {
     return memory;
   }
   private release(entry: Entry, attached: boolean) {
-    for (const { actor, mapper, data } of entry.parts) {
+    for (const part of entry.parts) {
+      const { actor, mapper, data } = part;
+      this.patch(part, undefined);
       if (attached) this.renderer.removeActor(actor);
       actor.getProperty().delete();
       actor.delete();
@@ -337,20 +365,52 @@ export class VTKSurfaceScene {
     }
   }
 
-  setPresentation(structures: readonly Structure[], display: StructureDisplay, selected: string, options: { visible: boolean; opaque: boolean }) {
+  setPresentation(
+    structures: readonly Structure[],
+    display: StructureDisplay,
+    selected: string,
+    options: { visible: boolean; mode: VTKSurfaceMode; binding?: VTKSurfaceLayerBinding },
+  ) {
     this.assertAlive();
+    if (options.mode === 'layered' && !options.binding) throw new Error('Layered native surfaces need the CT layer binding.');
     this.presentation = { structures, display, selected, ...options };
     this.applyPresentation();
   }
+  /** Adding or removing the patch reuses cached programs and keeps the vertex buffers. */
+  private patch(part: SurfacePart, binding: VTKSurfaceLayerBinding | undefined) {
+    if (part.layered?.binding === binding) return;
+    part.layered?.remove();
+    part.layered = undefined;
+    if (!binding) return;
+    const properties = part.mapper.getViewSpecificProperties() as {
+      OpenGL?: { ShaderReplacements?: unknown[] };
+      ShadersCallbacks?: VTKSurfaceLayerBinding['callback'][];
+    };
+    const openGL = properties.OpenGL ?? (properties.OpenGL = {});
+    openGL.ShaderReplacements = [...(openGL.ShaderReplacements ?? []), ...binding.replacements];
+    properties.ShadersCallbacks = [...(properties.ShadersCallbacks ?? []), binding.callback];
+    part.mapper.modified();
+    part.layered = {
+      binding,
+      remove: () => {
+        openGL.ShaderReplacements = (openGL.ShaderReplacements ?? []).filter(entry => !binding.replacements.includes(entry as never));
+        properties.ShadersCallbacks = (properties.ShadersCallbacks ?? []).filter(entry => entry !== binding.callback);
+        part.mapper.modified();
+      },
+    };
+  }
   private applyPresentation() {
-    const { structures, display, selected, visible, opaque } = this.presentation,
+    const { structures, display, selected, visible, mode, binding } = this.presentation,
       colors = new Map(structures.map(item => [item.id, color(item.color)]));
-    for (const { id, actor } of this.actors) {
-      const state = display[id],
+    for (const part of [...this.entries.values()].flatMap(entry => entry.parts)) {
+      const { id, actor } = part,
+        state = display[id],
         opacity = Math.max(0, Math.min(1, Number.isFinite(state?.opacity) ? state.opacity : 0.5));
       actor.setVisibility(visible && state?.visible !== false && opacity > 0 && colors.has(id));
-      actor.setForceOpaque(opaque);
-      actor.getProperty().setOpacity(opaque ? 1 : opacity);
+      // Layered surfaces count as opaque, so vtk never runs its own translucency over the CT.
+      actor.setForceOpaque(mode !== 'stock');
+      actor.getProperty().setOpacity(mode === 'solid' ? 1 : opacity);
+      this.patch(part, mode === 'layered' ? binding : undefined);
       actor.getProperty().setColor(...(colors.get(id) ?? ([0.72, 0.77, 0.82] as Point)));
       actor.getProperty().setSpecular(selected === id ? 0.4 : 0.15);
     }
@@ -370,7 +430,7 @@ export class VTKSurfaceScene {
       reservedMemoryBytes: this.reservedBytes,
       visibleActors: parts.filter(part => part.actor.getVisibility()).length,
       reusedStructures: this.reused,
-      opaque: this.presentation.opaque,
+      mode: this.presentation.mode,
       disposed: this.disposed,
     };
   }

@@ -8,7 +8,7 @@ import type { CTFrame } from '../lib/ct-renderer';
 import { VTKReviewInput, type NativeReviewState } from '../lib/vtk-review-input';
 import { VTKReviewPlane } from '../lib/vtk-review-plane';
 import { VTKCTPlane, type VTKCTPlaneState } from '../lib/vtk-ct-plane';
-import { VTKSurfaceScene } from '../lib/vtk-surface-scene';
+import { VTKSurfaceScene, type NativeSurfaceLayerStatus } from '../lib/vtk-surface-scene';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib/volume-lighting';
 import type { CTVolumeSettings } from '../lib/volume-presets';
@@ -63,6 +63,7 @@ const emit = defineEmits<{
   reviewStatus: [
     status: { surfaceLoading: boolean; surfaceError: string; surfaceRevision: string; targetReady: boolean; planeReady: boolean; planeError: string },
   ];
+  surfaceLayerStatus: [status: NativeSurfaceLayerStatus];
 }>();
 const host = ref<HTMLDivElement>();
 const ready = ref(false),
@@ -89,10 +90,14 @@ let viewer: CornerstoneVolume3D | undefined, controller: AbortController | undef
 let lease: CornerstoneSourceLease | undefined, planeLayer: VTKCTPlane | undefined, surfaces: VTKSurfaceScene | undefined;
 let featureRenderer: vtkRenderer | undefined;
 let reviewInput: VTKReviewInput | undefined, reviewPlaneLayer: VTKReviewPlane | undefined;
-let reserveReviewFrames: ((bytes: number) => void) | undefined;
-let presentationVersion = 0;
+let reserveReviewFrames: ((bytes: number) => void) | undefined, reserveSurfaceLayers: ((bytes: number) => void) | undefined;
+let presentationVersion = 0,
+  syncing = false;
+/** How surfaces meet the CT volume, and why they stay solid when they cannot be seen through. */
+const surfaceLayerStatus = ref<NativeSurfaceLayerStatus>({ mode: 'solid', layers: 0, reason: '' });
 let markingBinding = false,
-  reviewStatusKey = '';
+  reviewStatusKey = '',
+  surfaceLayerKey = '';
 const surfaceRevision = ref(''),
   surfacePresentedRevision = ref(''),
   reviewPlaneReady = ref(false);
@@ -182,6 +187,7 @@ function disposeFeatures() {
   reviewPlaneReady.value = false;
   reserveReviewFrames?.(0);
   reserveReviewFrames = undefined;
+  reserveSurfaceLayers = undefined;
   surfaceRevision.value = '';
   surfacePresentedRevision.value = '';
   maskController?.abort();
@@ -285,6 +291,19 @@ async function initialize() {
         if (!disposed && props.session && !props.session.isDisposed) queueMicrotask(() => void initialize());
       },
       onBeforeDispose: disposeFeatures,
+      // A mask that finishes loading draws the CT, which changes how surfaces meet it.
+      onVolumeDrawn: () => {
+        if (syncing || disposed || id !== generation || !viewer) return;
+        const instance = viewer;
+        syncPresentation();
+        void renderFeatures(instance, id).catch(reason => {
+          if (!disposed && id === generation && viewer === instance) fail(reason);
+        });
+      },
+      // The viewer presents a corrected frame itself; only the surfaces' mode has to change first.
+      onSurfaceLayersFailed: () => {
+        if (!disposed && id === generation && viewer) syncPresentation();
+      },
     });
     if (disposed || active.signal.aborted || id !== generation) {
       instance.dispose();
@@ -293,7 +312,17 @@ async function initialize() {
     viewer = instance;
     instance.clearMask(maskMode());
     featureRenderer = instance.nativeRenderer;
-    const featureBytes = { plane: 0, reviewPlane: 0, reviewFrames: 0, surfaces: 0, mask: 0, maskTransport: 0, colors: 0, colorTransport: 0 };
+    const featureBytes = {
+      plane: 0,
+      reviewPlane: 0,
+      reviewFrames: 0,
+      surfaces: 0,
+      surfaceLayers: 0,
+      mask: 0,
+      maskTransport: 0,
+      colors: 0,
+      colorTransport: 0,
+    };
     const reserveFeature = (feature: keyof typeof featureBytes) => (bytes: number) => {
       const previous = featureBytes[feature];
       try {
@@ -314,6 +343,7 @@ async function initialize() {
     instance.nativeRenderer.addViewProp(planeLayer.actor);
     surfaces = new VTKSurfaceScene(instance.nativeRenderer, undefined, reserveFeature('surfaces'));
     reserveReviewFrames = reserveFeature('reviewFrames');
+    reserveSurfaceLayers = reserveFeature('surfaceLayers');
     reviewPlaneLayer = new VTKReviewPlane(reserveFeature('reviewPlane'));
     instance.nativeRenderer.addViewProp(reviewPlaneLayer.actor);
     reviewInput = new VTKReviewInput(host.value, instance.nativeViewport, {
@@ -512,12 +542,46 @@ function presents(expected: ViewCaptureRequest) {
     (!props.mask?.enabled || props.volumeVisible === false || maskReady.value) &&
     !colorLoading.value &&
     !colorError.value &&
-    (!props.colors?.enabled || !props.colors.ids.length || props.volumeVisible === false || colorReady.value)
+    (!props.colors?.enabled || !props.colors.ids.length || props.volumeVisible === false || colorReady.value) &&
+    viewer.surfaceLayersSettled
   );
+}
+function publishSurfaceLayerStatus(status: NativeSurfaceLayerStatus) {
+  const key = JSON.stringify(status);
+  if (key === surfaceLayerKey) return;
+  surfaceLayerKey = key;
+  surfaceLayerStatus.value = status;
+  emit('surfaceLayerStatus', status);
 }
 function syncPresentation() {
   presentationVersion++;
   if (!viewer) return;
+  syncing = true;
+  try {
+    syncPresentationNow(viewer);
+  } finally {
+    syncing = false;
+  }
+}
+/**
+ * Surfaces over a drawn CT are peeled into its march when they can be, and solid when they cannot.
+ * The choice follows the CT the viewer actually draws, which a pending mask can hide.
+ */
+function surfaceMode(instance: CornerstoneVolume3D) {
+  // Reloading surfaces keeps the layers: hidden actors only leave nothing to merge.
+  if (!instance.isVolumeDrawn || props.segmentationVisible === false || !surfaces || !reserveSurfaceLayers) {
+    instance.disarmSurfaceLayers();
+    return { mode: instance.isVolumeDrawn ? ('solid' as const) : ('stock' as const), reason: '' };
+  }
+  try {
+    const scene = surfaces;
+    return { mode: 'layered' as const, binding: instance.armSurfaceLayers(() => scene.layeredActors(), reserveSurfaceLayers), reason: '' };
+  } catch (reason) {
+    instance.disarmSurfaceLayers();
+    return { mode: 'solid' as const, reason: reason instanceof Error ? reason.message : 'See-through segments are unavailable.' };
+  }
+}
+function syncPresentationNow(viewer: CornerstoneVolume3D) {
   viewer.setVolumeVisible(props.volumeVisible !== false);
   try {
     if (!props.reviewPlaneActive || reviewPlaneLayer?.frame !== props.reviewFrame) reviewPlaneLayer?.clear();
@@ -542,12 +606,12 @@ function syncPresentation() {
     planeError.value = reason instanceof Error ? reason.message : 'The CT plane could not load.';
   }
   syncCut();
-  surfaces?.setPresentation(props.structures ?? [], props.display ?? {}, props.selected ?? '', {
-    // A failed or pending revision replacement must not present old surfaces
-    // as though they belonged to the currently selected masks.
-    visible: props.segmentationVisible !== false && !surfaceLoading.value && !surfaceError.value,
-    opaque: props.volumeVisible !== false,
-  });
+  // A failed or pending revision replacement must not present old surfaces
+  // as though they belonged to the currently selected masks.
+  const visible = props.segmentationVisible !== false && !surfaceLoading.value && !surfaceError.value,
+    { mode, binding, reason } = surfaceMode(viewer);
+  surfaces?.setPresentation(props.structures ?? [], props.display ?? {}, props.selected ?? '', { visible, mode, binding });
+  publishSurfaceLayerStatus({ mode, layers: viewer.surfaceLayerCount, reason });
   syncReviewInput();
 }
 /** Only while marking on the plane: shown edge-on in another mode, a cut would remove half the volume. */
@@ -834,7 +898,13 @@ defineExpose({
 </script>
 
 <template>
-  <div class="cornerstone-volume-view" :data-vtk-ready="ready" :data-source-key="lease?.source.descriptor.key" :data-owner-id="lease?.owner.id">
+  <div
+    class="cornerstone-volume-view"
+    :data-vtk-ready="ready"
+    :data-source-key="lease?.source.descriptor.key"
+    :data-owner-id="lease?.owner.id"
+    :data-native-surface-layers="JSON.stringify(surfaceLayerStatus)"
+  >
     <div ref="host" class="cornerstone-volume-canvas"></div>
     <div v-if="!ready" class="cornerstone-volume-status" :role="error ? 'alert' : 'status'">
       <p>

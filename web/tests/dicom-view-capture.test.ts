@@ -46,6 +46,11 @@ vi.mock('../src/lib/cornerstone-volume-3d', () => ({
         setReviewInteraction() {},
         resize() {},
         resetCamera() {},
+        isVolumeDrawn: true,
+        armSurfaceLayers: () => ({}),
+        disarmSurfaceLayers() {},
+        surfaceLayerCount: 4,
+        surfaceLayersSettled: true,
         dispose: vi.fn(),
         stats: () => ({}),
       };
@@ -101,6 +106,9 @@ vi.mock('../src/lib/vtk-surface-scene', () => ({
     loadBuffer() {}
     clear() {}
     setPresentation() {}
+    layeredActors() {
+      return [];
+    }
     dispose() {}
     stats() {}
     constructor() {
@@ -280,6 +288,7 @@ describe('Cornerstone export capture', () => {
     ['the review plane', {}, shown => (shown.state.reviewPlaneActive = true)],
     ['a review', {}, shown => (shown.state.review = { enabled: true, mode: 'surface', tool: 'navigate', targetId: 'heart', prompts: [] })],
     ['a CT plane that could not be shown', {}, failPlane],
+    ['see-through surfaces still owed a corrected frame', {}, () => (fake.viewer.surfaceLayersSettled = false)],
   ])('refuses %s', async (_name, values, change) => {
     const shown = await view(values),
       { captureExportPNG } = shown.exposed;

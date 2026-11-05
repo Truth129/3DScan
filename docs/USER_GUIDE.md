@@ -294,7 +294,9 @@ original voxels.
 rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and **Restore ↙** or
 **Escape** returns.
 
-- With **CT volume** visible, surfaces are solid. Turn it off to use **All segment opacity**.
+- **All segment opacity** works with **CT volume** visible: CT in front of a segment covers it,
+  and CT behind shows through. If the browser cannot do this, segments stay solid and the
+  **Rendering stack** says why.
 - **CT plane** shows one native slice: choose **Native i**, **j** or **k**, move its slider, or use
   **Face plane**.
 - Tilted-gantry scans, MRI and the [portable HTML](#portable-offline-html) page use Three.js instead

@@ -80,12 +80,12 @@ describe('native anatomical surface decoding', () => {
 });
 
 describe('native surface revision ownership', () => {
-  it('reuses unchanged actors, applies display choices and separates opaque CT composition from segment-only alpha', async () => {
+  it('reuses unchanged actors, applies display choices and keeps segment opacity unless surfaces are solid', async () => {
     const renderer = vtkRenderer.newInstance(),
       scene = new VTKSurfaceScene(renderer),
       structures = [structure()],
       fetcher = vi.fn(async () => response());
-    scene.setPresentation(structures, { 'synthetic:organ': { visible: true, opacity: 0.25 } }, 'synthetic:organ', { visible: true, opaque: true });
+    scene.setPresentation(structures, { 'synthetic:organ': { visible: true, opacity: 0.25 } }, 'synthetic:organ', { visible: true, mode: 'solid' });
     await scene.load(manifest(['synthetic:organ']), structures, { fetcher });
     const actor = scene.actors[0].actor;
     expect(actor.getProperty().getOpacity()).toBe(1);
@@ -94,10 +94,26 @@ describe('native surface revision ownership', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(scene.actors[0].actor).toBe(actor);
     expect(scene.stats().reusedStructures).toBe(1);
-    scene.setPresentation(structures, { 'synthetic:organ': { visible: true, opacity: 0.25 } }, '', { visible: true, opaque: false });
+    scene.setPresentation(structures, { 'synthetic:organ': { visible: true, opacity: 0.25 } }, '', { visible: true, mode: 'stock' });
     expect(actor.getProperty().getOpacity()).toBe(0.25);
     expect(actor.getIsOpaque()).toBe(false);
-    scene.setPresentation(structures, { 'synthetic:organ': { visible: false, opacity: 0.25 } }, '', { visible: true, opaque: false });
+    expect(scene.layeredActors()).toEqual([]);
+    // Over a drawn CT, see-through surfaces count as opaque to vtk but keep their own opacity.
+    const binding = {
+      replacements: [{ shaderType: 'Fragment' as const, originalValue: 'a', replacementValue: 'b', replaceFirst: true, replaceAll: false }],
+      callback: { userData: undefined, callback: vi.fn() },
+    };
+    scene.setPresentation(structures, { 'synthetic:organ': { visible: true, opacity: 0.25 } }, '', { visible: true, mode: 'layered', binding });
+    expect(actor.getProperty().getOpacity()).toBe(0.25);
+    expect(actor.getIsOpaque()).toBe(true);
+    expect(scene.layeredActors()).toEqual([actor]);
+    const properties = actor.getMapper()!.getViewSpecificProperties() as { OpenGL: { ShaderReplacements: unknown[] }; ShadersCallbacks: unknown[] };
+    expect(properties.OpenGL.ShaderReplacements).toEqual(binding.replacements);
+    expect(properties.ShadersCallbacks).toEqual([binding.callback]);
+    scene.setPresentation(structures, { 'synthetic:organ': { visible: true, opacity: 0.25 } }, '', { visible: true, mode: 'stock' });
+    expect(properties.OpenGL.ShaderReplacements).toEqual([]);
+    expect(properties.ShadersCallbacks).toEqual([]);
+    scene.setPresentation(structures, { 'synthetic:organ': { visible: false, opacity: 0.25 } }, '', { visible: true, mode: 'stock' });
     expect(actor.getVisibility()).toBe(false);
     scene.dispose();
     expect(renderer.getActors()).toHaveLength(0);

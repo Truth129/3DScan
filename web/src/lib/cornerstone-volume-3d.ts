@@ -16,6 +16,7 @@ import { VTKVolumeMask, type VTKMaskMapper, type VTKMaskMapperNode, type VTKVolu
 import { VTKVolumeLabels, type VTKVolumeLabelStyle } from './vtk-volume-labels';
 import type { GPUVolumeSource } from './gpu-volume-data';
 import { attachVTKMaskMapperFactory } from './vtk-volume-mask-mapper';
+import { VTKSurfaceLayers, type VTKLayerRenderWindow, type VTKLayerVolumeMapper } from './vtk-surface-layers';
 
 export interface CornerstoneVolumeCameraRAS {
   positionRAS: Point;
@@ -38,6 +39,10 @@ export interface CornerstoneVolume3DOptions {
   onError?: (reason: string) => void;
   onDispose?: () => void;
   onBeforeDispose?: () => void;
+  /** Whether the CT actor is drawn changed, for example when a pending mask hid it. */
+  onVolumeDrawn?: (drawn: boolean) => void;
+  /** See-through surface layers stopped for good; the surfaces must go solid. */
+  onSurfaceLayersFailed?: (reason: string) => void;
 }
 type Libraries = { core: typeof Core; tools: typeof Tools };
 type SharedMapper = NonNullable<ReturnType<Core.Types.VolumeActor['getMapper']>> & { getScalarTexture(): unknown };
@@ -161,6 +166,9 @@ export class CornerstoneVolume3D {
   private maskFactory?: ReturnType<typeof attachVTKMaskMapperFactory>;
   private labels?: VTKVolumeLabels;
   private labelReserve?: (bytes: number) => void;
+  private layers?: VTKSurfaceLayers;
+  private interactionTimer?: ReturnType<typeof setTimeout>;
+  private volumeDrawn = false;
   private frames = 0;
   private pending?: { promise: Promise<void>; resolve(): void; reject(reason: unknown): void; timer: ReturnType<typeof setTimeout> };
 
@@ -314,7 +322,34 @@ export class CornerstoneVolume3D {
   }
 
   private applyVolumeVisibility() {
-    if (!this.disposed) this.actor?.setVisibility(this.volumeVisible && (this.maskMode === 'off' || this.mask?.stats().ready === true));
+    if (this.disposed || !this.actor) return;
+    const drawn = this.volumeVisible && (this.maskMode === 'off' || this.mask?.stats().ready === true);
+    this.actor.setVisibility(drawn);
+    if (drawn !== this.volumeDrawn) {
+      this.volumeDrawn = drawn;
+      this.options.onVolumeDrawn?.(drawn);
+    }
+  }
+  /** The CT actor is actually drawn, not just requested: a pending or failed mask hides it. */
+  get isVolumeDrawn() {
+    return !this.disposed && !!this.actor?.getVisibility();
+  }
+  /** Arms see-through surfaces over the CT at this view's tile size; throws the reason it cannot. */
+  armSurfaceLayers(actors: Parameters<VTKSurfaceLayers['arm']>[2], reserveMemory?: (bytes: number) => void) {
+    this.assertAlive();
+    if (!this.layers) throw new Error('This CT viewer cannot merge surfaces into the volume.');
+    if (!this.layers.isArmed) this.layers.arm(this.viewport!.sWidth, this.viewport!.sHeight, actors, reserveMemory);
+    return this.layers.binding;
+  }
+  disarmSurfaceLayers() {
+    this.layers?.disarm();
+  }
+  get surfaceLayerCount() {
+    return this.layers?.stats().layers ?? 0;
+  }
+  /** The frame on the canvas is the one the surfaces' mode describes, with no corrected frame owed. */
+  get surfaceLayersSettled() {
+    return this.layers?.settled ?? true;
   }
 
   private installMaskFactory() {
@@ -323,6 +358,13 @@ export class CornerstoneVolume3D {
     const actorNode = rendererNode?.addMissingNode(this.actor!);
     if (!actorNode) throw new Error('The native CT volume actor is unavailable for segmentation masking.');
     this.maskFactory = attachVTKMaskMapperFactory(actorNode, this.actor!.getMapper() as SharedMapper);
+    this.layers = new VTKSurfaceLayers(
+      renderWindow as unknown as VTKLayerRenderWindow,
+      this.maskFactory.node,
+      this.actor!.getMapper() as unknown as VTKLayerVolumeMapper,
+      this.actor!,
+    );
+    this.volumeDrawn = this.actor!.getVisibility();
   }
 
   /** The caller resolves the revision-bound union; this viewport owns only its
@@ -473,6 +515,13 @@ export class CornerstoneVolume3D {
           this.engine.renderViewport(this.id);
           return;
         }
+        const layers = this.layers?.settle();
+        if (layers?.failed) this.options.onSurfaceLayersFailed?.(layers.failed);
+        if (layers?.rerender) {
+          // The last frame dropped or misplaced the see-through surfaces; present the next one instead.
+          this.engine.renderViewport(this.id);
+          return;
+        }
         this.settleFrame();
         if (this.ready) this.options.onCamera?.(this.camera);
       } catch (reason) {
@@ -484,6 +533,20 @@ export class CornerstoneVolume3D {
         this.fail(new Error('The experimental CT viewer lost its WebGL context. Retry to restore it.'));
     };
     const menu = (event: Event) => event.preventDefault();
+    // Dragging and zooming peel fewer layers; the frame after the last event draws them all.
+    const interact = (event: Event) => {
+      if (event.type === 'pointermove' && !(event as PointerEvent).buttons) return;
+      this.layers?.setInteracting(true);
+      clearTimeout(this.interactionTimer);
+      this.interactionTimer = setTimeout(() => {
+        if (!this.disposed && this.layers?.setInteracting(false)) this.requestRender();
+      }, 150);
+    };
+    for (const type of ['pointerdown', 'pointermove', 'wheel']) this.element.addEventListener(type, interact, { capture: true, passive: true });
+    this.listeners.push(() => {
+      for (const type of ['pointerdown', 'pointermove', 'wheel']) this.element.removeEventListener(type, interact, { capture: true });
+      clearTimeout(this.interactionTimer);
+    });
     this.element.addEventListener(core.Enums.Events.CAMERA_MODIFIED, camera);
     this.element.addEventListener(core.Enums.Events.IMAGE_RENDERED, rendered);
     this.element.addEventListener('contextmenu', menu);
@@ -743,6 +806,8 @@ export class CornerstoneVolume3D {
     return promise;
   }
   async capturePNG() {
+    // A capture during a drag still gets every layer, in the one frame it waits for.
+    this.layers?.setInteracting(false);
     await this.render();
     this.assertAlive();
     return this.canvas.toDataURL('image/png');
@@ -794,6 +859,7 @@ export class CornerstoneVolume3D {
         additionalFullGridMaskBytes: 0,
       },
       labels: this.labels?.stats() ?? { ready: false, key: '', labels: [], gpuBytes: 0, reservedBytes: 0, textureCount: 0, additionalFullGridLabelBytes: 0 },
+      surfaceLayers: this.layers?.stats() ?? null,
       volumeId: this.source.volumeId,
       sourceKey: this.owner.sourceDescriptor.key,
       sourceVolumeIsMPROwner: this.libs.core.cache.getVolume(this.source.volumeId) === this.source,
@@ -836,6 +902,8 @@ export class CornerstoneVolume3D {
     if (this.disposed) return;
     this.disposed = true;
     this.settleFrame(new DOMException('The experimental CT viewer was disposed.', 'AbortError'));
+    this.layers?.dispose();
+    this.layers = undefined;
     this.mask?.dispose();
     this.mask = undefined;
     this.labels?.dispose();
