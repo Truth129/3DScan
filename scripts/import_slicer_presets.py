@@ -7,6 +7,7 @@ The source XML and generated TypeScript are both retained for offline parity tes
 import hashlib
 import json
 from pathlib import Path
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -58,7 +59,9 @@ def main():
         f"export const SLICER_PRESET_SOURCE_URL = {json.dumps(SOURCE_URL)};\n"
         f"export const SLICER_PRESET_SOURCE_SHA256 = {json.dumps(hashlib.sha256(source).hexdigest())};\n"
     )
-    target.write_text(header + "export const SLICER_VOLUME_PRESET_DATA = " + json.dumps(presets, indent=2) + " as const;\n")
+    # One control point per line: indent=2 alone puts every number on its own line.
+    data = re.sub(r"\[\s+([^\[\]{}]*?)\s+\]", lambda match: "[" + re.sub(r",\s+", ", ", match.group(1)) + "]", json.dumps(presets, indent=2))
+    target.write_text(header + "export const SLICER_VOLUME_PRESET_DATA = " + data + " as const;\n")
     print(f"Imported {len(presets)} Slicer presets into {target}")
 
 
