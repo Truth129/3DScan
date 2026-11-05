@@ -17,7 +17,7 @@ export interface SessionView {
 }
 type TabChange = 'signed-in' | 'signed-out';
 
-const LOCAL_KEYS = ['scan3d-case', 'scan3d-orthanc-import-job'];
+const LOCAL_KEYS = ['scan3d-case', 'scan3d-orthanc-import-job', 'scan3d-archive-import-job'];
 const LOCAL_PREFIXES = ['scan3d-job:', 'scan3d-review-target:', 'scan3d-dicom-seg:'];
 const LAST_USER_KEY = 'scan3d-last-user';
 

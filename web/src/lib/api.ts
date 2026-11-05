@@ -35,6 +35,7 @@ import type {
   OrthancStudyPage,
   OrthancStudyQuery,
 } from './orthanc';
+import type { ArchiveImportRequest, ArchiveLaunchRequest } from './archive';
 import type { DicomSegAvailability, DicomSegExportJob, DicomSegExportRequest } from './dicom-seg';
 import {
   DICOM_VIEW_MAX_BYTES,
@@ -108,6 +109,17 @@ export const api = {
   caseOrthancSeries: (id: string, signal?: AbortSignal) => request<OrthancCaseSeriesPage>(`${caseUrl(id)}/orthanc-series`, { signal }),
   addOrthancSeries: (id: string, data: Omit<OrthancImportRequest, 'label'>, signal?: AbortSignal) =>
     request<Job>(`${caseUrl(id)}/orthanc-series`, { ...json('POST', data), signal }),
+  // A DICOMweb archive: the same shapes, with UIDs in bodies rather than paths.
+  archiveStatus: (signal?: AbortSignal) => request<OrthancStatus>('/api/archive/status', { signal }),
+  archiveLaunch: (data: ArchiveLaunchRequest, signal?: AbortSignal) => request<OrthancLaunchResult>('/api/archive/launch', { ...json('POST', data), signal }),
+  archiveStudies: (query: OrthancStudyQuery, signal?: AbortSignal) =>
+    request<OrthancStudyPage>('/api/archive/studies/query', { ...json('POST', query), signal }),
+  archiveSeries: (study_uid: string, signal?: AbortSignal) =>
+    request<OrthancSeriesPage>('/api/archive/studies/series', { ...json('POST', { study_uid }), signal }),
+  importArchive: (data: ArchiveImportRequest, signal?: AbortSignal) => request<Job>('/api/archive/imports', { ...json('POST', data), signal }),
+  caseArchiveSeries: (id: string, signal?: AbortSignal) => request<OrthancCaseSeriesPage>(`${caseUrl(id)}/archive-series`, { signal }),
+  addArchiveSeries: (id: string, data: Omit<ArchiveImportRequest, 'label' | 'reimport'>, signal?: AbortSignal) =>
+    request<Job>(`${caseUrl(id)}/archive-series`, { ...json('POST', data), signal }),
   dicomSegAvailability: (id: string, rid: string, signal?: AbortSignal) => request<DicomSegAvailability>(`${revisionUrl(id, rid)}/dicom-seg`, { signal }),
   exportDicomSeg: (id: string, rid: string, data: DicomSegExportRequest, signal?: AbortSignal) =>
     request<DicomSegExportJob>(`${revisionUrl(id, rid)}/dicom-seg`, { ...json('POST', data), signal }),

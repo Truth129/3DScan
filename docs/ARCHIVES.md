@@ -45,4 +45,21 @@ Import runs on the CPU and is bound to the selected snapshot, like an
 - Add series takes only series of the case's own study, and only while the archive names the same
   patient for it. Import a series of a merged or changed study as a new case.
 
-The routes are in [API.md](API.md#dicomweb-archive).
+[USER_GUIDE.md](USER_GUIDE.md#import-a-study) shows the screens, and the routes are in
+[API.md](API.md#dicomweb-archive).
+
+## Launch links
+
+A viewer or worklist can open a series in 3DScan with:
+
+```text
+<3DScan root>#dicom-study=<StudyInstanceUID>&dicom-series=<SeriesInstanceUID>&dicom-source=<key>
+```
+
+- `<key>` names the archive and is not a secret. With `SCAN3D_DICOMWEB_ID` set, it is
+  `printf 'dicomweb-id:%s' "$SCAN3D_DICOMWEB_ID" | sha256sum`. A link for another archive is
+  refused.
+- The identities stay in the URL fragment, so the browser does not send them in the page request.
+- 3DScan shows the patient and series, then reopens an earlier import of it or offers
+  **Import selected series**. A link never prepares a CT or runs segmentation.
+- A link with `#orthanc-*` keys is read as an Orthanc link, and its `#dicom-*` keys are ignored.

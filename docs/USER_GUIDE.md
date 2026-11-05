@@ -165,6 +165,15 @@ The series is copied locally and the archive stays unchanged. A series still arr
 incomplete cannot be imported. If the expected image count is unknown, 3DScan imports the listed
 images and says so: confirm that the acquisition is complete.
 
+**DICOMweb archive.** If one is [configured](ARCHIVES.md), it has its own tab with its name, and
+works the same way, with these differences:
+
+- Searches match exactly unless the archive allows `*` and `?`.
+- A series newly listed shows **Import opens in N s**. It can be imported once its image list has
+  stayed unchanged that long. The list refreshes itself when the count ends.
+- **Import again** copies the series once more, as a new case. Use it if the archive may have
+  replaced files since the earlier import.
+
 ## Open a series
 
 1. On **Choose the right series.**, select one series. Expand the checks under an unavailable
@@ -178,9 +187,10 @@ These fields are labels only: they change no pixels, rendering or tasks. **Selec
 toolbar opens another series and keeps your result, and **Source image** switches between opened
 images.
 
-**Add series from Orthanc** appears under the series list of a case imported from Orthanc. It lists
-the rest of that study, so several series can share one case. Each series opens on its own and
-keeps its own segments.
+**Add series from Orthanc** appears under the series list of a case imported from Orthanc, and
+**Add series from DICOM archive** under one from a DICOMweb archive. It lists the rest of that
+study, so several series can share one case. Each series opens on its own and keeps its own
+segments.
 
 ## Run TotalSegmentator
 

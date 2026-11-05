@@ -1,13 +1,19 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { api } from '../lib/api';
+import { dicomwebSource, orthancSource } from '../lib/archive';
 import { uploadImport, type ImportProgress } from '../lib/import-upload';
+import type { OrthancStatus } from '../lib/orthanc';
 import { ARCHIVE_OFF, canUseArchive, leavingPage } from '../lib/session';
 import type { Case } from '../types';
 import OrthancBrowser from './OrthancBrowser.vue';
 const props = defineProps<{ busy: boolean; mrEnabled?: boolean }>();
 const emit = defineEmits<{ close: []; imported: [result: Case]; demo: [] }>();
-const source = ref<'files' | 'orthanc'>('files'),
+const source = ref<'files' | 'orthanc' | 'dicomweb'>('files'),
   orthancBusy = ref(false);
+// A DICOMweb archive gets a tab only when the server has one configured. An older server answers 404.
+const webArchive = ref<OrthancStatus>();
+let statusController: AbortController | undefined;
 const files = ref<File[]>([]),
   label = ref(''),
   folder = ref<HTMLInputElement>(),
@@ -104,11 +110,28 @@ async function start() {
 // A heartbeat can take the archive away while its tab is open. An import already started finishes on the
 // server, which decides each rule when a request starts, and appears in the Library.
 watch(canUseArchive, allowed => {
-  if (allowed || source.value !== 'orthanc') return;
+  if (allowed || source.value === 'files') return;
   source.value = 'files';
   message.value = { error: true, text: `${ARCHIVE_OFF} An import already started still finishes and appears in the Library.` };
 });
+// Asked again if access is turned on while the dialog is open.
+watch(
+  canUseArchive,
+  async allowed => {
+    statusController?.abort();
+    if (!allowed) return;
+    const current = (statusController = new AbortController());
+    try {
+      const status = await api.archiveStatus(current.signal);
+      if (!current.signal.aborted && status.configured) webArchive.value = status;
+    } catch {
+      /* No tab: the archive is not configured, or this server predates it. */
+    }
+  },
+  { immediate: true },
+);
 onBeforeUnmount(() => {
+  statusController?.abort();
   controller?.abort();
   window.removeEventListener('beforeunload', keepPage);
 });
@@ -116,13 +139,19 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="dialog-backdrop" @click.self="close" @keydown.esc="close">
-    <section class="import-dialog" :class="{ 'orthanc-import': source === 'orthanc' }" role="dialog" aria-modal="true" aria-labelledby="import-title">
+    <section class="import-dialog" :class="{ 'orthanc-import': source !== 'files' }" role="dialog" aria-modal="true" aria-labelledby="import-title">
       <header>
         <span class="eyebrow">NEW CASE</span><button type="button" class="icon-button" aria-label="Close import" :disabled="locked" @click="close">×</button>
       </header>
       <h2 id="import-title">Start with an imaging study.</h2>
       <p class="muted">
-        {{ canUseArchive ? 'Import DICOM files or choose a series from Orthanc.' : 'Import DICOM files.' }}
+        {{
+          !canUseArchive
+            ? 'Import DICOM files.'
+            : webArchive
+              ? 'Import DICOM files or choose a series from an archive.'
+              : 'Import DICOM files or choose a series from Orthanc.'
+        }}
         Select a CT reconstruction{{ mrEnabled ? ' or static 3D MR sequence' : '' }} before processing.
       </p>
       <div class="import-source-tabs" role="group" aria-label="Import source">
@@ -147,12 +176,31 @@ onBeforeUnmount(() => {
         >
           Orthanc archive
         </button>
+        <button
+          v-if="canUseArchive && webArchive"
+          class="button secondary"
+          type="button"
+          :class="{ selected: source === 'dicomweb' }"
+          :aria-pressed="source === 'dicomweb'"
+          :disabled="locked"
+          @click="source = 'dicomweb'"
+        >
+          {{ webArchive.name || dicomwebSource.name }}
+        </button>
       </div>
       <label class="field"
         >Case label <span class="optional">optional · pseudonymous</span
         ><input v-model="label" placeholder="e.g. Chest–abdomen 01" :disabled="locked" autofocus
       /></label>
-      <OrthancBrowser v-if="source === 'orthanc'" :label="label" :busy="busy || !!progress" @busy="archiveActivity" @imported="emit('imported', $event)" />
+      <OrthancBrowser
+        v-if="source !== 'files'"
+        :key="source"
+        :source="source === 'dicomweb' ? dicomwebSource : orthancSource"
+        :label="label"
+        :busy="busy || !!progress"
+        @busy="archiveActivity"
+        @imported="emit('imported', $event)"
+      />
       <template v-else>
         <div class="drop-zone" :class="{ dragging }" @dragover.prevent="dragging = !locked" @dragleave.prevent="dragging = false" @drop.prevent="drop">
           <svg viewBox="0 0 40 40" fill="none">

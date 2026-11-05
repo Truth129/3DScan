@@ -7,6 +7,8 @@ export interface OrthancStatus {
   name?: string;
   version?: string;
   error?: string;
+  /** A DICOMweb archive's search mode: without wildcards, terms match exactly. */
+  wildcards?: boolean;
 }
 export interface OrthancStudy {
   id: string;
@@ -15,7 +17,8 @@ export interface OrthancStudy {
   description: string;
   study_date: string;
   accession_number: string;
-  series_count: number;
+  /** Null from a DICOMweb archive that leaves the count out. */
+  series_count: number | null;
   study_uid?: string;
 }
 export interface OrthancStudyQuery {
@@ -44,6 +47,10 @@ export interface OrthancSeries {
   snapshot: string;
   supported: boolean;
   unsupported_reason?: string;
+  /** A DICOMweb archive's own image count, which can be stale: shown, never trusted. */
+  reported_instances?: number | null;
+  /** A DICOMweb series: seconds until its unchanged image list can be imported. */
+  ready_in?: number;
 }
 export interface OrthancSeriesPage {
   study: OrthancStudy;
@@ -101,17 +108,37 @@ export function withoutOrthancLaunch(hash: string): string {
   return rest ? `#${rest}` : '';
 }
 
-export interface OrthancLaunchReader extends OrthancImportReader {
-  resolve(request: OrthancLaunchRequest, signal: AbortSignal): Promise<OrthancLaunchResult>;
-  import(request: OrthancImportRequest, signal: AbortSignal): Promise<Job>;
+export interface LaunchReader<Request, Import> extends OrthancImportReader {
+  resolve(request: Request, signal: AbortSignal): Promise<OrthancLaunchResult>;
+  import(request: Import, signal: AbortSignal): Promise<Job>;
 }
+export type OrthancLaunchReader = LaunchReader<OrthancLaunchRequest, OrthancImportRequest>;
+export type SeriesLaunch<Request> = { kind: 'invalid'; error: string } | { kind: 'series'; request: Request };
 
-export function useOrthancLaunch(options: {
-  launch: Exclude<OrthancLaunch, { kind: 'none' }>;
-  reader: OrthancLaunchReader;
+/** How a launch names its series and asks to import it, so one flow serves Orthanc and a DICOMweb archive. */
+export interface LaunchSource<Request, Import> {
+  jobKind: string;
+  seriesId(request: Request): string;
+  importRequest(request: Request, snapshot: string): Import;
+  /** Where to pick the series again. */
+  again: string;
+}
+export const ORTHANC_LAUNCH: LaunchSource<OrthancLaunchRequest, OrthancImportRequest> = {
+  jobKind: 'orthanc_import',
+  seriesId: request => request.series_id,
+  importRequest: (request, snapshot) => ({ series_id: request.series_id, snapshot }),
+  again: 'Select the series again in Explorer 2.',
+};
+
+export function useOrthancLaunch<Request = OrthancLaunchRequest, Import = OrthancImportRequest>(options: {
+  launch: SeriesLaunch<Request>;
+  reader: LaunchReader<Request, Import>;
+  /** Orthanc's unless given. */
+  source?: LaunchSource<Request, Import>;
   opened(id: string): void;
   imported(result: Case): void;
 }) {
+  const source = options.source ?? (ORTHANC_LAUNCH as unknown as LaunchSource<Request, Import>);
   const result = shallowRef<OrthancLaunchResult>(),
     job = shallowRef<Job>(),
     busy = ref(false),
@@ -122,12 +149,12 @@ export function useOrthancLaunch(options: {
     disposed = false;
   const message = (reason: unknown) => (reason instanceof Error ? reason.message : 'The archive request could not finish.');
   function checkResult(next: OrthancLaunchResult) {
-    if (options.launch.kind !== 'series' || next.series.id !== options.launch.request.series_id)
-      throw new Error('The archive returned a different series. Select the series again in Explorer 2.');
+    if (options.launch.kind !== 'series' || next.series.id !== source.seriesId(options.launch.request))
+      throw new Error(`The archive returned a different series. ${source.again}`);
     if (next.case_id && next.job && next.case_id !== next.job.case_id) throw new Error('The import status belongs to a different case.');
   }
   async function follow(initial: Job, signal: AbortSignal) {
-    if (initial.kind !== 'orthanc_import') throw new Error('The archive returned an unrelated job.');
+    if (initial.kind !== source.jobKind) throw new Error('The archive returned an unrelated job.');
     const imported = await waitForOrthancImport(initial, signal, options.reader, next => (job.value = next));
     if (!disposed && !signal.aborted) options.imported(imported);
   }
@@ -159,7 +186,7 @@ export function useOrthancLaunch(options: {
     busy.value = true;
     error.value = '';
     try {
-      const next = await options.reader.import({ series_id: options.launch.request.series_id, snapshot: result.value.series.snapshot }, current.signal);
+      const next = await options.reader.import(source.importRequest(options.launch.request, result.value.series.snapshot), current.signal);
       current.signal.throwIfAborted();
       if (!disposed) await follow(next, current.signal);
     } catch (reason) {
@@ -179,9 +206,12 @@ export function useOrthancLaunch(options: {
   return { result, job, busy, error, blockReason, canImport, resolve, start };
 }
 
-export function orthancImportBlockReason(series: OrthancSeries): string {
+/** `waiting` is a DICOMweb series' countdown, which ticks after the list was read. */
+export function orthancImportBlockReason(series: OrthancSeries, waiting = series.ready_in): string {
   if (!series.supported) return series.unsupported_reason || 'This series is not supported by this workstation.';
   if (!series.instance_count) return 'This series has no images yet.';
+  if (series.completeness === 'receiving' && waiting != null)
+    return waiting > 0 ? `Images may still be arriving. Import opens in ${waiting} s if the series stays unchanged.` : 'Checking the series again…';
   if (series.completeness === 'receiving') return 'Images are still arriving. Refresh the series before importing.';
   if (series.completeness === 'incomplete') return 'This series is incomplete or inconsistent. Complete it in the archive before importing.';
   if (!series.snapshot) return 'Refresh the series before importing.';

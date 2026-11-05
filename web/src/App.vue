@@ -27,6 +27,7 @@ import CTOverlayPicker from './components/CTOverlayPicker.vue';
 import ImportDialog from './components/ImportDialog.vue';
 import OrthancLaunchDialog from './components/OrthancLaunchDialog.vue';
 import { readOrthancLaunch, withoutOrthancLaunch } from './lib/orthanc';
+import { archiveSourceFor, readArchiveLaunch, withoutArchiveLaunch } from './lib/archive';
 import RefinementPanel from './components/RefinementPanel.vue';
 import AgreementPanel from './components/AgreementPanel.vue';
 import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
@@ -109,6 +110,8 @@ const cases = ref<Case[]>([]),
   revision = ref<Revision>(),
   revisions = ref<Revision[]>([]);
 const orthancLaunch = ref(readOrthancLaunch(window.location.hash));
+// A DICOMweb archive's link, read only when the fragment names no Orthanc launch.
+const archiveLaunch = ref(orthancLaunch.value.kind === 'none' ? readArchiveLaunch(window.location.hash) : { kind: 'none' as const });
 const health = ref<Record<string, unknown>>({}),
   job = ref<Job>(),
   error = ref(''),
@@ -840,12 +843,12 @@ async function imported(next: Case) {
     fail(reason);
   }
 }
-function closeOrthancLaunch() {
-  orthancLaunch.value = { kind: 'none' };
-  history.replaceState(history.state, '', window.location.pathname + window.location.search + withoutOrthancLaunch(window.location.hash));
+function closeLaunch() {
+  orthancLaunch.value = archiveLaunch.value = { kind: 'none' };
+  history.replaceState(history.state, '', window.location.pathname + window.location.search + withoutArchiveLaunch(withoutOrthancLaunch(window.location.hash)));
 }
-async function openOrthancCase(id: string) {
-  closeOrthancLaunch();
+async function openLaunchedCase(id: string) {
+  closeLaunch();
   loading.value = true;
   try {
     void refreshCases().catch(() => {});
@@ -863,8 +866,8 @@ function seriesAdded(next: Case, uid: string) {
   // The Library searches series, and it can be open over this panel.
   void refreshCases().catch(() => {});
 }
-async function importedOrthancCase(next: Case) {
-  closeOrthancLaunch();
+async function importedLaunchedCase(next: Case) {
+  closeLaunch();
   await imported(next);
 }
 async function demo() {
@@ -1290,7 +1293,7 @@ onMounted(async () => {
   const results = await Promise.allSettled([api.cases(), api.health()]);
   if (results[0].status === 'fulfilled') {
     cases.value = results[0].value;
-    if (orthancLaunch.value.kind === 'none') {
+    if (orthancLaunch.value.kind === 'none' && archiveLaunch.value.kind === 'none') {
       // A saved case that has gone closes and lands on the Library, never on a different case.
       const saved = localStorage.getItem('scan3d-case');
       if (saved) await openCase(saved);
@@ -1500,8 +1503,9 @@ onBeforeUnmount(() => {
             <p v-if="revision" class="retained-result-note">Your current result remains available while another series is selected or opened.</p>
             <SeriesPicker :key="activeCase.id" v-model="seriesUid" :series="activeCase.series" :disabled="busy" />
             <OrthancAddSeries
-              v-if="activeCase.import_source?.kind === 'orthanc' && canUseArchive"
+              v-if="archiveSourceFor(activeCase.import_source?.kind) && canUseArchive"
               :key="`add-${activeCase.id}`"
+              :source="archiveSourceFor(activeCase.import_source?.kind)"
               :case-id="activeCase.id"
               :disabled="busy"
               @added="seriesAdded"
@@ -2150,9 +2154,17 @@ onBeforeUnmount(() => {
     <OrthancLaunchDialog
       v-if="orthancLaunch.kind !== 'none' && !loading"
       :launch="orthancLaunch"
-      @close="closeOrthancLaunch"
-      @opened="openOrthancCase"
-      @imported="importedOrthancCase"
+      @close="closeLaunch"
+      @opened="openLaunchedCase"
+      @imported="importedLaunchedCase"
+    />
+    <OrthancLaunchDialog
+      v-else-if="archiveLaunch.kind !== 'none' && !loading"
+      source="dicomweb"
+      :launch="archiveLaunch"
+      @close="closeLaunch"
+      @opened="openLaunchedCase"
+      @imported="importedLaunchedCase"
     />
     <ExportViewerDialog
       v-if="exportSnapshot && revision && activeCase"

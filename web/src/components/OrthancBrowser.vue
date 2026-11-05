@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '../lib/api';
+import { orthancSource, useQuietCountdown, type ArchiveSource } from '../lib/archive';
 import {
   orthancDate,
   orthancImportBlockReason,
@@ -14,11 +15,13 @@ import {
 } from '../lib/orthanc';
 import type { Case, Job } from '../types';
 
-const props = defineProps<{ label: string; busy: boolean }>();
+const props = withDefaults(defineProps<{ label: string; busy: boolean; source?: ArchiveSource }>(), { source: () => orthancSource });
 const emit = defineEmits<{ imported: [result: Case]; busy: [value: boolean] }>();
 const status = ref<OrthancStatus>(),
   statusLoading = ref(false),
   connectionError = ref('');
+// Orthanc keeps its own wording; a DICOMweb archive goes by its configured name.
+const title = computed(() => (props.source.kind === 'orthanc' ? 'Orthanc' : status.value?.name || props.source.name));
 const patientId = ref(''),
   patientName = ref(''),
   accession = ref(''),
@@ -35,9 +38,19 @@ const importJob = ref<Job>(),
   importLoading = ref(false),
   importError = ref(''),
   cancelLoading = ref(false);
-const recoveryKey = 'scan3d-orthanc-import-job';
+const recoveryKey = props.source.recoveryKey;
 const previousJob = ref(readPreviousJob());
 const selected = computed(() => series.value.find(item => item.id === selectedId.value));
+// A DICOMweb series waits out its quiet period; the list is read again when the first wait ends.
+const { remaining } = useQuietCountdown(
+  () => series.value,
+  () => {
+    if (!study.value || locked.value) return false;
+    void chooseStudy(study.value, true);
+    return true;
+  },
+);
+const blocked = (item: OrthancSeries) => orthancImportBlockReason(item, remaining(item));
 const locked = computed(() => props.busy || importLoading.value || cancelLoading.value);
 const pending = computed(() => !!importJob.value && ['queued', 'running'].includes(importJob.value.status));
 const canImport = computed(
@@ -49,7 +62,7 @@ const canImport = computed(
     !seriesLoading.value &&
     !seriesError.value &&
     !!selected.value &&
-    !orthancImportBlockReason(selected.value) &&
+    !blocked(selected.value) &&
     !locked.value &&
     !pending.value,
 );
@@ -105,7 +118,7 @@ async function connect() {
   statusLoading.value = true;
   connectionError.value = '';
   try {
-    const result = await api.orthancStatus(current.signal);
+    const result = await props.source.status(current.signal);
     if (disposed || current.signal.aborted || version !== statusVersion) return;
     status.value = result;
     if (result.configured && result.connected) await search(0, false);
@@ -133,7 +146,7 @@ async function search(offset = 0, apply = true) {
   searchLoading.value = true;
   searchError.value = '';
   try {
-    const result = await api.orthancStudies({ ...appliedQuery, offset, limit }, current.signal);
+    const result = await props.source.studies({ ...appliedQuery, offset, limit }, current.signal);
     if (!disposed && !current.signal.aborted && version === searchVersion) page.value = result;
   } catch (error) {
     if (!disposed && !current.signal.aborted && version === searchVersion) searchError.value = reason(error);
@@ -141,8 +154,10 @@ async function search(offset = 0, apply = true) {
     if (!disposed && version === searchVersion) searchLoading.value = false;
   }
 }
-async function chooseStudy(next: OrthancStudy) {
+/** `keep` holds the chosen series through a refresh that the quiet-period countdown asked for. */
+async function chooseStudy(next: OrthancStudy, keep = false) {
   if (locked.value) return;
+  const kept = keep ? selectedId.value : '';
   clearSeries();
   const current = new AbortController(),
     version = ++seriesVersion;
@@ -150,10 +165,11 @@ async function chooseStudy(next: OrthancStudy) {
   study.value = next;
   seriesLoading.value = true;
   try {
-    const result = await api.orthancSeries(next.id, current.signal);
+    const result = await props.source.series(next, current.signal);
     if (disposed || current.signal.aborted || version !== seriesVersion) return;
     if (result.study.id !== next.id) throw new Error('The archive returned a different study. Search again.');
     series.value = result.series;
+    if (kept && result.series.some(item => item.id === kept)) selectedId.value = kept;
   } catch (error) {
     if (!disposed && !current.signal.aborted && version === seriesVersion) seriesError.value = reason(error);
   } finally {
@@ -178,21 +194,16 @@ async function follow(job: Job, controller: AbortController) {
   );
   if (!disposed && !controller.signal.aborted) emit('imported', result);
 }
-async function start() {
+/** `reimport` makes a fresh copy even when this snapshot was imported before. */
+async function start(reimport = false) {
   const selection = selected.value;
-  if (!selection || !canImport.value) return;
+  if (!selection || !study.value || !canImport.value) return;
   const current = new AbortController();
   importController = current;
   importLoading.value = true;
   importError.value = '';
   try {
-    await follow(
-      await api.importOrthanc(
-        { series_id: selection.id, snapshot: selection.snapshot, ...(props.label.trim() ? { label: props.label.trim() } : {}) },
-        current.signal,
-      ),
-      current,
-    );
+    await follow(await props.source.import(study.value, selection, { label: props.label.trim() || undefined, reimport }, current.signal), current);
   } catch (error) {
     if (!disposed && !current.signal.aborted) importError.value = reason(error);
   } finally {
@@ -245,14 +256,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="orthanc-browser" :data-orthanc-connected="status?.connected" :data-orthanc-import-job="importJob?.id">
-    <div v-if="statusLoading" class="archive-message" role="status">Connecting to Orthanc…</div>
+    <div v-if="statusLoading" class="archive-message" role="status">Connecting to {{ title }}…</div>
     <div
       v-else-if="connectionError || !status?.configured || !status.connected"
       class="archive-message"
       :role="connectionError || status?.error ? 'alert' : 'status'"
     >
       <strong>{{
-        connectionError || status?.error || (status?.configured ? 'Orthanc is currently unavailable.' : 'Orthanc is not configured on this workstation.')
+        connectionError || status?.error || (status?.configured ? `${title} is currently unavailable.` : `${title} is not configured on this workstation.`)
       }}</strong>
       <p>
         {{
@@ -265,23 +276,26 @@ onBeforeUnmount(() => {
     </div>
     <template v-else>
       <div class="archive-heading">
-        <strong>{{ status.name || 'Orthanc archive' }}</strong
+        <strong>{{ status.name || `${title} archive` }}</strong
         ><button type="button" class="text-button" :disabled="locked || searchLoading" @click="connect">Refresh connection</button>
       </div>
       <form class="archive-search" @submit.prevent="search()">
-        <label class="field">Patient ID<input v-model="patientId" aria-label="Orthanc patient ID" :disabled="locked" maxlength="128" /></label>
-        <label class="field">Patient name<input v-model="patientName" aria-label="Orthanc patient name" :disabled="locked" maxlength="128" /></label>
-        <label class="field">Accession number<input v-model="accession" aria-label="Orthanc accession number" :disabled="locked" maxlength="128" /></label>
-        <label class="field">Study date<input v-model="studyDate" aria-label="Orthanc study date" type="date" :disabled="locked" /></label>
+        <label class="field">Patient ID<input v-model="patientId" :aria-label="`${title} patient ID`" :disabled="locked" maxlength="128" /></label>
+        <label class="field">Patient name<input v-model="patientName" :aria-label="`${title} patient name`" :disabled="locked" maxlength="128" /></label>
+        <label class="field">Accession number<input v-model="accession" :aria-label="`${title} accession number`" :disabled="locked" maxlength="128" /></label>
+        <label class="field">Study date<input v-model="studyDate" :aria-label="`${title} study date`" type="date" :disabled="locked" /></label>
         <button class="button secondary" :disabled="locked || searchLoading" type="submit">{{ searchLoading ? 'Searching…' : 'Search studies' }}</button>
       </form>
+      <p v-if="source.kind === 'dicomweb' && !status.wildcards" class="archive-identifier">
+        Searches match exactly. This archive does not accept * or ? in search terms.
+      </p>
       <p v-if="searchLoading" class="archive-message" role="status">Loading studies…</p>
       <p v-if="searchError" class="archive-message error" role="alert">
         {{ searchError }} <button type="button" class="text-button" :disabled="locked" @click="search(0, false)">Retry search</button>
       </p>
       <div v-if="page" class="archive-results">
         <p v-if="!page.studies.length" class="archive-message" role="status">No matching studies. Try a different search.</p>
-        <div v-else class="study-list" role="group" aria-label="Orthanc studies">
+        <div v-else class="study-list" role="group" :aria-label="`${title} studies`">
           <button
             type="button"
             v-for="item in page.studies"
@@ -299,7 +313,8 @@ onBeforeUnmount(() => {
             <span
               ><strong>{{ item.description || 'Study description unavailable' }}</strong
               ><span class="archive-identifier"
-                >{{ item.accession_number ? `Accession ${item.accession_number} · ` : '' }}{{ item.series_count }} series</span
+                >{{ item.accession_number ? `Accession ${item.accession_number} · ` : ''
+                }}{{ item.series_count != null ? `${item.series_count} series` : 'Series count unavailable' }}</span
               ></span
             >
           </button>
@@ -318,7 +333,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <section v-if="study" class="archive-series" aria-label="Orthanc series">
+      <section v-if="study" class="archive-series" :aria-label="`${title} series`">
         <header>
           <h3>Choose a reconstruction</h3>
           <button type="button" class="text-button" :disabled="locked || seriesLoading" @click="chooseStudy(study!)">Refresh series</button>
@@ -326,18 +341,14 @@ onBeforeUnmount(() => {
         <p v-if="seriesLoading" class="archive-message" role="status">Checking available series…</p>
         <p v-else-if="seriesError" class="archive-message error" role="alert">{{ seriesError }}</p>
         <p v-else-if="!series.length" class="archive-message" role="status">This study has no available series.</p>
-        <label
-          v-for="item in series"
-          :key="item.id"
-          class="series-entry"
-          :class="{ selected: selectedId === item.id, unavailable: !!orthancImportBlockReason(item) }"
-        >
-          <input type="radio" name="orthanc-series" :value="item.id" v-model="selectedId" :disabled="locked || !!orthancImportBlockReason(item)" />
+        <label v-for="item in series" :key="item.id" class="series-entry" :class="{ selected: selectedId === item.id, unavailable: !!blocked(item) }">
+          <input type="radio" name="orthanc-series" :value="item.id" v-model="selectedId" :disabled="locked || !!blocked(item)" />
           <span
             ><strong>{{ item.description || 'Series description unavailable' }}</strong
             ><span
-              >{{ item.modality }} · {{ item.instance_count }} images{{ item.expected_instances != null ? ` / ${item.expected_instances} expected` : '' }}</span
-            ><span v-if="orthancImportBlockReason(item)" class="error">{{ orthancImportBlockReason(item) }}</span
+              >{{ item.modality }} · {{ item.instance_count }} images{{ item.expected_instances != null ? ` / ${item.expected_instances} expected` : ''
+              }}{{ item.reported_instances != null ? ` / ${item.reported_instances} reported` : '' }}</span
+            ><span v-if="blocked(item)" class="error">{{ blocked(item) }}</span
             ><span v-else-if="item.completeness === 'unknown'">Expected image count unavailable. Imports the images currently listed in this series.</span
             ><span v-else>Expected image count received.</span></span
           >
@@ -345,11 +356,14 @@ onBeforeUnmount(() => {
       </section>
       <p v-if="selected" class="archive-import-note">
         The selected series is copied to your local case library. Open scan and segmentation remain separate actions.
+        <template v-if="source.kind === 'dicomweb'">
+          The archive cannot show a file replaced under the same identity, so Import again makes a fresh copy as a new case.
+        </template>
       </p>
     </template>
     <div v-if="importJob" class="archive-progress" role="status">
       <strong>{{ importJob.stage || 'Importing series…' }}</strong
-      ><progress v-if="pending" :value="importJob.progress?.completed" :max="importJob.progress?.total || 1" aria-label="Orthanc import progress"></progress
+      ><progress v-if="pending" :value="importJob.progress?.completed" :max="importJob.progress?.total || 1" :aria-label="`${title} import progress`"></progress
       ><span v-if="importJob.progress?.total">{{ importJob.progress.completed }} / {{ importJob.progress.total }}</span>
     </div>
     <p v-if="importError" class="archive-message error" role="alert">
@@ -364,8 +378,9 @@ onBeforeUnmount(() => {
         {{ cancelLoading ? 'Cancelling…' : 'Cancel import' }}
       </button>
       <span v-else class="archive-identifier">Archive source stays unchanged.</span>
+      <button type="button" v-if="source.kind === 'dicomweb' && !pending" class="text-button" :disabled="!canImport" @click="start(true)">Import again</button>
       <button type="button" v-if="pending && !importLoading" class="button secondary" :disabled="locked" @click="resume">Resume import status</button>
-      <button type="button" v-else class="button primary" :disabled="!canImport" @click="start">
+      <button type="button" v-else class="button primary" :disabled="!canImport" @click="start()">
         <span v-if="importLoading" class="spinner"></span>{{ importLoading ? 'Importing series…' : 'Import selected series →' }}
       </button>
     </footer>
