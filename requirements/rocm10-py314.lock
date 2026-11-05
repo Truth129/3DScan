@@ -3021,6 +3021,7 @@ pydicom==3.0.1 \
     #   -r requirements/rocm10-py314.in
     #   dicom2nifti
     #   highdicom
+    #   pynetdicom
     # from https://pypi.org/simple
 pygltflib==1.16.5 \
     --hash=sha256:1f15740d5a7aaf71a5083e285af6b361184958e255659132f4ba8fe4f3d21ea9 \
@@ -3068,6 +3069,11 @@ pyjpegls==1.5.1 \
     # via
     #   -r requirements/rocm10-py314.in
     #   highdicom
+    # from https://pypi.org/simple
+pynetdicom==3.0.4 \
+    --hash=sha256:567ef761d73b34a380a4350e0d10ae549d749c66da4f1bdf8793cab9a6a326e4 \
+    --hash=sha256:bc3f8869db4c90634336dfb02d7b6c249771e8b167e841254997a315d8e16f72
+    # via -r requirements/rocm10-py314.in
     # from https://pypi.org/simple
 pynrrd==1.1.3 \
     --hash=sha256:21f7e370045e7ef8a86841965b2ff3a18937efbb4e2078e346168463f8f34b7e \
