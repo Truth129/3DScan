@@ -103,7 +103,7 @@ def parse_download(value: object) -> DownloadManifest:
 
 
 def series_source(case: dict, series_uid) -> dict:
-    """The retained archive source of one series, as `import_source`, `orthanc` and `source_dir`.
+    """The retained archive source of one series: `import_source`, `source_dir`, and `orthanc` or `archive`.
 
     The series that made a case keeps these on the case. A series added later has its own, so an
     export can never bind one series' masks to another's source.
@@ -114,7 +114,8 @@ def series_source(case: dict, series_uid) -> dict:
     return {
         "import_source": case.get("import_source"),
         "source_dir": case.get("source_dir"),
-        **({"orthanc": references["orthanc"]} if "orthanc" in references else {}),
+        # `archive` is a DICOMweb source (`scan3d.archive.models`), whose own readers parse it.
+        **{key: references[key] for key in ("orthanc", "archive") if key in references},
     }
 
 

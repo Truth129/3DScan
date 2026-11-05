@@ -33,6 +33,25 @@ _READABLE = "AND NOT EXISTS(SELECT 1 FROM trash t WHERE t.case_id=j.case_id AND 
 
 
 class OrthancImports:
+    """Orthanc's transport, and the import lifecycle that another archive's subclass shares.
+
+    A subclass changes these attributes and the transport methods: `client`, `status`, `studies`,
+    `series`, `launch`, `start`, `case_series`, `_check_addition`, `_launch_case` and `_transfer`.
+    The kind is a constant, never input, so it is written into SQL, where SQLite can use the
+    kind's partial index.
+    """
+
+    kind = "orthanc_import"
+    source_kind = "orthanc"
+    reference = "orthanc"
+    default_label = "Orthanc imaging case"
+    failed_error = "The Orthanc import did not complete. Retry the selected series."
+    cancelled_error = "Orthanc import cancelled"
+    changed = OrthancChanged
+    parse_snapshot = staticmethod(parse_snapshot)
+    json_record = staticmethod(json_record)
+    fingerprint = staticmethod(snapshot_fingerprint)
+
     def __init__(self, service):
         self.service = service
 
@@ -84,11 +103,15 @@ class OrthancImports:
         result = {"study": study, "series": summary, "case_id": None, "job": None}
         if reason or not snapshot.stable or snapshot.completeness not in {"complete", "unknown"}:
             return result
+        return self._find_import(result, snapshot)
+
+    def _find_import(self, result, snapshot):
+        """Point a launch at the newest readable import of this exact snapshot, changing nothing."""
         key = hashlib.sha256((snapshot.source_key + snapshot.snapshot).encode()).hexdigest()
         with self.service.store.connection() as con:
             row = con.execute(
                 "SELECT j.data AS job_data,c.data AS case_data FROM jobs j LEFT JOIN cases c ON c.id=j.case_id "
-                f"WHERE json_extract(j.data,'$.kind')='orthanc_import' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
+                f"WHERE json_extract(j.data,'$.kind')='{self.kind}' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
                 (key,),
             ).fetchone()
         if not row:
@@ -104,8 +127,8 @@ class OrthancImports:
             case = json.loads(row["case_data"])
             if not isinstance(case, dict):
                 raise ValueError()
-            previous = parse_snapshot(job["payload"]["snapshot"])
-            if job["case_id"] != case["id"] or previous.snapshot != snapshot.snapshot or snapshot_fingerprint(previous) != snapshot.snapshot:
+            previous = self.parse_snapshot(job["payload"]["snapshot"])
+            if job["case_id"] != case["id"] or previous.snapshot != snapshot.snapshot or self.fingerprint(previous) != snapshot.snapshot:
                 raise ValueError()
             safe_id(case["id"])
             safe_id(job["id"])
@@ -121,7 +144,7 @@ class OrthancImports:
         except (KeyError, OSError, TypeError, ValueError):
             # Import deduplication would return this same job again: offering a
             # fresh import here would bypass the rejected source binding.
-            raise OrthancChanged(
+            raise self.changed(
                 "The previous import cannot be verified. Restore its retained source files and import record before opening this series."
             ) from None
         return result
@@ -207,7 +230,7 @@ class OrthancImports:
             con.execute("BEGIN IMMEDIATE")
             rows = con.execute(
                 "SELECT c.data AS case_data,j.data AS job_data FROM cases c JOIN jobs j ON j.case_id=c.id "
-                "WHERE json_extract(c.data,'$.status')='importing' AND json_extract(j.data,'$.kind')='orthanc_import' "
+                f"WHERE json_extract(c.data,'$.status')='importing' AND json_extract(j.data,'$.kind')='{self.kind}' "
                 "AND j.rowid=(SELECT MAX(rowid) FROM jobs WHERE case_id=c.id)"
             ).fetchall()
             for row in rows:
@@ -217,7 +240,7 @@ class OrthancImports:
                 cancelled = job["status"] == "cancelled"
                 case.update(
                     status="import_cancelled" if cancelled else "import_failed",
-                    error=None if cancelled else "The Orthanc import did not complete. Retry the selected series.",
+                    error=None if cancelled else self.failed_error,
                 )
                 con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case["id"]))
                 Store.summarize_case(con, case)
@@ -234,19 +257,27 @@ class OrthancImports:
             raise ValueError(reason)
         if sum(item.size for item in snapshot.instances) > self.service.settings.upload_limit:
             raise ValueError("Orthanc import exceeds size limit")
+        return self._enqueue(snapshot, label, case_id)
+
+    def _enqueue(self, snapshot, label=None, case_id=None, *, reimport=False):
+        """Queue an import of a checked snapshot, or return the one that already serves everyone.
+
+        `reimport` makes a fresh copy beside a completed one, for an archive that cannot show
+        when a file was replaced under the same identity.
+        """
         key = hashlib.sha256((snapshot.source_key + snapshot.snapshot + (case_id or "")).encode()).hexdigest()
         store = self.service.store
         with store.connection() as con:
             con.execute("BEGIN IMMEDIATE")
             con.execute(
-                "CREATE INDEX IF NOT EXISTS orthanc_import_key ON jobs(json_extract(data,'$.payload.import_key')) WHERE json_extract(data,'$.kind')='orthanc_import'"
+                f"CREATE INDEX IF NOT EXISTS {self.kind}_key ON jobs(json_extract(data,'$.payload.import_key')) WHERE json_extract(data,'$.kind')='{self.kind}'"
             )
             previous = con.execute(
-                f"SELECT j.data FROM jobs j WHERE json_extract(j.data,'$.kind')='orthanc_import' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
+                f"SELECT j.data FROM jobs j WHERE json_extract(j.data,'$.kind')='{self.kind}' AND json_extract(j.data,'$.payload.import_key')=? {_READABLE} ORDER BY j.rowid DESC LIMIT 1",
                 (key,),
             ).fetchone()
             previous = json.loads(previous["data"]) if previous else None
-            if previous and previous["status"] in {"queued", "running", "completed"}:
+            if previous and previous["status"] in {"queued", "running"} | (set() if reimport else {"completed"}):
                 return previous
             case = None
             if case_id:
@@ -263,7 +294,7 @@ class OrthancImports:
             if case is None:
                 case = dict(
                     id=identifier(),
-                    label=label or snapshot.description or "Orthanc imaging case",
+                    label=label or snapshot.description or self.default_label,
                     created_at=now(),
                     active_revision_id=None,
                     selected_series_uid=None,
@@ -276,14 +307,14 @@ class OrthancImports:
             job = dict(
                 id=identifier(),
                 case_id=case["id"],
-                kind="orthanc_import",
+                kind=self.kind,
                 status="queued",
                 stage="Queued",
                 error=None,
                 revision_id=None,
                 created_at=now(),
                 cancel_requested=False,
-                payload={"import_key": key, "snapshot": json_record(snapshot), **({"add_to_case": True} if case_id else {})},
+                payload={"import_key": key, "snapshot": self.json_record(snapshot), **({"add_to_case": True} if case_id else {})},
                 requested_by=identity.actor_id(),
             )
             if not case_id:
@@ -379,12 +410,29 @@ class OrthancImports:
                 con.execute("UPDATE jobs SET status=?,data=? WHERE id=?", (job["status"], json.dumps(job), job_id))
         return job
 
+    def _transfer(self, snapshot, directory, *, progress, cancelled):
+        """Download the snapshot into the empty `directory`, and return its verified source record."""
+        with self.client() as client:
+            manifest = client.download(snapshot, directory, max_bytes=self.service.settings.upload_limit, progress=progress, cancelled=cancelled)
+        frame_uid = self._verify(directory, snapshot, manifest, cancelled=cancelled)
+        return parse_source(
+            SourceManifest(
+                snapshot=manifest.snapshot,
+                files=manifest.files,
+                bytes=manifest.bytes,
+                content_digest=manifest.content_digest,
+                kind="orthanc",
+                imported_at=now(),
+                frame_of_reference_uid=frame_uid,
+            )
+        )
+
     def run(self, job):
         from .dicom import index_dicom
 
         service = self.service
         try:
-            snapshot = parse_snapshot(job["payload"]["snapshot"])
+            snapshot = self.parse_snapshot(job["payload"]["snapshot"])
             root = service.settings.data_dir / "orthanc-staging"
             root.mkdir(parents=True, exist_ok=True)
             if reason := self._modality_reason(snapshot.modality):
@@ -408,7 +456,7 @@ class OrthancImports:
                 def progress(completed, total, received):
                     nonlocal last_progress
                     if cancelled():
-                        raise InterruptedError("Orthanc import cancelled")
+                        raise InterruptedError(self.cancelled_error)
                     moment = time.monotonic()
                     # Jobs retain the complete source snapshot. Avoid rewriting
                     # it for every tiny DICOM file or rereading it per CT block.
@@ -420,9 +468,7 @@ class OrthancImports:
                         )
                         last_progress = moment
 
-                with self.client() as client:
-                    manifest = client.download(snapshot, directory, max_bytes=service.settings.upload_limit, progress=progress, cancelled=cancelled)
-                frame_uid = self._verify(directory, snapshot, manifest, cancelled=cancelled)
+                source = self._transfer(snapshot, directory, progress=progress, cancelled=cancelled)
                 series = index_dicom(directory)
                 if len(series) != 1 or series[0]["uid"] != snapshot.series_uid or not series[0]["supported"]:
                     # Reasons name rules and DICOM attributes, never a value from the scan.
@@ -437,28 +483,17 @@ class OrthancImports:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 for row in series:
                     row["files"] = [str(destination / Path(file).relative_to(directory)) for file in row["files"]]
-                source = parse_source(
-                    SourceManifest(
-                        snapshot=manifest.snapshot,
-                        files=manifest.files,
-                        bytes=manifest.bytes,
-                        content_digest=manifest.content_digest,
-                        kind="orthanc",
-                        imported_at=now(),
-                        frame_of_reference_uid=frame_uid,
-                    )
-                )
-                source_data = json_record(source)
+                source_data = self.json_record(source)
                 encoded = json.dumps(source_data, indent=2, allow_nan=False).encode()
                 provenance = {
-                    "kind": "orthanc",
+                    "kind": self.source_kind,
                     "source_key": snapshot.source_key,
                     "study_uid": snapshot.study_uid,
                     "series_uid": snapshot.series_uid,
-                    "frame_of_reference_uid": frame_uid,
+                    "frame_of_reference_uid": source.frame_of_reference_uid,
                     "snapshot": snapshot.snapshot,
-                    "instance_count": len(manifest.files),
-                    "content_digest": manifest.content_digest,
+                    "instance_count": len(source.files),
+                    "content_digest": source.content_digest,
                     "manifest_sha256": hashlib.sha256(encoded).hexdigest(),
                     "completeness": snapshot.completeness,
                     "warnings": list(snapshot.warnings),
@@ -470,13 +505,13 @@ class OrthancImports:
                     con.execute("BEGIN IMMEDIATE")
                     current = json.loads(con.execute("SELECT data FROM jobs WHERE id=?", (job["id"],)).fetchone()["data"])
                     if current.get("cancel_requested") or current["status"] != "running" or service.stop_event.is_set():
-                        raise InterruptedError("Orthanc import cancelled")
+                        raise InterruptedError(self.cancelled_error)
                     case = json.loads(con.execute("SELECT data FROM cases WHERE id=?", (job["case_id"],)).fetchone()["data"])
                     addition = job["payload"].get("add_to_case")
                     if addition:
                         self._check_addition(case, snapshot)
                     elif case.get("active_revision_id") or case.get("source_dir"):
-                        raise OrthancChanged("The destination case changed while this archive import was running.")
+                        raise self.changed("The destination case changed while this archive import was running.")
                     directory.rename(destination)
                     atomic_json(destination.parent / "source-import.json", source_data)
                     if addition:
@@ -484,12 +519,12 @@ class OrthancImports:
                         case["series"].extend(series)
                         case.setdefault("added_sources", {})[snapshot.series_uid] = {
                             "import_source": provenance,
-                            "orthanc": source_data,
+                            self.reference: source_data,
                             "source_dir": str(destination),
                         }
                     else:
                         case.update(status="imported", error=None, series=series, source_dir=str(destination), import_source=provenance)
-                        case["references"]["orthanc"] = source_data
+                        case["references"][self.reference] = source_data
                     current.update(status="completed", stage="Imported; choose Open scan to prepare viewing", error=None, completed_at=now())
                     con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case, allow_nan=False), case["id"]))
                     Store.summarize_case(con, case)
@@ -505,7 +540,7 @@ class OrthancImports:
                     if case["status"] == "importing":
                         case.update(
                             status="import_cancelled" if isinstance(reason, InterruptedError) else "import_failed",
-                            error=None if isinstance(reason, InterruptedError) else "The Orthanc import did not complete. Retry the selected series.",
+                            error=None if isinstance(reason, InterruptedError) else self.failed_error,
                         )
                         con.execute("UPDATE cases SET data=? WHERE id=?", (json.dumps(case), case["id"]))
                         Store.summarize_case(con, case)
