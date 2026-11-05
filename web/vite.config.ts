@@ -2,14 +2,15 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { vtkRayGuard, vtkRayGuardOptimizer } from './vite-vtk-ray-guard';
+import { thirdPartyNotices, workerNotices } from './vite-third-party-notices';
 
 const mounted = ['tests/dicom-view-*.test.ts', 'tests/dicom-seg-file-dialog.test.ts', 'tests/**/*.mounted.test.ts'];
 
 export default defineConfig({
-  plugins: [vue(), vtkRayGuard()],
+  plugins: [vue(), vtkRayGuard(), thirdPartyNotices()],
   optimizeDeps: { esbuildOptions: { plugins: [vtkRayGuardOptimizer()] } },
   // Workers are bundled separately and do not inherit the plugins above.
-  worker: { plugins: () => [vtkRayGuard()] },
+  worker: { plugins: () => [vtkRayGuard(), workerNotices()] },
   // Cornerstone metadata evaluates an XML builder whose EventEmitter base
   // needs the small browser package rather than Vite's Node builtin stub.
   resolve: { alias: { events: 'events/' } },

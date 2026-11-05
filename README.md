@@ -94,4 +94,5 @@ downloads with their own terms, which you must accept yourself:
   weights.
 
 Using these models commercially may require permission from their authors. Third-party
-notices are in [`web/public/licenses/`](web/public/licenses/).
+notices are in [`web/public/licenses/`](web/public/licenses/). A viewer build adds
+`licenses/THIRD-PARTY-NOTICES.txt` for the packages it bundles, and portable exports carry theirs.
