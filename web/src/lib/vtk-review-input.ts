@@ -8,6 +8,7 @@ import { pixelToRas, rasToPixel } from './geometry';
 import { createReviewGesture } from './interactive-review';
 import { reviewInputContext } from './review-input-context';
 import { validateReviewPlaneMeta } from './review-plane-geometry';
+import { firstVisibleVolumePoint, type VolumeRayHalfSpace, type VolumeRaySource } from './volume-ray';
 import {
   createScissorsPrompt,
   scissorsPath,
@@ -20,7 +21,7 @@ import {
 
 export interface NativeReviewState {
   enabled: true;
-  mode: 'surface' | 'plane';
+  mode: 'surface' | 'plane' | 'volume';
   targetId: string;
   tool: InteractiveTool;
   include: boolean;
@@ -46,10 +47,20 @@ export interface NativeReviewActor {
 }
 export interface NativeReviewOptions {
   actors(): NativeReviewActor[];
+  /** The CT volume as drawn, for picks that must see it; nothing while it is hidden. */
+  volume?(): VolumeRaySource | undefined;
   onGesture(prompt: InteractivePrompt): void;
   onPick?(id: string, ras: Point): void;
+  /** A volume point that moves the linked crosshair and marks nothing. */
+  onPoint?(ras: Point): void;
+  /** Why the last click made no mark, or '' when a new click starts. */
+  onNotice?(message: string): void;
   onError(message: string): void;
 }
+export const VOLUME_MISSED_MESSAGE = 'No visible CT volume under the pointer.';
+export const VOLUME_COVERED_MESSAGE = 'A surface or the CT plane is in front of the CT volume here.';
+export const VOLUME_UNREADABLE_MESSAGE = 'The CT volume could not be read here; try again.';
+export const SURFACE_COVERED_MESSAGE = 'The CT volume covers this surface here. Use Volume point, or turn CT volume off.';
 const svgNS = 'http://www.w3.org/2000/svg';
 const dot = (a: readonly number[], b: readonly number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
 const cross = (a: readonly number[], b: readonly number[]): Point => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -80,6 +91,13 @@ export function nativeReviewSurfacePoint(ras: Point, geometry: Geometry): Point 
   const voxel = transformPoint(inverseAffine(geometry.affine_ras), ras);
   if (voxel.some((value, axis) => !Number.isFinite(value) || value < -0.50001 || value > geometry.shape[axis] - 0.49999)) return;
   return transformPoint(geometry.affine_ras, voxel.map((value, axis) => Math.max(0, Math.min(geometry.shape[axis] - 1, value))) as Point);
+}
+
+/** The voxel centre the server will use, rounding as scan3d/imaging.py does, through the full inverse affine. */
+export function nativeReviewVoxelCentre(ras: Point, geometry: Geometry): Point | undefined {
+  const voxel = transformPoint(inverseAffine(geometry.affine_ras), ras);
+  if (voxel.some((value, axis) => !Number.isFinite(value) || value < -0.5 || value >= geometry.shape[axis] - 0.5)) return;
+  return transformPoint(geometry.affine_ras, voxel.map(value => Math.floor(value + 0.5)) as Point);
 }
 
 /** Use the displayed Cornerstone camera, including its canvas/viewport offset.
@@ -152,6 +170,8 @@ interface Gesture {
   projection: number[][];
   viewport: ScissorsCapture['viewport'];
   surface?: Point;
+  /** A volume point that moves the crosshair instead of marking. */
+  crosshair?: boolean;
   scissors?: ScissorsCapture;
 }
 
@@ -223,6 +243,7 @@ export class VTKReviewInput {
     const state = this.state;
     if (!state || state.disabled || !state.targetId || state.tool === 'navigate') return false;
     if (state.tool === 'scissors') return true;
+    if (state.mode === 'volume') return !!this.options.volume?.();
     if (state.mode === 'plane') return !!state.planeMeta && state.showPlane !== false;
     return (
       state.tool === 'point' &&
@@ -242,6 +263,54 @@ export class VTKReviewInput {
       direction = lpsToRas(subtract(camera.getFocalPoint(), camera.getPosition()));
     return intersectNativeReviewPlane(origin, direction, meta);
   }
+  /** The orthographic ray under the pointer, and the camera's near and far planes the renderer clips to. */
+  private ray(event: PointerEvent) {
+    const camera = this.viewport.getRenderer().getActiveCamera(),
+      position = lpsToRas(camera.getPosition()),
+      direction = unit(lpsToRas(subtract(camera.getFocalPoint(), camera.getPosition()))),
+      [near, far] = camera.getClippingRange(),
+      along = (distance: number) => position.map((value, axis) => value + distance * direction[axis]) as Point;
+    return {
+      origin: lpsToRas(this.viewport.canvasToWorld(this.canvasPoint(event))),
+      direction,
+      clip: [
+        { normal: direction, origin: along(near) },
+        { normal: direction.map(value => -value) as Point, origin: along(far) },
+      ],
+    };
+  }
+  /** Undefined when nothing visible lies on the ray; null when the CT could not be read, which refuses one click, not the viewer. */
+  private volumeHit(ray: { origin: Point; direction: Point; clip: VolumeRayHalfSpace[] }, source: VolumeRaySource, maxDistanceMM?: number) {
+    try {
+      return firstVisibleVolumePoint(ray.origin, ray.direction, { ...source, clip: [...(source.clip ?? []), ...ray.clip] }, { maxDistanceMM });
+    } catch {
+      return null;
+    }
+  }
+  /** Opaque surfaces and the CT plane hide the volume behind them, so the ray stops at the nearest. */
+  private volumePoint(event: PointerEvent, state: NativeReviewState) {
+    const source = this.options.volume?.();
+    if (!source) return;
+    const ray = this.ray(event),
+      surface = pickNativeReviewSurface(this.viewport, this.canvasPoint(event), this.options.actors()),
+      plane = state.planeMeta && state.showPlane !== false ? intersectNativeReviewPlane(ray.origin, ray.direction, state.planeMeta) : undefined,
+      depths = [surface, plane].flatMap(hit => (hit ? [dot(subtract(hit.ras, ray.origin), ray.direction)] : [])),
+      limit = depths.length ? Math.min(...depths) : undefined,
+      hit = this.volumeHit(ray, source, limit),
+      ras = hit && nativeReviewVoxelCentre(hit.ras, state.geometry);
+    if (hit === null) this.options.onNotice?.(VOLUME_UNREADABLE_MESSAGE);
+    // Covered only when visible volume does lie behind what stopped the ray.
+    else if (!ras) this.options.onNotice?.(limit !== undefined && this.volumeHit(ray, source) ? VOLUME_COVERED_MESSAGE : VOLUME_MISSED_MESSAGE);
+    return ras || undefined;
+  }
+  /** Meshes follow masks and can sit up to a voxel off the CT edge they trace, so only volume clearly in front hides a surface. */
+  private surfaceCovered(event: PointerEvent, surface: Point, geometry: Geometry) {
+    const source = this.options.volume?.();
+    if (!source) return false;
+    const ray = this.ray(event),
+      tolerance = Math.max(1, ...[0, 1, 2].map(axis => Math.hypot(...geometry.affine_ras.slice(0, 3).map(row => row[axis]))));
+    return !!this.volumeHit(ray, source, dot(subtract(surface, ray.origin), ray.direction) - tolerance);
+  }
   private capture(): ScissorsCapture {
     const { left, top, width, height } = this.viewport.canvas.getBoundingClientRect();
     return { rasToClip: nativeReviewProjection(this.viewport), viewport: { left, top, width, height } };
@@ -260,6 +329,7 @@ export class VTKReviewInput {
   private pointerDown(event: PointerEvent) {
     if (this.disposed) return;
     this.start = [event.clientX, event.clientY];
+    if (event.button === 0 && this.state) this.options.onNotice?.('');
     if (event.button !== 0 || !this.state || this.state.tool === 'navigate') return;
     this.consume(event);
     this.cancelGesture();
@@ -279,7 +349,16 @@ export class VTKReviewInput {
           ),
           ras = hit && nativeReviewSurfacePoint(hit.ras, state.geometry);
         if (!ras) return;
+        if (this.surfaceCovered(event, hit.ras, state.geometry)) {
+          this.options.onNotice?.(SURFACE_COVERED_MESSAGE);
+          return;
+        }
         gesture.surface = ras;
+      } else if (state.mode === 'volume') {
+        const ras = this.volumePoint(event, state);
+        if (!ras) return;
+        gesture.surface = ras;
+        gesture.crosshair = state.tool !== 'point';
       } else {
         const hit = this.planeHit(event, state.planeMeta!);
         if (!hit) return;
@@ -330,6 +409,7 @@ export class VTKReviewInput {
         gesture.pixels,
         id,
       );
+    if (gesture.crosshair) return;
     if (gesture.surface) return { id: id ?? crypto.randomUUID(), kind: 'point' as const, ras: gesture.surface, include: gesture.state.include };
     return createReviewGesture(
       gesture.state.geometry,
@@ -349,22 +429,28 @@ export class VTKReviewInput {
       if (!gesture || gesture.pointerId !== event.pointerId) return;
       this.pointerMove(event);
       try {
-        const prompt =
-          this.gesture === gesture &&
-          this.ready &&
-          this.matches(gesture) &&
-          (!gesture.surface || Math.hypot(event.clientX - this.start[0], event.clientY - this.start[1]) <= 5)
-            ? this.livePrompt(gesture)
-            : undefined;
+        const settled =
+            this.gesture === gesture &&
+            this.ready &&
+            this.matches(gesture) &&
+            (!gesture.surface || Math.hypot(event.clientX - this.start[0], event.clientY - this.start[1]) <= 5),
+          prompt = settled ? this.livePrompt(gesture) : undefined;
         this.cancelGesture();
+        if (settled && gesture.crosshair) this.options.onPoint?.(gesture.surface!);
         if (prompt) this.options.onGesture(prompt);
       } catch (reason) {
         this.fail(reason);
       }
-    } else if (this.options.onPick && Math.hypot(event.clientX - this.start[0], event.clientY - this.start[1]) <= 5) {
+    } else if (Math.hypot(event.clientX - this.start[0], event.clientY - this.start[1]) <= 5) {
       try {
-        const hit = pickNativeReviewSurface(this.viewport, this.canvasPoint(event), this.options.actors());
-        if (hit) this.options.onPick(hit.id, hit.ras);
+        // Navigate clicks select a surface, or in Volume point move the crosshair to the CT shown there.
+        if (this.state?.mode === 'volume') {
+          const ras = this.volumePoint(event, this.state);
+          if (ras) this.options.onPoint?.(ras);
+        } else if (this.options.onPick) {
+          const hit = pickNativeReviewSurface(this.viewport, this.canvasPoint(event), this.options.actors());
+          if (hit) this.options.onPick(hit.id, hit.ras);
+        }
       } catch (reason) {
         this.fail(reason);
       }

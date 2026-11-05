@@ -5,7 +5,7 @@ import ModelViewport from '../src/components/ModelViewport.vue';
 import { revisionUrl } from '../src/lib/api';
 import { VIEW_CHANGED_MESSAGE, VIEW_HIDDEN_MESSAGE, VIEW_NOT_READY_MESSAGE, VIEW_REVIEW_MESSAGE } from '../src/lib/dicom-view';
 import { modelReviewFrameKey } from '../src/lib/model-review-frame';
-import { freshVolumeSettings } from '../src/lib/volume-presets';
+import { CINEMATIC_HEART_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings } from '../src/lib/volume-presets';
 import type { Geometry, Structure } from '../src/types';
 import { click, deferred, mount, setDocumentVisibility, settled } from './mounted';
 
@@ -39,6 +39,7 @@ vi.mock('../src/lib/cornerstone-volume-3d', () => ({
         clearLabels() {},
         setLabelStyle() {},
         setVolumeVisible() {},
+        setReviewCut() {},
         setSettings() {},
         setLighting() {},
         setCamera() {},
@@ -534,6 +535,38 @@ describe('viewport capture through Cornerstone', () => {
     await settled();
     frame.resolve('data:image/png;base64,stale');
     await expect(capture).rejects.toThrow(message);
+  });
+});
+
+describe('Cinematic heart in Cornerstone review', () => {
+  async function reviewing() {
+    const shown = await viewport({ localSession: session() });
+    fake.controls['onUpdate:settings'](
+      freshVolumeSettings({ preset: CINEMATIC_HEART_PRESET, density: 1.4, cinematic: { ...DEFAULT_CINEMATIC_SETTINGS, myocardiumHU: 120 } }),
+    );
+    shown.state.reviewActive = true;
+    await settled();
+    expect(fake.controls.settings.preset).toBe('angiography');
+    return shown;
+  }
+  const exit = async (shown: Viewport) => {
+    shown.state.reviewActive = false;
+    await settled();
+    return fake.controls.settings;
+  };
+  it('comes back after edits and Reset volume in review', async () => {
+    const shown = await reviewing();
+    fake.controls['onUpdate:settings'](freshVolumeSettings({ ...fake.controls.settings, shift: 50 }));
+    expect(await exit(shown)).toMatchObject({ preset: CINEMATIC_HEART_PRESET, shift: 50, density: 1.4, cinematic: { myocardiumHU: 120 } });
+    shown.state.reviewActive = true;
+    await settled();
+    fake.controls['onUpdate:settings'](freshVolumeSettings({ preset: fake.controls.settings.preset }));
+    expect(await exit(shown)).toMatchObject({ preset: CINEMATIC_HEART_PRESET, shift: 0, density: 1, cinematic: { myocardiumHU: 120 } });
+  });
+  it('gives way to a preset picked in review', async () => {
+    const shown = await reviewing();
+    fake.controls['onUpdate:settings'](freshVolumeSettings({ ...fake.controls.settings, preset: 'CT-AAA' }));
+    expect((await exit(shown)).preset).toBe('CT-AAA');
   });
 });
 

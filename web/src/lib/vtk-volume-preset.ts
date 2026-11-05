@@ -1,7 +1,7 @@
 import type { vtkVolume } from '@kitware/vtk.js/Rendering/Core/Volume';
 import { ColorSpace } from '@kitware/vtk.js/Rendering/Core/ColorTransferFunction/Constants';
 import { freshNativeVolumeLighting, type NativeVolumeLightingSettings } from './volume-lighting';
-import { CINEMATIC_HEART_PRESET, freshVolumeSettings, getVolumePreset, type CTVolumeSettings } from './volume-presets';
+import { CINEMATIC_HEART_PRESET, freshVolumeSettings, getVolumePreset, samplePresetTransfer, type CTVolumeSettings } from './volume-presets';
 
 export interface VTKVolumeQuality {
   sampleDistanceMM: number;
@@ -35,6 +35,13 @@ function vtkVolumePreset(settings: CTVolumeSettings) {
         ? ([preset.gradientOpacity[0], [preset.gradientOpacity[0][0] + 1, preset.gradientOpacity[0][1]]] as const)
         : ([preset.gradientOpacity[0], preset.gradientOpacity[1]] as const),
   };
+}
+
+/** The scalar opacity and unit distance the native actor draws with, for a CPU ray that must find what it shows. */
+export function vtkVolumeScalarOpacity(settings: CTVolumeSettings) {
+  const mapped = vtkVolumePreset(settings),
+    shifted = { ...mapped.preset, opacity: mapped.opacity };
+  return { opacity: (value: number) => samplePresetTransfer(shifted, value)[3], unitDistanceMM: mapped.opacityUnitDistanceMM };
 }
 
 /** Native VTK properties preserve our recipe and physical optical depth. The

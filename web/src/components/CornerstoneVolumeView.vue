@@ -57,6 +57,8 @@ const emit = defineEmits<{
   colorStatus: [status: VolumeMaskStatus];
   gesture: [prompt: InteractivePrompt];
   pick: [id: string, point: Point];
+  point: [point: Point];
+  notice: [message: string];
   retryPlane: [];
   reviewStatus: [
     status: { surfaceLoading: boolean; surfaceError: string; surfaceRevision: string; targetReady: boolean; planeReady: boolean; planeError: string },
@@ -316,8 +318,11 @@ async function initialize() {
     instance.nativeRenderer.addViewProp(reviewPlaneLayer.actor);
     reviewInput = new VTKReviewInput(host.value, instance.nativeViewport, {
       actors: () => surfaces?.actors ?? [],
+      volume: () => (viewer === instance && props.volumeVisible !== false ? instance.rayVolume() : undefined),
       onGesture: prompt => emit('gesture', prompt),
       onPick: (id, ras) => emit('pick', id, ras),
+      onPoint: ras => emit('point', ras),
+      onNotice: message => emit('notice', message),
       onError: reason => {
         if (!disposed && id === generation) fail(reason);
       },
@@ -536,6 +541,7 @@ function syncPresentation() {
     reviewPlaneReady.value = false;
     planeError.value = reason instanceof Error ? reason.message : 'The CT plane could not load.';
   }
+  syncCut();
   surfaces?.setPresentation(props.structures ?? [], props.display ?? {}, props.selected ?? '', {
     // A failed or pending revision replacement must not present old surfaces
     // as though they belonged to the currently selected masks.
@@ -543,6 +549,11 @@ function syncPresentation() {
     opaque: props.volumeVisible !== false,
   });
   syncReviewInput();
+}
+/** Only while marking on the plane: shown edge-on in another mode, a cut would remove half the volume. */
+function syncCut() {
+  const cut = props.reviewPlaneActive && props.review?.mode === 'plane' && !planeError.value && props.plane;
+  viewer?.setReviewCut(cut ? { axis: props.plane!.axis, index: props.plane!.index } : undefined);
 }
 function retryPlane() {
   if (viewer) {
@@ -683,6 +694,21 @@ watch(
   { deep: true },
 );
 watch(() => props.review, syncReviewInput, { deep: true });
+// A mode change moves only the cut: a full presentation sync would wait for a plane frame that is not coming.
+watch(
+  () => props.review?.mode,
+  async () => {
+    const instance = viewer,
+      id = generation;
+    if (!instance) return;
+    try {
+      syncCut();
+      await renderFeatures(instance, id);
+    } catch (reason) {
+      if (!disposed && id === generation && viewer === instance) fail(reason);
+    }
+  },
+);
 watch(
   () => props.settings,
   async settings => {

@@ -398,6 +398,18 @@ second GPU copy of the CT.
   with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a boundary by
   a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong tissue.
 - **Color segments** tints the CT before lighting from a label union, largest structure first.
+- **Review** can show the CT volume, with masking, colouring and Cinematic heart off because they
+  would follow the candidate mask. The default preset stands in for Cinematic heart on screen
+  only, so edits there keep the main page's preset and reference HU. While the reader marks on the CT
+  plane, the crop plane on its axis moves to the slice to cut away the camera's side, because vtk.js volume
+  shaders take six clipping planes.
+- **Volume point** marches the click's ray on the CPU through the shared ImageVolume's voxels
+  (`volume-ray.ts`), because vtk.js cannot pick a shared GPU volume. It samples trilinearly every
+  half smallest spacing, corrects each sample's opacity to the step as vtk.js does, and takes the
+  first sample where accumulated opacity reaches 0.5. It honours the mapper's clipping planes and
+  the camera's near and far planes, and stops at opaque surfaces and the CT plane. Gradient opacity
+  and lighting are not modelled. The same march refuses a Surface point behind volume by more than
+  one coarsest voxel, and at least 1 mm.
 
 Masking and colouring patch exact shader anchors through a factory local to one actor. That bridge
 checks the installed versions (Cornerstone3D 5.13.1, vtk.js 36.4.1) and throws on a mismatch.

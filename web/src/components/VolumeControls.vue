@@ -43,6 +43,8 @@ const props = withDefaults(
     maskError?: boolean;
     maskMarginFixed?: boolean;
     maskSupported?: boolean;
+    /** Review leaves Cinematic heart out, because its reference HU comes from the masks being edited. */
+    cinematicAvailable?: boolean;
     colors?: VolumeColorSettings;
     /** Segment colours need the Cornerstone3D renderer. */
     colorsAvailable?: boolean;
@@ -55,6 +57,7 @@ const props = withDefaults(
     selected: '',
     display: () => ({}),
     maskSupported: true,
+    cinematicAvailable: true,
     colors: () => freshVolumeColorSettings(),
   },
 );
@@ -91,6 +94,9 @@ const maskCanRetry = computed(
     props.mask.ids.every(id => props.structures.some(structure => structure.id === id)),
 );
 const signalVolume = computed(() => !!props.modality && props.modality !== 'CT');
+const presetGroups = computed(() =>
+  signalVolume.value ? [] : VOLUME_PRESET_GROUPS.filter(group => props.cinematicAvailable || !group.ids.some(id => id === CINEMATIC_HEART_PRESET)),
+);
 const modalityLabel = computed(() => props.modality ?? 'CT');
 const intensityLabel = computed(() => `${props.settings.shift > 0 ? '+' : ''}${props.settings.shift} HU`);
 const opacityLabel = computed(() => `${Math.round(props.settings.density * 100)}%`);
@@ -205,7 +211,7 @@ watch(
           >Appearance
           <select :aria-label="`${modalityLabel} volume preset`" :value="preset.id" :disabled="disabled" @change="changePreset">
             <option v-if="signalVolume" :value="MR_SIGNAL_PRESET">Signal window (grayscale)</option>
-            <optgroup v-for="group in signalVolume ? [] : VOLUME_PRESET_GROUPS" :key="group.label" :label="group.label">
+            <optgroup v-for="group in presetGroups" :key="group.label" :label="group.label">
               <option v-for="id in group.ids" :key="id" :value="id">{{ VOLUME_PRESET_LABELS[id] }}</option>
             </optgroup>
           </select>

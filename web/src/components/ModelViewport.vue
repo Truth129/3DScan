@@ -43,7 +43,14 @@ import { imagePresentation, type ImageContext, type ImageCapability } from '../l
 import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
 import { freshNativeVolumeLighting } from '../lib/volume-lighting';
-import { CINEMATIC_HEART_PRESET, MR_SIGNAL_PRESET, DEFAULT_CINEMATIC_SETTINGS, freshVolumeSettings } from '../lib/volume-presets';
+import {
+  CINEMATIC_HEART_PRESET,
+  MR_SIGNAL_PRESET,
+  DEFAULT_CINEMATIC_SETTINGS,
+  DEFAULT_VOLUME_SETTINGS,
+  freshVolumeSettings,
+  type CTVolumeSettings,
+} from '../lib/volume-presets';
 import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
 import { useExpandedViewport } from '../lib/use-expanded-viewport';
@@ -175,7 +182,7 @@ const orientation = ref<OrientationAxis[]>([]);
 const progress = ref<SurfaceProgress>();
 const hasModel = ref(false);
 const surfaceRevisionLoaded = ref('');
-const reviewMode = ref<'surface' | 'plane'>('surface'),
+const reviewMode = ref<'surface' | 'plane' | 'volume'>('surface'),
   reviewPlane = ref<Plane>(props.initialSnapshot?.state.plane.plane ?? 'axial'),
   showPlane = ref(props.initialSnapshot?.layers.ct_plane ?? false);
 const planeFrame = shallowRef<ModelReviewFrame>();
@@ -206,6 +213,12 @@ const showVolume = ref(props.initialSnapshot?.layers.ct_volume ?? preferCornerst
   nativeLighting = shallowRef(freshNativeVolumeLighting()),
   volumeError = ref(''),
   volumeFamilyReady = ref('');
+// Cornerstone review starts with the CT volume as the reader last left it there, off at first.
+const reviewVolume = useFoldingControls('scan3d-review-ct-volume-v1', () => false);
+const reviewNotice = ref('');
+// Masking, segment colours and Cinematic heart follow the masks being edited, so Cornerstone
+// review leaves them off and keeps the main page's choices for Exit review.
+const segmentDrivenVolume = computed(() => !(props.reviewActive && vtkSelected.value));
 const referenceAvailable = computed(
   () => !signalVolume.value && !!props.caseId && !!props.revisionId && !props.initialSnapshot && !props.reviewActive && props.structures.length > 0,
 );
@@ -268,8 +281,22 @@ const renderVolumeSettings = computed(() =>
           invert: sourcePresentation.value.photometric_interpretation === 'MONOCHROME1',
         },
       })
-    : volumeSettings.value,
+    : !segmentDrivenVolume.value && volumeSettings.value.preset === CINEMATIC_HEART_PRESET
+      ? freshVolumeSettings({ ...volumeSettings.value, preset: DEFAULT_VOLUME_SETTINGS.preset })
+      : volumeSettings.value,
 );
+// The default preset stands in for Cinematic heart in review for display only. An edit made there
+// keeps the main page's preset and reference HU, which review cannot show, so Exit review restores
+// them. A preset the reader picks is never the 'angiography' alias, so it is still saved.
+function updateVolumeSettings(settings: CTVolumeSettings) {
+  const standIn = !segmentDrivenVolume.value && volumeSettings.value.preset === CINEMATIC_HEART_PRESET && settings.preset === renderVolumeSettings.value.preset;
+  setVolumeSettings(standIn ? { ...settings, preset: CINEMATIC_HEART_PRESET, cinematic: volumeSettings.value.cinematic } : settings);
+}
+const shownVolumeMask = computed(() => (segmentDrivenVolume.value ? volumeMask.value : { ...volumeMask.value, enabled: false }));
+const shownVolumeColors = computed(() =>
+  segmentDrivenVolume.value ? volumeColorsRequest.value : { ...volumeColorsRequest.value, enabled: false, ids: [], colors: [] },
+);
+const volumeMarkAvailable = computed(() => vtkSelected.value && showVolume.value);
 const planeAvailable = computed(() => !!props.geometry && !!props.caseId && !!props.revisionId && !!props.point);
 const segmentationAvailable = computed(() => props.structures.length > 0 && props.availableLayers?.segmentation !== false);
 const ctVolumeAvailable = computed(() => planeAvailable.value && allows('volume_rendering') && props.availableLayers?.ct_volume !== false);
@@ -368,13 +395,13 @@ const volumeMessage = computed(
 );
 const volumeStackStatus = computed(() => {
   if (vtkSelected.value ? vtkError.value : volumeError.value) return 'Unavailable';
-  if (volumeMask.value.enabled) {
+  if (shownVolumeMask.value.enabled) {
     if (!volumeMaskIds.value.length) return 'Choose mask segments';
     if (volumeMaskIds.value.length > MAX_VOLUME_MASK_SEGMENTS) return 'Reduce mask selection';
     if (effectiveMaskError.value) return 'Mask unavailable';
   }
   if (!vtkSelected.value && needsVolume.value && (!props.fullResolution || gpuPreparing.value)) return 'Preparing…';
-  if (volumeMask.value.enabled && !volumeMaskReady.value) return 'Preparing mask…';
+  if (shownVolumeMask.value.enabled && !volumeMaskReady.value) return 'Preparing mask…';
   if (vtkSelected.value) return vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
   return volumeReady.value ? 'Visible' : `Waiting for ${modality.value}`;
 });
@@ -408,22 +435,24 @@ const reviewReady = computed(
       ? vtkSelected.value
         ? vtkReady.value && !nativeReviewStatus.value.surfaceLoading && !nativeReviewStatus.value.surfaceError
         : !loading.value && !error.value
-      : reviewMode.value === 'plane'
-        ? showPlane.value &&
-          exactPlaneReady.value &&
-          targetOverlayAvailable.value &&
-          (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady && !nativeReviewStatus.value.planeError))
-        : showSegmentation.value &&
-          selectedSegmentationOpacity.value > 0.02 &&
-          hasTargetSurface.value &&
-          (vtkSelected.value
-            ? vtkReady.value &&
-              nativeReviewStatus.value.targetReady &&
-              nativeReviewStatus.value.surfaceRevision === props.modelRevisionId &&
-              !nativeReviewStatus.value.surfaceLoading &&
-              !nativeReviewStatus.value.surfaceError
-            : hasModel.value && !loading.value) &&
-          props.reviewTool === 'point'),
+      : reviewMode.value === 'volume'
+        ? volumeMarkAvailable.value && vtkReady.value
+        : reviewMode.value === 'plane'
+          ? showPlane.value &&
+            exactPlaneReady.value &&
+            targetOverlayAvailable.value &&
+            (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady && !nativeReviewStatus.value.planeError))
+          : showSegmentation.value &&
+            selectedSegmentationOpacity.value > 0.02 &&
+            hasTargetSurface.value &&
+            (vtkSelected.value
+              ? vtkReady.value &&
+                nativeReviewStatus.value.targetReady &&
+                nativeReviewStatus.value.surfaceRevision === props.modelRevisionId &&
+                !nativeReviewStatus.value.surfaceLoading &&
+                !nativeReviewStatus.value.surfaceError
+              : hasModel.value && !loading.value) &&
+            props.reviewTool === 'point'),
 );
 const reviewContext = computed(() =>
   JSON.stringify([
@@ -462,6 +491,7 @@ const reviewHint = computed(() => {
   if (vtkSelected.value && props.reviewActive) {
     if (vtkError.value) return vtkError.value;
     if (!vtkReady.value) return 'Preparing the native CT review scene…';
+    if (reviewNotice.value) return reviewNotice.value;
     if (reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceError) return nativeReviewStatus.value.surfaceError;
     if (nativeReviewStatus.value.planeError) return nativeReviewStatus.value.planeError;
     if (reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceLoading) return 'Preparing the target surface…';
@@ -486,6 +516,13 @@ const reviewHint = computed(() => {
     if (gpuPreparing.value) return 'Preparing GPU volume · local slice navigation remains available.';
     if (gpuFallback.value) return `Local slice navigation. ${gpuFallback.value}`;
     return `${currentPlane.value.quality === 'preview' ? `Local preview · full ${modality.value} preloading.` : `Full ${modality.value} · local navigation.`} Drag to rotate; scroll to zoom.`;
+  }
+  if (reviewMode.value === 'volume') {
+    if (props.reviewDisabled && props.reviewTool !== 'navigate') return 'Editing paused while the current operation finishes.';
+    const cut = showPlane.value ? ' The CT plane cuts away the volume in front of it.' : '';
+    if (props.reviewTool === 'point')
+      return `Click the CT volume to add a ${props.reviewInclude === false ? 'negative' : 'positive'} point where it first shows. Right drag rotates.${cut}`;
+    return `Click the CT volume to move the crosshair there${props.reviewTool === 'navigate' ? '' : ', then draw on the slices'}. ${props.reviewTool === 'navigate' ? 'Drag' : 'Right drag'} rotates.${cut}`;
   }
   if (!hasTargetSurface.value && reviewMode.value === 'surface') return `This segment has no saved surface. Mark its ${modality.value} plane to create it.`;
   if (reviewMode.value === 'surface' && (!showSegmentation.value || selectedSegmentationOpacity.value <= 0.02))
@@ -600,7 +637,8 @@ function syncReview() {
         ]);
   scene.setReview({
     enabled: true,
-    mode: reviewMode.value,
+    // Volume point is Cornerstone's alone, and leaves review when Three.js takes over.
+    mode: reviewMode.value === 'volume' ? 'surface' : reviewMode.value,
     showPlane: showPlane.value,
     targetId: target.value.id,
     geometry: props.geometry,
@@ -857,6 +895,10 @@ function setVolumeEnabled(enabled: boolean) {
   volumeError.value = '';
   syncReview();
 }
+function chooseVolume(enabled: boolean) {
+  setVolumeEnabled(enabled);
+  if (props.reviewActive) reviewVolume.setOpen(enabled);
+}
 function fallbackToCTPlane() {
   if (!ctOnly.value) return;
   showVolume.value = false;
@@ -996,7 +1038,7 @@ function queueReviewPlane() {
   });
 }
 function changeMode(event: Event) {
-  reviewMode.value = (event.target as HTMLSelectElement).value as 'surface' | 'plane';
+  reviewMode.value = (event.target as HTMLSelectElement).value as 'surface' | 'plane' | 'volume';
   if (reviewMode.value === 'plane') {
     showPlane.value = true;
     faceWhenReady = true;
@@ -1012,7 +1054,7 @@ function slidePlane(event: Event) {
 }
 function reviewGesture(prompt: InteractivePrompt) {
   if (!reviewReady.value || !props.reviewActive || disposed) return;
-  if (reviewMode.value === 'surface' && prompt.kind && prompt.kind !== 'point' && prompt.kind !== 'scissors') return;
+  if (reviewMode.value !== 'plane' && prompt.kind && prompt.kind !== 'point' && prompt.kind !== 'scissors') return;
   if (reviewMode.value === 'plane' && 'axis' in prompt) {
     const native = displayedMeta.value?.native;
     if (!native || prompt.axis !== native.axis || prompt.index !== native.index) return;
@@ -1355,6 +1397,12 @@ watch(
 let volumeBeforeReview = showVolume.value;
 let segmentationBeforeReview = showSegmentation.value;
 let planeBeforeReview = showPlane.value;
+// Focus, or a rotate while the volume was hidden, fits clipping to the target or the surfaces; a volume
+// turned on afterwards would draw as a slab until the next rotate.
+watch(showVolume, visible => {
+  if (visible && props.reviewActive && vtkSelected.value && vtkCamera.value && props.geometry?.bounds_ras)
+    vtkCamera.value = fitVolumeCameraClipping(vtkCamera.value, props.geometry.bounds_ras);
+});
 watch(
   () => props.reviewActive,
   active => {
@@ -1363,7 +1411,7 @@ watch(
       segmentationBeforeReview = showSegmentation.value;
       planeBeforeReview = showPlane.value;
       showSegmentation.value = true;
-      setVolumeEnabled(false);
+      setVolumeEnabled(vtkSelected.value && reviewVolume.open.value);
     } else {
       showSegmentation.value = segmentationBeforeReview;
       showPlane.value = planeBeforeReview;
@@ -1428,7 +1476,8 @@ watch(
       reviewMode.value = 'surface';
       return;
     }
-    if (!hasTargetSurface.value || (props.reviewTool && !['navigate', 'point'].includes(props.reviewTool))) {
+    const pointTool = !props.reviewTool || ['navigate', 'point'].includes(props.reviewTool);
+    if ((!hasTargetSurface.value && reviewMode.value !== 'volume') || !pointTool) {
       // Opening review keeps the main page's camera; Face plane is there to turn it.
       const opening = !!previous && !previous[0];
       if (reviewMode.value !== 'plane' && !opening) faceWhenReady = true;
@@ -1437,6 +1486,25 @@ watch(
     }
   },
   { immediate: true },
+);
+// Volume point needs the CT volume on screen. Without it, marking returns to where the tool belongs.
+watch(
+  () => [props.reviewActive, volumeMarkAvailable.value],
+  () => {
+    if (!props.reviewActive || volumeMarkAvailable.value || reviewMode.value !== 'volume') return;
+    if (hasTargetSurface.value && (!props.reviewTool || ['navigate', 'point'].includes(props.reviewTool))) reviewMode.value = 'surface';
+    else {
+      reviewMode.value = 'plane';
+      showPlane.value = true;
+    }
+  },
+  { immediate: true },
+);
+watch(
+  () => [props.reviewActive, props.reviewTool, reviewMode.value, showVolume.value],
+  () => {
+    reviewNotice.value = '';
+  },
 );
 const cameras: CameraView[] = ['anterior', 'posterior', 'right', 'left', 'superior', 'oblique'];
 function cameraFitFactor() {
@@ -1463,7 +1531,9 @@ function nativeAspect() {
 }
 function focusView() {
   if (vtkSelected.value && props.reviewActive && target.value?.bounds_ras && vtkCamera.value) {
-    vtkCamera.value = fitVolumeCameraBounds(vtkCamera.value, target.value.bounds_ras, nativeAspect());
+    const fitted = fitVolumeCameraBounds(vtkCamera.value, target.value.bounds_ras, nativeAspect());
+    // Clipping to the target alone would leave a visible CT volume as a slab around it.
+    vtkCamera.value = showVolume.value ? fitVolumeCameraClipping(fitted, props.geometry!.bounds_ras) : fitted;
   } else if (vtkSelected.value) volumePreview.value?.resetView();
   else scene?.focus();
 }
@@ -1696,8 +1766,8 @@ defineExpose({
       :structures="structures"
       :display="display"
       :selected="selected"
-      :mask="volumeMask"
-      :colors="volumeColorsRequest"
+      :mask="shownVolumeMask"
+      :colors="shownVolumeColors"
       :revision-base="planeRequest?.base"
       :mask-source-provider="maskSourceProvider"
       :model-revision-id="modelRevisionId"
@@ -1713,6 +1783,8 @@ defineExpose({
       @retry-plane="queueReviewPlane"
       @gesture="reviewGesture"
       @pick="(id: string, ras: Point) => emit('pick', id, ras)"
+      @point="(ras: Point) => props.reviewActive && emit('point', ras)"
+      @notice="reviewNotice = $event"
       @ready="nativeReady"
       @error="vtkError = $event"
       @camera="vtkCamera = $event"
@@ -1792,13 +1864,13 @@ defineExpose({
             }}</output></label
           >
         </div>
-        <div v-if="ctVolumeAvailable && !reviewActive" class="rendering-stack-layer">
+        <div v-if="ctVolumeAvailable && (!reviewActive || vtkSelected)" class="rendering-stack-layer">
           <label class="rendering-stack-toggle"
             ><input
               type="checkbox"
               :aria-label="`Show ${modality} volume`"
               :checked="showVolume"
-              @change="setVolumeEnabled(($event.target as HTMLInputElement).checked)"
+              @change="chooseVolume(($event.target as HTMLInputElement).checked)"
             />
             {{ modality }} volume</label
           >
@@ -1818,7 +1890,7 @@ defineExpose({
         </div>
       </section>
       <details
-        v-if="!reviewActive && ctVolumeAvailable"
+        v-if="(!reviewActive || vtkSelected) && ctVolumeAvailable"
         v-show="showVolume"
         class="stack-volume-options"
         :open="volumeOptionsOpen"
@@ -1827,7 +1899,11 @@ defineExpose({
           if (volumeOptionsOpen) controlsOpen = true;
         "
       >
-        <summary>{{ modality }} volume settings <span>Appearance · lighting · mask · crop</span></summary>
+        <!-- prettier-ignore -->
+        <summary>{{ modality }} volume settings <span>Appearance · lighting · {{ reviewActive ? '' : 'mask · ' }}crop</span></summary>
+        <p v-if="reviewActive" class="volume-preview-note">
+          Mask to segmentation, Color segments and Cinematic heart are off in review, because they would follow the mask being edited.
+        </p>
         <VolumeControls
           headerless
           :enabled="showVolume"
@@ -1841,24 +1917,26 @@ defineExpose({
           :reference-message="referenceMessage"
           :reference-error="referenceError"
           @measure-reference="measureCinematicReference()"
-          :ready="vtkSelected ? vtkReady && (!volumeMask.enabled || volumeMaskReady) : volumeReady && !volumeError"
+          :ready="vtkSelected ? vtkReady && (!shownVolumeMask.enabled || volumeMaskReady) : volumeReady && !volumeError"
           :loading="vtkSelected ? (!vtkReady && !vtkError) || volumeMaskLoading : needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
           :mask="volumeMask"
           :structures="availableMaskStructures"
           :selected="selected"
           :display="display"
           :mask-margin-fixed="!!props.localSession?.networkFree"
+          :mask-supported="segmentDrivenVolume"
+          :cinematic-available="segmentDrivenVolume"
           :mask-loading="volumeMaskLoading"
           :mask-message="volumeMaskMessage"
           :mask-error="!!effectiveMaskError"
           :message="showVolume ? volumeMessage : ''"
           @update:enabled="setVolumeEnabled"
-          @update:settings="setVolumeSettings"
+          @update:settings="updateVolumeSettings"
           @update:native-lighting="nativeLighting = $event"
           @update:mask="setVolumeMask"
           @retry-mask="retryVolumeMask"
           :colors="volumeColors"
-          :colors-available="vtkSelected"
+          :colors-available="vtkSelected && segmentDrivenVolume"
           :colors-loading="nativeColorStatus.loading"
           :colors-error="nativeColorStatus.error"
           @update:colors="setVolumeColors"
@@ -1871,6 +1949,7 @@ defineExpose({
           >Mark on
           <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode">
             <option value="surface">Surface point</option>
+            <option v-if="volumeMarkAvailable" value="volume">Volume point</option>
             <option value="plane">{{ modality }} plane</option>
           </select></label
         >

@@ -10,7 +10,8 @@ import { lpsToRas, rasToLps } from './cornerstone-frame';
 import { inverseAffine, transformPoint, type VolumeDescriptor } from './ct-reslice';
 import { cornerstoneVolumeGeometry } from './cornerstone-volume';
 import { freshVolumeSettings, type CTVolumeSettings } from './volume-presets';
-import { applyVTKVolumePreset } from './vtk-volume-preset';
+import { applyVTKVolumePreset, vtkVolumeScalarOpacity } from './vtk-volume-preset';
+import { trilinearSampler, type VolumeRaySource } from './volume-ray';
 import { VTKVolumeMask, type VTKMaskMapper, type VTKMaskMapperNode, type VTKVolumeMaskMode } from './vtk-volume-mask';
 import { VTKVolumeLabels, type VTKVolumeLabelStyle } from './vtk-volume-labels';
 import type { GPUVolumeSource } from './gpu-volume-data';
@@ -99,9 +100,16 @@ export function cornerstoneVolumeStepMM(descriptor: VolumeDescriptor, quality: C
   return Math.max(requested, Math.hypot(...spans) / 1535);
 }
 
-export function cornerstoneVolumeCropPlanes(descriptor: VolumeDescriptor, settings: CTVolumeSettings) {
+/** A native slice in review: `side` 0 keeps the volume from `index` up, 1 keeps it down to `index`. */
+export interface CornerstoneVolumeCut {
+  axis: 0 | 1 | 2;
+  index: number;
+  side: 0 | 1;
+}
+
+export function cornerstoneVolumeCropPlanes(descriptor: VolumeDescriptor, settings: CTVolumeSettings, cut?: CornerstoneVolumeCut) {
   const crop = freshVolumeSettings(settings).crop;
-  if (crop[0].every(value => value === 0) && crop[1].every(value => value === 1)) return [];
+  if (!cut && crop[0].every(value => value === 0) && crop[1].every(value => value === 1)) return [];
   const inverse = inverseAffine(descriptor.affine_ras);
   return [0, 1, 2].flatMap(axis => {
     const gradient = inverse[axis].slice(0, 3),
@@ -109,6 +117,8 @@ export function cornerstoneVolumeCropPlanes(descriptor: VolumeDescriptor, settin
     return ([0, 1] as const).map(side => {
       const voxel: Point = [0, 0, 0];
       voxel[axis] = crop[side][axis] * descriptor.shape[axis] - 0.5;
+      // The cut tightens the crop on its own axis: vtk.js volume shaders take six clipping planes, no more.
+      if (cut?.axis === axis && cut.side === side) voxel[axis] = side === 0 ? Math.max(voxel[axis], cut.index) : Math.min(voxel[axis], cut.index);
       return {
         normal: rasToLps(gradient.map(value => (value / length) * (side === 0 ? 1 : -1))),
         origin: rasToLps(transformPoint(descriptor.affine_ras, voxel)),
@@ -133,6 +143,11 @@ export class CornerstoneVolume3D {
   private presetStats: Partial<ReturnType<typeof applyVTKVolumePreset>> = {};
   private listeners: (() => void)[] = [];
   private clipping: { plane: ReturnType<typeof vtkPlane.newInstance>; normal: Point; origin: Point }[] = [];
+  /** A native slice under review; the volume on the camera's side of it is cut away. */
+  private cut?: Omit<CornerstoneVolumeCut, 'side'>;
+  private cutSide?: CornerstoneVolumeCut['side'];
+  private rayOpacity?: ReturnType<typeof vtkVolumeScalarOpacity>;
+  private raySample?: VolumeRaySource['sample'];
   private applyingCamera = false;
   private ownedCamera?: CornerstoneVolumeCameraRAS;
   private cameraUpdateQueued = false;
@@ -264,6 +279,38 @@ export class CornerstoneVolume3D {
     this.volumeVisible = visible;
     this.applyVolumeVisibility();
     this.requestRender();
+  }
+
+  /** A CT plane under review stays visible: the volume in front of it is cut away, whichever side the camera is on. */
+  setReviewCut(slice: Omit<CornerstoneVolumeCut, 'side'> | undefined) {
+    this.assertAlive();
+    if (slice?.axis === this.cut?.axis && slice?.index === this.cut?.index) return;
+    this.cut = slice && { axis: slice.axis, index: slice.index };
+    this.configureClipping();
+    this.requestRender();
+  }
+
+  /** The cut keeps the side beyond the plane: where the camera looks, the slice index grows or falls. */
+  private viewCutSide(): CornerstoneVolumeCut['side'] | undefined {
+    if (!this.cut) return;
+    const camera = this.nativeRenderer.getActiveCamera(),
+      view = lpsToRas(camera.getFocalPoint().map((value, axis) => value - camera.getPosition()[axis])),
+      gradient = inverseAffine(this.owner.sourceDescriptor.affine_ras)[this.cut.axis];
+    return view.reduce((sum, value, axis) => sum + value * gradient[axis], 0) >= 0 ? 0 : 1;
+  }
+
+  /** What a CPU ray needs to find the CT as drawn: its source samples, scalar opacity and the very clipping planes the mapper uses. Nothing while it is hidden or masked. */
+  rayVolume(): VolumeRaySource | undefined {
+    if (this.disposed || !this.ready || !this.actor?.getVisibility() || this.maskMode !== 'off' || !this.rayOpacity) return;
+    const descriptor = this.owner.sourceDescriptor;
+    this.raySample ??= trilinearSampler(descriptor.shape, (i, j, k) => this.sourceVoxelValue(i, j, k));
+    return {
+      affine: descriptor.affine_ras,
+      shape: descriptor.shape,
+      sample: this.raySample,
+      ...this.rayOpacity,
+      clip: this.clipping.map(({ normal, origin }) => ({ normal: lpsToRas(normal), origin: lpsToRas(origin) })),
+    };
   }
 
   private applyVolumeVisibility() {
@@ -520,14 +567,27 @@ export class CornerstoneVolume3D {
       sampleDistanceMM: cornerstoneVolumeStepMM(this.owner.sourceDescriptor, this.settings.quality),
       nativeLighting: this.lighting,
     });
-    const mapper = this.actor!.getMapper()!;
+    this.rayOpacity = vtkVolumeScalarOpacity(this.settings);
+    this.configureClipping();
+  }
+  private configureClipping() {
+    const mapper = this.actor?.getMapper();
+    if (!mapper) return;
     mapper.removeAllClippingPlanes();
     for (const { plane } of this.clipping) plane.delete();
-    this.clipping = cornerstoneVolumeCropPlanes(this.owner.sourceDescriptor, this.settings).map(({ normal, origin }) => {
+    this.cutSide = this.viewCutSide();
+    this.clipping = this.cropPlanes().map(({ normal, origin }) => {
       const plane = vtkPlane.newInstance({ normal: [...normal], origin: [...origin] });
       mapper.addClippingPlane(plane);
       return { plane, normal, origin };
     });
+  }
+  private cropPlanes() {
+    return cornerstoneVolumeCropPlanes(
+      this.owner.sourceDescriptor,
+      this.settings,
+      this.cut && this.cutSide !== undefined ? { ...this.cut, side: this.cutSide } : undefined,
+    );
   }
   /** A SceneLight never receives vtk.js's implicit camera transform. Keeping
    * ownership here prevents a 3D lighting edit from changing MPR lights. */
@@ -573,6 +633,14 @@ export class CornerstoneVolume3D {
     this.previousTwoSidedLighting = undefined;
   }
   private restoreCrop() {
+    // Every camera change passes here, so the cut follows the camera to the plane's far side. With a cut there are always six planes.
+    const side = this.viewCutSide();
+    if (side !== this.cutSide) {
+      this.cutSide = side;
+      const planes = this.cropPlanes();
+      if (planes.length !== this.clipping.length) return this.configureClipping();
+      for (const [index, { normal, origin }] of planes.entries()) Object.assign(this.clipping[index], { normal, origin });
+    }
     // The legacy camera rewrites the first two mapper planes as an MPR slab.
     for (const { plane, normal, origin } of this.clipping) {
       plane.setNormal(normal);
@@ -745,6 +813,7 @@ export class CornerstoneVolume3D {
       canvasSize: [this.canvas.width, this.canvas.height],
       crop: structuredClone(this.settings.crop),
       cropPlaneCount: this.clipping.length,
+      reviewCut: this.cut ? { ...this.cut, side: this.cutSide } : null,
       actorUIDs: this.viewport!.getActors().map(actor => actor.uid),
       cameraRAS: this.camera,
       sampleDistanceMM: mapper.getSampleDistance(),
@@ -797,6 +866,7 @@ export class CornerstoneVolume3D {
     }
     for (const { plane } of this.clipping) plane.delete();
     this.clipping = [];
+    this.cut = undefined;
     this.options.onDispose?.();
   }
 }
