@@ -15,7 +15,7 @@ Read before changing anything:
 | HTTP API, data model, error mapping  | `docs/API.md`          |
 | Using the app                        | `docs/USER_GUIDE.md`   |
 | Orthanc integration                  | `docs/ORTHANC.md`      |
-| DICOMweb archives                    | `docs/ARCHIVES.md`     |
+| DICOMweb archives and direct sends   | `docs/ARCHIVES.md`     |
 | Checks and project rules             | `docs/DEVELOPMENT.md`  |
 
 ## Ground rules
