@@ -15,6 +15,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__, api_cases, api_imports, api_people, api_reviews, api_session, api_system, api_viewer
 from .access import SessionGate, check_policy
+from .archive import api as api_archive
+from .archive.errors import ArchiveChanged, ArchiveError
 from .config import Settings
 from .errors import Conflict, Forbidden, NotFound
 from .orthanc import OrthancChanged, OrthancError
@@ -174,6 +176,8 @@ def create_app(settings: Settings | None = None):
         (Conflict, 409, None),
         (OrthancChanged, 409, no_store),
         (OrthancError, 502, no_store),
+        (ArchiveChanged, 409, no_store),
+        (ArchiveError, 502, no_store),
     ):
         app.add_exception_handler(error, _error_response(status, headers))
 
@@ -197,7 +201,7 @@ def create_app(settings: Settings | None = None):
             session
             or redeem
             or request.url.path == "/api/totalsegmentator/license"
-            or request.url.path.startswith("/api/orthanc/")
+            or request.url.path.startswith(("/api/orthanc/", "/api/archive/"))
             or request.url.path.endswith(("/dicom-seg", "/segment.dcm", "/view.dcm"))
             or view_export
             or _is_purge_path(request)
@@ -227,7 +231,7 @@ def create_app(settings: Settings | None = None):
             response.headers.setdefault("Cache-Control", "private, no-store")
         return response
 
-    for module in (api_system, api_session, api_people, api_imports, api_cases, api_reviews, api_viewer):
+    for module in (api_system, api_session, api_people, api_imports, api_archive, api_cases, api_reviews, api_viewer):
         module.add_routes(app, service)
 
     if service.settings.web_dir.is_dir():

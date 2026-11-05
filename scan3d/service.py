@@ -51,6 +51,7 @@ class Service:
         self._orthanc_view_exports = None
         self._osirix_roi_exports = None
         self._view_file_exports = None
+        self._archive_imports = None
         self._lane_guard = threading.Lock()
         self._running_lanes = 0
         self._preparation_slots = None
@@ -108,6 +109,18 @@ class Service:
             self._view_file_exports = ViewFileExports(self)
         return self._view_file_exports
 
+    @property
+    def archive_imports(self):
+        """Imports from the DICOMweb archive, which exists only when SCAN3D_DICOMWEB_URL is set."""
+        if self._archive_imports is None:
+            from .archive.imports import WebImports
+
+            self._archive_imports = WebImports(self)
+        return self._archive_imports
+
+    def _importer(self, kind):
+        return {"orthanc_import": self.orthanc, "archive_import": self.archive_imports}.get(kind)
+
     def _exporter(self, kind):
         return {
             "orthanc_export": self.orthanc_exports,
@@ -149,6 +162,7 @@ class Service:
         self.worker_lock = lock
         self.store.recover()
         self.orthanc.recover()
+        self.archive_imports.recover()
         self.orthanc_exports.recover()
         self.orthanc_view_exports.recover()
         self.osirix_roi_exports.recover()
@@ -356,8 +370,8 @@ class Service:
 
     def cancel_job(self, job_id):
         job = self.store.get("jobs", job_id)
-        if job["kind"] == "orthanc_import":
-            return self.orthanc.cancel(job_id)
+        if importer := self._importer(job["kind"]):
+            return importer.cancel(job_id)
         if job["kind"] in EXPORT_KINDS:
             # The generic path below would report a remote delivery as cancelled
             # while it may still run, and each kind words that in its own way.
@@ -500,8 +514,8 @@ class Service:
 
     def execute(self, job):
         try:
-            if job["kind"] == "orthanc_import":
-                self.orthanc.run(job)
+            if importer := self._importer(job["kind"]):
+                importer.run(job)
                 return
             elif job["kind"] in EXPORT_KINDS:
                 self._exporter(job["kind"]).run(job)

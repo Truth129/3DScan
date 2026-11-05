@@ -54,6 +54,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange       |
 | `scan3d/disk_usage.py`                                                  | Case sizes and the storage report                      |
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX ROIs     |
+| `scan3d/archive/`                                                        | DICOMweb client, records and imports                   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                |
 | `web/src/components/AuthGate.vue`, `web/src/lib/session.ts`             | Sign-in form, overlay and session state                |
 | `web/src/components/CaseLibrary.vue`, `web/src/lib/library.ts`          | The Library: search, rename, Trash and storage         |
@@ -67,7 +68,7 @@ and complements a diagnostic viewer rather than replacing one.
 ```mermaid
 flowchart TD
   INPUT["DICOM folder, ZIP or local path"] --> IMPORT["Copy originals and index series"]
-  ARCHIVE["Orthanc series snapshot"] --> COPY["CPU import job<br/>Verify identity, publish originals"]
+  ARCHIVE["Orthanc or DICOMweb series snapshot"] --> COPY["CPU import job<br/>Verify identity, publish originals"]
   COPY --> SELECT
   IMPORT --> SELECT["Select one series"]
   SELECT --> OPEN["Queue process job"]
@@ -191,7 +192,7 @@ process per data directory executes jobs.
 | Lane | Job kinds                                                                                                                                                                                                      |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GPU  | `segment`; `review_predict` that runs nnInteractive                                                                                                                                                            |
-| CPU  | `process`, `orthanc_import`, `orthanc_export`, `orthanc_roi_export`, `orthanc_view_export`, `dicom_seg_import`, `refine`, `correction`, `include_all`, `review_accept`; `review_predict` for direct edits or relationship-only Apply |
+| CPU  | `process`, `orthanc_import`, `archive_import`, `orthanc_export`, `orthanc_roi_export`, `orthanc_view_export`, `view_file_export`, `dicom_seg_import`, `refine`, `correction`, `include_all`, `review_accept`; `review_predict` for direct edits or relationship-only Apply |
 
 - GPU jobs never overlap, whichever GPU they use, which keeps TotalSegmentator's shared settings and
   first-time weight downloads safe.

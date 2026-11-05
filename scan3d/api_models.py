@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, model
 
 from .acquisition import CardiacPhase, StudyProfile
 from .inference_paths import ID_PATTERN
-from .orthanc_models import Digest, OrthancID
+from .orthanc_models import DicomUID, Digest, OrthancID
 
 
 class Input(BaseModel):
@@ -69,6 +69,33 @@ class OrthancQuery(Input):
     study_date: str | None = Field(None, max_length=256)
     offset: int = Field(0, ge=0, le=1_000_000)
     limit: int = Field(25, ge=1, le=50)
+
+
+def study_query(body: OrthancQuery) -> dict:
+    """The search terms filled in, as the DICOM attributes an archive matches."""
+    names = {"patient_id": "PatientID", "patient_name": "PatientName", "accession_number": "AccessionNumber", "study_date": "StudyDate"}
+    return {tag: value.strip() for name, tag in names.items() if (value := getattr(body, name)) and value.strip()}
+
+
+# DICOMweb archives are addressed by UID, which travels in request bodies, never in paths.
+class ArchiveStudy(Input):
+    study_uid: DicomUID
+
+
+class ArchiveSeries(ArchiveStudy):
+    series_uid: DicomUID
+    snapshot: Digest
+
+
+class ArchiveImport(ArchiveSeries):
+    label: str | None = Field(None, max_length=128)
+    # A fresh copy beside a completed import of the same snapshot.
+    reimport: bool = Field(False, strict=True)
+
+
+class ArchiveLaunch(ArchiveStudy):
+    series_uid: DicomUID
+    source_key: Digest
 
 
 class OrthancImport(Input):

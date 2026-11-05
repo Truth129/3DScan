@@ -142,6 +142,28 @@ Orthanc is optional, and the integration is off until `SCAN3D_ORTHANC_URL` is se
 | `SCAN3D_ORTHANC_EXPORT_DESTINATIONS` | unset   | Orthanc modality identifiers offered for SEG and view export. |
 | `SCAN3D_ORTHANC_CA_BUNDLE`           | unset   | Absolute path to a PEM file, for an Orthanc with a private CA. |
 
+### DICOMweb archive
+
+A DICOMweb archive is optional, and off until `SCAN3D_DICOMWEB_URL` is set.
+[ARCHIVES.md](ARCHIVES.md) explains importing from one.
+
+| Variable                         | Default         | Purpose                                                                                     |
+| -------------------------------- | --------------- | ------------------------------------------------------------------------------------------- |
+| `SCAN3D_DICOMWEB_URL`            | unset           | The archive's DICOMweb root. Not on the same host and port as `SCAN3D_ORTHANC_URL`.          |
+| `SCAN3D_DICOMWEB_NAME`           | `DICOM archive` | The name shown in 3DScan.                                                                   |
+| `SCAN3D_DICOMWEB_ID`             | unset           | The archive's name in case records: letters, digits, `.`, `_` or `-`. Set it before the first import; without it, the URL is used. |
+| `SCAN3D_DICOMWEB_AUTH`           | `none`          | `none`, `basic` or `bearer`. Credentials need https unless the archive is on this machine.  |
+| `SCAN3D_DICOMWEB_USERNAME`       | unset           | User, for `basic`.                                                                          |
+| `SCAN3D_DICOMWEB_PASSWORD`       | unset           | Password, for `basic`.                                                                      |
+| `SCAN3D_DICOMWEB_TOKEN_FILE`     | unset           | Absolute path to the token, for `bearer`. Read again whenever the file changes.             |
+| `SCAN3D_DICOMWEB_CA_BUNDLE`      | unset           | Absolute path to a PEM file, for an archive with a private CA.                              |
+| `SCAN3D_DICOMWEB_TIMEOUT`        | `30`            | Request timeout in seconds, 1 to 300.                                                       |
+| `SCAN3D_DICOMWEB_QUIET_SECONDS`  | `60`            | Seconds, 0 to 3600, that a series' image list must stay unchanged before it can be imported. |
+| `SCAN3D_DICOMWEB_WILDCARDS`      | `false`         | `true` lets searches use `*` and `?`.                                                       |
+| `SCAN3D_DICOMWEB_STORE`          | `true`          | Reserved for sending results to the archive, which is not built yet.                        |
+
+The server refuses to start if the token or CA file cannot be read.
+
 ## Examples
 
 Keep the case library on another disk and allow imports from a scans folder:
