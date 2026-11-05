@@ -35,7 +35,7 @@ On Ubuntu, with `git`, Node.js 22.12 or newer, and the build tools listed in
 [INSTALL.md](docs/INSTALL.md):
 
 ```bash
-git clone https://github.com/OWNER/3DScan.git
+git clone https://github.com/Truth129/3DScan.git
 cd 3DScan
 scripts/bootstrap.sh --torch cpu
 .venv/bin/scan3d serve

@@ -46,7 +46,7 @@ nvm install 26
 ### 3. Get 3DScan and install it
 
 ```bash
-git clone https://github.com/OWNER/3DScan.git
+git clone https://github.com/Truth129/3DScan.git
 cd 3DScan
 scripts/bootstrap.sh --torch cpu
 ```
