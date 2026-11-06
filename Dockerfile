@@ -26,8 +26,8 @@ RUN scripts/build_dcm2niix.sh
 
 # Python 3.14 and the dependencies, at the paths the runtime image uses.
 FROM toolchain AS python
-# cpu: CPU-only PyTorch and the AI packages. rocm: the hash-locked AMD stack for gfx1201 GPUs.
-# none: viewer and editing only, with no AI.
+# cpu: CPU-only PyTorch and the AI packages. cuda: PyTorch for NVIDIA GPUs, which bundles CUDA.
+# rocm: the hash-locked AMD stack for gfx1201 GPUs. none: viewer and editing only, with no AI.
 ARG TORCH=cpu
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_PYTHON_INSTALL_DIR=/opt/python UV_PYTHON_PREFERENCE=only-managed UV_NO_CACHE=1 UV_COMPILE_BYTECODE=1
@@ -38,9 +38,10 @@ COPY pyproject.toml ./
 COPY requirements/constraints.txt requirements/rocm10-py314.lock requirements/
 RUN case "$TORCH" in \
     cpu) uv pip install --python .venv/bin/python --torch-backend cpu --constraint requirements/constraints.txt --requirements pyproject.toml --extra ai ;; \
+    cuda) uv pip install --python .venv/bin/python --constraint requirements/constraints.txt --requirements pyproject.toml --extra ai ;; \
     rocm) uv pip sync --python .venv/bin/python --require-hashes --index-strategy unsafe-best-match requirements/rocm10-py314.lock ;; \
     none) uv pip install --python .venv/bin/python --constraint requirements/constraints.txt --requirements pyproject.toml ;; \
-    *) echo "TORCH must be cpu, rocm or none" >&2; exit 1 ;; \
+    *) echo "TORCH must be cpu, cuda, rocm or none" >&2; exit 1 ;; \
   esac
 
 FROM ${UBUNTU}

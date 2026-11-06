@@ -1,13 +1,12 @@
 # Running 3DScan in Docker
 
-The image runs 3DScan's AI on the CPU, which is slow on real CTs, or on an
-[AMD GPU](#amd-gpu). For NVIDIA, use the [native install](INSTALL.md). You build the image from
-this repository; none is published.
+The image runs 3DScan's AI on the CPU, which is slow on real CTs, or on an NVIDIA or AMD
+[GPU](#gpu). You build the image from this repository; none is published.
 
 **3DScan is for research use only.** It is not a medical device. See
 [What is not supported](INSTALL.md#what-is-not-supported).
 
-You need Docker with Compose 2.24 or newer on Linux x86_64, and at least 16 GB of RAM.
+You need Docker with Compose 2.30 or newer on Linux x86_64, and at least 16 GB of RAM.
 
 ## Build and start
 
@@ -56,11 +55,41 @@ docker compose exec scan3d python scripts/download_segmentation_model.py mrsegme
 
 Check the licenses first. See [AI models](INSTALL.md#ai-models).
 
-## AMD GPU
+## GPU
 
-For an AMD Radeon AI PRO (gfx1201), such as the R9700, put this in
-[`compose.override.yaml`](#your-settings), with each group ID that
-`stat -c %g /dev/kfd /dev/dri/renderD*` prints:
+For a GPU, build the matching image from [`compose.override.yaml`](#your-settings), then check the
+GPU once:
+
+```bash
+docker compose up --build -d
+docker compose exec scan3d python scripts/check_gpu.py
+```
+
+Run the check again after an update, a driver or card change, or on a new runtime volume.
+
+### NVIDIA
+
+You need the NVIDIA driver, version 580 or newer, the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
+version 1.18 or newer, and Docker Engine 28.2 or newer. `docker info` should then list
+`nvidia.com/gpu=all` under Discovered Devices. If it does not, run
+`sudo systemctl enable --now nvidia-cdi-refresh.path nvidia-cdi-refresh.service`.
+
+Then put this in `compose.override.yaml`:
+
+```yaml
+services:
+  scan3d:
+    build: {args: {TORCH: cuda}}
+    devices: [nvidia.com/gpu=all]
+```
+
+The image is about 11.9 GB and has CUDA, for GPUs from the RTX 20 series on.
+
+### AMD
+
+For an AMD Radeon AI PRO (gfx1201), such as the R9700, put this in `compose.override.yaml`, with
+each group ID that `stat -c %g /dev/kfd /dev/dri/renderD*` prints:
 
 ```yaml
 services:
@@ -70,20 +99,9 @@ services:
     group_add: ["987"]
 ```
 
-Then build it, start it and check the GPU once:
-
-```bash
-docker compose up --build -d
-docker compose exec scan3d python scripts/check_gpu.py
-```
-
-The image has GPU kernels for gfx1201 only. On another GPU, leave this override out and use the CPU
-image. ROCm comes with the image, which is about 11.8 GB, so the host needs only the amdgpu kernel
-driver.
-
-The first run of each AI model on a new runtime volume compiles GPU kernels and can take a few
-minutes longer. Run the check again after an update, a driver or card change, or on a new runtime
-volume.
+The image has GPU kernels for gfx1201 only, so on another AMD GPU use the CPU image. ROCm comes with
+the image, which is about 11.8 GB, so the host needs only the amdgpu kernel driver. The first run of
+each AI model on a new runtime volume compiles GPU kernels and can take a few minutes longer.
 
 ## Your settings
 

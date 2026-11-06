@@ -51,7 +51,7 @@ Open <http://127.0.0.1:9010> and choose **Explore synthetic demo**, or import a 
 | Read this                              | For                                            |
 | -------------------------------------- | ---------------------------------------------- |
 | [Install](docs/INSTALL.md)             | Linux setup, GPUs, AI models                   |
-| [Docker](docs/DOCKER.md)               | Running it in a container, CPU or AMD gfx1201  |
+| [Docker](docs/DOCKER.md)               | Running it in a container, on the CPU or a GPU |
 | [Configuration](docs/CONFIGURATION.md) | Every setting in `scan3d.env`                  |
 | [User guide](docs/USER_GUIDE.md)       | Importing, reviewing, correcting and exporting |
 | [Orthanc](docs/ORTHANC.md)             | Connecting to an Orthanc archive               |
