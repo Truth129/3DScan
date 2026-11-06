@@ -10,6 +10,7 @@ Read before changing anything:
 | Topic                                | Document               |
 | ------------------------------------ | ---------------------- |
 | Install and supported platforms      | `docs/INSTALL.md`      |
+| Docker image                         | `docs/DOCKER.md`       |
 | Settings                             | `docs/CONFIGURATION.md`|
 | System overview                      | `docs/ARCHITECTURE.md` |
 | HTTP API, data model, error mapping  | `docs/API.md`          |

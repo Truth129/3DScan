@@ -1,0 +1,25 @@
+# 3DScan with Docker Compose: `docker compose up --build -d`. docs/DOCKER.md explains it.
+# Put your own changes in compose.override.yaml, which Compose merges and git ignores.
+name: scan3d
+
+services:
+  scan3d:
+    build:
+      context: .
+      args:
+        TORCH: cpu
+    image: scan3d
+    ports:
+      # This machine only. To reach it from other machines, put an HTTPS reverse proxy in front.
+      - "127.0.0.1:9010:9010"
+    volumes:
+      - data:/data
+      - runtime:/app/.runtime
+    # PyTorch passes data between processes in shared memory, and Docker's default 64 MB is too little.
+    shm_size: 8gb
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+volumes:
+  data:
+  runtime:

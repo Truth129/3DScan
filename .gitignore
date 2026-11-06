@@ -1,5 +1,7 @@
 # Local settings and notes; scan3d.env.example is the committed template.
 scan3d.env
+# Local Docker Compose settings, which can hold passwords.
+compose.override.yaml
 AGENTS.local.md
 .venv/
 .venv-*/

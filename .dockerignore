@@ -1,0 +1,17 @@
+# An allowlist: a build sees only these paths. data/, .runtime/ and test_data/ can hold
+# patient scans, so never widen this to the whole checkout.
+*
+!LICENSE
+!README.md
+!pyproject.toml
+!requirements/
+!scan3d/
+!scripts/
+!deployment/docker-entrypoint.sh
+!web/
+web/node_modules/
+web/dist/
+web/tests/
+web/test-results/
+**/__pycache__/
+**/*.pyc
