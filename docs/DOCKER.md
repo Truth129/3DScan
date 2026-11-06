@@ -1,7 +1,8 @@
 # Running 3DScan in Docker
 
-The image runs 3DScan with CPU-only AI, which is slow on real CTs. For a GPU, use the
-[native install](INSTALL.md). You build the image from this repository; none is published.
+The image runs 3DScan's AI on the CPU, which is slow on real CTs, or on an
+[AMD GPU](#amd-gpu). For NVIDIA, use the [native install](INSTALL.md). You build the image from
+this repository; none is published.
 
 **3DScan is for research use only.** It is not a medical device. See
 [What is not supported](INSTALL.md#what-is-not-supported).
@@ -31,11 +32,11 @@ published on this machine's loopback address only.
 
 ## Where things are kept
 
-| In the container | Volume           | Holds                                                          |
-| ---------------- | ---------------- | -------------------------------------------------------------- |
-| `/data`          | `scan3d_data`    | The case library, with patient images. Protect it.             |
-| `/app/.runtime`  | `scan3d_runtime` | AI weights, and TotalSegmentator's license and settings.       |
-| `/import`        | none             | A folder to import from by path. Mount it read-only to use it. |
+| In the container | Volume           | Holds                                                                |
+| ---------------- | ---------------- | -------------------------------------------------------------------- |
+| `/data`          | `scan3d_data`    | The case library, with patient images. Protect it.                   |
+| `/app/.runtime`  | `scan3d_runtime` | AI weights, GPU kernels and TotalSegmentator's license and settings. |
+| `/import`        | none             | A folder to import from by path. Mount it read-only to use it.       |
 
 `docker compose down` keeps the volumes, and `docker compose down --volumes` deletes them with
 every case.
@@ -54,6 +55,35 @@ docker compose exec scan3d python scripts/download_segmentation_model.py mrsegme
 ```
 
 Check the licenses first. See [AI models](INSTALL.md#ai-models).
+
+## AMD GPU
+
+For an AMD Radeon AI PRO (gfx1201), such as the R9700, put this in
+[`compose.override.yaml`](#your-settings), with each group ID that
+`stat -c %g /dev/kfd /dev/dri/renderD*` prints:
+
+```yaml
+services:
+  scan3d:
+    build: {args: {TORCH: rocm}}
+    devices: [/dev/kfd, /dev/dri]
+    group_add: ["987"]
+```
+
+Then build it, start it and check the GPU once:
+
+```bash
+docker compose up --build -d
+docker compose exec scan3d python scripts/check_gpu.py
+```
+
+The image has GPU kernels for gfx1201 only. On another GPU, leave this override out and use the CPU
+image. ROCm comes with the image, which is about 11.8 GB, so the host needs only the amdgpu kernel
+driver.
+
+The first run of each AI model on a new runtime volume compiles GPU kernels and can take a few
+minutes longer. Run the check again after an update, a driver or card change, or on a new runtime
+volume.
 
 ## Your settings
 

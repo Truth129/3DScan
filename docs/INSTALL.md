@@ -1,8 +1,8 @@
 # Installing 3DScan
 
 3DScan runs on Linux. `scripts/bootstrap.sh` installs everything except the system packages into
-the checkout, and needs no root access itself. To run it in a container instead, with CPU-only AI,
-see [DOCKER.md](DOCKER.md).
+the checkout, and needs no root access itself. To run it in a container instead, on the CPU or an AMD
+GPU, see [DOCKER.md](DOCKER.md).
 
 **3DScan is for research use only.** It is not a medical device and is not cleared or approved for
 diagnosis or treatment. Keep it on a machine and network you control. Sign-in is off by default on
