@@ -101,7 +101,7 @@ sudo pacman -S --needed git curl base-devel cmake pkgconf openjpeg2 zlib
 | Option            | Effect                                                                      |
 | ----------------- | --------------------------------------------------------------------------- |
 | `--torch cpu`     | CPU-only PyTorch and AI packages. This is the default.                      |
-| `--torch cuda`    | PyTorch for NVIDIA GPUs and AI packages. Untested.                          |
+| `--torch cuda`    | PyTorch for NVIDIA GPUs and AI packages.                                    |
 | `--torch rocm`    | The hash-locked AMD stack in `requirements/rocm10-py314.lock`, for gfx1201. |
 | `--torch none`    | Viewer and editing only, with no PyTorch or AI packages.                    |
 | `--skip-dcm2niix` | Use the `dcm2niix` on `PATH`. It must handle your compression formats.      |
@@ -123,7 +123,7 @@ Run the script again at any time to update an install. It keeps `scan3d.env`.
 | CPU                         | `--torch cpu`  | Works, but is slow on real CTs. TotalSegmentator's authors recommend a GPU.           |
 | AMD Radeon AI PRO (gfx1201) | `--torch rocm` | Supported. The most exercised GPU stack.                                              |
 | NVIDIA as a second GPU      | See below      | Supported: an RTX 5070 Ti beside an R9700. See [Add a second GPU](#add-a-second-gpu). |
-| NVIDIA as the only GPU      | `--torch cuda` | **Untested.** Needs CUDA 13.                                                          |
+| NVIDIA as the only GPU      | `--torch cuda` | Supported: tested on an RTX 5070 Ti. Needs NVIDIA driver 580 or newer, for CUDA 13.   |
 | Other AMD GPUs              | Manual         | Untested. Edit the device extras in `requirements/rocm10-py314-gpu.in`.               |
 
 For a GPU, install the vendor's driver first. On AMD, your user needs access to the render nodes,
