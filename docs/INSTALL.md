@@ -73,7 +73,8 @@ Library is empty, or run `.venv/bin/scan3d demo`. The demo does not run AI model
 
 ### 5. Add the AI models (optional)
 
-See [AI models](#ai-models). Only nnInteractive needs a command:
+See [AI models](#ai-models). nnInteractive needs this command, and the optional MRSegmentator its
+own:
 
 ```bash
 .venv/bin/python scripts/download_interactive_model.py

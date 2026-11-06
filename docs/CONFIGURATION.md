@@ -53,7 +53,8 @@ Any other value refuses to start.
 - `password`: everyone needs an account. Create the first with `scan3d users add NAME --admin`,
   which also takes any case with no owner, and add others from People. See the
   [user guide](USER_GUIDE.md#sign-in).
-- Beyond loopback a sign-in needs HTTPS, so publish 3DScan through an HTTPS reverse proxy.
+- Beyond loopback a sign-in needs HTTPS, so publish 3DScan through an HTTPS reverse proxy. It must
+  pass the browser's `Host` header unchanged, or every change is refused.
 - A proxy that rewrites `Host` to loopback hides the published name from this table, so set
   `SCAN3D_AUTH=password` for it.
 
