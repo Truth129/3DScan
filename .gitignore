@@ -23,3 +23,4 @@ web/test-results/
 *.egg-info/
 # Isolated git worktrees used by coding agents.
 /.claude/worktrees/
+CLAUDE.md
