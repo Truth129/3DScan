@@ -58,9 +58,10 @@ function selectTask(event: Event) {
     robust_crop: !!next?.robust_crop_default || (!!next?.robust_crop_supported && !!props.catalog?.defaults.robust_crop),
     body_seg: !!next?.body_seg_supported && !!props.catalog?.defaults.body_seg,
     remove_small_blobs: next?.remove_small_blobs_supported !== false && !!props.catalog?.defaults.remove_small_blobs,
+    high_order_resampling: next?.high_order_resampling_supported !== false && !!props.catalog?.defaults.high_order_resampling,
   });
 }
-function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: Event) {
+function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_order_resampling', event: Event) {
   emit('update:modelValue', { ...props.modelValue, [field]: (event.target as HTMLInputElement).checked });
 }
 </script>
@@ -160,6 +161,21 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs', event: 
             :disabled="task?.remove_small_blobs_supported === false"
             @change="check('remove_small_blobs', $event)"
           />Remove small blobs <code>-rmb</code></label
+        >
+        <label
+          :class="{ unavailable: task?.high_order_resampling_supported === false }"
+          :title="
+            task?.high_order_resampling_supported === false
+              ? 'This task does not support higher-order resampling.'
+              : 'Scale each structure’s scores back to the scan’s own grid before labelling: smoother edges, more time and memory.'
+          "
+          ><input
+            type="checkbox"
+            aria-label="Higher-order resampling"
+            :checked="modelValue.high_order_resampling"
+            :disabled="task?.high_order_resampling_supported === false"
+            @change="check('high_order_resampling', $event)"
+          />Higher-order resampling <code>-ho</code></label
         >
       </fieldset>
       <button class="button primary" :disabled="working || loading || unavailable || !!error" type="submit">

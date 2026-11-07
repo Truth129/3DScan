@@ -73,7 +73,7 @@ def test_options_refuse_missing_weights_other_tasks_and_totalsegmentator_switche
     assert run_source({"tasks": ["total"]}) == "totalsegmentator"
     with pytest.raises(ValueError, match="on its own"):
         normalize_options("other", {"tasks": [model.id, "total"]})
-    with pytest.raises(ValueError, match="no crop or small-blob"):
+    with pytest.raises(ValueError, match="no crop, small-blob or resampling"):
         normalize_options("other", {"tasks": [model.id], "remove_small_blobs": True})
 
 

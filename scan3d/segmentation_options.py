@@ -13,8 +13,8 @@ from .totalsegmentator_license import license_configured
 
 
 _EXCLUDED_TASKS = {"test", "total_highres_test"}
-_OPTION_NAMES = {"tasks", "robust_crop", "body_seg", "remove_small_blobs"}
-_BOOLEAN_OPTIONS = ("robust_crop", "body_seg", "remove_small_blobs")
+_OPTION_NAMES = {"tasks", "robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling"}
+_BOOLEAN_OPTIONS = ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling")
 REMOVE_SMALL_BLOBS_MM3 = 200
 
 _LABELS = {
@@ -101,6 +101,7 @@ def task_capabilities(task: str) -> dict:
             "robust_crop_supported": False,
             "body_seg_supported": False,
             "remove_small_blobs_supported": False,
+            "high_order_resampling_supported": False,
         }
     config = resolved_task_config(task)
     is_mr = task_modality(task) == "MR"
@@ -115,6 +116,8 @@ def task_capabilities(task: str) -> dict:
         and not any(label in {"body_trunc", "body_extremities"} for label in crop_labels),
         "body_seg_supported": not is_mr and not cropped,
         "remove_small_blobs_supported": True,
+        # Upstream skips its own resampling and lets nnU-Net scale class scores back to the source grid.
+        "high_order_resampling_supported": True,
     }
 
 
@@ -180,7 +183,7 @@ def segmentation_catalog(modality: str = "CT") -> dict:
         "engine_version": metadata.version("TotalSegmentator"),
         "tasks": tasks,
         "license_configured": configured,
-        "defaults": {"task": default_task(modality), "robust_crop": False, "body_seg": False, "remove_small_blobs": False},
+        "defaults": {"task": default_task(modality), "robust_crop": False, "body_seg": False, "remove_small_blobs": False, "high_order_resampling": False},
         "remove_small_blobs_mm3": REMOVE_SMALL_BLOBS_MM3,
     }
 
@@ -219,7 +222,7 @@ def normalize_options(profile: str, options: dict | None = None, *, modality: st
         if len(tasks) > 1:
             raise ValueError(f"{models[0].name} runs on its own, not with other tasks")
         if any(settings.values()):
-            raise ValueError(f"{models[0].name} has no crop or small-blob options")
+            raise ValueError(f"{models[0].name} has no crop, small-blob or resampling options")
         if not nnunet_models.installed(models[0]):
             raise ValueError(nnunet_models.install_hint(models[0]))
     if any(requires_license(task) for task in tasks if task not in nnunet_models.MODELS) and not license_configured():

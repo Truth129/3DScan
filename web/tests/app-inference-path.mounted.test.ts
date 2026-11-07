@@ -64,7 +64,7 @@ const prepared: Revision = {
 };
 const catalog = (inference_paths: InferencePathRow[]): SegmentationCatalog => ({
   engine_version: '0.0.test',
-  defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
+  defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false, high_order_resampling: false },
   remove_small_blobs_mm3: 200,
   inference_paths,
   tasks: [
@@ -83,7 +83,7 @@ const catalog = (inference_paths: InferencePathRow[]): SegmentationCatalog => ({
   ],
 });
 const queued: Job = { id: 'segmenting', case_id: 'case', kind: 'segment', status: 'queued', stage: 'Queued', created_at: '' };
-const settings = { revision_id: 'prepared', task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false };
+const settings = { revision_id: 'prepared', task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false, high_order_resampling: false };
 
 const opened: { unmount(): void }[] = [];
 afterEach(() => {

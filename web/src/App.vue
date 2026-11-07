@@ -1043,6 +1043,7 @@ async function segment() {
       robust_crop: activeModality.value === 'CT' && (task.robust_crop_default || (task.robust_crop_supported && settings.robust_crop)),
       body_seg: activeModality.value === 'CT' && task.body_seg_supported && settings.body_seg,
       remove_small_blobs: settings.remove_small_blobs,
+      high_order_resampling: task.high_order_resampling_supported !== false && settings.high_order_resampling,
       ...pathField(segmentationPaths.value, segmentationPath.value),
     });
     track(next);

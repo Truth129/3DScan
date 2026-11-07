@@ -560,7 +560,7 @@ def segment(
             ]
             if model:
                 command += ["--model-folder", str(nnunet_models.model_dir(model))]
-            for option in ("robust_crop", "body_seg", "remove_small_blobs"):
+            for option in ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling"):
                 if options[option]:
                     command.append("--" + option)
             if inference_path and not model:
@@ -571,6 +571,7 @@ def segment(
                 "body_seg": options["body_seg"],
                 "remove_small_blobs": options["remove_small_blobs"],
                 "remove_small_blobs_mm3": (segmentation_options.REMOVE_SMALL_BLOBS_MM3 if options["remove_small_blobs"] else None),
+                "high_order_resampling": options["high_order_resampling"],
             }
             record = {
                 "task": task,

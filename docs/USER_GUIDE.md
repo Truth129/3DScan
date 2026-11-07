@@ -174,8 +174,9 @@ the series list, adds another series of that study. Each series keeps its own se
 1. Choose **Segment CT…**.
 2. Pick a **Task**. **Find a task or structure** searches tasks and anatomy, and **Included
    structures** lists the outputs.
-3. Set any options the task supports: **Robust crop** (`-rc`), **Body crop** (`-bs`) and **Remove
-   small blobs** (`-rmb`, components below 200 mm³).
+3. Set any options the task supports: **Robust crop** (`-rc`), **Body crop** (`-bs`), **Remove
+   small blobs** (`-rmb`, components below 200 mm³) and **Higher-order resampling** (`-ho`, smoother
+   edges on scans finer than the model's spacing, with more time and memory).
 4. Choose **Run segmentation**.
 
 Each run creates a revision that replaces that task's results **and** any segments with matching

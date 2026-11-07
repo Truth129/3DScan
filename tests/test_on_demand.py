@@ -220,7 +220,7 @@ def test_cardiac_acquisition_survives_explicit_segmentation_with_identical_task_
     before = Path(ct["ct_file"]).read_bytes()
     segmented = execute(rig, requested(rig, case, ct, task="total"))
     assert segmented["acquisition"] == acquisition
-    assert rig.calls.segments[0]["options"] == dict(tasks=["total"], robust_crop=False, body_seg=False, remove_small_blobs=False)
+    assert rig.calls.segments[0]["options"] == dict(tasks=["total"], robust_crop=False, body_seg=False, remove_small_blobs=False, high_order_resampling=False)
     assert len(rig.calls.segments) == 1 and Path(ct["ct_file"]).read_bytes() == before
 
 
@@ -232,7 +232,7 @@ def test_explicit_task_and_each_option_reach_worker_cache_and_provenance(rig, fl
     assert first["parent_id"] == ct["id"]
     assert {s["task"] for s in first["structures"]} == {"total"}
     assert len(rig.calls.segments) == 1
-    expected = {"tasks": ["total"], "robust_crop": False, "body_seg": False, "remove_small_blobs": False}
+    expected = {"tasks": ["total"], "robust_crop": False, "body_seg": False, "remove_small_blobs": False, "high_order_resampling": False}
     assert rig.calls.segments[-1]["options"] == expected
     first_snapshot = deepcopy(first)
     warm = execute(rig, requested(rig, case, first))
@@ -257,7 +257,13 @@ def test_new_task_preserves_other_task_correction_and_replaces_only_selected_tas
     first = execute(rig, requested(rig, case, ct))
     both = execute(rig, requested(rig, case, first, task="lung_vessels"))
     assert {s["task"] for s in both["structures"]} == {"total", "lung_vessels"}
-    assert rig.calls.segments[-1]["options"] == {"tasks": ["lung_vessels"], "robust_crop": True, "body_seg": False, "remove_small_blobs": False}
+    assert rig.calls.segments[-1]["options"] == {
+        "tasks": ["lung_vessels"],
+        "robust_crop": True,
+        "body_seg": False,
+        "remove_small_blobs": False,
+        "high_order_resampling": False,
+    }
     lung = next(s for s in both["structures"] if s["task"] == "lung_vessels")
     correction = Path(both["directory"]) / "corrected-lung.nii.gz"
     corrected_values = np.asarray(nib.load(lung["mask_file"]).dataobj).copy()

@@ -78,7 +78,13 @@ def test_catalog_is_ct_only_stable_and_does_not_initialize_torch():
 
 
 def test_options_defaults_are_explicit_and_historical_profiles_remain_compatible():
-    assert normalize_options("chest", {}) == {"tasks": ["total"], "robust_crop": False, "body_seg": False, "remove_small_blobs": False}
+    assert normalize_options("chest", {}) == {
+        "tasks": ["total"],
+        "robust_crop": False,
+        "body_seg": False,
+        "remove_small_blobs": False,
+        "high_order_resampling": False,
+    }
     assert normalize_options("chest")["tasks"] == ["total", "lung_vessels"]
     assert normalize_options("abdomen")["tasks"] == ["total"]
     assert normalize_options("abdomen", {"tasks": ["lung_vessels"], "robust_crop": False})["robust_crop"] is True
@@ -201,7 +207,12 @@ def test_auxiliary_checkpoint_changes_invalidate_cache_identity(tmp_path, monkey
 @pytest.mark.parametrize(
     "task,flags,expected_flags,names",
     [
-        ("total", {"body_seg": True, "remove_small_blobs": True}, {"--body_seg", "--remove_small_blobs"}, ["liver", "skull"]),
+        (
+            "total",
+            {"body_seg": True, "remove_small_blobs": True, "high_order_resampling": True},
+            {"--body_seg", "--remove_small_blobs", "--high_order_resampling"},
+            ["liver", "skull"],
+        ),
         ("liver_vessels", {"robust_crop": True, "remove_small_blobs": True}, {"--robust_crop", "--remove_small_blobs"}, ["liver_vessels", "liver_tumor"]),
         ("lung_vessels", {"robust_crop": False}, {"--robust_crop"}, sorted(segmentation._LUNG)),
     ],
@@ -251,7 +262,7 @@ def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, mo
     assert command[:4] == [sys.executable, "-u", "-m", "totalsegmentator.bin.TotalSegmentator"]
     assert command[command.index("--task") + 1] == task
     assert command[command.index("--device") + 1] == "gpu:1"
-    actual_flags = {flag for flag in command if flag in {"--body_seg", "--robust_crop", "--remove_small_blobs"}}
+    actual_flags = {flag for flag in command if flag in {"--body_seg", "--robust_crop", "--remove_small_blobs", "--high_order_resampling"}}
     assert actual_flags == expected_flags
     assert not {"--fast", "--fastest", "--save_lowres"} & set(command)
     assert {entry["id"] for entry in structures} == {f"{task}:{name}" for name in names}

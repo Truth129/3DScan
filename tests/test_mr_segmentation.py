@@ -34,7 +34,13 @@ def test_mr_catalog_and_defaults_are_modality_specific_without_torch_import():
         for item in tasks.values()
     )
     for profile in ("chest", "chest_abdomen", "head_neck", "other"):
-        assert normalize_options(profile, modality="MR") == {"tasks": ["total_mr"], "body_seg": False, "robust_crop": False, "remove_small_blobs": False}
+        assert normalize_options(profile, modality="MR") == {
+            "tasks": ["total_mr"],
+            "body_seg": False,
+            "robust_crop": False,
+            "remove_small_blobs": False,
+            "high_order_resampling": False,
+        }
 
 
 @pytest.mark.parametrize(

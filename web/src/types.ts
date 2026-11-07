@@ -144,6 +144,7 @@ export interface SegmentationSettings {
   robust_crop: boolean;
   body_seg: boolean;
   remove_small_blobs: boolean;
+  high_order_resampling: boolean;
 }
 export interface RecordedSegmentationSettings extends Partial<SegmentationSettings> {
   tasks?: string[];
@@ -167,6 +168,7 @@ export interface SegmentationTask {
   robust_crop_supported: boolean;
   body_seg_supported: boolean;
   remove_small_blobs_supported?: boolean;
+  high_order_resampling_supported?: boolean;
 }
 export interface SegmentationCatalog {
   engine_version: string;

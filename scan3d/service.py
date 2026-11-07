@@ -384,7 +384,9 @@ class Service:
         fields = {} if expected_active_revision_id is None else {"expected_active_revision_id": expected_active_revision_id}
         return self.store.enqueue(case_id, "process", acquisition, **fields)
 
-    def segment_case(self, case_id, revision_id, task=None, robust_crop=False, body_seg=False, remove_small_blobs=False, inference_path=None):
+    def segment_case(
+        self, case_id, revision_id, task=None, robust_crop=False, body_seg=False, remove_small_blobs=False, high_order_resampling=False, inference_path=None
+    ):
         from .segmentation_options import default_task, normalize_options
 
         parent = self.store.revision(case_id, revision_id)
@@ -399,7 +401,13 @@ class Service:
             raise ValueError(reason)
         options = normalize_options(
             profile,
-            dict(tasks=[task or default_task(reference["modality"])], robust_crop=robust_crop, body_seg=body_seg, remove_small_blobs=remove_small_blobs),
+            dict(
+                tasks=[task or default_task(reference["modality"])],
+                robust_crop=robust_crop,
+                body_seg=body_seg,
+                remove_small_blobs=remove_small_blobs,
+                high_order_resampling=high_order_resampling,
+            ),
             modality=reference["modality"],
         )
         # Top-level and public, so the card is still named once a failure overwrites the stage.

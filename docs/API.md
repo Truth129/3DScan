@@ -377,8 +377,8 @@ capabilities, presentation, enabled}]}`.
 defaults, remove_small_blobs_mm3, inference_paths}`. The default task is `total` for CT and
 `total_mr` for MR. Each task has `id`, `label`, `modality`, `classes`, `class_count`,
 `model_class_count`, `description`, `engine`, `license_required`, `license_available`, `available`,
-`uses_organ_crop`, `robust_crop_default`, `robust_crop_supported`, `body_seg_supported` and
-`remove_small_blobs_supported`. A pinned nnU-Net model adds `engine_version` and `comparison: true`,
+`uses_organ_crop`, `robust_crop_default`, `robust_crop_supported`, `body_seg_supported`,
+`remove_small_blobs_supported` and `high_order_resampling_supported`. A pinned nnU-Net model adds `engine_version` and `comparison: true`,
 and `available` is false until its weights are installed.
 
 **License.** `GET /api/totalsegmentator/license` returns `{configured, validated, validated_at}`
@@ -454,7 +454,7 @@ only: they never select frames, change intensities, crop anatomy or choose a tas
   the newer revision. Without it, the new image becomes active regardless.
 
 **`POST /api/cases/{id}/segment`** takes `{revision_id, task?, robust_crop?, body_seg?,
-remove_small_blobs?, inference_path?}` and returns a `segment` job. `revision_id` must be active.
+remove_small_blobs?, high_order_resampling?, inference_path?}` and returns a `segment` job. `revision_id` must be active.
 See [Choosing a path](#choosing-a-path).
 
 - `task` must be in the modality's catalog. Licensed tasks need a configured key.

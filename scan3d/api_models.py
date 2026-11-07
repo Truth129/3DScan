@@ -139,6 +139,7 @@ class Segment(Input):
     robust_crop: bool = False
     body_seg: bool = False
     remove_small_blobs: bool = False
+    high_order_resampling: bool = False
     inference_path: str | None = Field(default=None, max_length=32, pattern=ID_PATTERN)
 
 

@@ -21,13 +21,13 @@ const task = (id: string, extra: Partial<SegmentationTask> = {}): SegmentationTa
 const catalog: SegmentationCatalog = {
   engine_version: 'test',
   remove_small_blobs_mm3: 200,
-  defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
+  defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false, high_order_resampling: false },
   tasks: [
     task('total'),
     task('lung_vessels'),
     task('required', { robust_crop_default: true, body_seg_supported: false }),
     task('licensed', { license_required: true, license_available: false }),
-    task('compared', { comparison: true, remove_small_blobs_supported: false }),
+    task('compared', { comparison: true, remove_small_blobs_supported: false, high_order_resampling_supported: false }),
     task('uninstalled', { comparison: true, available: false, description: 'Run the download script.' }),
     task('total_mr', { modality: 'MR', robust_crop_supported: false, body_seg_supported: false }),
   ],
@@ -35,8 +35,8 @@ const catalog: SegmentationCatalog = {
 
 describe('restore segmentation settings', () => {
   it('restores recorded task and flags before and after the catalog arrives', () => {
-    const saved = { tasks: ['lung_vessels'], robust_crop: true, body_seg: false, remove_small_blobs: true };
-    const expected = { task: 'lung_vessels', robust_crop: true, body_seg: false, remove_small_blobs: true };
+    const saved = { tasks: ['lung_vessels'], robust_crop: true, body_seg: false, remove_small_blobs: true, high_order_resampling: true };
+    const expected = { task: 'lung_vessels', robust_crop: true, body_seg: false, remove_small_blobs: true, high_order_resampling: true };
     expect(restoreSegmentationSettings(undefined, saved)).toEqual(expected);
     expect(restoreSegmentationSettings(catalog, saved)).toEqual(expected);
   });
@@ -49,13 +49,16 @@ describe('restore segmentation settings', () => {
       robust_crop: true,
       body_seg: false,
       remove_small_blobs: false,
+      high_order_resampling: false,
     });
     expect(restoreSegmentationSettings(catalog, { tasks: ['compared'], remove_small_blobs: true }).remove_small_blobs).toBe(false);
+    expect(restoreSegmentationSettings(catalog, { tasks: ['compared'], high_order_resampling: true }).high_order_resampling).toBe(false);
     expect(restoreSegmentationSettings(catalog, { task: 'total_mr', robust_crop: true, body_seg: true, remove_small_blobs: true })).toEqual({
       task: 'total_mr',
       robust_crop: false,
       body_seg: false,
       remove_small_blobs: true,
+      high_order_resampling: false,
     });
   });
   it.each(['uninstalled', 'licensed', 'removed-task'])('falls back safely from unavailable task %s', id => {
@@ -67,7 +70,7 @@ describe('comparison models in the panel', () => {
   const render = (id: string) =>
     renderToString(
       createSSRApp(SegmentationControls, {
-        modelValue: { task: id, robust_crop: false, body_seg: false, remove_small_blobs: false },
+        modelValue: { task: id, robust_crop: false, body_seg: false, remove_small_blobs: false, high_order_resampling: false },
         catalog,
         busy: false,
         loading: false,

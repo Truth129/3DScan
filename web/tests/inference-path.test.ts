@@ -409,7 +409,7 @@ describe('what the toolbar names and what a run sends', () => {
 describe('the segmentation panel', () => {
   const catalog = (inference_paths?: InferencePathRow[]): SegmentationCatalog => ({
     engine_version: '0.0.test',
-    defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
+    defaults: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false, high_order_resampling: false },
     remove_small_blobs_mm3: 200,
     inference_paths,
     tasks: [
@@ -430,7 +430,7 @@ describe('the segmentation panel', () => {
   const render = (paths: InferencePathRow[] | undefined, inferencePath = '', pathNotice = '', state: { busy?: boolean; loading?: boolean } = {}) =>
     renderToString(
       createSSRApp(SegmentationControls, {
-        modelValue: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false },
+        modelValue: { task: 'total', robust_crop: false, body_seg: false, remove_small_blobs: false, high_order_resampling: false },
         catalog: catalog(paths),
         inferencePath,
         pathNotice,
