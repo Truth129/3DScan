@@ -1036,8 +1036,8 @@ streaming. Paths and acquisition identifiers stay out of the manifest.
 
 **`POST /api/cases/{id}/dicom-seg/imports`** takes multipart `revision_id` and `files` (1–64 local
 SEG objects, not ZIPs, bounded by 512 MiB and the upload limit) and returns a `dicom_seg_import`
-job. The revision must be active with a prepared classic CT and its complete original series. It
-needs no AI segmentation or Orthanc connection, and sends nothing.
+job. The revision must be active with a prepared classic CT or classic single-frame MR and its
+complete original series. It needs no AI segmentation or Orthanc connection, and sends nothing.
 
 | Rule     | Values                                                                                                    |
 | -------- | --------------------------------------------------------------------------------------------------------- |
@@ -1061,10 +1061,13 @@ needs no AI segmentation or Orthanc connection, and sends nothing.
 
 ### DICOM SEG export
 
-| Route            | Needs                                                                                                                            |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Archive and send | A configured Orthanc, and a saved revision whose reference image is an original classic CT imported from that archive            |
-| File             | No Orthanc. A saved revision whose reference image was prepared from a classic CT this case still holds, however it was imported |
+| Route            | Needs                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Archive and send | A configured Orthanc, and a saved revision whose reference image is an original classic CT or MR imported from that archive            |
+| File             | No Orthanc. A saved revision whose reference image was prepared from a classic CT or MR this case still holds, however it was imported |
+
+SEG, OsiriX ROI and view exports from MR also need `MR` in `SCAN3D_MODALITIES`, and refuse Enhanced
+MR.
 
 `SCAN3D_ORTHANC_EXPORT_DESTINATIONS` allowlists configured Orthanc modality IDs. Empty allows
 archive-only export.
@@ -1238,7 +1241,7 @@ hash.
 ### DICOM view file
 
 The same capture becomes a file to download, with nothing archived or sent. It needs no archive
-access, and works for any CT prepared from DICOM, folder and ZIP imports included.
+access, and works for any CT or classic MR prepared from DICOM, folder and ZIP imports included.
 
 - **`GET .../dicom-view-file`** returns `{available, reason?, exports: Job[], encoding_version}`.
 - **`POST .../dicom-view-file`** takes multipart `image` and `reference_image_id`, with the limits

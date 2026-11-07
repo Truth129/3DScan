@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { dicomSegSelectionError, useDicomSegImport } from '../lib/use-dicom-seg-import';
 import type { Job } from '../types';
 
-const props = defineProps<{ caseId: string; revisionId: string; disabledReason: string }>();
+const props = defineProps<{ caseId: string; revisionId: string; disabledReason: string; modality?: string }>();
 const emit = defineEmits<{ queued: [job: Job]; busy: [value: boolean] }>();
 const dialog = ref<HTMLDialogElement>(),
   input = ref<HTMLInputElement>(),
@@ -13,6 +13,7 @@ const { submitting, error, start } = useDicomSegImport({
   blocked: () => props.disabledReason,
   queued: job => emit('queued', job),
 });
+const modalityLabel = computed(() => props.modality ?? 'CT');
 const selectionError = computed(() => (files.value.length ? dicomSegSelectionError(files.value) : ''));
 const size = computed(() => (files.value.reduce((sum, file) => sum + file.size, 0) / 1024 ** 2).toFixed(1));
 let previousFocus: HTMLElement | undefined;
@@ -53,7 +54,7 @@ onBeforeUnmount(() => {
     class="button secondary compact dicom-seg-import-action"
     type="button"
     :disabled="!!disabledReason || submitting"
-    :title="disabledReason || 'Add existing segmentation masks to this CT.'"
+    :title="disabledReason || `Add existing segmentation masks to this ${modalityLabel}.`"
     @click="open"
   >
     Import DICOM SEG…
@@ -72,10 +73,12 @@ onBeforeUnmount(() => {
     </header>
     <h2 id="dicom-seg-import-title">Import existing segmentations.</h2>
     <p id="dicom-seg-import-description">
-      Choose binary DICOM SEG files made from this CT. Matching masks are added as independent segments in a new saved revision. Existing masks and overlapping
-      regions are preserved; no AI segmentation is run.
+      Choose binary DICOM SEG files made from this {{ modalityLabel }}. Matching masks are added as independent segments in a new saved revision. Existing masks
+      and overlapping regions are preserved; no AI segmentation is run.
     </p>
-    <p class="help">The source CT references and voxel alignment must match exactly. Compressed, fractional or resampled segmentations are not supported.</p>
+    <p class="help">
+      The source {{ modalityLabel }} references and voxel alignment must match exactly. Compressed, fractional or resampled segmentations are not supported.
+    </p>
     <form @submit.prevent="submit">
       <label class="file-field">
         DICOM SEG files
@@ -84,7 +87,7 @@ onBeforeUnmount(() => {
       <p v-if="files.length" class="selection-summary" role="status">
         {{ files.length }} {{ files.length === 1 ? 'file' : 'files' }} selected · {{ size }} MiB
       </p>
-      <p class="help">Up to 64 files and 512 MiB total. Select the SEG objects themselves, rather than a ZIP archive or source CT images.</p>
+      <p class="help">Up to 64 files and 512 MiB total. Select the SEG objects themselves, rather than a ZIP archive or source {{ modalityLabel }} images.</p>
       <p v-if="selectionError" class="import-error" role="alert">{{ selectionError }}</p>
       <p v-if="error" class="import-error" role="alert">{{ error }}</p>
       <p v-if="submitting" role="status" aria-live="polite"><span class="spinner"></span> Uploading SEG files…</p>

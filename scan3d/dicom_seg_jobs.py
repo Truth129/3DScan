@@ -51,10 +51,10 @@ def _fingerprint(path, aggregate=None):
     return {"path": str(path), "sha256": digest, "size": after.st_size}
 
 
-def series_files(service, case_id, case, source):
-    """The retained files of a reference's original CT series, proven to lie inside this case."""
+def series_files(service, case_id, case, source, modality="CT"):
+    """The retained files of a reference's original series, proven to lie inside this case."""
     series = next((entry for entry in case["series"] if entry["uid"] == source.get("series_uid")), None)
-    if not series or series.get("modality") != "CT" or not series.get("files") or len(series["files"]) > 100_000:
+    if not series or series.get("modality") != modality or not series.get("files") or len(series["files"]) > 100_000:
         raise ValueError("The prepared CT has no complete original DICOM series for SEG matching")
     for key in ("study_uid", "frame_of_reference_uid"):
         if not source.get(key) or source[key] != series.get(key):
@@ -82,14 +82,14 @@ def _inputs(service, case_id, revision_id):
     if case.get("active_revision_id") != revision_id:
         raise ReviewConflict("The active revision changed; import SEG from the current CT")
     reference = service.store.resolve_reference(parent)
-    if reference["modality"] != "CT":
-        raise ValueError("DICOM SEG import currently requires a prepared classic CT source")
+    if reference["modality"] not in {"CT", "MR"}:
+        raise ValueError("DICOM SEG import currently requires a prepared classic CT or MR source")
     if reason := service.settings.modality_unavailable(reference["modality"]):
         raise ValueError(reason)
     _owned_file(parent["ct_file"], service.store.case_dir(case_id))
     assert_reference_image(reference, Path(parent["ct_file"]), parent["geometry"])
     source = reference["source"]
-    paths = series_files(service, case_id, case, source)
+    paths = series_files(service, case_id, case, source, reference["modality"])
     for path in paths:
         try:
             header = pydicom.dcmread(path, stop_before_pixels=True, specific_tags=["StudyInstanceUID", "SeriesInstanceUID", "FrameOfReferenceUID"])

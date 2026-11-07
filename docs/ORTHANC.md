@@ -127,9 +127,9 @@ In a saved revision, choose **Export SEG…**, select nonempty masks, then choos
 or pick a **Send destination** and choose **Send to** it. Both upload the SEG and read it back to
 compare hashes. Sending then asks Orthanc to perform C-STORE to that modality.
 
-- Both need classic CT imported from this same Orthanc, and MR is not supported. Other classic CT
-  prepared from DICOM can be [saved as a SEG file](USER_GUIDE.md#dicom-seg), and CT from a folder, a
-  ZIP or a DICOMweb archive can also be delivered as in [ARCHIVES.md](ARCHIVES.md).
+- Both need classic CT or classic single-frame MR imported from this same Orthanc. Other classic CT
+  or MR prepared from DICOM can be [saved as a SEG file](USER_GUIDE.md#dicom-seg), and scans from a
+  folder, a ZIP or a DICOMweb archive can also be delivered as in [ARCHIVES.md](ARCHIVES.md).
 - To bring masks in, see [Import DICOM SEG](USER_GUIDE.md#import-existing-dicom-seg-masks).
 - All selected masks are numbered binary segments of one instance, so overlaps survive.
 - The SEG references the original patient, study, frame of reference and source images. Source
@@ -153,8 +153,8 @@ Only OsiriX reads these reports, so send them to an OsiriX destination. See
 ## Send a 3D view back
 
 **DICOM ↗** in the 3D view exports what **PNG ↗** saves, as a new one-image series in the original
-patient and study. It needs a classic CT imported from this same Orthanc, but no masks. Archiving,
-sending, retries and **Send again** work as for a segmentation.
+patient and study. It needs a classic CT or MR imported from this same Orthanc, but no masks.
+Archiving, sending, retries and **Send again** work as for a segmentation.
 
 The image is a Secondary Capture with modality `OT`, so the study then lists `CT\OT`. **It is a
 picture, not a measurement:** see [DICOM view](USER_GUIDE.md#dicom-view) and its

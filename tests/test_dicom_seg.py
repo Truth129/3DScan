@@ -11,7 +11,7 @@ import numpy as np
 import pydicom
 import pytest
 
-from synthetic_dicom import native_grid, source_fixture
+from synthetic_dicom import as_classic_mr, native_grid, source_fixture
 from scan3d import dicom, dicom_seg
 from scan3d.fileio import hash_file
 
@@ -32,6 +32,13 @@ def fixture(tmp_path):
         nib.save(nib.Nifti1Image(masks[..., index].astype(np.uint8), affine), path)
         segments.append(dicom_seg.SegmentInput(name, name.capitalize(), color, path, automatic=True))
     return dict(paths=paths, images=images, reference=reference, segments=segments, truth=truth, output=tmp_path / "export")
+
+
+@pytest.fixture
+def mr_fixture(fixture):
+    for image, path in zip(fixture["images"], fixture["paths"], strict=True):
+        as_classic_mr(image).save_as(path, enforce_file_format=True)
+    return fixture
 
 
 def export(fixture, **kwargs):
@@ -467,7 +474,15 @@ def test_rounding_tolerance_cannot_hide_far_corner_spacing_drift(fixture):
     assert not fixture["output"].exists()
 
 
-@pytest.mark.parametrize("problem", ["patient", "frame", "source_class", "orientation", "duplicate", "irregular"])
+def test_classic_mr_source_exports_exact_masks(mr_fixture):
+    instance = export(mr_fixture).files[0]
+    for entry in instance.segments:
+        seg, pixels = independent_pixels(instance.path, mr_fixture["images"], entry.segment_number)
+        assert np.array_equal(pixels, mr_fixture["truth"][..., 1 if entry.structure_id == "block" else 0])
+    assert {item.ReferencedSOPClassUID for item in seg.ReferencedSeriesSequence[0].ReferencedInstanceSequence} == {pydicom.uid.MRImageStorage}
+
+
+@pytest.mark.parametrize("problem", ["patient", "frame", "source_class", "modality", "orientation", "duplicate", "irregular"])
 def test_inconsistent_or_unsupported_sources_are_rejected(fixture, problem):
     path = fixture["paths"][2]
     image = pydicom.dcmread(path)
@@ -477,6 +492,8 @@ def test_inconsistent_or_unsupported_sources_are_rejected(fixture, problem):
         image.FrameOfReferenceUID = pydicom.uid.generate_uid()
     elif problem == "source_class":
         image.SOPClassUID = image.file_meta.MediaStorageSOPClassUID = pydicom.uid.EnhancedCTImageStorage
+    elif problem == "modality":
+        image.Modality = "MR"
     elif problem == "orientation":
         image.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
     elif problem == "spacing":

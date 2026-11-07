@@ -213,7 +213,7 @@ def _report(source, payload, now):
 def export_native_rois(source_paths, reference_path, segments, output_dir, *, revision_id, cancelled=None, progress=None):
     """Publish a new immutable experimental native ROI package atomically.
 
-    Uses only original classic CT headers, the saved reference geometry and
+    Uses only original classic CT or MR headers, the saved reference geometry and
     separate binary masks. It performs no network operation or runtime change.
     A caller must retain these exact artifacts for any same-SOP resend.
     """
@@ -235,7 +235,7 @@ def _export_native_rois(source_paths, reference_path, segments, output_dir, *, r
         raise NativeROIError("Native ROI export destination already exists")
     source_paths = tuple(Path(path) for path in source_paths)
     if not source_paths or len(source_paths) > 100_000 or len(set(source_paths)) != len(source_paths):
-        raise NativeROIError("Select one complete original classic CT series")
+        raise NativeROIError("Select one complete original classic CT or MR series")
     reference_path = Path(reference_path)
     inputs = tuple(dict.fromkeys((*source_paths, reference_path, *(Path(segment.mask_path) for segment in selection))))
     stamps = {path: _stamp(path) for path in inputs}

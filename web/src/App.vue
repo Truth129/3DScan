@@ -426,7 +426,7 @@ const savedExportDisabledReason = computed(() =>
   }),
 );
 const segImportDisabledReason = computed(() => {
-  if (!revision.value || activeModality.value !== 'CT') return 'Open the matching CT before importing segmentation masks.';
+  if (!revision.value || !['CT', 'MR'].includes(activeModality.value)) return 'Open the matching CT or MR before importing segmentation masks.';
   if (activeCase.value?.active_revision_id !== revision.value.id) return 'Return to the current revision before importing segmentation masks.';
   return savedRevisionExportBlockReason({
     caseId: activeCase.value?.id,
@@ -1454,10 +1454,11 @@ onBeforeUnmount(() => {
               Segment {{ sourceLabel }}…</button
             ><button v-if="!ctOnly" class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button
             ><DicomSegImport
-              v-if="activeModality === 'CT'"
+              v-if="activeModality === 'CT' || mrEnabled"
               :key="`seg-import:${activeCase.id}:${revision.id}`"
               :case-id="activeCase.id"
               :revision-id="revision.id"
+              :modality="activeModality"
               :disabled-reason="segImportDisabledReason"
               @queued="track"
               @busy="segImportBusy = $event"

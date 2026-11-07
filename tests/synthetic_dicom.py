@@ -145,6 +145,16 @@ def source_fixture():
     return images, pixels, masks
 
 
+def as_classic_mr(image):
+    """The same synthetic plane stored as single-frame classic MR, without CT-only attributes."""
+    image.SOPClassUID = image.file_meta.MediaStorageSOPClassUID = pydicom.uid.MRImageStorage
+    image.Modality, image.ImageType = "MR", ["ORIGINAL", "PRIMARY", "M"]
+    for keyword in ("KVP", "RescaleType"):
+        if keyword in image:
+            delattr(image, keyword)
+    return image
+
+
 def native_grid(images, pixels, masks):
     """An exact alternative storage grid, with columns reversed and axes permuted."""
     first = images[0]

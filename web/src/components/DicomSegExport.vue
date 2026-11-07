@@ -30,6 +30,7 @@ const dialog = ref<HTMLDialogElement>(),
   format = ref<DicomSegFormat>('seg'),
   formatName = useId();
 const structures = computed(() => nonemptySavedStructures(props.revision.structures));
+const modalityLabel = computed(() => props.revision.image_asset?.modality ?? 'CT');
 const visibleIds = computed(() => visibleVolumeMaskIds(structures.value, props.display));
 const {
   availability,
@@ -214,7 +215,9 @@ onBeforeUnmount(() => dialog.value?.close());
         <legend>Format</legend>
         <label><input v-model="format" type="radio" :name="formatName" value="seg" /><span>DICOM SEG</span></label
         ><label><input v-model="format" type="radio" :name="formatName" value="osirix_roi" /><span>OsiriX ROIs</span></label>
-        <p v-if="roi" class="help">One native OsiriX brush ROI per mask on each CT slice, for OsiriX MD. Experimental: check them in OsiriX.</p>
+        <p v-if="roi" class="help">
+          One native OsiriX brush ROI per mask on each {{ modalityLabel }} slice, for OsiriX MD. Experimental: check them in OsiriX.
+        </p>
       </fieldset>
       <div v-if="selected.length > 1 && !roi" class="overlap-options">
         <label class="overlap-toggle"><input v-model="resolveOverlaps" type="checkbox" /><span>Resolve overlaps in this export</span></label>
@@ -284,7 +287,7 @@ onBeforeUnmount(() => dialog.value?.close());
       <template v-else-if="job.status === 'failed'">{{ job.error || 'The export failed. Refresh status before retrying.' }}</template>
       <template v-else>{{ summary }}</template>
     </div>
-    <p v-if="fileReady && !roi" class="help">A saved file carries the CT's patient details, so handle it like the study.</p>
+    <p v-if="fileReady && !roi" class="help">A saved file carries the {{ modalityLabel }}'s patient details, so handle it like the study.</p>
     <p v-if="pending" class="help">
       {{
         cancellable

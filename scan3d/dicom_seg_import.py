@@ -20,7 +20,7 @@ import nibabel as nib
 import numpy as np
 import pydicom
 from pydicom.filereader import read_partial
-from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, ImplicitVRLittleEndian, SegmentationStorage, UID
+from pydicom.uid import ExplicitVRLittleEndian, ImplicitVRLittleEndian, SegmentationStorage, UID
 
 from .dicom_seg import DicomSegError, _axis, _matches_grid, _source_stack, _stamp
 from .fileio import hash_file
@@ -195,7 +195,7 @@ def _references(header, images):
     selected = set()
     for entry in entries:
         uid = _identity(entry.get("ReferencedSOPInstanceUID", ""))
-        if str(entry.get("ReferencedSOPClassUID", "")) != str(CTImageStorage) or uid not in known or uid in selected:
+        if str(entry.get("ReferencedSOPClassUID", "")) != str(first.SOPClassUID) or uid not in known or uid in selected:
             raise _error("DICOM SEG contains foreign, repeated or unsupported source image references")
         selected.add(uid)
     if header.get("StudiesContainingOtherReferencedInstancesSequence"):
@@ -292,7 +292,7 @@ def _plan(path, stack, shape, affine, cancelled=None):
         if derivation is not None:
             source = _single(derivation, "SourceImageSequence")
             if (
-                str(source.get("ReferencedSOPClassUID", "")) != str(CTImageStorage)
+                str(source.get("ReferencedSOPClassUID", "")) != str(stack.images[0].SOPClassUID)
                 or str(source.get("ReferencedSOPInstanceUID", "")) != source_uid
                 or "ReferencedFrameNumber" in source
             ):
@@ -345,7 +345,7 @@ def _code(description, keyword):
 
 
 def import_segmentation(source_paths, reference_path, seg_paths, output_dir, *, cancelled=None, progress=None):
-    """Publish independent binary masks atomically for one verified classic CT.
+    """Publish independent binary masks atomically for one verified classic CT or MR series.
 
     Only native little-endian BINARY SEG is accepted. Geometry-only per-frame
     binding is allowed when the study/frame/series/SOP references and native
@@ -356,7 +356,7 @@ def import_segmentation(source_paths, reference_path, seg_paths, output_dir, *, 
     source_paths = tuple(Path(path) for path in source_paths)
     reference_path, output_dir = Path(reference_path), Path(output_dir)
     if not 1 <= len(source_paths) <= 100_000 or len(set(source_paths)) != len(source_paths):
-        raise _error("Select one complete original classic CT series")
+        raise _error("Select one complete original classic CT or MR series")
     if not 1 <= len(paths) <= MAX_FILES or len(set(paths)) != len(paths):
         raise _error("Select 1–64 distinct DICOM SEG files")
     if output_dir.exists() or output_dir.is_symlink():
@@ -382,7 +382,7 @@ def import_segmentation(source_paths, reference_path, seg_paths, output_dir, *, 
         try:
             stack, _ = _source_stack(source_paths, reference, affine, cancelled)
         except DicomSegError:
-            raise _error("The original classic CT series does not match the selected native reference grid") from None
+            raise _error("The original classic series does not match the selected native reference grid") from None
         inputs = []
         for path in paths:
             _cancel(cancelled)

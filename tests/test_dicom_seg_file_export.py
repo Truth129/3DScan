@@ -14,7 +14,8 @@ import pytest
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.store import identifier, job_lane
-from test_dicom_seg import fixture, independent_pixels
+from test_dicom_seg import fixture, independent_pixels, mr_fixture
+from test_dicom_seg_jobs import run
 
 
 def import_folder(service, fixture, reference=None):
@@ -35,6 +36,8 @@ def import_folder(service, fixture, reference=None):
         target,
         acquisition={"series_uid": series["uid"], "profile": "whole_body", "phase": "unknown"},
         image_source={key: series[key] for key in ("study_uid", "frame_of_reference_uid", "sop_class_uids")},
+        modality=series["modality"],
+        presentation_metadata=series,
     )
     service.store.commit_revision(ct)
     return case, ct
@@ -56,23 +59,27 @@ def save_masks(service, ct, fixture):
     return saved
 
 
-@pytest.fixture
-def rig(tmp_path, fixture):
-    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", modalities=("CT",)))
+def make_rig(tmp_path, fixture, modalities=("CT",)):
+    app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", modalities=modalities))
     service = app.state.service
     case, ct = import_folder(service, fixture)
     saved = save_masks(service, ct, fixture)
-    http = TestClient(app, base_url="http://127.0.0.1")
-    yield SimpleNamespace(
+    return SimpleNamespace(
         service=service,
-        http=http,
+        http=TestClient(app, base_url="http://127.0.0.1"),
         case=case,
         ct=ct,
         saved=saved,
         fixture=fixture,
         endpoint=f"/api/cases/{case['id']}/revisions/{saved['id']}/dicom-seg",
     )
-    http.close()
+
+
+@pytest.fixture
+def rig(tmp_path, fixture):
+    rig = make_rig(tmp_path, fixture)
+    yield rig
+    rig.http.close()
 
 
 def prepare(rig, **body):
@@ -251,3 +258,26 @@ def test_an_interrupted_file_job_does_not_mention_orthanc(rig):
     rig.service.orthanc_exports.recover()
     failed = rig.service.store.get("jobs", queued["id"])
     assert failed["status"] == "failed" and failed["error"] == "Export interrupted. Retry to reuse its exact SEG bytes."
+
+
+def test_mr_case_saves_masks_to_a_file_and_imports_them_back(tmp_path, mr_fixture):
+    rig = make_rig(tmp_path, mr_fixture, ("CT", "MR"))
+    assert rig.ct["image_asset"]["modality"] == "MR"
+    assert rig.http.get(rig.endpoint).json()["file"] == {"available": True}
+    assert rig.http.get(f"/api/cases/{rig.case['id']}/revisions/{rig.saved['id']}/dicom-view-file").json()["available"] is True
+    finished = execute(rig, prepare(rig))
+    assert finished["status"] == "completed", finished.get("error")
+    download(rig, finished, tmp_path / "mr.dcm")
+    upload = ("files", ("seg.dcm", (tmp_path / "mr.dcm").read_bytes(), "application/dicom"))
+    job = run(rig, rig.http.post(f"/api/cases/{rig.case['id']}/dicom-seg/imports", data={"revision_id": rig.ct["id"]}, files=[upload]))
+    assert job["status"] == "completed", job.get("error")
+    masks = {
+        item["name"]: np.asanyarray(nib.load(item["mask_file"]).dataobj)
+        for item in rig.service.store.revision(rig.case["id"], job["revision_id"])["structures"]
+    }
+    for segment in mr_fixture["segments"]:
+        np.testing.assert_array_equal(masks[segment.name], np.asanyarray(nib.load(segment.mask_path).dataobj))
+    ct_only = TestClient(create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", modalities=("CT",))), base_url="http://127.0.0.1")
+    assert ct_only.get(rig.endpoint).json()["file"] == {"available": False, "reason": "MR images are not enabled on this workstation."}
+    ct_only.close()
+    rig.http.close()

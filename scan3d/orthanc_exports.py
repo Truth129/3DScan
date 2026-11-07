@@ -256,8 +256,10 @@ class OrthancExports:
             reference = reference_image(revision)
         except (KeyError, OSError, ValueError):
             raise ExportUnavailable("This saved revision's reference image cannot be verified.") from None
-        if reference["modality"] != "CT":
-            raise ExportUnavailable(f"{self.label} export currently supports original classic CT sources only.")
+        if reference["modality"] not in {"CT", "MR"}:
+            raise ExportUnavailable(f"{self.label} export currently supports original classic CT and MR sources only.")
+        if reason := self.service.settings.modality_unavailable(reference["modality"]):
+            raise ExportUnavailable(f"{reason}.")
         return revision, case, reference
 
     def _inputs(self, case_id, revision_id, structure_ids=None, *, delivery="orthanc"):
@@ -296,10 +298,11 @@ class OrthancExports:
             digest = prepared_digest(self.service, case_id, revision["ct_file"])
             if digest is None:
                 raise ValueError()
-            paths = tuple(series_files(self.service, case_id, case, metadata))
+            paths = tuple(series_files(self.service, case_id, case, metadata, reference["modality"]))
         except (KeyError, OSError, ValueError):
+            modality = reference["modality"]
             raise ExportUnavailable(
-                f"This saved revision has no verified original DICOM CT series. {self.label} needs a CT imported and prepared from DICOM."
+                f"This saved revision has no verified original DICOM {modality} series. {self.label} needs a {modality} imported and prepared from DICOM."
             ) from None
         return _SegSource(paths, digest, digest, metadata["study_uid"], metadata["frame_of_reference_uid"])
 
@@ -328,7 +331,7 @@ class OrthancExports:
                 or source.snapshot.series_uid != source_metadata["series_uid"]
                 or source.snapshot.study_uid != source_metadata["study_uid"]
                 or source.frame_of_reference_uid != source_metadata["frame_of_reference_uid"]
-                or source.snapshot.modality != "CT"
+                or source.snapshot.modality != reference["modality"]
             ):
                 raise ValueError()
             if connect:

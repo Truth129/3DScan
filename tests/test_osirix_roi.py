@@ -13,7 +13,7 @@ import pytest
 
 from scan3d import osirix_roi
 from scan3d.fileio import hash_file
-from test_dicom_seg import fixture
+from test_dicom_seg import fixture, mr_fixture
 
 
 def export(fixture, **kwargs):
@@ -223,6 +223,12 @@ def test_exact_native_brushes_preserve_holes_overlap_and_source_links(fixture):
     assert {path: hash_file(path) for path in inputs} == before
     with pytest.raises(FrozenInstanceError):
         result.revision_id = "changed"
+
+
+def test_classic_mr_source_gives_the_same_exact_brushes(mr_fixture):
+    masks = independent_masks(export(mr_fixture), mr_fixture["images"])
+    np.testing.assert_array_equal(masks["ring"], mr_fixture["truth"][..., 0])
+    np.testing.assert_array_equal(masks["block"], mr_fixture["truth"][..., 1])
 
 
 def test_native_labels_colors_and_fresh_export_identities(fixture):

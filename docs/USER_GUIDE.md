@@ -524,14 +524,14 @@ The HTML, DICOM SEG and DICOM view exports read the saved revision: first save o
 draft, return to the current revision and turn off comparison. Exports can contain patient images
 and metadata, so treat them like the study itself.
 
-**DICOM ↗** and **Export SEG…** deliver to these places, depending on where the CT came from:
+**DICOM ↗** and **Export SEG…** deliver to these places, depending on where the scan came from:
 
-| Delivery         | Choose                                                                                              | Needs                                                                                 |
-| ---------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| File             | **Prepare file**, then **Download file** (**Prepare SEG file** and **Download SEG file** for a SEG) | A CT prepared from DICOM, a folder or ZIP import included. No archive.                |
-| Orthanc          | **Archive in Orthanc**, or a **Send destination** and **Send to** it                                | A CT imported from a [configured Orthanc](ORTHANC.md).                                |
-| DICOMweb archive | **Archive in** and the archive's name                                                               | A CT imported from that [archive](ARCHIVES.md#archive-results).                       |
-| DICOM node       | A **Send destination** and **Send to** it                                                           | A CT not from Orthanc, and [configured destinations](ARCHIVES.md#direct-dicom-sends). |
+| Delivery         | Choose                                                                                              | Needs                                                                                   |
+| ---------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| File             | **Prepare file**, then **Download file** (**Prepare SEG file** and **Download SEG file** for a SEG) | A CT or classic MR prepared from DICOM, a folder or ZIP import included. No archive.    |
+| Orthanc          | **Archive in Orthanc**, or a **Send destination** and **Send to** it                                | A CT or classic MR imported from a [configured Orthanc](ORTHANC.md).                    |
+| DICOMweb archive | **Archive in** and the archive's name                                                               | A CT or classic MR imported from that [archive](ARCHIVES.md#archive-results).           |
+| DICOM node       | A **Send destination** and **Send to** it                                                           | A scan not from Orthanc, and [configured destinations](ARCHIVES.md#direct-dicom-sends). |
 
 Archiving and sending need archive access on your account; files do not. **Send again**
 deliberately resends the same instances. A DICOM node that does not accept the object is sent
@@ -580,9 +580,9 @@ overlap-preserving export for 3D Slicer.
 
 ### DICOM SEG
 
-**Export SEG…** works for classic CT from any import. Selected masks go into one SEG object with
-overlaps preserved. All nonempty masks start selected, and **Select visible** takes a snapshot of
-the masks switched on in the anatomy list.
+**Export SEG…** works for classic CT and classic single-frame MR from any import. Selected masks go
+into one SEG object with overlaps preserved. All nonempty masks start selected, and **Select
+visible** takes a snapshot of the masks switched on in the anatomy list.
 
 Deliver it as in [Export](#export); a file can build with the dialog closed. For Orthanc, see
 [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back). A SEG uses the colors
@@ -613,10 +613,10 @@ scans only, so compare the ROIs with the masks before you rely on them.
 
 ## Import existing DICOM SEG masks
 
-**Import DICOM SEG…** adds masks made elsewhere to an open classic CT, from any import. It needs no
-AI and no archive connection.
+**Import DICOM SEG…** adds masks made elsewhere to an open classic CT or classic single-frame MR,
+from any import. It needs no AI and no archive connection.
 
-1. Open the original CT on its current revision, with no draft open.
+1. Open the original scan on its current revision, with no draft open.
 2. Choose **Import DICOM SEG…** and select up to 64 SEG files, 512 MiB in total, not a ZIP or the
    source images.
 3. Choose **Import masks**.
@@ -654,8 +654,10 @@ change to **Open MR →** and **Segment MR…**, and `total_mr` is the default t
 One phase of a dynamic scan imports as a static volume when it is its own series. A series that
 holds several phases is refused.
 
-MR signal values are not HU, so review each sequence separately. MR uses Three.js, and DICOM SEG
-import and export are CT only.
+MR signal values are not HU, so review each sequence separately. MR uses Three.js.
+
+SEG import and export, OsiriX ROIs and **DICOM ↗** work for classic single-frame MR as for CT, and
+refuse Enhanced MR. They have been checked on synthetic MR only, not yet in OsiriX or another viewer.
 
 ## Command line
 

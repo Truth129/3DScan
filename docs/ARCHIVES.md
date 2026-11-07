@@ -85,7 +85,7 @@ Import runs on the CPU and is bound to the selected snapshot, like an
 
 For a case imported from the archive, **Export SEG…** and **DICOM ↗** offer **Archive in** the
 archive, which stores the SEG or view in the original study with STOW-RS. SEG and view files work
-as for any CT prepared from DICOM.
+as for any CT or classic MR prepared from DICOM.
 
 - An archive's STOW answer does not show which bytes it keeps, so 3DScan reads every instance back.
   It must return the same bytes, or the same identity, patient and decoded pixels after a

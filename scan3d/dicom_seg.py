@@ -22,7 +22,7 @@ import numpy as np
 import pydicom
 from pydicom.errors import InvalidDicomError
 from pydicom.sr.coding import Code
-from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, UID, generate_uid
+from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, MRImageStorage, UID, generate_uid
 
 from . import __version__, imaging
 from .fileio import hash_file
@@ -35,6 +35,8 @@ _GRID_TOLERANCE_MM = 0.05
 _MAX_VOXELS = 512 * 1024**2
 _MAX_ENCODED_BYTES = 512 * 1024**2
 _MAX_ENCODED_FRAMES = 100_000
+# One source plane per instance. Enhanced multi-frame sources would need per-frame references.
+_CLASSIC_SOURCES = {str(CTImageStorage): "CT", str(MRImageStorage): "MR"}
 
 
 class DicomSegError(ValueError):
@@ -130,7 +132,7 @@ def _matches_grid(actual, expected, affine):
 def _source_stack(source_paths, reference, affine, cancelled):
     paths = tuple(Path(path) for path in source_paths)
     if not paths or len(paths) > 100_000 or len(set(paths)) != len(paths):
-        raise DicomSegError("Select one complete original classic CT series")
+        raise DicomSegError("Select one complete original classic CT or MR series")
     images, stamps = [], []
     for path in paths:
         _check_cancelled(cancelled)
@@ -139,13 +141,14 @@ def _source_stack(source_paths, reference, affine, cancelled):
             image = pydicom.dcmread(path, stop_before_pixels=True)
         except (OSError, InvalidDicomError):
             raise DicomSegError("An original CT header cannot be read") from None
-        if str(image.get("SOPClassUID", "")) != str(CTImageStorage) or image.get("Modality") != "CT" or int(image.get("NumberOfFrames", 1)) != 1:
-            raise DicomSegError("DICOM SEG export currently requires original single-frame classic CT images")
+        modality = _CLASSIC_SOURCES.get(str(image.get("SOPClassUID", "")))
+        if modality is None or image.get("Modality") != modality or int(image.get("NumberOfFrames", 1)) != 1:
+            raise DicomSegError("DICOM SEG export currently requires original single-frame classic CT or MR images")
         identities = tuple(_uid(image.get(key, "")) for key in ("StudyInstanceUID", "SeriesInstanceUID", "FrameOfReferenceUID", "SOPInstanceUID"))
         if image.file_meta.get("MediaStorageSOPInstanceUID", identities[-1]) != identities[-1]:
             raise DicomSegError("Original CT file and image identities disagree")
         images.append(image)
-    for key in ("StudyInstanceUID", "SeriesInstanceUID", "FrameOfReferenceUID", "PatientID", "PatientName", "PatientBirthDate", "PatientSex"):
+    for key in ("SOPClassUID", "StudyInstanceUID", "SeriesInstanceUID", "FrameOfReferenceUID", "PatientID", "PatientName", "PatientBirthDate", "PatientSex"):
         if len({str(image.get(key, "")) for image in images}) != 1:
             raise DicomSegError("Original CT images do not belong to one patient, study, series and coordinate frame")
     if len({str(image.SOPInstanceUID) for image in images}) != len(images):
