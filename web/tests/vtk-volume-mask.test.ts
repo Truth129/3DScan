@@ -4,6 +4,7 @@ import volumeShader from '@kitware/vtk.js/Rendering/OpenGL/glsl/vtkVolumeFS.glsl
 import { VTKVolumeMask, vtkVolumeMaskShaderReplacements, vtkVolumeMaskTransform } from '../src/lib/vtk-volume-mask';
 import type { VolumeDescriptor } from '../src/lib/ct-reslice';
 import type { GPUVolumeSource } from '../src/lib/gpu-volume-data';
+import type { Point } from '../src/types';
 import {
   attachVTKMaskMapperFactory,
   createVTKMaskMapperNode,
@@ -253,7 +254,8 @@ describe('VTKVolumeMask ownership and fail-closed updates', () => {
     const source = provider();
     await mask.set(source, 'inside');
     expect(source.readSlab).toHaveBeenCalledWith(0, 2, expect.any(AbortSignal));
-    expect(fake.trace).toEqual(['reserve:48', 'read', 'upload', 'reserve:24']);
+    // The texture stays charged, with the one-bit copy Volume point reads.
+    expect(fake.trace).toEqual(['reserve:48', 'read', 'upload', 'reserve:27']);
     expect(fake.textures[0].options).toEqual({
       minificationFilter: Filter.NEAREST,
       magnificationFilter: Filter.NEAREST,
@@ -264,9 +266,40 @@ describe('VTKVolumeMask ownership and fail-closed updates', () => {
     expect(fake.textures[0].create3DFromRaw).toHaveBeenCalledWith(
       expect.objectContaining({ width: 4, height: 3, depth: 2, numComps: 1, dataType: 'Uint8Array', data: Uint8Array.from({ length: 24 }, (_, i) => i % 2) }),
     );
-    expect(mask.stats()).toMatchObject({ ready: true, gpuBytes: 24, cpuBytes: 0, textureCount: 1, additionalFullGridMaskBytes: 0 });
+    expect(mask.stats()).toMatchObject({
+      ready: true,
+      gpuBytes: 24,
+      cpuBytes: 0,
+      rayBytes: 3,
+      reservedBytes: 27,
+      textureCount: 1,
+      additionalFullGridMaskBytes: 0,
+    });
     mask.dispose();
     expect(reserveMemory).toHaveBeenLastCalledWith(0);
+  });
+  it('gives Volume point the shader’s nearest-voxel test until cleared', async () => {
+    const { mask } = setup();
+    expect(mask.voxelTest()).toBeUndefined();
+    await mask.set(provider(), 'inside');
+    // Mask voxel u sits at CT index 2 + 2u, and the provider sets odd u only.
+    const points: Point[] = [
+      [4, 1, 3],
+      [4.9, 1, 3],
+      [5.1, 1, 3],
+      [2, 1, 3],
+      [8, 2, 4.5],
+      [-1, 1, 3],
+    ];
+    const inside = mask.voxelTest()!;
+    expect(points.map(point => inside(point))).toEqual([true, true, false, false, true, false]);
+    mask.setMode('outside');
+    const outside = mask.voxelTest()!;
+    expect(points.map(point => outside(point))).toEqual([false, false, true, true, false, true]);
+    mask.clear();
+    expect(mask.voxelTest()).toBeUndefined();
+    expect(mask.stats()).toMatchObject({ rayBytes: 0, reservedBytes: 0 });
+    mask.dispose();
   });
   it('reuses one texture for warm source and inside/outside/off mode changes, setting only instance uniforms', async () => {
     const { mask, node } = setup();
@@ -353,7 +386,7 @@ describe('VTKVolumeMask ownership and fail-closed updates', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(reserveMemory).toHaveBeenCalledTimes(calls);
-    expect(mask.stats()).toMatchObject({ ready: true, key: 'replacement', reservedBytes: 8, gpuBytes: 8, mode: 'outside', textureUploads: 1 });
+    expect(mask.stats()).toMatchObject({ ready: true, key: 'replacement', reservedBytes: 9, gpuBytes: 8, mode: 'outside', textureUploads: 1 });
     mask.dispose();
   });
   it('external abort and disposal cancel ignored signals without a late texture allocation', async () => {
@@ -382,17 +415,17 @@ describe('VTKVolumeMask ownership and fail-closed updates', () => {
     source.readSlab = vi.fn(() => pending.promise);
     const waiting = mask.set(source, 'outside');
     await Promise.resolve();
-    expect(mask.stats()).toMatchObject({ ready: false, gpuBytes: 24, cpuBytes: 8, reservedBytes: 40 });
+    expect(mask.stats()).toMatchObject({ ready: false, gpuBytes: 24, cpuBytes: 8, reservedBytes: 43 });
     pending.resolve(new ArrayBuffer(8));
     await waiting;
     expect(fake.textures[0].delete).toHaveBeenCalledOnce();
-    expect(reserveMemory).toHaveBeenLastCalledWith(8);
+    expect(reserveMemory).toHaveBeenLastCalledWith(9);
     await expect(mask.set(provider({ ...union(), reference_image_id: 'different' }), 'inside')).rejects.toThrow('different reference');
     expect(mask.stats()).toMatchObject({ ready: false, gpuBytes: 8, mode: 'inside' });
     fake.uploadOK = false;
     await expect(mask.set(provider(union('broken')), 'inside')).rejects.toThrow('could not be uploaded');
     expect(fake.textures[2].delete).toHaveBeenCalledOnce();
-    expect(mask.stats()).toMatchObject({ ready: false, gpuBytes: 8, cpuBytes: 0, reservedBytes: 8 });
+    expect(mask.stats()).toMatchObject({ ready: false, gpuBytes: 8, cpuBytes: 0, reservedBytes: 9 });
     mask.clear('outside');
     expect(mask.stats()).toMatchObject({ ready: false, mode: 'outside', gpuBytes: 0, reservedBytes: 0 });
     mask.dispose();

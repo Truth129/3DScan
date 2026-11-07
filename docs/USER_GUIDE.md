@@ -432,8 +432,10 @@ With **CT volume** on in review:
   mark; see-through surfaces do not block it. **Surface point** refuses a surface the volume covers.
 - While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps the
   whole CT in depth.
-- **Mask to segmentation**, **Color segments** and **Cinematic heart** stay off. A Cinematic heart
-  volume shows the default preset, and returns on **Exit review** unless you choose another.
+- **Mask to segmentation** masks by the saved segmentation, not your draft, so your edits do not
+  change it until you save. **Volume point** sees only the CT the mask shows.
+- **Color segments** and **Cinematic heart** stay off. A Cinematic heart volume shows the default
+  preset, and returns on **Exit review** unless you choose another.
 
 **Review tools** starts folded. A mark cannot start underneath it, so fold it to reach that part of
 the view.

@@ -18,6 +18,8 @@ export interface VolumeRaySource {
   unitDistanceMM: number;
   /** Kept half-spaces: the crop and cut planes the mapper clips to, and the camera's near and far planes. */
   clip?: readonly VolumeRayHalfSpace[];
+  /** False where Mask to segmentation hides the CT at a continuous voxel index; hidden samples add no opacity. */
+  visible?(voxel: Point): boolean;
 }
 export interface VolumeRayHit {
   ras: Point;
@@ -82,7 +84,7 @@ export function firstVisibleVolumePoint(
   let accumulated = 0;
   for (let index = 0, t = low; t <= high + 1e-9; t = low + ++index * stepMM) {
     const voxel = start.map((value, axis) => value + t * step[axis]) as Point,
-      alpha = Math.max(0, Math.min(1, source.opacity(source.sample(voxel)) || 0));
+      alpha = source.visible?.(voxel) === false ? 0 : Math.max(0, Math.min(1, source.opacity(source.sample(voxel)) || 0));
     accumulated += (1 - accumulated) * (1 - Math.pow(1 - alpha, exponent));
     if (accumulated >= threshold) return { ras: transformPoint(source.affine, voxel), voxel, distanceMM: t, opacity: accumulated };
   }

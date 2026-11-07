@@ -8,6 +8,7 @@ import { inverseAffine, validateDescriptor, type VolumeDescriptor } from './ct-r
 import { GPU_VOLUME_MASK_UNION_BYTES, isVolumeDisplayUnion, type GPUVolumeSource } from './gpu-volume-data';
 import { assertReferenceImage } from './image-domain';
 import type { VTKMaskMapperNode } from './vtk-volume-mask-mapper';
+import type { Point } from '../types';
 export type { VTKMaskMapperNode } from './vtk-volume-mask-mapper';
 
 export type VTKVolumeMaskMode = 'off' | 'inside' | 'outside';
@@ -84,6 +85,12 @@ export function vtkVolumeMaskTransform(ct: VolumeDescriptor, mask: VolumeDescrip
 function cancelled() {
   return new DOMException('Volume mask preparation cancelled.', 'AbortError');
 }
+/** One bit per voxel, set where the R8 mask is nonzero, as the shader's `> 0.0` test reads it. */
+function packBits(voxels: Uint8Array) {
+  const bits = new Uint8Array(Math.ceil(voxels.length / 8));
+  for (let index = 0; index < voxels.length; index++) if (voxels[index]) bits[index >> 3] |= 1 << (index & 7);
+  return bits;
+}
 /** Read a whole cropped presentation source; cancellation wins even if the provider ignores it. */
 export function readMask(source: GPUVolumeSource, signal: AbortSignal): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
@@ -134,6 +141,8 @@ export class VTKVolumeMask {
   private textureUploads = 0;
   private slabReads = 0;
   private matrix: number[] = [];
+  /** One bit per texture voxel, kept for the CPU ray behind Volume point at an eighth of the texture's bytes. */
+  private bits?: Uint8Array;
   private restore?: () => void;
 
   constructor(
@@ -208,7 +217,7 @@ export class VTKVolumeMask {
     this.controller = undefined;
     const epoch = ++this.epoch;
     this.cpuBytes = 0;
-    this.reserve(this.gpuBytes);
+    this.reserve(this.keptBytes);
     this.ready = false;
     this.mode = mode;
     this.changed();
@@ -242,7 +251,7 @@ export class VTKVolumeMask {
     try {
       this.install();
       // Admission precedes provider reads, slab allocation and GPU upload.
-      this.reserve(this.gpuBytes + 2 * descriptor.byte_length);
+      this.reserve(this.keptBytes + 2 * descriptor.byte_length);
       this.cpuBytes = descriptor.byte_length;
       this.slabReads++;
       const buffer = await readMask(source, controller.signal);
@@ -256,8 +265,9 @@ export class VTKVolumeMask {
         wrapR: Wrap.CLAMP_TO_EDGE,
       });
       staged.setOpenGLRenderWindow(this.renderWindow);
-      const [width, height, depth] = descriptor.shape;
-      if (!staged.create3DFromRaw({ width, height, depth, numComps: 1, dataType: vtkDataArray.VtkDataTypes.UNSIGNED_CHAR, data: new Uint8Array(buffer) }))
+      const [width, height, depth] = descriptor.shape,
+        voxels = new Uint8Array(buffer);
+      if (!staged.create3DFromRaw({ width, height, depth, numComps: 1, dataType: vtkDataArray.VtkDataTypes.UNSIGNED_CHAR, data: voxels }))
         throw new Error('The cropped volume mask texture could not be uploaded.');
       if (!current()) throw cancelled();
       this.textureUploads++;
@@ -265,18 +275,19 @@ export class VTKVolumeMask {
       this.texture?.delete();
       this.texture = staged;
       staged = undefined;
+      this.bits = packBits(voxels);
       this.gpuBytes = descriptor.byte_length;
       this.cpuBytes = 0;
       this.descriptor = structuredClone(descriptor);
       this.matrix = vtkVolumeMaskTransform(this.ct, descriptor);
       this.ready = true;
-      this.reserve(this.gpuBytes);
+      this.reserve(this.keptBytes);
       this.changed();
     } catch (reason) {
       if (epoch === this.epoch) {
         this.cpuBytes = 0;
         this.ready = false;
-        this.reserve(this.gpuBytes);
+        this.reserve(this.keptBytes);
         this.changed();
       }
       throw reason;
@@ -300,12 +311,37 @@ export class VTKVolumeMask {
     this.texture?.releaseGraphicsResources(this.renderWindow);
     this.texture?.delete();
     this.texture = undefined;
+    this.bits = undefined;
     this.descriptor = undefined;
     this.matrix = [];
     this.gpuBytes = 0;
     this.cpuBytes = 0;
     this.reserve(0);
     this.changed();
+  }
+  /** The texture and its bit copy, both charged to the budget while a mask is installed. */
+  private get keptBytes() {
+    return this.gpuBytes + (this.bits?.byteLength ?? 0);
+  }
+  /**
+   * The shader's mask test on the CPU at continuous CT voxel indices, so a Volume point ray sees
+   * the CT the mask leaves drawn: the nearest mask voxel, nothing outside the crop. Undefined
+   * until a mask is ready.
+   */
+  voxelTest(): ((voxel: Point) => boolean) | undefined {
+    const descriptor = this.descriptor,
+      bits = this.bits;
+    if (!this.ready || this.mode === 'off' || !descriptor || !bits) return;
+    const inverse = inverseAffine(descriptor.affine_ras),
+      ctToMask = inverse.slice(0, 3).map(row => [0, 1, 2, 3].map(col => row.reduce((sum, value, axis) => sum + value * this.ct.affine_ras[axis][col], 0))),
+      [width, height, depth] = descriptor.shape,
+      inside = this.mode === 'inside';
+    return voxel => {
+      const [i, j, k] = ctToMask.map(row => Math.floor(row[0] * voxel[0] + row[1] * voxel[1] + row[2] * voxel[2] + row[3] + 0.5));
+      const index = i + width * (j + height * k),
+        set = i >= 0 && j >= 0 && k >= 0 && i < width && j < height && k < depth && ((bits[index >> 3] >> (index & 7)) & 1) === 1;
+      return set === inside;
+    };
   }
   stats() {
     return {
@@ -318,6 +354,7 @@ export class VTKVolumeMask {
       referenceImageId: this.ct.reference_image_id,
       gpuBytes: this.gpuBytes,
       cpuBytes: this.cpuBytes,
+      rayBytes: this.bits?.byteLength ?? 0,
       reservedBytes: this.reservedBytes,
       textureUploads: this.textureUploads,
       slabReads: this.slabReads,

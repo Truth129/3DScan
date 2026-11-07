@@ -392,14 +392,15 @@ second GPU copy of the CT.
   with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a boundary by
   a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong tissue.
 - **Color segments** tints the CT before lighting from a label union, largest structure first.
-- **Review** can show the CT volume, with masking, colouring and Cinematic heart off because they
-  would follow the candidate mask. While the reader marks on the CT plane, the crop plane on its
-  axis moves to the slice to cut away the camera's side, because vtk.js volume shaders take six
-  clipping planes.
+- **Review** can show the CT volume. Mask to segmentation there uses the saved revision, not the
+  candidate; colouring and Cinematic heart stay off because they would follow it. While the reader
+  marks on the CT plane, the crop plane on its axis moves to the slice to cut away the camera's
+  side, because vtk.js volume shaders take six clipping planes.
 - **Volume point** marches the click's ray on the CPU through the shared ImageVolume
   (`volume-ray.ts`), because vtk.js cannot pick a shared GPU volume. It samples trilinearly every
   half smallest spacing and takes the first sample where opacity, accumulated as vtk.js does,
   reaches 0.5, within the clipping, near and far planes and before opaque surfaces and the CT plane.
+  A mask hides samples by the shader's own nearest-voxel test on a one-bit CPU copy of its crop.
 - **Volume point limits.** See-through surfaces neither stop nor dim it, and gradient opacity and
   lighting are not modelled.
 - **Surface point** is refused when visible volume lies in front of it by more than the coarsest
@@ -433,7 +434,7 @@ fails before allocating, and the viewer explains it and offers Retry.
 | CT worker's copy                  | 512 MiB, or 128 MiB with 2 GiB of RAM or less |
 | Source preview                    | 192 voxels per dimension                      |
 | Selected masks in the worker      | 64 MiB for preview, 192 MiB for full          |
-| Native CT plane, mask, label crop | 8 MiB each                                    |
+| Native CT plane, mask, label crop | 8 MiB each; a mask adds 1 MiB of bits           |
 | Three.js CT and mask atlas        | 512 MiB                                       |
 | MIP and MinIP slab                | 200 mm                                        |
 | Native **Color segments**         | 64 structures                                 |

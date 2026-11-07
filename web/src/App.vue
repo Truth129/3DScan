@@ -1822,6 +1822,7 @@ onBeforeUnmount(() => {
                 "
                 :structures="shownStructures"
                 :mask-structures="maskStructures"
+                :mask-revision-id="revision.id"
                 :display="display"
                 :selected="selected"
                 :point="point"

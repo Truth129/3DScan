@@ -38,6 +38,8 @@ const props = defineProps<{
   mask?: VolumeMaskSettings;
   colors?: VolumeColorRequest;
   revisionBase?: string;
+  /** Review masks the CT by the saved revision, so a draft's edits never reload or move the mask. */
+  maskRevisionBase?: string;
   maskSourceProvider?: GPUOverlaySourceProvider;
   modelRevisionId?: string;
   review?: NativeReviewState;
@@ -110,9 +112,8 @@ let generation = 0,
 const visibleStructures = computed(() =>
   (props.structures ?? []).filter(item => props.display?.[item.id]?.visible !== false && (props.display?.[item.id]?.opacity ?? 0.5) > 0),
 );
-const maskFamily = computed(() =>
-  JSON.stringify([props.revisionBase ?? props.session?.revisionBase, [...(props.mask?.ids ?? [])].sort(), props.mask?.margin_mm ?? 0]),
-);
+const maskBase = () => props.maskRevisionBase ?? props.revisionBase ?? props.session?.revisionBase;
+const maskFamily = computed(() => JSON.stringify([maskBase(), [...(props.mask?.ids ?? [])].sort(), props.mask?.margin_mm ?? 0]));
 const maskMode = () => (props.mask?.enabled ? props.mask.mode : 'off');
 function publishMaskStatus() {
   emit('maskStatus', { ready: maskReady.value, loading: maskLoading.value, error: maskError.value });
@@ -419,7 +420,7 @@ async function loadMask() {
     return;
   }
   try {
-    const base = props.revisionBase ?? props.session?.revisionBase;
+    const base = maskBase();
     if (!base) throw new Error('The selected CT revision is unavailable for volume masking.');
     const result = await (props.maskSourceProvider ?? localMasks).get(base, settings.ids, active.signal, settings.margin_mm);
     if (!current()) return;

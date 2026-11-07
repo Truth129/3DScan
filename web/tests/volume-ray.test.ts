@@ -62,6 +62,25 @@ describe('first visible volume point', () => {
     expect(firstVisibleVolumePoint(along(-300).map((value, axis) => value + aside[axis]) as Point, direction, source)).toBeUndefined();
   });
 
+  it('passes CT a mask hides and stops at the first part it shows', () => {
+    // Mask to segmentation hiding the sphere's near half.
+    const masked = {
+      ...source,
+      visible: (voxel: Point) =>
+        dot(
+          transformPoint(affine, voxel).map((value, axis) => value - centre[axis]),
+          direction,
+        ) >= 0,
+    };
+    const hit = firstVisibleVolumePoint(along(-300), direction, masked)!;
+    const depth = dot(
+      hit.ras.map((value, axis) => value - centre[axis]),
+      direction,
+    );
+    expect(depth).toBeGreaterThanOrEqual(0);
+    expect(depth).toBeLessThan(1);
+    expect(firstVisibleVolumePoint(along(-300), direction, { ...source, visible: () => false })).toBeUndefined();
+  });
   it('honours the mapper planes, including a review cut that tightens the crop on its own axis', () => {
     const descriptor = { shape, affine_ras: affine } as VolumeDescriptor,
       clip = (settings: CTVolumeSettings, cut?: CornerstoneVolumeCut) =>

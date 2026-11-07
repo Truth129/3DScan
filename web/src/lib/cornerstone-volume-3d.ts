@@ -307,9 +307,11 @@ export class CornerstoneVolume3D {
     return view.reduce((sum, value, axis) => sum + value * gradient[axis], 0) >= 0 ? 0 : 1;
   }
 
-  /** What a CPU ray needs to find the CT as drawn: its source samples, scalar opacity and the very clipping planes the mapper uses. Nothing while it is hidden or masked. */
+  /** What a CPU ray needs to find the CT as drawn: its source samples, scalar opacity, the very clipping planes the mapper uses and any mask's voxel test. Nothing while it is hidden. */
   rayVolume(): VolumeRaySource | undefined {
-    if (this.disposed || !this.ready || !this.actor?.getVisibility() || this.maskMode !== 'off' || !this.rayOpacity) return;
+    if (this.disposed || !this.ready || !this.actor?.getVisibility() || !this.rayOpacity) return;
+    const visible = this.maskMode === 'off' ? undefined : this.mask?.voxelTest();
+    if (this.maskMode !== 'off' && !visible) return;
     const descriptor = this.owner.sourceDescriptor;
     this.raySample ??= trilinearSampler(descriptor.shape, (i, j, k) => this.sourceVoxelValue(i, j, k));
     return {
@@ -318,6 +320,7 @@ export class CornerstoneVolume3D {
       sample: this.raySample,
       ...this.rayOpacity,
       clip: this.clipping.map(({ normal, origin }) => ({ normal: lpsToRas(normal), origin: lpsToRas(origin) })),
+      visible,
     };
   }
 

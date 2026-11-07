@@ -42,7 +42,6 @@ const props = withDefaults(
     maskMessage?: string;
     maskError?: boolean;
     maskMarginFixed?: boolean;
-    maskSupported?: boolean;
     /** Review leaves Cinematic heart out, because its reference HU comes from the masks being edited. */
     cinematicAvailable?: boolean;
     colors?: VolumeColorSettings;
@@ -56,7 +55,6 @@ const props = withDefaults(
     structures: () => [],
     selected: '',
     display: () => ({}),
-    maskSupported: true,
     cinematicAvailable: true,
     colors: () => freshVolumeColorSettings(),
   },
@@ -273,10 +271,7 @@ watch(
         <p v-if="heartViewAvailable" class="volume-preset-note">
           Heart view faces the same side as the supplied Slicer scene. Oblique exposes a different face and can show brighter blood or chamber interiors.
         </p>
-        <p class="volume-preset-note">
-          Crimson myocardium and ivory blood.
-          <template v-if="maskSupported">For an isolated heart, enable Mask to segmentation below and choose its segments.</template>
-        </p>
+        <p class="volume-preset-note">Crimson myocardium and ivory blood. For an isolated heart, enable Mask to segmentation below and choose its segments.</p>
         <div class="volume-cinematic-reference">
           <!-- prettier-ignore -->
           <label>Myocardium <input v-model="myocardiumInput" type="number" aria-label="Myocardium reference HU" min="-500" max="1500" step="1" :disabled="disabled || referenceLoading" /> <span>HU</span></label>
@@ -339,7 +334,7 @@ watch(
       />
       <p v-if="otherModality" class="volume-preset-note">This preset is designed for another modality and may need adjustment for CT.</p>
       <p v-if="projectionNamed" class="volume-preset-note">Slicer’s {{ preset.label }} appearance, shown with composite volume rendering.</p>
-      <div v-if="maskSupported" class="volume-mask">
+      <div class="volume-mask">
         <div class="volume-mask-header">
           <label
             class="volume-toggle"
