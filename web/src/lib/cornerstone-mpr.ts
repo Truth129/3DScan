@@ -137,9 +137,9 @@ export class CornerstoneMPR {
    * Each pane's camera while masks attach. Adding a mask actor resets that pane's camera inside
    * Cornerstone, and Crosshairs answers the reset by resetting every pane, slab included, so the
    * panes showed the volume's centre slice until the load ended. ACTORS_CHANGED puts all of them
-   * back before the next frame.
+   * back before the next frame. `replacing` maps each new mask to the one it replaces.
    */
-  private kept?: { generation: number; cameras: Record<Plane, Core.Types.ICamera> };
+  private kept?: { generation: number; cameras: Record<Plane, Core.Types.ICamera>; replacing: Map<OverlayEntry, OverlayEntry> };
   private pointRAS: Point;
   private nativeReview = false;
   private crosshairsEnabled = false;
@@ -149,6 +149,7 @@ export class CornerstoneMPR {
   private level: number;
   private overlayOpacity = 0.4;
   private presentationKey = '';
+  private presentedSelections: readonly CTOverlaySelection[] = [];
   private inactiveViewports = new Set<string>();
   private overlayStyle = { fill: true, outline: true };
   private listeners: Array<() => void> = [];
@@ -326,8 +327,15 @@ export class CornerstoneMPR {
           this.callbacks.windowLevel?.(this.windowWidth, this.level);
         }
       };
-      const actors = () => {
+      const actors = (event: Event) => {
         if (!this.kept || this.disposed) return;
+        // Once a new mask's actors are on this pane, the mask it replaces goes, in the same frame.
+        // Both together showed a shape that never existed, such as an Original merged with its
+        // Candidate, for as long as the load ran.
+        const current = (event as CustomEvent<{ currentActors?: Core.Types.ActorEntry[] }>).detail?.currentActors ?? [],
+          present = new Set(current.map(item => item.referencedId));
+        for (const [entry, old] of this.kept.replacing)
+          if ([entry.current, entry.removed].every(volume => !volume || present.has(volume.id))) this.hideEntry(old, plane, current);
         for (const value of planes) this.viewport(value).setCamera(this.kept.cameras[value]);
         this.setSlab(this.slabMode, this.slabMM);
         this.setPointRAS(this.pointRAS);
@@ -698,7 +706,8 @@ export class CornerstoneMPR {
     const onAbort = () => controller.abort();
     this.controller.signal.addEventListener('abort', onAbort, { once: true });
     const next = new Map<string, OverlayEntry>(),
-      created: OverlayEntry[] = [];
+      created: OverlayEntry[] = [],
+      replacing = new Map<OverlayEntry, OverlayEntry>();
     try {
       for (const source of sources.overlays) {
         aborted(controller.signal);
@@ -712,6 +721,7 @@ export class CornerstoneMPR {
         }
         const key = JSON.stringify([source.id, source.current.descriptor.key, parent?.descriptor.key]);
         let entry = this.overlays.get(source.id);
+        const previous = entry;
         if (entry?.key !== key) {
           const current = await this.uploadVolume(source.current, controller.signal);
           let removed: OwnedVolume | undefined;
@@ -730,6 +740,7 @@ export class CornerstoneMPR {
               memoryBytes: cornerstoneOverlayMemoryBytes({ overlays: [source] }),
             };
             created.push(entry);
+            if (previous) replacing.set(entry, previous);
           } catch (error) {
             this.releaseVolume(current);
             if (removed) this.releaseVolume(removed);
@@ -740,7 +751,7 @@ export class CornerstoneMPR {
       }
       aborted(controller.signal);
       if (generation !== this.overlayGeneration || this.disposed) throw new DOMException('MPR overlays were superseded.', 'AbortError');
-      this.kept = { generation, cameras: this.cameras() };
+      this.kept = { generation, cameras: this.cameras(), replacing };
       try {
         for (const entry of created) await this.attachOverlay(entry, controller.signal, selections, opacity);
         aborted(controller.signal);
@@ -766,6 +777,11 @@ export class CornerstoneMPR {
       return true;
     } catch (error) {
       for (const entry of created) this.releaseOverlay(entry);
+      // A failed or superseded load may have hidden masks it was replacing, which are still current.
+      if (replacing.size && !this.disposed && this.mprAttached) {
+        this.presentationKey = '';
+        this.setOverlayPresentation(this.presentedSelections);
+      }
       if (controller.signal.aborted || this.disposed || generation !== this.overlayGeneration) return false;
       throw error;
     } finally {
@@ -953,9 +969,19 @@ export class CornerstoneMPR {
       [...this.overlays.values()].map(entry => [entry.id, entry.segmentationIds, selections.find(item => item.id === entry.id)?.color]),
     ]);
     if (this.presentationKey === nextPresentation) return;
+    this.presentedSelections = selections;
     for (const entry of this.overlays.values()) this.presentEntry(entry, selections, opacity);
     this.presentationKey = nextPresentation;
     this.engine?.render();
+  }
+  /** Hides a mask on one pane. Its actors go at once: the visibility setting alone waits for the
+   * next segmentation pass, a frame after the replacement has drawn. */
+  private hideEntry(entry: OverlayEntry, plane: Plane, actors: readonly Core.Types.ActorEntry[]) {
+    const type = this.libs.tools.Enums.SegmentationRepresentations.Labelmap,
+      volumes = new Set([entry.current.id, entry.removed?.id]);
+    for (const item of actors) if (volumes.has(item.referencedId)) (item.actor as { setVisibility?: (visible: boolean) => void }).setVisibility?.(false);
+    for (const segmentationId of entry.segmentationIds)
+      this.libs.tools.segmentation.config.visibility.setSegmentationRepresentationVisibility(this.viewportId(plane), { segmentationId, type }, false);
   }
   private presentEntry(entry: OverlayEntry, selections: readonly CTOverlaySelection[], opacity: number) {
     const { tools } = this.libs,

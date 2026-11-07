@@ -59,14 +59,16 @@ const planes: Plane[] = ['axial', 'coronal', 'sagittal'];
 const stack = ref<HTMLElement>();
 const stills = shallowRef<Partial<Record<Plane, HTMLCanvasElement>>>();
 // Before the preview panes unmount, keep what they show for the volume MPR to show until it has
-// drawn. Going straight to the MPR left the panes black for seconds after a case opened.
+// drawn. Going straight to the MPR left the panes black for seconds after a case opened. Not in
+// review: there the preview lays native slices out as stored, which can be the other way up.
 watch(
   nativeVolume,
   value => {
     const panes = stack.value ? [...stack.value.children].map(pane => pane.querySelector('.ct-image')) : [];
-    stills.value = value
-      ? Object.fromEntries(planes.flatMap((plane, index) => (panes[index] ? [[plane, paneStill(panes[index]!)]] : [])).filter(([, still]) => still))
-      : undefined;
+    stills.value =
+      value && !props.nativeReview
+        ? Object.fromEntries(planes.flatMap((plane, index) => (panes[index] ? [[plane, paneStill(panes[index]!)]] : [])).filter(([, still]) => still))
+        : undefined;
   },
   { flush: 'pre' },
 );
