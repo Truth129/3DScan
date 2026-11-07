@@ -85,8 +85,11 @@ vi.mock('@cornerstonejs/tools', () => ({
   WindowLevelTool: { toolName: 'window' },
   PanTool: { toolName: 'pan' },
   ZoomTool: { toolName: 'zoom' },
-  Enums: { MouseBindings: { Secondary: 2, Auxiliary: 4, Wheel: 524288 } },
-  ToolGroupManager: { createToolGroup: () => ({ addTool() {}, addViewport() {}, setToolActive() {} }), destroyToolGroup: fake.destroyGroup },
+  Enums: { MouseBindings: { Primary: 1, Secondary: 2, Auxiliary: 4, Wheel: 524288 }, KeyboardBindings: { Ctrl: 17, Meta: 91 } },
+  ToolGroupManager: {
+    createToolGroup: () => ({ addTool() {}, addViewport() {}, setToolActive() {}, setToolDisabled() {} }),
+    destroyToolGroup: fake.destroyGroup,
+  },
 }));
 
 import { CornerstoneFrameViewport, cornerstoneFrameCacheStats } from '../src/lib/cornerstone-runtime';

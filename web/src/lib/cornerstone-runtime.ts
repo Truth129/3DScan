@@ -4,6 +4,7 @@ import type { Point, SliceMeta } from '../types';
 import { ctOverlayAppearance, sameCTFrameSamples, type CTFrame } from './ct-renderer';
 import { cornerstoneDisplayMeta, cornerstonePlane, lpsToRas, rasToLps } from './cornerstone-frame';
 import { imagePresentation } from './image-domain';
+import { bindWindowLevel, cornerstoneZoomBindings } from './cornerstone-bindings';
 
 type Libraries = { core: typeof Core; tools: typeof Tools };
 type ImageRecord = { frame: CTFrame; image: Core.Types.IImage; frameOfReferenceUID: string };
@@ -131,9 +132,9 @@ export class CornerstoneFrameViewport {
     this.group = tools.ToolGroupManager.createToolGroup(this.id)!;
     for (const tool of [tools.WindowLevelTool, tools.PanTool, tools.ZoomTool]) this.group.addTool(tool.toolName);
     this.group.addViewport(this.id, this.id);
-    this.group.setToolActive(tools.WindowLevelTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Secondary }] });
+    bindWindowLevel(this.group, tools, false);
     this.group.setToolActive(tools.PanTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Auxiliary }] });
-    this.group.setToolActive(tools.ZoomTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Wheel }] });
+    this.group.setToolActive(tools.ZoomTool.toolName, { bindings: cornerstoneZoomBindings(tools) });
     this.cameraChanged = () => callbacks.camera?.();
     this.voiChanged = event => {
       if (this.applyingWindow || this.applyingImage) return;
@@ -196,9 +197,9 @@ export class CornerstoneFrameViewport {
     return cornerstoneDisplayMeta(this.currentFrame.meta, rect.width, rect.height, point => this.viewport.canvasToWorld(point));
   }
   setEditing(editing: boolean) {
-    // Primary mouse input belongs to linked picking / review gestures. Native
-    // Cornerstone tools retain right-window, middle-pan and wheel-zoom bindings.
+    // While drawing, the left button belongs to review gestures; right drag still windows.
     this.element.dataset.editing = String(editing);
+    bindWindowLevel(this.group, this.libs.tools, editing);
   }
   setWindow(window: number, level: number) {
     if (!Number.isFinite(window) || window <= 0 || !Number.isFinite(level)) return;

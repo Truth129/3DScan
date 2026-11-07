@@ -260,11 +260,14 @@ filtered. A section's eye hides it, and its arrow collapses it.
 
 Three linked planes share one position, with its patient RAS coordinates and HU value below.
 
-- **Navigate:** click to move, slider to change slice, right drag for window/level, middle drag to
-  pan, scroll to zoom. **Reset planes** restores them.
+- **Navigate:** click to move, scroll or the slider to change slice, left or right drag for
+  window/level, middle drag to pan, Ctrl or ⌘ scroll (or pinch) to zoom. Scrolling down moves
+  one slice towards the feet, back or patient's left. While drawing, left drag draws and right
+  drag still sets window/level. **Reset planes** restores them.
 - **Window:** **Soft tissue**, **Lung**, **Bone** or **Vessels**, or type **W** and **L**.
 - **Projection:** **MPR**, **MIP** or **MinIP**, with **Slab mm**. A slab shows overlays on its
-  centre slice and pauses drawing. **Rotatable crosshairs** adds crosshairs you can rotate.
+  centre slice and pauses drawing. **Rotatable crosshairs** adds crosshairs you can drag and
+  rotate by their lines.
 - **Overlays:** **Segments** chooses what shows, **Use selected segment** follows the selection and
   **Clear overlays** shows CT alone. **Fill**, **Outline** and **2D overlay opacity** set the style.
 - **Colors:** bones are yellow. Change any color under **Selected structure**; your browser keeps

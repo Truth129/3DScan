@@ -7,6 +7,7 @@ import { inverseAffine, transformPoint, type VolumeDescriptor } from './ct-resli
 import { imagePresentation, assertReferenceImage } from './image-domain';
 import { rasToLps, lpsToRas } from './cornerstone-frame';
 import { cornerstoneLibraries, destroyRenderingEngine } from './cornerstone-runtime';
+import { bindWindowLevel, cornerstoneZoomBindings } from './cornerstone-bindings';
 import { nativeSliceFor } from './interactive-review';
 import { cornerstoneVolumeGeometry, cornerstoneVolumeSlices, nativeCameraOrientation, cornerstoneMPRDisplayMeta } from './cornerstone-volume';
 
@@ -149,6 +150,7 @@ export class CornerstoneMPR {
   private pointRAS: Point;
   private nativeReview = false;
   private crosshairsEnabled = false;
+  private editing = false;
   private slabMode: MPRSlabMode = 'mpr';
   private slabMM = 1;
   private windowWidth: number;
@@ -364,9 +366,9 @@ export class CornerstoneMPR {
       element.dataset.rendererId = this.id;
       element.dataset.viewportId = this.viewportId(plane);
     }
-    this.group.setToolActive(tools.WindowLevelTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Secondary }] });
+    bindWindowLevel(this.group, tools, this.editing);
     this.group.setToolActive(tools.PanTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Auxiliary }] });
-    this.group.setToolActive(tools.ZoomTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Wheel }] });
+    this.group.setToolActive(tools.ZoomTool.toolName, { bindings: cornerstoneZoomBindings(tools) });
     const crosshair = (event: Event) => {
       const detail = (event as CustomEvent<{ toolGroupId: string; toolCenter: Point }>).detail;
       if (!this.disposed && !this.applying && !this.kept && detail.toolGroupId === this.mprGroupId && detail.toolCenter?.every(Number.isFinite)) {
@@ -618,10 +620,16 @@ export class CornerstoneMPR {
       }
     }
   }
+  /** While drawing, the left button belongs to review gestures; right drag still windows. */
+  setEditing(editing: boolean) {
+    if (this.editing === editing) return;
+    this.editing = editing;
+    if (!this.disposed && this.group) bindWindowLevel(this.group, this.libs.tools, editing);
+  }
   private updateCrosshairs() {
     const name = this.libs.tools.CrosshairsTool.toolName;
-    if (this.crosshairsEnabled && !this.nativeReview)
-      this.group!.setToolActive(name, { bindings: [{ mouseButton: this.libs.tools.Enums.MouseBindings.Primary }] });
+    // Passive keeps the lines and handles draggable while a left drag elsewhere windows.
+    if (this.crosshairsEnabled && !this.nativeReview) this.group!.setToolPassive(name);
     else this.group!.setToolEnabled(name);
   }
   setWindow(width: number, level: number) {

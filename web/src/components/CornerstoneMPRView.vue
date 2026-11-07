@@ -9,6 +9,7 @@ import { acquireCornerstoneSource, type CornerstoneSourceLease } from '../lib/co
 import { inverseAffine, transformPoint } from '../lib/ct-reslice';
 import { planeAxis } from '../lib/geometry';
 import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/interactive-review';
+import { createSliceWheel, stepSlice } from '../lib/slice-wheel';
 import { revisionUrl } from '../lib/api';
 import { sharedVolumeMemoryBudget, VolumeMemoryBudgetError } from '../lib/volume-memory-budget';
 import CTReviewInput from './CTReviewInput.vue';
@@ -77,6 +78,7 @@ let generation = 0,
   committedContext = '';
 let unsubscribeOverlay: (() => void) | undefined;
 let pointerStart: [number, number] | undefined;
+const sliceWheels = { axial: createSliceWheel(), coronal: createSliceWheel(), sagittal: createSliceWheel() };
 const budget = ref(sharedVolumeMemoryBudget.stats);
 const unsubscribeBudget = sharedVolumeMemoryBudget.onChange(() => {
   budget.value = sharedVolumeMemoryBudget.stats;
@@ -172,6 +174,7 @@ function fail(reason: unknown) {
 function configure() {
   if (!viewer) return;
   viewer.setNativeReview(!!props.nativeReview);
+  viewer.setEditing(marking.value);
   viewer.setCrosshairs(crosshairs.value && !props.nativeReview && !marking.value);
   viewer.setSlab(effectiveSlab.value, effectiveSlab.value === 'mpr' ? 0 : Math.max(1, Math.min(200, Number(slabMM.value) || 10)));
   viewer.setPointRAS(props.point);
@@ -306,6 +309,14 @@ function range(plane: Plane) {
     ? [0, props.geometry.shape[nativeSliceFor(props.geometry, plane, props.point).axis] - 1]
     : [props.geometry.bounds_ras[0][axis], props.geometry.bounds_ras[1][axis]];
 }
+function wheel(plane: Plane, event: WheelEvent) {
+  event.preventDefault();
+  // Ctrl or Cmd with the wheel zooms in Cornerstone, and a held button means a drag or stroke is under way.
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.buttons) return;
+  const step = sliceWheels[plane](event),
+    next = step && stepSlice(props.geometry, plane, props.point, step, !!props.nativeReview);
+  if (next && next !== props.point) emit('point', next);
+}
 function slide(plane: Plane, event: Event) {
   const value = Number((event.target as HTMLInputElement).value);
   if (props.nativeReview) emit('point', moveNativeSlice(props.geometry, props.point, nativeSliceFor(props.geometry, plane, props.point).axis, value));
@@ -391,6 +402,7 @@ onBeforeUnmount(() => {
           @contextmenu.prevent
           @pointerdown.capture="pointerStart = [$event.clientX, $event.clientY]"
           @click="click(plane, $event)"
+          @wheel="wheel(plane, $event)"
         >
           <div v-if="metas[plane]" class="cornerstone-annotations" :style="{ clipPath: clips[plane] }">
             <CTReviewInput

@@ -134,6 +134,7 @@ const fake = vi.hoisted(() => {
     utilities: { segmentation: { triggerSegmentationRender: vi.fn() } },
     Enums: {
       MouseBindings: { Primary: 1, Secondary: 2, Auxiliary: 4, Wheel: 524288 },
+      KeyboardBindings: { Ctrl: 17, Meta: 91 },
       Events: { CROSSHAIR_TOOL_CENTER_CHANGED: 'crosshair', SEGMENTATION_RENDERED: 'seg-rendered' },
       SegmentationRepresentations: { Labelmap: 'Labelmap' },
     },
@@ -145,6 +146,7 @@ const fake = vi.hoisted(() => {
           addViewport: vi.fn(),
           setToolActive: vi.fn(),
           setToolEnabled: vi.fn(),
+          setToolPassive: vi.fn(),
           setToolDisabled: vi.fn(),
           removeViewports: vi.fn(),
           getToolInstance: () => crosshair,

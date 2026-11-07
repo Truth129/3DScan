@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point, SliceMeta } from '../types';
 import CTReviewInput from './CTReviewInput.vue';
 import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/interactive-review';
+import { createSliceWheel, stepSlice } from '../lib/slice-wheel';
 import { pixelToRas, planeAxis, rasToPixel, referenceGridKey } from '../lib/geometry';
 import { revisionUrl } from '../lib/api';
 import { fetchCTDetail, type LocalCTSession } from '../lib/ct-volume';
@@ -89,6 +90,7 @@ let previewRequested = 0,
 let detailController: AbortController | undefined, lastOverlayFrame: CTFrame | undefined;
 let unsubscribeOverlay: (() => void) | undefined;
 let pointerStart: [number, number] | undefined;
+const sliceWheel = createSliceWheel();
 const details = new Map<string, CTFrame>();
 const delivery = new WeakMap<CTFrame, { context: string; quality: 'preview' | 'full' }>();
 const bitmap = document.createElement('canvas');
@@ -314,6 +316,14 @@ function slide(event: Event) {
     emit('point', next);
   }
 }
+function wheel(event: WheelEvent) {
+  event.preventDefault();
+  // Ctrl or Cmd with the wheel zooms in Cornerstone, and a held button means a drag or stroke is under way.
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.buttons) return;
+  const step = sliceWheel(event),
+    next = step && stepSlice(props.geometry, props.plane, props.point, step, !!props.nativeReview);
+  if (next && next !== props.point) emit('point', next);
+}
 function releaseViewer() {
   viewerGeneration++;
   generation++;
@@ -425,6 +435,7 @@ onBeforeUnmount(() => {
         @contextmenu.prevent
         @pointerdown.capture="pointerStart = [$event.clientX, $event.clientY]"
         @click="click"
+        @wheel="wheel"
       >
         <canvas ref="overlay" class="cornerstone-overlay" aria-hidden="true"></canvas>
         <div v-if="displayMeta" class="cornerstone-annotations" :style="{ clipPath: annotationClip }">
