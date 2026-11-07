@@ -392,8 +392,9 @@ input[type='range'] {
   background: #050608;
   font-size: 11px;
 }
+/* Top right: Reset view holds the bottom right corner. */
 .ct-local-loading.ct-updating {
-  inset: auto 6px 6px auto;
+  inset: 6px 6px auto auto;
   display: block;
   padding: 4px 7px;
   border-radius: 3px;

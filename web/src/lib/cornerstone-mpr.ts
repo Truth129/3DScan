@@ -133,7 +133,13 @@ export class CornerstoneMPR {
   private disposed = false;
   private beforeDispose = new Set<() => void>();
   private applying = false;
-  private preservingCamera = false;
+  /**
+   * Each pane's camera while masks attach. Adding a mask actor resets that pane's camera inside
+   * Cornerstone, and Crosshairs answers the reset by resetting every pane, slab included, so the
+   * panes showed the volume's centre slice until the load ended. ACTORS_CHANGED puts all of them
+   * back before the next frame.
+   */
+  private kept?: { generation: number; cameras: Record<Plane, Core.Types.ICamera> };
   private pointRAS: Point;
   private nativeReview = false;
   private crosshairsEnabled = false;
@@ -324,13 +330,21 @@ export class CornerstoneMPR {
           this.callbacks.windowLevel?.(this.windowWidth, this.level);
         }
       };
+      const actors = () => {
+        if (!this.kept || this.disposed) return;
+        for (const value of planes) this.viewport(value).setCamera(this.kept.cameras[value]);
+        this.setSlab(this.slabMode, this.slabMM);
+        this.setPointRAS(this.pointRAS);
+      };
       element.addEventListener(core.Enums.Events.CAMERA_MODIFIED, camera);
       element.addEventListener(core.Enums.Events.IMAGE_RENDERED, camera);
       element.addEventListener(core.Enums.Events.VOI_MODIFIED, voi);
+      element.addEventListener(core.Enums.Events.ACTORS_CHANGED, actors);
       this.listeners.push(() => {
         element.removeEventListener(core.Enums.Events.CAMERA_MODIFIED, camera);
         element.removeEventListener(core.Enums.Events.IMAGE_RENDERED, camera);
         element.removeEventListener(core.Enums.Events.VOI_MODIFIED, voi);
+        element.removeEventListener(core.Enums.Events.ACTORS_CHANGED, actors);
       });
       element.dataset.renderer = 'cornerstone-mpr';
       element.dataset.rendererId = this.id;
@@ -341,7 +355,7 @@ export class CornerstoneMPR {
     this.group.setToolActive(tools.ZoomTool.toolName, { bindings: [{ mouseButton: tools.Enums.MouseBindings.Wheel }] });
     const crosshair = (event: Event) => {
       const detail = (event as CustomEvent<{ toolGroupId: string; toolCenter: Point }>).detail;
-      if (!this.disposed && !this.applying && !this.preservingCamera && detail.toolGroupId === this.mprGroupId && detail.toolCenter?.every(Number.isFinite)) {
+      if (!this.disposed && !this.applying && !this.kept && detail.toolGroupId === this.mprGroupId && detail.toolCenter?.every(Number.isFinite)) {
         this.pointRAS = lpsToRas(detail.toolCenter);
         this.callbacks.point?.([...this.pointRAS]);
       }
@@ -549,6 +563,12 @@ export class CornerstoneMPR {
     if (this.nativeReview === native) return;
     this.nativeReview = native;
     if (!this.mprAttached) return;
+    this.orient();
+    this.engine!.render();
+  }
+  /** Turn every pane to the current mode, keeping each reader's zoom and centre. */
+  private orient() {
+    const native = this.nativeReview;
     this.applying = true;
     try {
       for (const plane of planes) {
@@ -563,10 +583,14 @@ export class CornerstoneMPR {
       if (native) this.setSlab('mpr', 1);
       this.updateCrosshairs();
       this.setPointRAS(this.pointRAS);
+      // Review can open or close while masks attach, and the cameras kept for them face the old way.
+      if (this.kept) this.kept.cameras = this.cameras();
     } finally {
       this.applying = false;
     }
-    this.engine!.render();
+  }
+  private cameras() {
+    return Object.fromEntries(planes.map(plane => [plane, this.viewport(plane).getCamera()])) as Record<Plane, Core.Types.ICamera>;
   }
   setCrosshairs(enabled: boolean) {
     if (this.crosshairsEnabled === enabled) return;
@@ -722,18 +746,19 @@ export class CornerstoneMPR {
       }
       aborted(controller.signal);
       if (generation !== this.overlayGeneration || this.disposed) throw new DOMException('MPR overlays were superseded.', 'AbortError');
-      const cameras = Object.fromEntries(planes.map(plane => [plane, this.viewport(plane).getCamera()])) as Record<Plane, Core.Types.ICamera>;
-      this.preservingCamera = true;
+      this.kept = { generation, cameras: this.cameras() };
       try {
-        for (const entry of created) await this.attachOverlay(entry, controller.signal);
+        for (const entry of created) await this.attachOverlay(entry, controller.signal, selections, opacity);
         aborted(controller.signal);
         if (generation !== this.overlayGeneration || this.disposed) throw new DOMException('MPR overlays were superseded.', 'AbortError');
         for (const [id, entry] of this.overlays) if (next.get(id) !== entry) this.releaseOverlay(entry);
         this.overlays = next;
       } finally {
-        this.preservingCamera = false;
-        if (!this.disposed) {
-          for (const plane of planes) this.viewport(plane).setCamera(cameras[plane]);
+        // A newer load can be attaching by now, and it keeps the same cameras.
+        const kept = this.kept;
+        if (kept?.generation === generation) this.kept = undefined;
+        if (!this.disposed && kept) {
+          for (const plane of planes) this.viewport(plane).setCamera(kept.cameras[plane]);
           this.setPointRAS(this.pointRAS);
           this.setSlab(this.slabMode, this.slabMM);
         }
@@ -812,7 +837,7 @@ export class CornerstoneMPR {
     }
     return offset;
   }
-  private async attachOverlay(entry: OverlayEntry, signal: AbortSignal) {
+  private async attachOverlay(entry: OverlayEntry, signal: AbortSignal, selections: readonly CTOverlaySelection[], opacity: number) {
     const { tools } = this.libs,
       type = tools.Enums.SegmentationRepresentations.Labelmap;
     for (const [kind, volume] of [
@@ -837,14 +862,19 @@ export class CornerstoneMPR {
       entry.colorLUTs.push(
         tools.segmentation.state.addColorLUT([
           [0, 0, 0, 0],
-          [56, 189, 248, 255],
+          [...this.segmentColor(entry, selections, kind === 'removed'), 255] as [number, number, number, number],
           [34, 197, 94, 255],
         ]),
       );
     }
-    await this.segmentationRenderBarrier(entry, signal);
+    // A mask's first frame is drawn in its own colour and style, not Cornerstone's defaults.
+    await this.segmentationRenderBarrier(entry, signal, () => this.presentEntry(entry, selections, opacity));
   }
-  private segmentationRenderBarrier(entry: OverlayEntry, signal: AbortSignal): Promise<void> {
+  private segmentColor(entry: OverlayEntry, selections: readonly CTOverlaySelection[], removed: boolean): [number, number, number] {
+    const selected = selections.find(item => item.id === entry.id);
+    return removed ? [244, 63, 94] : selected ? ctOverlayColor(selected.color) : [56, 189, 248];
+  }
+  private segmentationRenderBarrier(entry: OverlayEntry, signal: AbortSignal, present: () => void): Promise<void> {
     const { core, tools } = this.libs;
     return new Promise((resolve, reject) => {
       const pending = new Set(planes.flatMap(plane => entry.segmentationIds.map(id => `${this.viewportId(plane)}:${id}`)));
@@ -895,6 +925,7 @@ export class CornerstoneMPR {
             this.inactiveViewports.add(viewportId);
           }
         }
+        present();
         // v5.13 can strand representation work behind an empty lifecycle batch.
         // Nudge the public renderer only while this bounded load is pending;
         // after the final image, cancellation or timeout there is no idle loop.
@@ -928,43 +959,45 @@ export class CornerstoneMPR {
       [...this.overlays.values()].map(entry => [entry.id, entry.segmentationIds, selections.find(item => item.id === entry.id)?.color]),
     ]);
     if (this.presentationKey === nextPresentation) return;
-    const { tools } = this.libs,
-      type = tools.Enums.SegmentationRepresentations.Labelmap;
-    for (const entry of this.overlays.values()) {
-      const selected = selections.find(item => item.id === entry.id),
-        visible = !!selected;
-      for (const plane of planes) {
-        const viewportId = this.viewportId(plane);
-        for (let index = 0; index < entry.segmentationIds.length; index++) {
-          const segmentationId = entry.segmentationIds[index],
-            removed = index === 1;
-          tools.segmentation.config.visibility.setSegmentationRepresentationVisibility(viewportId, { segmentationId, type }, visible && opacity > 0);
-          tools.segmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, 1, [
-            ...(removed ? [244, 63, 94] : selected ? ctOverlayColor(selected.color) : [56, 189, 248]),
-            255,
-          ] as [number, number, number, number]);
-          if (!removed) tools.segmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, 2, [34, 197, 94, 255]);
-          tools.segmentation.config.style.setStyle(
-            { viewportId, segmentationId, type },
-            {
-              renderFill: this.overlayStyle.fill,
-              renderFillInactive: this.overlayStyle.fill,
-              renderOutline: this.overlayStyle.outline,
-              renderOutlineInactive: this.overlayStyle.outline,
-              fillAlpha: opacity,
-              fillAlphaInactive: opacity,
-              outlineOpacity: Math.min(1, opacity * 3),
-              outlineOpacityInactive: Math.min(1, opacity * 3),
-              outlineWidth: 1,
-              outlineWidthInactive: 1,
-              activeSegmentOutlineWidthDelta: 0,
-            },
-          );
-        }
-      }
-    }
+    for (const entry of this.overlays.values()) this.presentEntry(entry, selections, opacity);
     this.presentationKey = nextPresentation;
     this.engine?.render();
+  }
+  private presentEntry(entry: OverlayEntry, selections: readonly CTOverlaySelection[], opacity: number) {
+    const { tools } = this.libs,
+      type = tools.Enums.SegmentationRepresentations.Labelmap,
+      visible = selections.some(item => item.id === entry.id);
+    for (const plane of planes) {
+      const viewportId = this.viewportId(plane);
+      for (let index = 0; index < entry.segmentationIds.length; index++) {
+        const segmentationId = entry.segmentationIds[index],
+          removed = index === 1;
+        tools.segmentation.config.visibility.setSegmentationRepresentationVisibility(viewportId, { segmentationId, type }, visible && opacity > 0);
+        tools.segmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, 1, [...this.segmentColor(entry, selections, removed), 255] as [
+          number,
+          number,
+          number,
+          number,
+        ]);
+        if (!removed) tools.segmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, 2, [34, 197, 94, 255]);
+        tools.segmentation.config.style.setStyle(
+          { viewportId, segmentationId, type },
+          {
+            renderFill: this.overlayStyle.fill,
+            renderFillInactive: this.overlayStyle.fill,
+            renderOutline: this.overlayStyle.outline,
+            renderOutlineInactive: this.overlayStyle.outline,
+            fillAlpha: opacity,
+            fillAlphaInactive: opacity,
+            outlineOpacity: Math.min(1, opacity * 3),
+            outlineOpacityInactive: Math.min(1, opacity * 3),
+            outlineWidth: 1,
+            outlineWidthInactive: 1,
+            activeSegmentOutlineWidthDelta: 0,
+          },
+        );
+      }
+    }
   }
   stats() {
     return {

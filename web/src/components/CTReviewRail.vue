@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, shallowRef, watch } from 'vue';
 import CTSlice from './CTSlice.vue';
 import CornerstoneMPRView from './CornerstoneMPRView.vue';
-import type { Geometry, InteractivePrompt, InteractiveTool, Point } from '../types';
+import CTMPRControls from './CTMPRControls.vue';
+import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point } from '../types';
 import type { LocalCTSession } from '../lib/ct-volume';
 import type { CTOverlaySelection } from '../lib/ct-overlays';
 import { hasCornerstoneShear } from '../lib/cornerstone-volume';
 import type { CornerstoneMPR } from '../lib/cornerstone-mpr';
+import { paneStill } from '../lib/pane-still';
 
 const props = withDefaults(
   defineProps<{
@@ -53,6 +55,21 @@ watch(
     memoryError.value = '';
   },
 );
+const planes: Plane[] = ['axial', 'coronal', 'sagittal'];
+const stack = ref<HTMLElement>();
+const stills = shallowRef<Partial<Record<Plane, HTMLCanvasElement>>>();
+// Before the preview panes unmount, keep what they show for the volume MPR to show until it has
+// drawn. Going straight to the MPR left the panes black for seconds after a case opened.
+watch(
+  nativeVolume,
+  value => {
+    const panes = stack.value ? [...stack.value.children].map(pane => pane.querySelector('.ct-image')) : [];
+    stills.value = value
+      ? Object.fromEntries(planes.flatMap((plane, index) => (panes[index] ? [[plane, paneStill(panes[index]!)]] : [])).filter(([, still]) => still))
+      : undefined;
+  },
+  { flush: 'pre' },
+);
 </script>
 
 <template>
@@ -60,6 +77,7 @@ watch(
     v-if="nativeVolume && localSession"
     v-bind="core"
     :session="localSession"
+    :stills="stills"
     @point="emit('point', $event)"
     @gesture="emit('gesture', $event)"
     @window-level="emit('windowLevel', $event)"
@@ -72,7 +90,17 @@ watch(
       <button class="text-button" @click="memoryError = ''">Retry volume MPR</button>
     </p>
     <p v-else-if="sheared && localReady" class="ct-detail-error" role="status">Tilted scan · exact worker reslicing with source-native review coordinates.</p>
-    <div class="ct-slices" data-mpr-mode="stack">
+    <CTMPRControls
+      v-if="!sheared && !memoryError"
+      disabled
+      :crosshairs="true"
+      slab-mode="mpr"
+      :slab-mm="10"
+      :fill="true"
+      :outline="true"
+      effective-slab="mpr"
+    />
+    <div ref="stack" class="ct-slices" data-mpr-mode="stack">
       <CTSlice
         v-for="plane in ['axial', 'coronal', 'sagittal'] as const"
         :key="plane"

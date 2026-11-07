@@ -12,6 +12,7 @@ import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/intera
 import { revisionUrl } from '../lib/api';
 import { sharedVolumeMemoryBudget, VolumeMemoryBudgetError } from '../lib/volume-memory-budget';
 import CTReviewInput from './CTReviewInput.vue';
+import CTMPRControls from './CTMPRControls.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -33,6 +34,8 @@ const props = withDefaults(
     reviewInclude?: boolean;
     reviewRadius?: number;
     nativeReview?: boolean;
+    /** What the preview panes last showed, kept on screen until this view has drawn its masks. */
+    stills?: Partial<Record<Plane, HTMLCanvasElement>>;
   }>(),
   { overlayOpacity: 0.4 },
 );
@@ -48,6 +51,7 @@ const elements: Partial<Record<Plane, HTMLDivElement>> = {};
 const metas = reactive<Partial<Record<Plane, SliceMeta>>>({});
 const clips = reactive<Partial<Record<Plane, string>>>({});
 const loading = ref(true),
+  held = ref(!!props.stills),
   overlayLoading = ref(false),
   error = ref(''),
   overlayError = ref('');
@@ -161,6 +165,7 @@ function release() {
 function fail(reason: unknown) {
   release();
   loading.value = false;
+  held.value = false;
   error.value = reason instanceof Error ? reason.message : 'Cornerstone volume rendering is unavailable.';
   if (reason instanceof VolumeMemoryBudgetError) emit('memoryUnavailable', error.value);
 }
@@ -273,6 +278,9 @@ async function initialize() {
     loading.value = false;
     emit('volumeOwner', instance);
     await loadOverlays();
+    // The preview's still stays until the first frame with the masks has drawn.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    held.value = false;
   } catch (reason) {
     if (!disposed && !active.signal.aborted && id === generation) fail(reason);
   }
@@ -343,32 +351,20 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="ct-mpr-controls">
-    <label><input v-model="crosshairs" type="checkbox" :disabled="nativeReview || marking" /> Rotatable crosshairs</label>
-    <label
-      >Projection
-      <select v-model="slabMode" aria-label="MPR projection" :disabled="nativeReview">
-        <option value="mpr">MPR</option>
-        <option value="mip">MIP</option>
-        <option value="minip">MinIP</option>
-      </select></label
-    >
-    <label v-if="effectiveSlab !== 'mpr'"
-      >Slab mm <input v-model.number="slabMM" aria-label="MPR slab thickness" type="number" min="1" max="200" step="0.5"
-    /></label>
-    <label><input v-model="fill" type="checkbox" /> Fill</label><label><input v-model="outline" type="checkbox" /> Outline</label>
-    <button
-      class="text-button"
-      @click="
-        viewer?.reset();
-        configure();
-      "
-    >
-      Reset planes
-    </button>
-    <span v-if="nativeReview">Native review · planes locked to source slices</span>
-    <span v-else-if="effectiveSlab !== 'mpr'">Overlays show the centre slice · drawing paused</span>
-  </div>
+  <CTMPRControls
+    v-model:crosshairs="crosshairs"
+    v-model:slab-mode="slabMode"
+    v-model:slab-mm="slabMM"
+    v-model:fill="fill"
+    v-model:outline="outline"
+    :effective-slab="effectiveSlab"
+    :native-review="nativeReview"
+    :marking="marking"
+    @reset="
+      viewer?.reset();
+      configure();
+    "
+  />
   <p v-if="overlayError" class="ct-detail-error" role="alert">{{ overlayError }} <button class="text-button" @click="loadOverlays">Retry overlays</button></p>
   <div class="ct-slices" data-mpr-mode="volume" :data-volume-memory-bytes="budget.usedBytes">
     <section v-for="plane in planes" :key="plane" class="ct-slice cornerstone-slice" data-viewer="cornerstone-volume">
@@ -414,8 +410,16 @@ onBeforeUnmount(() => {
             nativeEdgeLabels(metas[plane]!)[index]
           }}</span>
         </template>
+        <div
+          v-if="held && stills?.[plane]"
+          :ref="value => (value as HTMLDivElement | null)?.replaceChildren(stills![plane]!)"
+          class="ct-still"
+          aria-hidden="true"
+        ></div>
         <div v-if="error" class="slice-error" role="alert">{{ error }} <button class="text-button" @click="initialize">Retry</button></div>
-        <span v-else-if="loading || overlayLoading" class="ct-local-loading">{{ loading ? 'Preparing volume MPR…' : 'Updating overlays…' }}</span>
+        <!-- The CT stays on screen while masks change, so only a first load covers the pane. -->
+        <span v-else-if="loading && !(held && stills?.[plane])" class="ct-local-loading">Preparing volume MPR…</span>
+        <span v-else-if="loading || overlayLoading" class="ct-local-loading ct-updating">{{ loading ? 'Preparing volume MPR…' : 'Updating overlays…' }}</span>
         <span v-else-if="marking && !canMark(plane)" class="ct-local-loading ct-updating">{{
           reviewDisabled ? 'Editing paused' : 'Drawings require a native source slice with MPR projection'
         }}</span>
@@ -447,25 +451,15 @@ onBeforeUnmount(() => {
 
 <style scoped src="./cornerstone-slice.css"></style>
 <style scoped>
-.ct-mpr-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  font-size: 11px;
+.ct-still {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: #050608;
 }
-.ct-mpr-controls label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.ct-mpr-controls input[type='number'] {
-  width: 64px;
-}
-.ct-mpr-controls select {
-  max-width: 90px;
-}
-.ct-mpr-controls > span {
-  color: var(--muted);
+.ct-still :deep(canvas) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 </style>
