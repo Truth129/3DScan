@@ -250,6 +250,13 @@ pinned `nnInteractive_v1.0` model into `.runtime/nninteractive/` and checks its 
 .venv/bin/python scripts/download_segmentation_model.py mrsegmentator
 ```
 
+**ImageCAS-X nnU-Net** is an optional coronary artery model for CT. It downloads 1.6 GB and keeps
+1.2 GB:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py imagecasx_coronary
+```
+
 The weights go to `.runtime/segmentation-models/`. Every file is checked against a pinned SHA-256
 when it is downloaded and before each run. Requests never download them.
 

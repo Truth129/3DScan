@@ -18,21 +18,21 @@ import numpy as np
 from .imaging import _image, _save_mask
 from .nnunet_models import MODELS
 
-_MODEL_AXES = orientations.axcodes2ornt(("L", "P", "S"))
 
-
-def model_input(image, affine):
+def model_input(image, affine, axes="LPS"):
     """The voxels as nnU-Net was trained on them, with the transform that undoes this.
 
-    The models read images with SimpleITK after reorienting to LPS, which gives a z, y, x
-    array. Axes are only reordered and flipped, so an oblique grid keeps every voxel value.
+    The models read images with SimpleITK, which gives a z, y, x array of the training
+    files' voxel axes. Axes are only reordered and flipped, so an oblique grid keeps every
+    voxel value.
     """
+    model_axes = orientations.axcodes2ornt(tuple(axes))
     native = orientations.io_orientation(affine)
-    forward = orientations.ornt_transform(native, _MODEL_AXES)
+    forward = orientations.ornt_transform(native, model_axes)
     values = orientations.apply_orientation(np.asarray(image.dataobj, dtype=np.float32), forward)
     spacing = np.empty(3)
     spacing[forward[:, 0].astype(int)] = np.linalg.norm(affine[:3, :3], axis=0)
-    return values.transpose(2, 1, 0)[np.newaxis], spacing[::-1].tolist(), orientations.ornt_transform(_MODEL_AXES, native)
+    return values.transpose(2, 1, 0)[np.newaxis], spacing[::-1].tolist(), orientations.ornt_transform(model_axes, native)
 
 
 def native_labels(labels, back):
@@ -65,10 +65,11 @@ def predict(model, model_folder, image, spacing, device):
 
     selected = torch.device("cpu") if device == "cpu" else torch.device("cuda", int(device.partition(":")[2] or 0))
     predictor = nnUNetPredictor(tile_step_size=model.tile_step_size, use_gaussian=True, use_mirroring=True, device=selected, allow_tqdm=False)
-    predictor.initialize_from_trained_model_folder(str(model_folder), use_folds=model.folds, checkpoint_name="checkpoint_final.pth")
+    predictor.initialize_from_trained_model_folder(str(model_folder), use_folds=model.folds, checkpoint_name=model.checkpoint)
     # A wrong order here would silently mislabel anatomy.
     named = sorted((value, name) for name, value in predictor.dataset_json["labels"].items() if value)
-    if tuple(name for _, name in named) != model.labels or [value for value, _ in named] != list(range(1, len(model.labels) + 1)):
+    expected = model.dataset_labels or model.labels
+    if tuple(name for _, name in named) != expected or [value for value, _ in named] != list(range(1, len(model.labels) + 1)):
         raise RuntimeError(f"{model.name} labels do not match the pinned list")
     if predictor.label_manager.has_regions:
         raise RuntimeError(f"{model.name} is region-based, which this worker does not export")
@@ -100,7 +101,7 @@ def main():
     model = MODELS[args.task]
     started = time.monotonic()
     reference, affine = _image(args.image)
-    image, spacing, back = model_input(reference, affine)
+    image, spacing, back = model_input(reference, affine, model.axes)
     labels, torch_version = predict(model, args.model_folder, image, spacing, args.device)
     labels = native_labels(labels, back)
     for value, name in enumerate(model.labels, 1):

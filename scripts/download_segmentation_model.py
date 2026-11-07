@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import posixpath
 import tempfile
 import zipfile
 
@@ -22,7 +23,7 @@ def install(model, archive: Path, target: Path):
         for name, expected in model.files.items():
             destination = folder / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            with bundle.open(name) as source, destination.open("wb") as output:
+            with bundle.open(posixpath.join(model.archive_folder, name)) as source, destination.open("wb") as output:
                 while block := source.read(4 * 1024 * 1024):
                     output.write(block)
             if hash_file(destination) != expected:

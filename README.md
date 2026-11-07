@@ -18,7 +18,7 @@ other service.
 - **Import:** browser upload, `scan3d import`, an optional [Orthanc](docs/ORTHANC.md), or any
   [DICOMweb archive](docs/ARCHIVES.md). Static MRI is experimental and opt-in.
 - **Segmentation:** selected TotalSegmentator tasks on a GPU or the CPU, plus optional
-  MRSegmentator to compare beside them. With
+  MRSegmentator and an ImageCAS-X coronary model to compare beside them. With
   [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
 - **Corrections:** nnInteractive prompts, direct mask edits, scissors and recipes, with
   exact undo.
@@ -85,6 +85,7 @@ downloads with their own terms, which you must accept yourself:
   [provider's license page](https://backend.totalsegmentator.com/license-academic/).
 - **MRSegmentator:** the code is Apache-2.0. Its repository states no separate license for the
   weights.
+- **ImageCAS-X nnU-Net:** the weights are CC BY 4.0 on Zenodo, and the code is MIT.
 
 Using these models commercially may require permission from their authors. Third-party
 notices are in [`web/public/licenses/`](web/public/licenses/). A viewer build adds

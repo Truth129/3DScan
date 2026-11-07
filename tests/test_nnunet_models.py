@@ -126,8 +126,9 @@ def test_changed_weights_stop_a_run_before_any_child_can_load_them(pinned, tmp_p
         segmentation.segment(image, tmp_path / "output", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
 
 
+@pytest.mark.parametrize("axes", ["LPS", "LAS"])
 @pytest.mark.parametrize("codes", [("L", "P", "S"), ("R", "A", "S"), ("A", "R", "I")])
-def test_model_input_matches_the_simpleitk_reader_the_model_was_trained_with(tmp_path, codes):
+def test_model_input_matches_the_simpleitk_reader_the_model_was_trained_with(tmp_path, codes, axes):
     values = np.random.default_rng(1).integers(-1000, 1000, (7, 9, 11)).astype(np.int16)
     affine = np.eye(4)
     affine[:3, :3] = 0
@@ -138,9 +139,9 @@ def test_model_input_matches_the_simpleitk_reader_the_model_was_trained_with(tmp
     path = tmp_path / "image.nii.gz"
     nib.save(nib.Nifti1Image(values, affine), path)
     assert nib.aff2axcodes(affine) == codes
-    upstream = sitk.DICOMOrient(sitk.ReadImage(str(path)), "LPS")
+    upstream = sitk.DICOMOrient(sitk.ReadImage(str(path)), axes)
     reference, native = _image(path)
-    array, spacing, back = nnunet_worker.model_input(reference, native)
+    array, spacing, back = nnunet_worker.model_input(reference, native, axes)
     assert np.array_equal(array[0], sitk.GetArrayFromImage(upstream))
     np.testing.assert_allclose(spacing, list(upstream.GetSpacing())[::-1])
     assert np.array_equal(nnunet_worker.native_labels(array[0], back), values)
@@ -174,6 +175,31 @@ def test_one_channel_export_gives_nnunets_full_export():
     expected = np.zeros(properties["shape_before_cropping"], np.uint8)
     expected[1:11, 2:14, 0:14] = resample(logits).argmax(0)
     assert labels.dtype == np.uint8 and np.array_equal(labels, expected.transpose(2, 0, 1))
+
+
+def test_download_takes_the_model_from_its_folder_in_a_larger_archive(pinned, tmp_path):
+    model, _ = pinned
+    archive = tmp_path / "several-models.zip"
+    contents = {"dataset.json": b"{}", "plans.json": b"[]", "fold_0/checkpoint_best.pth": b"weights"}
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("other_model/weights.pt", b"not this one")
+        for name, value in contents.items():
+            bundle.writestr(f"pretrained/nnunet/{name}", value)
+    model = replace(
+        model,
+        checkpoint="checkpoint_best.pth",
+        archive_folder="pretrained/nnunet",
+        files={name: sha256(value) for name, value in contents.items()},
+        archive_sha256=sha256(archive.read_bytes()),
+    )
+    target = install(model, archive)
+    assert sorted(path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()) == sorted(contents)
+
+
+def test_every_pinned_model_lists_its_own_checkpoint_for_each_fold():
+    for model in nnunet_models.MODELS.values():
+        assert {f"fold_{fold}/{model.checkpoint}" for fold in model.folds} | {"dataset.json", "plans.json"} == set(model.files)
+        assert not model.dataset_labels or len(model.dataset_labels) == len(model.labels)
 
 
 def test_download_publishes_only_pinned_files_that_match(pinned):

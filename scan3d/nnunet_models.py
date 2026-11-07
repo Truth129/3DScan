@@ -31,6 +31,13 @@ class NnunetModel:
     url: str
     archive_sha256: str
     files: dict[str, str]
+    checkpoint: str = "checkpoint_final.pth"
+    # The voxel axes of the training images, in nibabel's codes. MRSegmentator reoriented to LPS.
+    axes: str = "LPS"
+    # The model's folder inside the archive, when it is not the archive's root.
+    archive_folder: str = ""
+    # The names in the model's dataset.json, when 3DScan shows other names.
+    dataset_labels: tuple[str, ...] = ()
 
 
 MODELS = {
@@ -98,6 +105,35 @@ MODELS = {
                 "fold_2/checkpoint_final.pth": "efe53ee273454864cf4d0a1d5b26b7799c9ff486de971a9cb6e1d7760f4ad169",
                 "fold_3/checkpoint_final.pth": "6897c318111b23a285322597730b6c31c9975a5bcc6fd16a8577135a203bf7a5",
                 "fold_4/checkpoint_final.pth": "c2255425395e1c6b117746ad8e190fc3f9d9a8d995e1bd69db69a8ab0f5e019d",
+            },
+        ),
+        NnunetModel(
+            id="imagecasx_coronary",
+            name="ImageCAS-X nnU-Net",
+            version="zenodo-23894668",
+            label="Coronary arteries — ImageCAS-X nnU-Net",
+            description="Coronary artery lumen on gated coronary CT angiography, from the ImageCAS-X benchmark's nnU-Net. It was trained at one centre on scans without artefacts. Results stay beside other models' results, so you can compare them.",
+            license="Weights CC BY 4.0 (Zenodo record 23894668); code MIT",
+            modalities=("CT",),
+            labels=("coronary_arteries",),
+            dataset_labels=("lumen",),
+            folds=(0, 1, 2, 3, 4),
+            tile_step_size=0.5,
+            url="https://zenodo.org/records/23894668/files/pretrained_weights.zip",
+            archive_sha256="4e5ec4510847ab5af561f906e21faed22aec574caa4a21517f2ebbf21dcdd334",
+            archive_folder="pretrained_weights/nnunet/nnUNetTrainer__nnUNetPlans__3d_fullres",
+            # The authors published only the best checkpoint of each fold.
+            checkpoint="checkpoint_best.pth",
+            # nnU-Net read the ImageCAS files unchanged, and all 800 ImageCAS-X label headers are LAS.
+            axes="LAS",
+            files={
+                "dataset.json": "43d1e6d7b11c3af807484ce1bb4c660f1ae83ca1934eebf7390e675ab24403da",
+                "plans.json": "1d1d83ab3d0af4542f23ed047ea9769249e07058d85348ee483e95e757245e14",
+                "fold_0/checkpoint_best.pth": "8150d2031b0f45431e2499daa8b172b19873f1fac9ce5e94b38f3f34c99933d5",
+                "fold_1/checkpoint_best.pth": "409ca2a1a464b2dbd633575c8a91fab630a5427f6d59545e5e9cc2da5ad5fdd5",
+                "fold_2/checkpoint_best.pth": "f79a1b4b3f6f3028434939774a137e52be7a4409edd1ab0e9a2fdb30afe0a691",
+                "fold_3/checkpoint_best.pth": "18cf22acd8332cac77eb640216e358ea43c0ab6aba91e76e2e0056e83b87f86a",
+                "fold_4/checkpoint_best.pth": "c4449840327b7d2275346531c98fa2fcc3f620df088d4a960918ed57070f29a2",
             },
         ),
     )

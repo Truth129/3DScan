@@ -197,6 +197,12 @@ tasks, without the crop or small-blob options, and always with all five folds.
 Its segments sit in their own **MRSegmentator** group, named like **Liver (MRSegmentator)**. A run
 of either model replaces only that model's earlier segments, so the two sets stay side by side.
 
+**Coronary arteries — ImageCAS-X nnU-Net** is a CT model for the coronary lumen on gated coronary
+CT angiography, from the ImageCAS-X benchmark. Install it with
+`scripts/download_segmentation_model.py imagecasx_coronary`. Its segment is **Coronary arteries
+(ImageCAS-X nnU-Net)**, beside TotalSegmentator's. It was trained at one centre on scans without
+artefacts, and it works at 0.35 mm, so a large non-cardiac CT needs a lot of memory and time.
+
 ### TotalSegmentator license
 
 Tasks that need a license show **· license required**. Under **Segment CT…**, expand

@@ -51,6 +51,7 @@ TotalSegmentator downloads its weights the first time a task runs. The others ne
 ```bash
 docker compose exec scan3d python scripts/download_interactive_model.py
 docker compose exec scan3d python scripts/download_segmentation_model.py mrsegmentator
+docker compose exec scan3d python scripts/download_segmentation_model.py imagecasx_coronary
 ```
 
 Check the licenses first. See [AI models](INSTALL.md#ai-models).
