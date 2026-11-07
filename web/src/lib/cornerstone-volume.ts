@@ -55,14 +55,25 @@ export function cornerstoneVolumeGeometry(
     ].some(([a, b]) => Math.abs(dot(axesRAS[a], axesRAS[b])) > 1e-5),
   };
 }
-/** Camera pixel x/y follow the two remaining native axes, matching worker
- * native slices; the normal comes from the displayed plane, not native handedness. */
-export function nativeCameraOrientation(geometry: Pick<Geometry, 'shape' | 'affine_ras'>, axis: NativeAxis) {
+/** Screen right and down of Cornerstone's patient MPR cameras, in LPS. */
+const PATIENT_VIEW: Record<Plane, { right: Point; down: Point }> = {
+  axial: { right: [1, 0, 0], down: [0, 1, 0] },
+  coronal: { right: [1, 0, 0], down: [0, 0, -1] },
+  sagittal: { right: [0, 1, 0], down: [0, 0, -1] },
+};
+/** Camera pixel x/y follow the two remaining native axes, each signed and placed
+ * as near the patient view of the plane as it goes. Grids are often stored with
+ * rows flipped, and following them raw turned the slices over on entering review.
+ * The normal comes from the displayed plane, not native handedness. */
+export function nativeCameraOrientation(geometry: Pick<Geometry, 'shape' | 'affine_ras'>, axis: NativeAxis, plane: Plane) {
   if (![0, 1, 2].includes(axis)) throw new Error('Invalid native MPR axis');
   const { axesRAS } = cornerstoneVolumeGeometry(geometry);
-  const [u, v] = [0, 1, 2].filter(value => value !== axis);
-  const x = rasToLps(axesRAS[u]),
-    y = rasToLps(axesRAS[v]);
+  const { right, down } = PATIENT_VIEW[plane];
+  const [a, b] = [0, 1, 2].filter(value => value !== axis).map(column => rasToLps(axesRAS[column]));
+  const swap = Math.abs(dot(b, right)) + Math.abs(dot(a, down)) > Math.abs(dot(a, right)) + Math.abs(dot(b, down));
+  const signed = (value: Point, toward: Point) => (dot(value, toward) < 0 ? (value.map(component => -component) as Point) : value);
+  const x = signed(swap ? b : a, right),
+    y = signed(swap ? a : b, down);
   const viewPlaneNormal = unit(cross(y, x));
   // Orthogonalize the camera only. Stored image directions and edit coordinates
   // retain the complete affine even if this helper is used for a sheared plane.

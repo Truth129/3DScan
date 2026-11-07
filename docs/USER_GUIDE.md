@@ -318,7 +318,7 @@ Review opens on your main-page views, and slab projection and rotatable crosshai
 **Exit review**. **CT volume** starts as you last left it in review, off at first, and **Exit
 review** restores the main page's choice. MRI and tilted-gantry CT keep it off.
 
-- Planes lock to the native source slices.
+- Planes lock to the native source slices, shown the same way up as on the main page.
 - Marks autosave into a draft that survives reloads and restarts. Accepted masks change only when
   you save.
 - Mark only a settled, full-resolution view.

@@ -272,7 +272,11 @@ export class CornerstoneMPR {
       // actors still need the retained native orientation and slab state.
       if (this.nativeReview)
         for (const plane of planes)
-          this.viewport(plane).setOrientation(nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, plane, this.pointRAS).axis), false, true);
+          this.viewport(plane).setOrientation(
+            nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, plane, this.pointRAS).axis, plane),
+            false,
+            true,
+          );
       this.setWindow(this.windowWidth, this.level);
       this.setSlab(this.slabMode, this.slabMM);
       this.updateCrosshairs();
@@ -549,7 +553,7 @@ export class CornerstoneMPR {
     try {
       for (const plane of planes) {
         const orientation = native
-          ? nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, plane, this.pointRAS).axis)
+          ? nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, plane, this.pointRAS).axis, plane)
           : this.patientOrientation(plane);
         const viewport = this.viewport(plane),
           { focalPoint, parallelScale } = viewport.getCamera();
@@ -644,7 +648,9 @@ export class CornerstoneMPR {
     if (this.disposed || !this.sourceVolume || !this.mprAttached) return;
     for (const value of plane ? [plane] : planes) {
       this.viewport(value).setOrientation(
-        this.nativeReview ? nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, value, this.pointRAS).axis) : this.patientOrientation(value),
+        this.nativeReview
+          ? nativeCameraOrientation(this.geometry, nativeSliceFor(this.geometry, value, this.pointRAS).axis, value)
+          : this.patientOrientation(value),
         false,
         true,
       );

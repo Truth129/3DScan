@@ -3,7 +3,7 @@ import vtkRenderer from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { vtkCamera } from '@kitware/vtk.js/Rendering/Core/Camera';
 // Core does not export the camera its viewports unproject through.
 import vtkSlabCamera from '../node_modules/@cornerstonejs/core/dist/esm/RenderingEngine/vtkClasses/vtkSlabCamera.js';
-import type { Geometry, Point } from '../src/types';
+import type { Geometry, Plane, Point } from '../src/types';
 import {
   cornerstoneMPRDisplayMeta,
   cornerstoneVolumeBytes,
@@ -64,8 +64,8 @@ const close = (actual: readonly number[], expected: readonly number[], digits = 
 /** A native pane's canvasToWorld as Cornerstone runs it: Viewport.resetCamera puts the slab camera
  * half the bounds diagonal from the focal point, and BaseVolumeViewport unprojects through its
  * Float32 projection matrix. */
-function cornerstoneCanvasToWorld(grid: Geometry, axis: 0 | 1 | 2, index: number, width: number, height: number) {
-  const { viewPlaneNormal, viewUp } = nativeCameraOrientation(grid, axis);
+function cornerstoneCanvasToWorld(grid: Geometry, axis: 0 | 1 | 2, plane: Plane, index: number, width: number, height: number) {
+  const { viewPlaneNormal, viewUp } = nativeCameraOrientation(grid, axis, plane);
   const centre = grid.shape.map(size => (size - 1) / 2) as Point;
   centre[axis] = index;
   const focal = rasToLps(transformPoint(grid.affine_ras, centre));
@@ -126,17 +126,42 @@ describe('native Cornerstone volume geometry', () => {
     expect(() => cornerstoneVolumeGeometry({ shape: [2, 0, 2], affine_ras: affine })).toThrow('dimensions');
   });
 
-  it('orients each source-index camera with native u right and native v down', () => {
+  it('turns each source-index camera to the patient view along signed native axes', () => {
+    const lps = (value: readonly number[]) => value.map(component => Math.round(component * 1e9) / 1e9 + 0);
+    const view = (n: Point, up: Point) => ({
+      right: lps([up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2], up[0] * n[1] - up[1] * n[0]]),
+      down: lps(up.map(v => -v)),
+    });
+    // Rows stored anterior-down, as dcm2niix writes axial CT: review must still show anterior at the top.
+    const flipped = {
+      shape: [4, 5, 6] as Point,
+      affine_ras: [
+        [-0.7, 0, 0, 1],
+        [0, 0.7, 0, 2],
+        [0, 0, 2, 3],
+        [0, 0, 0, 1],
+      ],
+    };
+    for (const [plane, axis, right, down] of [
+      ['axial', 2, [1, 0, 0], [0, 1, 0]],
+      ['coronal', 1, [1, 0, 0], [0, 0, -1]],
+      ['sagittal', 0, [0, 1, 0], [0, 0, -1]],
+    ] as const) {
+      const { viewPlaneNormal, viewUp } = nativeCameraOrientation(flipped, axis, plane);
+      expect(view(viewPlaneNormal, viewUp)).toEqual({ right, down });
+    }
+    // On an oblique reflected grid each screen axis is still a signed native axis.
     const result = cornerstoneVolumeGeometry(descriptor());
-    for (const axis of [0, 1, 2] as const) {
-      const [u, v] = [0, 1, 2].filter(value => value !== axis);
-      const { viewPlaneNormal: n, viewUp: up } = nativeCameraOrientation(geometry(), axis);
-      const right = [up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2], up[0] * n[1] - up[1] * n[0]];
-      close(right, rasToLps(result.axesRAS[u]));
-      close(
-        up.map(value => -value),
-        rasToLps(result.axesRAS[v]),
-      );
+    for (const [plane, axis] of [
+      ['sagittal', 0],
+      ['coronal', 1],
+      ['axial', 2],
+    ] as const) {
+      const { viewPlaneNormal, viewUp } = nativeCameraOrientation(geometry(), axis, plane);
+      const { right, down } = view(viewPlaneNormal, viewUp);
+      const native = [0, 1, 2].filter(value => value !== axis).map(column => rasToLps(result.axesRAS[column]));
+      for (const screen of [right, down])
+        expect(native.some(direction => Math.abs(Math.abs(direction.reduce((sum, v, i) => sum + v * screen[i], 0)) - 1) < 1e-9)).toBe(true);
     }
   });
 
@@ -188,7 +213,7 @@ describe('native Cornerstone volume geometry', () => {
         ['axial', 2],
       ] as const) {
         const index = Math.floor(grid.shape[axis] / 3);
-        const meta = cornerstoneMPRDisplayMeta(grid, plane, 600, 500, cornerstoneCanvasToWorld(grid, axis, index, 600, 500));
+        const meta = cornerstoneMPRDisplayMeta(grid, plane, 600, 500, cornerstoneCanvasToWorld(grid, axis, plane, index, 600, 500));
         expect(meta.native, `${slices} slices, ${plane}`).toEqual({ axis, index });
         const lasso = createReviewGesture(grid, meta, 'lasso', true, [
           [2, 3],
