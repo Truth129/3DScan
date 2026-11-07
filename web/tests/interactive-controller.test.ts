@@ -1915,6 +1915,17 @@ describe('what the page shows across a Save and an Undo', () => {
     controller.undo();
     expect(controller.candidate?.revision_id).toBe('review-draft-1');
   });
+  it('shows no earlier result for marks the server would not restore it for', async () => {
+    const { controller, reader } = fixture(step(1, [point('a')]));
+    await controller.load();
+    controller.append(point('b'));
+    controller.append(point('c'));
+    await controller.apply();
+    reader.interactiveReview.mockResolvedValueOnce(step(3, [point('a'), point('b'), point('c')]));
+    await vi.advanceTimersByTimeAsync(900);
+    controller.undo();
+    expect([controller.prompts.length, controller.candidate], 'b alone was never applied').toEqual([2, undefined]);
+  });
   it("keeps this page's saved result on screen, busy, until App opens the saved revision", async () => {
     const { controller, reader } = fixture(step(1, [point('a')]));
     await controller.load();

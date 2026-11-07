@@ -119,18 +119,21 @@ export class InteractiveController {
       this.prompts.length >= count
     )
       return value.candidate;
-    // Undo or Redo onto an applied step shows that step's result while the draft save that brings
-    // it back is on its way, as the server answers with the same result under a new name. Without
-    // this the original mask showed in between.
-    if (!this.unsaved) return undefined;
-    return [...this.results]
-      .reverse()
-      .find(
-        item =>
-          signature([item.options, item.relationship]) === signature([this.options, this.relationship]) &&
-          this.prompts.length >= item.prompts.length &&
-          signature(item.prompts) === signature(this.prompts.slice(0, item.prompts.length)),
-      )?.candidate;
+    // Undo onto an applied step shows that step's result while the draft save that brings it back
+    // is on its way, as the server answers with the same result under a new name. Without this the
+    // original mask showed in between. The server restores a result only for exactly its marks,
+    // options and relationship, from steps it still holds, so an undo of marks it has, under
+    // options it has: nothing looser is shown.
+    const length = this.prompts.length;
+    if (
+      !this.unsaved ||
+      length >= value.prompts.length ||
+      signature(this.prompts) !== signature(value.prompts.slice(0, length)) ||
+      signature(this.options) !== signature(value.options ?? initialOptions())
+    )
+      return undefined;
+    const wanted = signature([this.prompts, this.options, this.relationship]);
+    return [...this.results].reverse().find(item => signature([item.prompts, item.options, item.relationship]) === wanted)?.candidate;
   }
   /**
    * This page's Save has finished. Its result stays on screen, with the page busy, until App opens
