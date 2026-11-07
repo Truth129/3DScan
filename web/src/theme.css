@@ -352,6 +352,13 @@ input[type='range'] {
 .ct-image.is-loading {
   opacity: 1;
 }
+/* A fixed width, so a changing percentage cannot reflow the toolbar and move the slices. */
+.ct-percent {
+  display: inline-block;
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 .ct-delivery {
   display: flex;
   align-items: center;

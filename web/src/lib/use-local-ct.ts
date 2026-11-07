@@ -59,8 +59,10 @@ export function useLocalCT(options: LocalCTOptions) {
       else {
         session = new LocalCTSession(url, {
           quality: 'preview',
+          // Mask downloads report through here too. Only CT chunks move the percentage, which
+          // otherwise blinked off at each mask report and reflowed the toolbar.
           onProgress: value => {
-            if (localCT.value === session) ctProgress.value = value;
+            if (localCT.value === session && value.stage === 'ct') ctProgress.value = value;
           },
           onOverlayError: reason => {
             if (session && localCT.value === session) ctOverlayError.value = reason?.message ?? '';
@@ -118,7 +120,7 @@ export function useLocalCT(options: LocalCTOptions) {
         quality: 'full',
         maxOverlayBytes: FULL_OVERLAY_BYTES,
         onProgress: value => {
-          if (fullCandidate === candidate) fullCTProgress.value = value;
+          if (fullCandidate === candidate && value.stage === 'ct') fullCTProgress.value = value;
         },
         onOverlayError: reason => {
           if (candidate && localCT.value === candidate) ctOverlayError.value = reason?.message ?? '';

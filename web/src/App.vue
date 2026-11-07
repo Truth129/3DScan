@@ -1979,7 +1979,9 @@ onBeforeUnmount(() => {
                 />
                 <div class="ct-delivery" :data-mode="ctDeliveryMode" role="status">
                   <span v-if="ctDeliveryMode === 'loading'"
-                    >Loading fast {{ sourceLabel }} navigation<span v-if="ctProgress?.stage === 'ct'"> · {{ ctPercent }}%</span>…</span
+                    >Loading fast {{ sourceLabel }} navigation<span v-if="ctProgress">
+                      · <span class="ct-percent">{{ ctPercent }}%</span></span
+                    >…</span
                   >
                   <span v-else-if="ctDeliveryMode === 'full'">{{ sourceLabel }} cached · local review</span>
                   <span v-else-if="ctDeliveryMode === 'progressive'">{{
@@ -1995,7 +1997,9 @@ onBeforeUnmount(() => {
                     Cache full {{ sourceLabel }}
                   </button>
                   <button v-if="ctCaching" class="text-button" @click="cancelFullCT">
-                    Cancel {{ sourceLabel }} download<span v-if="fullCTProgress?.stage === 'ct'"> · {{ fullCTPercent }}%</span>
+                    Cancel {{ sourceLabel }} download<span v-if="fullCTProgress">
+                      · <span class="ct-percent">{{ fullCTPercent }}%</span></span
+                    >
                   </button>
                   <p v-if="ctLocalError" class="ct-detail-error">
                     {{ ctLocalError }} <button v-if="!localCTReady" class="text-button" @click="prepareLocalCT(ctBase)">Retry</button>

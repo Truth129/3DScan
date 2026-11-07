@@ -11,7 +11,11 @@ const { sessions, FakeSession } = vi.hoisted(() => {
     bases: string[] = [];
     constructor(
       readonly base: string,
-      readonly options: { quality: string; onError?: (reason: Error) => void },
+      readonly options: {
+        quality: string;
+        onError?: (reason: Error) => void;
+        onProgress?: (value: { stage: string; loadedBytes: number; totalBytes: number }) => void;
+      },
     ) {
       this.ready = new Promise((resolve, reject) => {
         this.resolve = resolve;
@@ -108,6 +112,14 @@ describe('local CT session lifecycle', () => {
     expect(ct.ctDeliveryMode.value).toBe('progressive');
     expect(ct.ctLocalError.value).toBe('Full CT caching was unavailable. Fast navigation remains active. disk full');
     expect(ct.ctCaching.value).toBe(false);
+    scope.stop();
+  });
+  it('keeps the CT percentage while masks report their own progress', async () => {
+    const { scope, ct } = fixture();
+    const [preview] = sessions;
+    preview.options.onProgress!({ stage: 'ct', loadedBytes: 30, totalBytes: 100 });
+    preview.options.onProgress!({ stage: 'overlay', loadedBytes: 1, totalBytes: 2 });
+    expect([ct.ctProgress.value?.stage, ct.ctPercent.value]).toEqual(['ct', 30]);
     scope.stop();
   });
 });
