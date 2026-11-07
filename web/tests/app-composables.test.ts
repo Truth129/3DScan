@@ -141,4 +141,17 @@ describe('candidate surface preview', () => {
     expect(preview.error.value).toBe('');
     scope.stop();
   });
+  it('keeps the preview when App re-reads the same case, as it does when a Save completes', async () => {
+    vi.spyOn(api, 'revision').mockResolvedValue({ id: 'review-1', model_manifest_url: '/one' } as Revision);
+    const activeCase = ref({ id: 'case' }),
+      scope = effectScope();
+    const preview = scope.run(() =>
+      useCandidateSurface({ caseId: () => activeCase.value.id, revisionId: () => 'revision', review: () => review('one', 'review-1') }),
+    )!;
+    await preview.load();
+    activeCase.value = { id: 'case' };
+    await nextTick();
+    expect(preview.revision.value?.id).toBe('review-1');
+    scope.stop();
+  });
 });

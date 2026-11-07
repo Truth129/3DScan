@@ -738,8 +738,8 @@ defineExpose({
       <div class="review-toolbar-context">
         <span v-if="discarding">Closing draft…</span><span v-else-if="!current?.loaded">Loading saved work…</span
         ><span v-else-if="current.working" class="review-working"
-          ><span class="spinner"></span>{{ current.job?.stage || 'Processing on workstation…'
-          }}<button class="text-button" @click="current.cancel()">Cancel</button></span
+          ><span class="spinner"></span>{{ current.accepted ? 'Opening the saved revision…' : current.job?.stage || 'Processing on workstation…'
+          }}<button v-if="!current.accepted" class="text-button" @click="current.cancel()">Cancel</button></span
         ><span v-else
           >{{ current.prompts.length }} {{ current.prompts.length === 1 ? 'gesture' : 'gestures' }} ·
           {{

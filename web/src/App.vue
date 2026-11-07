@@ -937,9 +937,11 @@ function poll() {
         toast(
           next.kind === 'dicom_seg_import'
             ? 'Imported masks ready. Review them on the source CT.'
-            : !revision.value?.structures.length
-              ? `${sourceLabel.value} ready. View the scan now; segmentation is available when you need it.`
-              : 'Segmentation ready. Review the masks on the source images.',
+            : next.kind === 'review_accept'
+              ? 'Correction saved as a new revision.'
+              : !revision.value?.structures.length
+                ? `${sourceLabel.value} ready. View the scan now; segmentation is available when you need it.`
+                : 'Segmentation ready. Review the masks on the source images.',
         );
       } else if (next.status === 'failed') error.value = next.error || 'Processing failed. See the worker logs for details.';
       else toast('Processing cancelled. Completed stages remain cached.');

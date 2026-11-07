@@ -52,22 +52,18 @@ export function useCandidateSurface(source: CandidateSurfaceSource) {
     cache.clear();
   }
 
-  watch(
-    () => [source.caseId(), source.revisionId()],
-    () => {
-      clear();
-      revision.value = undefined;
-      session.value = '';
-      loading.value = false;
-      error.value = '';
-    },
-  );
-  watch(
-    () => [source.review()?.id, reviewCandidateRevision(source.review())],
-    () => {
-      void load();
-    },
-  );
+  // Each id on its own: one getter returning a new array fired whenever App re-read the same
+  // case, as it does when a Save completes, and the original surfaces showed until the saved ones.
+  watch([source.caseId, source.revisionId], () => {
+    clear();
+    revision.value = undefined;
+    session.value = '';
+    loading.value = false;
+    error.value = '';
+  });
+  watch([() => source.review()?.id, () => reviewCandidateRevision(source.review()), () => !!source.review()?.candidate?.preview_3d_ready], () => {
+    void load();
+  });
   onScopeDispose(clear);
   return { revision, session, loading, error, load };
 }

@@ -1134,7 +1134,7 @@ describe('a draft that moves under a job this page follows', () => {
       reader.interactiveReview.mockClear();
       await reads(reader, saved(1, { status: 'accepted', job_id: 'saving' }));
       expect(reader.interactiveReview, 'the Save arms its own').toHaveBeenCalledOnce();
-      expect(controller.working).toBe(false);
+      expect([controller.working, controller.accepted], 'busy until App opens the saved revision').toEqual([true, true]);
     });
     it('leaves no read behind a Cancel pressed before a repeat run has its job', async () => {
       const { controller, reader } = fixture(saved());
@@ -1884,5 +1884,44 @@ describe('a draft another tab started', () => {
     expect((await reader.interactiveReview()).prompts.map(item => item.id)).toEqual(['first']);
     expect([second.conflict, ids(second)]).toEqual([true, ['second']]);
     expect(second.error).toBeTruthy();
+  });
+});
+
+describe('what the page shows across a Save and an Undo', () => {
+  beforeEach(() => void vi.useFakeTimers());
+  afterEach(() => void vi.useRealTimers());
+  const step = (generation: number, prompts: InteractivePrompt[], extra: Partial<InteractiveReview> = {}): InteractiveReview => ({
+    ...base(),
+    generation,
+    status: 'ready',
+    prompts,
+    applied_prompt_count: prompts.length,
+    dirty: false,
+    candidate: {
+      generation,
+      revision_id: `review-draft-${generation}`,
+      summary: { changed_voxels: 1, added_voxels: 1, removed_voxels: 0, before_volume_ml: 4, after_volume_ml: 5 },
+    },
+    ...extra,
+  });
+  it('shows the earlier result at once on an Undo onto an applied step, before the draft save answers', async () => {
+    const { controller, reader } = fixture(step(1, [point('a')]));
+    await controller.load();
+    controller.append(point('b'));
+    await controller.apply();
+    reader.interactiveReview.mockResolvedValueOnce(step(3, [point('a'), point('b')]));
+    await vi.advanceTimersByTimeAsync(900);
+    expect(controller.candidate?.revision_id).toBe('review-draft-3');
+    controller.undo();
+    expect(controller.candidate?.revision_id).toBe('review-draft-1');
+  });
+  it("keeps this page's saved result on screen, busy, until App opens the saved revision", async () => {
+    const { controller, reader } = fixture(step(1, [point('a')]));
+    await controller.load();
+    await controller.accept();
+    reader.interactiveReview.mockResolvedValueOnce(step(1, [point('a')], { status: 'accepted', job_id: 'prediction' }));
+    await vi.advanceTimersByTimeAsync(900);
+    const shown = controller.publicReview;
+    expect([controller.working, shown?.status, shown?.candidate?.revision_id, controller.pendingMarks]).toEqual([true, 'accepting', 'review-draft-1', 0]);
   });
 });

@@ -74,6 +74,15 @@ export class InteractiveController {
   private cancelRequested = false;
   private initialRelationship = normalizeRelationship();
   private starting?: Promise<InteractiveReview>;
+  /** The job of this page's own Save. App follows that job and opens what it saves. */
+  private ownSave?: string;
+  /** Results this draft has shown, for an Undo or Redo onto one of their steps. */
+  private results: {
+    prompts: InteractivePrompt[];
+    options: InteractiveOptions;
+    relationship: SegmentRelationship;
+    candidate: NonNullable<InteractiveReview['candidate']>;
+  }[] = [];
 
   constructor(
     readonly caseId: string,
@@ -101,10 +110,36 @@ export class InteractiveController {
   }
   get candidate() {
     const value = this.review;
-    if (!value?.candidate || ['accepted', 'discarded'].includes(value.status) || signature(value.options ?? initialOptions()) !== signature(this.options))
-      return undefined;
+    if (!value || value.status === 'discarded' || (value.status === 'accepted' && !this.accepted)) return undefined;
     const count = this.appliedCount;
-    return signature(value.prompts.slice(0, count)) === signature(this.prompts.slice(0, count)) && this.prompts.length >= count ? value.candidate : undefined;
+    if (
+      value.candidate &&
+      signature(value.options ?? initialOptions()) === signature(this.options) &&
+      signature(value.prompts.slice(0, count)) === signature(this.prompts.slice(0, count)) &&
+      this.prompts.length >= count
+    )
+      return value.candidate;
+    // Undo or Redo onto an applied step shows that step's result while the draft save that brings
+    // it back is on its way, as the server answers with the same result under a new name. Without
+    // this the original mask showed in between.
+    if (!this.unsaved) return undefined;
+    return [...this.results]
+      .reverse()
+      .find(
+        item =>
+          signature([item.options, item.relationship]) === signature([this.options, this.relationship]) &&
+          this.prompts.length >= item.prompts.length &&
+          signature(item.prompts) === signature(this.prompts.slice(0, item.prompts.length)),
+      )?.candidate;
+  }
+  /**
+   * This page's Save has finished. Its result stays on screen, with the page busy, until App opens
+   * the saved revision and replaces this controller. Dropping it at once showed the original mask,
+   * with the saved marks as unapplied, for as long as that took.
+   */
+  get accepted() {
+    const value = this.review;
+    return value?.status === 'accepted' && !!value.job_id && this.ownSave === value.job_id;
   }
   get relationshipDirty() {
     const value = this.review;
@@ -125,9 +160,10 @@ export class InteractiveController {
     return !!(this.prompts.length || this.review?.new_structure || this.candidate || this.relationshipDirty || this.unsaved);
   }
   get publicReview(): InteractiveReview | undefined {
-    return this.review && !['accepted', 'discarded'].includes(this.review.status)
+    return this.review && this.review.status !== 'discarded' && (this.review.status !== 'accepted' || this.accepted)
       ? {
           ...this.review,
+          status: this.accepted ? 'accepting' : this.review.status,
           prompts: this.prompts,
           options: this.options,
           relationship: this.relationship,
@@ -139,6 +175,17 @@ export class InteractiveController {
       : undefined;
   }
   private notify() {
+    const value = this.review;
+    if (value?.candidate && !['accepted', 'discarded'].includes(value.status)) {
+      const result = {
+        prompts: value.prompts.slice(0, this.appliedCount),
+        options: value.options ?? initialOptions(),
+        relationship: normalizeRelationship(value.candidate.relationship ?? value.relationship),
+        candidate: value.candidate,
+      };
+      const key = signature([result.prompts, result.options, result.relationship]);
+      this.results = [...this.results.filter(item => signature([item.prompts, item.options, item.relationship]) !== key), result].slice(-50);
+    }
     this.changed();
   }
   adopt(value: InteractiveReview) {
@@ -193,6 +240,7 @@ export class InteractiveController {
     this.follow++;
     this.working = false;
     this.job = undefined;
+    if (value?.id !== this.review?.id) this.results = [];
     this.review = value;
     this.prompts = structuredClone(value?.prompts ?? []);
     this.options = { ...(value?.options ?? initialOptions()) };
@@ -526,6 +574,7 @@ export class InteractiveController {
       // As in apply(), but the server has the Save whatever became of this record, so App must hear.
       if (follow !== this.follow) return value;
       this.job = value;
+      this.ownSave = value.id;
       this.review = { ...this.review, status: 'accepting', job_id: value.id };
       this.poll();
       this.notify();
@@ -611,7 +660,7 @@ export class InteractiveController {
         if (!this.takeOn(seen, value)) return;
         if (failed) throw failed.reason;
         this.job = job;
-        this.working = ['predicting', 'accepting'].includes(value.status);
+        this.working = ['predicting', 'accepting'].includes(value.status) || this.accepted;
         if (!this.working) {
           this.persisted = saved(value);
           // Marks still unsaved with a message up mean a save failed during the follow. It keeps the
@@ -625,7 +674,7 @@ export class InteractiveController {
           }
         }
         this.notify();
-        if (this.working) this.poll();
+        if (this.working && !this.accepted) this.poll();
       } catch (reason) {
         if (over()) return;
         this.error = `Review status unavailable. ${reason instanceof Error ? reason.message : reason}`;
