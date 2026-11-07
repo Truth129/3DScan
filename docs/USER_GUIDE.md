@@ -357,6 +357,7 @@ use only. Inference stays on your computer and never trains the model.
 
 It can change voxels far beyond your marks: one mark can remove other separate parts of the
 segment or loops of a folded tube, and an Exclude on a large leak can remove much of the organ.
+**Include only adds**, under **Options +**, stops an Include-only run removing anything.
 
 1. Choose **+ Include** or **− Exclude**.
 2. Mark with **Point**, **Hint brush**, **Lasso** or **Box** (2D, on one native slice).
@@ -377,6 +378,9 @@ check the whole structure on the CT and in 3D before saving.
 
 - **Native slice planes**, required for hint brush, lasso and box
 - **Automatically focus inference**, on by default
+- **Include only adds**, off until you turn it on, and remembered in this browser. A **Run AI** with
+  only Include marks then never removes voxels, and one with only Exclude marks never adds. It cannot
+  tidy the boundary near an Include. Mixed runs and **Refine whole mask** are not guarded.
 - **Start from an empty mask**, which leaves the saved mask unchanged
 - **Refine whole mask**, a slower extra model stage. The marks made before it keep guiding later
   runs. If it fails or is cancelled with no marks waiting, the result before it stays and can be

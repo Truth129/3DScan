@@ -74,6 +74,24 @@ const runtime = ref<InteractiveStatus>(),
   messages = ref<HTMLElement>();
 const method = ref<InteractiveMethod>('direct'),
   methodError = ref('');
+// Include only adds starts off, and this browser remembers the reader's choice.
+const ONLY_ADDS_KEY = 'scan3d-ai-include-only-adds-v1';
+const onlyAdds = ref(readOnlyAdds());
+function readOnlyAdds() {
+  try {
+    return localStorage.getItem(ONLY_ADDS_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+function setOnlyAdds(value: boolean) {
+  onlyAdds.value = value;
+  try {
+    localStorage.setItem(ONLY_ADDS_KEY, String(value));
+  } catch {
+    // Without storage the choice lasts for this page.
+  }
+}
 const scissorsShape = ref<ScissorsShape>('freehand'),
   scissorsOperation = ref<ScissorsOperation>('erase_inside');
 const controller = shallowRef<InteractiveController>(),
@@ -397,7 +415,8 @@ async function run(full: boolean, choice?: InteractiveRunChoice) {
     caseId = props.caseId,
     revisionId = props.revisionId;
   showCandidate.value = true;
-  await value?.apply(full, choice);
+  // A re-run repeats each step as it first ran; the guard reaches only marks it adds as a new step.
+  await value?.apply(full, choice, method.value === 'nninteractive' && onlyAdds.value);
   if (disposed || identity !== identityVersion || current.value !== value || props.caseId !== caseId || props.revisionId !== revisionId) return;
   if (value?.job) policyOpen.value = false;
   else if (value?.error) recheckCards();
@@ -895,6 +914,14 @@ defineExpose({
             @change="option('autozoom', ($event.target as HTMLInputElement).checked)"
           />
           Automatically focus inference</label
+        >
+        <label v-if="method === 'nninteractive'"
+          ><input type="checkbox" :checked="onlyAdds" @change="setOnlyAdds(($event.target as HTMLInputElement).checked)" />
+          Include only adds
+          <small
+            >A Run AI with only Include marks never removes voxels, and one with only Exclude marks never adds. Mixed runs and Refine whole mask are not
+            guarded.</small
+          ></label
         >
         <label
           ><input

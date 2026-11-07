@@ -217,6 +217,17 @@ describe('running on a chosen card', () => {
     candidate: { generation: 1, revision_id: 'review-draft-1', summary },
   });
 
+  it('sends Include only adds as a sixth argument, on a re-run too, where it reaches only marks the re-run adds', async () => {
+    const { controller, reader } = fixture();
+    await controller.load();
+    controller.append(point('mark'));
+    await controller.apply(false, undefined, true);
+    expect(reader.predictInteractive.mock.lastCall!.slice(3)).toEqual([false, undefined, true]);
+    const rerun = fixture(locked());
+    await rerun.controller.load();
+    await rerun.controller.apply(false, { inference_path: 'nvidia', replay: true }, true);
+    expect(rerun.reader.predictInteractive).toHaveBeenCalledExactlyOnceWith('case', 'draft', 1, false, { inference_path: 'nvidia', replay: true }, true);
+  });
   it('sends a fifth argument only when there is a choice, for marks or a whole-mask refine with none', async () => {
     const { controller, reader } = fixture();
     await controller.load();

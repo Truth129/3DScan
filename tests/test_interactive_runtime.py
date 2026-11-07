@@ -138,11 +138,19 @@ class BatchRuntimeSession(FakeSession):
     def set_do_autozoom(self, enabled):
         self.do_autozoom = enabled
 
+    def _get_prev_seg_channel(self):
+        return 0
+
+    def _paste_interactions(self, channel, source, bbox, record_undo=True):
+        assert channel == 0 and record_undo is False
+        self.prev_seg[tuple(slice(a, b) for a, b in bbox)] = source
+
     def add_initial_seg_interaction(self, baseline, run_prediction):
         self.initials.append(baseline.copy())
         self.initial_modes.append(run_prediction)
         self.target.fill(0)
         self.target[:] = baseline
+        self.prev_seg = baseline.astype(np.float16)
         self.evidence.clear()
         self.new_interaction_centers, self.new_interaction_zoom_out_factors = [], []
         if run_prediction:
@@ -190,6 +198,7 @@ class BatchRuntimeSession(FakeSession):
         self.new_interaction_centers, self.new_interaction_zoom_out_factors = [], []
         if self.after_batch:
             self.after_batch()
+        self.prev_seg[:] = self.target
         if self.fail:
             raise RuntimeError("GPU prediction failed")
         return np.stack((np.maximum(0, low), np.minimum(self.target.shape, high)), axis=1).tolist()
@@ -206,8 +215,8 @@ def batch_runtime_files(runtime_files, monkeypatch):
     return runtime_files
 
 
-def boundary(end, *, autozoom=True, full=False):
-    return {"end": end, "autozoom": autozoom, "full_refine": full}
+def boundary(end, *, autozoom=True, full=False, guard=False):
+    return {"end": end, "autozoom": autozoom, "full_refine": full, **({"polarity_guard": True} if guard else {})}
 
 
 def test_readiness_does_not_import_gpu_or_expose_model_path(runtime_files, monkeypatch):
@@ -617,3 +626,41 @@ def test_runtime_materializes_all_drawing_tools_into_one_apply_without_ras_axis_
     with pytest.raises(ValueError, match="^Lasso mark 5 covers no voxel centre"):
         predict(runtime, fixture, tmp_path, [*prompts, missed], "missed.nii.gz", batches=[boundary(4), boundary(5)])
     runtime.release()
+
+
+def test_include_only_adds_guards_single_polarity_steps_the_same_warm_and_replayed(batch_runtime_files, tmp_path, monkeypatch):
+    fixture = batch_runtime_files
+    factory = interactive._new_session
+
+    def dropping(info):
+        session = factory(info)
+
+        def drop():
+            # A pasted object that leaves out a saved voxel no mark reaches.
+            session.target[2, 3, 4] = 0
+
+        session.after_batch = drop
+        return session
+
+    monkeypatch.setattr(interactive, "_new_session", dropping)
+    prompts = [fixture.point("add", [7, 8, 9]), fixture.point("more", [8, 9, 10]), fixture.point("remove", [3, 4, 5], False), fixture.point("mixed", [9, 9, 9])]
+    plain = predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts[:2], "plain.nii.gz", batches=[boundary(2)])
+    assert nib.load(tmp_path / "plain.nii.gz").dataobj[2, 3, 4] == 0 and "polarity_guard" not in plain["batch_statistics"][0]
+    warm = interactive.InteractiveRuntime()
+    first = predict(warm, fixture, tmp_path, prompts[:2], "first.nii.gz", batches=[boundary(2, guard=True)])
+    candidate = np.asarray(nib.load(tmp_path / "first.nii.gz").dataobj)
+    assert candidate[2, 3, 4] == candidate[7, 8, 9] == candidate[8, 9, 10] == 1
+    assert first["batch_statistics"][0]["polarity_guard"] == {"include": True, "reverted_voxels": 1, "reverted_bbox_ijk": [[2, 3], [3, 4], [4, 5]]}
+    assert first["apply_batches"] == [boundary(2, guard=True) | {"legacy": False}]
+    np.testing.assert_array_equal(fixture.sessions[-1].prev_seg, fixture.sessions[-1].target)
+    # A step mixing Include and Exclude is unguarded even when its record asks.
+    history = [boundary(2, guard=True), boundary(4, guard=True)]
+    second = predict(warm, fixture, tmp_path, prompts, "second.nii.gz", batches=history)
+    assert second["reused_prompt_prefix"] and "polarity_guard" not in second["batch_statistics"][0]
+    assert nib.load(tmp_path / "second.nii.gz").dataobj[2, 3, 4] == 0
+    replayed = predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts, "replayed.nii.gz", batches=history)
+    assert not replayed["reused_prompt_prefix"] and replayed["batch_statistics"][0]["polarity_guard"]["reverted_voxels"] == 1
+    np.testing.assert_array_equal(nib.load(tmp_path / "replayed.nii.gz").dataobj, nib.load(tmp_path / "second.nii.gz").dataobj)
+    for bad in ({"polarity_guard": "yes"}, {"polarity_guard": True, "legacy": True}):
+        with pytest.raises(ValueError, match="apply boundary"):
+            predict(interactive.InteractiveRuntime(), fixture, tmp_path, prompts[:2], "bad.nii.gz", batches=[boundary(2) | bad])

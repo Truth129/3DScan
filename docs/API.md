@@ -590,7 +590,7 @@ relationship?}` and replaces the complete ordered prompt list, with no inference
 - Editing an applied prompt drops later boundaries and invalidates the candidate.
 - Undoing to an exact applied snapshot restores identical bytes under a fresh alias.
 
-**`POST .../reviews/{sid}/predict`** takes `{generation, full_refine?, inference_path?, replay?}`
+**`POST .../reviews/{sid}/predict`** takes `{generation, full_refine?, inference_path?, replay?, polarity_guard?}`
 and returns a `review_predict` job, which applies every pending mark and publishes a candidate, not
 a revision. With nothing pending, it needs `full_refine`, a changed relationship or `replay`, or
 marks with no `candidate`, whose applied steps it repeats. See [Choosing a path](#choosing-a-path).
@@ -605,6 +605,9 @@ marks with no `candidate`, whose applied steps it repeats. See [Choosing a path]
 - `full_refine` (nnInteractive only) refines the whole mask from the current candidate, and can take
   longer than a local correction. Earlier marks keep guiding later runs. If it fails or is cancelled
   with nothing pending, the earlier candidate returns under a fresh alias and can be accepted.
+- `polarity_guard` (nnInteractive only) guards the step this run adds for pending marks: if they are
+  all Include, no voxel is removed, and if all Exclude, none is added. Mixed marks and the
+  whole-mask pass are unguarded, and replayed steps keep their own records.
 
 **`POST .../reviews/{sid}/accept`** takes `{generation}` and returns a `review_accept` job, which
 marks the new revision `corrected`. The candidate must be current and change masks or relationships,
@@ -646,8 +649,9 @@ completed candidates survive a restart.
 `options` defaults to `{autozoom: true, start_empty: false}`. `start_empty` changes the proposal's
 initialization, not the saved mask. Changing options resets applied boundaries.
 
-`batches` records each Apply as `{end, autozoom, full_refine, legacy?}`: `end` is the cumulative
-prompt count, and `legacy` marks older pointwise sessions.
+`batches` records each Apply as `{end, autozoom, full_refine, legacy?, polarity_guard?}`: `end` is
+the cumulative prompt count, `legacy` marks older pointwise sessions, and `polarity_guard` is
+present only on a guarded step, which every replay guards again.
 
 ### Candidate aliases
 

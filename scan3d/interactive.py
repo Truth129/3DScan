@@ -184,15 +184,18 @@ def _batches(records, count):
         full = record.get("full_refine", False)
         autozoom = record.get("autozoom", True)
         legacy = record.get("legacy", False)
+        guard = record.get("polarity_guard", False)
         if (
             isinstance(end, bool)
             or not isinstance(end, int)
             or not previous <= end <= count
-            or not all(isinstance(value, bool) for value in (full, autozoom, legacy))
+            or not all(isinstance(value, bool) for value in (full, autozoom, legacy, guard))
             or (end == previous and not full)
+            or (guard and legacy)
         ):
             raise ValueError("Invalid correction apply boundary")
-        result.append({"end": end, "autozoom": autozoom, "full_refine": full, "legacy": legacy})
+        # Only a guarded step names its guard, so every earlier record reads as it always has.
+        result.append({"end": end, "autozoom": autozoom, "full_refine": full, "legacy": legacy, **({"polarity_guard": True} if guard else {})})
         previous = end
     if previous != count:
         raise ValueError("Apply history must cover every correction prompt")
@@ -479,7 +482,7 @@ class InteractiveRuntime:
                     self._applied.append(prompt)
                     applied_now += 1
             else:
-                from .interactive_batch import register_and_predict, refine_whole_mask
+                from .interactive_batch import guard_polarity, polarity_snapshot, register_and_predict, refine_whole_mask
 
                 for batch in history[len(self._applied_batches) :]:
                     self._cancel(cancelled)
@@ -496,7 +499,14 @@ class InteractiveRuntime:
                             applied_now += 1
                     elif pending:
                         marks = _marks(pending, affine, image.shape, start)
+                        # Include only adds: a step whose marks share one polarity keeps to it. A mixed step is unguarded.
+                        polarities = {prompt["include"] for prompt in pending}
+                        guarded = batch.get("polarity_guard", False) and len(polarities) == 1
+                        snapshot = polarity_snapshot(self._target) if guarded else None
                         stats = register_and_predict(self._session, marks, progress, cancelled, autozoom=batch["autozoom"])
+                        if guarded:
+                            self._cancel(cancelled)
+                            stats["polarity_guard"] = guard_polarity(self._session, self._target, snapshot, polarities.pop())
                         batch_statistics.append(stats)
                         changed_bbox = stats.get("changed_bbox_ijk", changed_bbox)
                         applied_now += stats["prediction_regions"]

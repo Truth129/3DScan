@@ -219,8 +219,8 @@ export const api = {
     options?: InteractiveOptions,
     relationship?: SegmentRelationship,
   ) => request<InteractiveReview>(reviewUrl(id, session), json('PATCH', { expected_generation: generation, prompts, options, relationship })),
-  predictInteractive: (id: string, session: string, generation: number, full_refine = false, choice?: InteractiveRunChoice) =>
-    request<Job>(`${reviewUrl(id, session)}/predict`, json('POST', { generation, full_refine, ...choice })),
+  predictInteractive: (id: string, session: string, generation: number, full_refine = false, choice?: InteractiveRunChoice, polarity_guard = false) =>
+    request<Job>(`${reviewUrl(id, session)}/predict`, json('POST', { generation, full_refine, ...choice, ...(polarity_guard ? { polarity_guard } : {}) })),
   acceptInteractive: (id: string, session: string, generation: number) => request<Job>(`${reviewUrl(id, session)}/accept`, json('POST', { generation })),
   discardInteractive: (id: string, session: string, generation: number) =>
     request<InteractiveReview>(`${reviewUrl(id, session)}/discard`, json('POST', { expected_generation: generation })),

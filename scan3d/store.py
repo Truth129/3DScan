@@ -759,7 +759,7 @@ class Store:
             raise ReviewConflict(f"This draft's AI results came from {label}. Re-run its steps to use another GPU.")
         return chosen
 
-    def enqueue_review(self, case_id, session_id, generation, kind, full_refine=False, inference_path=None, replay=False):
+    def enqueue_review(self, case_id, session_id, generation, kind, full_refine=False, inference_path=None, replay=False, polarity_guard=False):
         if kind not in ("review_predict", "review_accept"):
             raise ValueError("Unknown interactive review operation")
         with self.connection() as con:
@@ -834,7 +834,17 @@ class Store:
                     payload["batches"] = (
                         review["batches"]
                         if (rebuild or step_replay) and len(review["prompts"]) <= applied and not full_refine
-                        else [*review["batches"], dict(end=len(review["prompts"]), autozoom=review["options"]["autozoom"], full_refine=full_refine)]
+                        else [
+                            *review["batches"],
+                            dict(
+                                end=len(review["prompts"]),
+                                autozoom=review["options"]["autozoom"],
+                                full_refine=full_refine,
+                                # Only on a step whose new marks share one polarity, the one kind the runtime
+                                # guards, so each replay guards exactly the steps that were guarded.
+                                **({"polarity_guard": True} if polarity_guard and len({p["include"] for p in review["prompts"][applied:]}) == 1 else {}),
+                            ),
+                        ]
                     )
             payload["session_id"] = session_id
             if kind == "review_accept":

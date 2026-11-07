@@ -436,6 +436,27 @@ def test_apply_boundaries_persist_only_after_publication_and_pending_undo_is_exa
     assert service.interactive_runtime.calls[-1][-1]["options"] == {"autozoom": True, "start_empty": False}
 
 
+def test_include_only_adds_is_recorded_on_its_own_step_and_refused_where_it_cannot_apply(example):
+    service, case, base, prompt = example
+    draft = candidate(example)
+    service.reviews.update(case["id"], draft["id"], 2, [prompt, dict(prompt, id="guarded", include=True)])
+    job = service.reviews.predict(case["id"], draft["id"], 3, polarity_guard=True)
+    assert job["payload"]["batches"] == [
+        {"end": 1, "autozoom": True, "full_refine": False},
+        {"end": 2, "autozoom": True, "full_refine": False, "polarity_guard": True},
+    ]
+    assert execute_next(service, job)["status"] == "completed"
+    assert service.reviews.get(case["id"], draft["id"])["batches"][-1]["polarity_guard"] is True
+    # Mixed marks are never guarded, so their step does not say it was.
+    prompts = [prompt, dict(prompt, id="guarded", include=True), dict(prompt, id="out", include=False), dict(prompt, id="in", include=True)]
+    service.reviews.update(case["id"], draft["id"], 4, prompts)
+    mixed = service.reviews.predict(case["id"], draft["id"], 5, polarity_guard=True)
+    assert mixed["payload"]["batches"][-1] == {"end": 4, "autozoom": True, "full_refine": False}
+    direct = start(example, "total:kidney_left", method="direct")
+    with pytest.raises(ValueError, match="AI assist"):
+        service.reviews.predict(case["id"], direct["id"], direct["generation"], polarity_guard=True)
+
+
 def test_whole_refine_gets_fresh_alias_and_options_changes_reset_replay(example):
     service, case, base, prompt = example
     draft = candidate(example)
@@ -1268,6 +1289,15 @@ def test_pending_marks_become_one_more_step_after_the_replayed_ones(example, pat
     state = ran(example, draft, inference_path="second", replay=True)
     assert state["batches"] == [*draft["batches"], {"end": 4, "autozoom": True, "full_refine": False}]
     assert sent(example)[1]["batches"] == state["batches"] and state["inference_path"] == binding("second")
+
+
+def test_a_rerun_guards_only_the_pending_marks_it_adds_as_a_step(example, paths):
+    draft = bound_draft(example)
+    add_mark(example, draft, "point-3")
+    state = ran(example, draft, inference_path="second", replay=True, polarity_guard=True)
+    assert state["batches"] == [*draft["batches"], {"end": 3, "autozoom": True, "full_refine": False, "polarity_guard": True}]
+    # With nothing pending, a re-run repeats the recorded steps as they are.
+    assert ran(example, state, inference_path="second", replay=True, polarity_guard=True)["batches"] == state["batches"]
 
 
 def test_the_replayed_steps_satisfy_the_engines_own_validation(example, paths):

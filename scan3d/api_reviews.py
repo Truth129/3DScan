@@ -75,7 +75,15 @@ def add_routes(app, service):
     @app.post("/api/cases/{case_id}/reviews/{session_id}/predict")
     def interactive_predict(case_id: str, session_id: str, body: InteractivePredict):
         return public_job(
-            service.reviews.predict(case_id, session_id, body.generation, full_refine=body.full_refine, inference_path=body.inference_path, replay=body.replay)
+            service.reviews.predict(
+                case_id,
+                session_id,
+                body.generation,
+                full_refine=body.full_refine,
+                inference_path=body.inference_path,
+                replay=body.replay,
+                polarity_guard=body.polarity_guard,
+            )
         )
 
     @app.post("/api/cases/{case_id}/reviews/{session_id}/accept")

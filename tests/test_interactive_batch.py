@@ -44,6 +44,14 @@ class FakeSession:
         self.registered = []
         self.calls = []
         self.after_prediction = None
+        self.prev_seg = np.zeros(shape, dtype=np.float16)
+
+    def _get_prev_seg_channel(self):
+        return 0
+
+    def _paste_interactions(self, channel, source, bbox, record_undo=True):
+        assert channel == 0 and record_undo is False and source.dtype == np.float16
+        self.prev_seg[tuple(slice(a, b) for a, b in bbox)] = source
 
     def set_do_autozoom(self, value):
         self.do_autozoom = value
@@ -239,3 +247,27 @@ def test_whole_refinement_requires_supported_nonempty_binary_candidate():
     session.supports_zero_shot_label_refinement = False
     with pytest.raises(ValueError, match="does not support"):
         batch.refine_whole_mask(session, lambda m: None, lambda: False)
+
+
+@pytest.mark.parametrize("include", [True, False])
+def test_polarity_guard_reverts_only_against_the_steps_polarity_and_mirrors_it_in_the_previous_mask(include):
+    session = FakeSession(shape=(40, 20, 5))
+    target = session.target
+    target[2:6, 2:6, 1:3] = 1
+    target[30:34, 10:14, 1:3] = 1
+    snapshot = batch.polarity_snapshot(target)
+    # As a pasted object does: the step drops a separate part, across slabs, and grows the marked one.
+    target[30:34, 10:14, 1:3] = 0
+    target[6, 2:6, 1:3] = 1
+    session.prev_seg[:] = target
+    result = batch.guard_polarity(session, target, snapshot, include)
+    if include:
+        assert result == {"include": True, "reverted_voxels": 32, "reverted_bbox_ijk": [[30, 34], [10, 14], [1, 3]]}
+        assert target[30:34, 10:14, 1:3].all() and target[6, 2:6, 1:3].all()
+    else:
+        assert result == {"include": False, "reverted_voxels": 8, "reverted_bbox_ijk": [[6, 7], [2, 6], [1, 3]]}
+        assert not target[30:34, 10:14, 1:3].any() and not target[6].any()
+    np.testing.assert_array_equal(session.prev_seg, target)
+    unchanged = session.prev_seg.copy()
+    assert batch.guard_polarity(session, target, batch.polarity_snapshot(target), include)["reverted_voxels"] == 0
+    np.testing.assert_array_equal(session.prev_seg, unchanged)

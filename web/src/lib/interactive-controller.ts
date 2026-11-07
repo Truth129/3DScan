@@ -452,7 +452,8 @@ export class InteractiveController {
     this.error = '';
     await this.load();
   }
-  async apply(fullRefine = false, choice?: InteractiveRunChoice) {
+  /** `polarityGuard` is Include only adds, for the step this run adds; AI assist only. */
+  async apply(fullRefine = false, choice?: InteractiveRunChoice, polarityGuard = false) {
     if (this.working || this.conflict) return;
     if (this.method === 'direct' && fullRefine) {
       this.error = 'Whole-mask refinement is available in AI assist.';
@@ -482,10 +483,14 @@ export class InteractiveController {
         return;
       }
       const { id, generation } = this.review;
-      // One path sends no fifth argument at all, so it stays today's request.
-      const job = await (choice
-        ? this.reader.predictInteractive(this.caseId, id, generation, fullRefine, choice)
-        : this.reader.predictInteractive(this.caseId, id, generation, fullRefine));
+      // The server records the guard only on a new step, so a re-run's own steps keep theirs.
+      const guard = polarityGuard && this.method !== 'direct';
+      // One path sends no fifth argument at all, and an unguarded run no sixth, so they stay today's requests.
+      const job = await (guard
+        ? this.reader.predictInteractive(this.caseId, id, generation, fullRefine, choice, true)
+        : choice
+          ? this.reader.predictInteractive(this.caseId, id, generation, fullRefine, choice)
+          : this.reader.predictInteractive(this.caseId, id, generation, fullRefine));
       // The record that was asked about has gone, and this job says nothing about what replaced it.
       if (follow !== this.follow) return;
       this.job = job;

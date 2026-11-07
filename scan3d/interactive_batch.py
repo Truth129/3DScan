@@ -304,3 +304,45 @@ def refine_whole_mask(session, progress, cancelled, *, autozoom=True, marks=()):
         session.new_interaction_centers = []
         session.new_interaction_zoom_out_factors = []
         session.set_do_autozoom(previous_autozoom)
+
+
+_SLAB = 16
+
+
+def polarity_snapshot(target):
+    """The working mask before a guarded step, one bit per voxel in slabs, to bound memory on a large CT."""
+    return [np.packbits(target[start : start + _SLAB]) for start in range(0, target.shape[0], _SLAB)]
+
+
+def guard_polarity(session, target, snapshot, include):
+    """Revert what one single-polarity step did against its polarity: Include only adds, Exclude only removes.
+
+    nnInteractive pastes one predicted object over its whole box, so an Include can delete parts of the
+    segmentation that its marks do not reach. The engine's previous-mask channel mirrors the target
+    wherever it pastes, so the reverted voxels are written there too: the next step then starts from the
+    mask the reader sees, as a session restored from this result does.
+    """
+    if metadata.version("nnInteractive") != SUPPORTED_ENGINE_VERSION:
+        raise RuntimeError("The polarity guard requires the pinned nnInteractive 2.6.0 adapter")
+    if not isinstance(include, bool):
+        raise ValueError("The guarded polarity must be an explicit boolean")
+    reverted, low, high = 0, None, None
+    for start, packed in zip(range(0, target.shape[0], _SLAB), snapshot):
+        view = target[start : start + _SLAB]
+        before = np.unpackbits(packed, count=view.size).reshape(view.shape).astype(bool)
+        against = before & (view == 0) if include else ~before & (view != 0)
+        if not against.any():
+            continue
+        view[against] = 1 if include else 0
+        reverted += int(np.count_nonzero(against))
+        where = np.nonzero(against)
+        lows = np.array([start + where[0].min(), where[1].min(), where[2].min()])
+        highs = np.array([start + where[0].max(), where[1].max(), where[2].max()]) + 1
+        low = lows if low is None else np.minimum(low, lows)
+        high = highs if high is None else np.maximum(high, highs)
+    if reverted:
+        box = [[int(a), int(b)] for a, b in zip(low, high)]
+        # The runtime keeps interactions in blosc2 (`_new_session`), whose paste takes a NumPy region.
+        region = target[tuple(slice(a, b) for a, b in box)].astype(np.float16)
+        session._paste_interactions(session._get_prev_seg_channel(), region, box, record_undo=False)
+    return {"include": include, "reverted_voxels": reverted, "reverted_bbox_ijk": [[int(a), int(b)] for a, b in zip(low, high)] if reverted else None}

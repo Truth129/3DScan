@@ -271,6 +271,7 @@ class InteractivePredict(InteractiveGeneration):
     full_refine: bool = False
     inference_path: str | None = Field(default=None, max_length=32, pattern=ID_PATTERN)
     replay: bool = False
+    polarity_guard: bool = False
 
 
 class InteractiveDiscard(Input):

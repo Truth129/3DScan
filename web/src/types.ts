@@ -321,6 +321,8 @@ export interface InteractiveBatch {
   end: number;
   autozoom: boolean;
   full_refine: boolean;
+  /** Include only adds, present only on a step that was guarded. */
+  polarity_guard?: boolean;
 }
 export interface InteractiveRunChoice {
   inference_path: string;
