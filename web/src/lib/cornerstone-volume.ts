@@ -62,13 +62,18 @@ const PATIENT_VIEW: Record<Plane, { right: Point; down: Point }> = {
   sagittal: { right: [0, 1, 0], down: [0, 0, -1] },
 };
 /** Camera pixel x/y follow the two remaining native axes, each signed and placed
- * as near the patient view of the plane as it goes. Grids are often stored with
- * rows flipped, and following them raw turned the slices over on entering review.
- * The normal comes from the displayed plane, not native handedness. */
-export function nativeCameraOrientation(geometry: Pick<Geometry, 'shape' | 'affine_ras'>, axis: NativeAxis, plane: Plane) {
+ * as near the patient view of the slice's own anatomical plane as it goes. Grids
+ * are often stored with rows flipped, and following them raw turned the slices
+ * over on entering review. The plane comes from the slice, not the pane: a pane
+ * shows a native axis whatever the acquisition, so a sagittal series puts a
+ * sagittal slice in the axial pane. The normal comes from the displayed plane,
+ * not native handedness. */
+export function nativeCameraOrientation(geometry: Pick<Geometry, 'shape' | 'affine_ras'>, axis: NativeAxis) {
   if (![0, 1, 2].includes(axis)) throw new Error('Invalid native MPR axis');
   const { axesRAS } = cornerstoneVolumeGeometry(geometry);
-  const { right, down } = PATIENT_VIEW[plane];
+  const normal = rasToLps(axesRAS[axis]).map(Math.abs);
+  const nearest = normal.indexOf(Math.max(...normal));
+  const { right, down } = PATIENT_VIEW[(['sagittal', 'coronal', 'axial'] as const)[nearest]];
   const [a, b] = [0, 1, 2].filter(value => value !== axis).map(column => rasToLps(axesRAS[column]));
   const swap = Math.abs(dot(b, right)) + Math.abs(dot(a, down)) > Math.abs(dot(a, right)) + Math.abs(dot(b, down));
   const signed = (value: Point, toward: Point) => (dot(value, toward) < 0 ? (value.map(component => -component) as Point) : value);
