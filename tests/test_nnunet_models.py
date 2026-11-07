@@ -97,14 +97,20 @@ def test_run_starts_the_worker_and_records_the_model_as_its_engine(pinned, tmp_p
             for name, filled in (("liver", True), ("spleen", False)):
                 nib.save(nib.Nifti1Image(np.full(shape, filled, np.uint8), affine), directory / f"{name}.nii.gz")
             Path(command[command.index("--report") + 1]).write_text(json.dumps({"device": "gpu", "classes": {"1": "liver", "2": "spleen"}}))
+            Path(command[command.index("--progress") + 1]).write_text("fold 1 of 1")
+            self.polls = 0
 
         def poll(self):
-            return 0
+            # Still running at the first look, so the parent reads the step once.
+            self.polls += 1
+            return None if self.polls == 1 else 0
 
     monkeypatch.setattr(segmentation.subprocess, "Popen", Worker)
     output = tmp_path / "output"
-    structures = segmentation.segment(image, output, "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
+    stages = []
+    structures = segmentation.segment(image, output, "other", stages.append, lambda: False, {"tasks": [model.id]}, modality="MR")
     command, options = launches[0]
+    assert any(stage.startswith(f"Running full-resolution MRSegmentator: {model.id}, fold 1 of 1 (") for stage in stages)
     assert command[:5] == [sys.executable, "-u", "-P", "-m", "scan3d.nnunet_worker"]
     assert command[command.index("--model-folder") + 1] == str(target)
     assert str(ROOT) in options["env"]["PYTHONPATH"].split(":")

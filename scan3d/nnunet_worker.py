@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import time
 
@@ -58,7 +59,7 @@ def full_size_labels(logits, resample, properties, transpose_backward):
     return restored.transpose(transpose_backward)
 
 
-def predict(model, model_folder, image, spacing, device):
+def predict(model, model_folder, image, spacing, device, step=lambda _: None):
     import torch
     from nnunetv2.inference.data_iterators import PreprocessAdapterFromNpy
     from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
@@ -74,11 +75,22 @@ def predict(model, model_folder, image, spacing, device):
     if predictor.label_manager.has_regions:
         raise RuntimeError(f"{model.name} is region-based, which this worker does not export")
     plans, configuration = predictor.plans_manager, predictor.configuration_manager
+    step("preparing the scan")
     adapter = PreprocessAdapterFromNpy([image], None, [{"spacing": spacing}], None, plans, predictor.dataset_json, configuration)
     prepared = next(adapter)
     properties = prepared["data_properties"]
+    # Upstream runs each fold through this once, so counting calls shows a long run is moving.
+    sliding_window, folds_started = predictor.predict_sliding_window_return_logits, []
+
+    def counted(data):
+        folds_started.append(None)
+        step(f"fold {len(folds_started)} of {len(model.folds)}")
+        return sliding_window(data)
+
+    predictor.predict_sliding_window_return_logits = counted
     logits = predictor.predict_logits_from_preprocessed_data(prepared["data"]).cpu()
     del prepared
+    step("saving the masks")
     shape = properties["shape_after_cropping_and_before_resampling"]
     target = [spacing[axis] for axis in plans.transpose_forward]
     return full_size_labels(
@@ -97,12 +109,20 @@ def main():
     parser.add_argument("--model-folder", type=Path, required=True)
     parser.add_argument("--device", required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--progress", type=Path, help="A file that always holds the current step, for the parent to show")
     args = parser.parse_args()
     model = MODELS[args.task]
     started = time.monotonic()
+
+    def step(text):
+        if args.progress:
+            pending = args.progress.with_name(args.progress.name + ".tmp")
+            pending.write_text(text)
+            os.replace(pending, args.progress)
+
     reference, affine = _image(args.image)
     image, spacing, back = model_input(reference, affine, model.axes)
-    labels, torch_version = predict(model, args.model_folder, image, spacing, args.device)
+    labels, torch_version = predict(model, args.model_folder, image, spacing, args.device, step)
     labels = native_labels(labels, back)
     for value, name in enumerate(model.labels, 1):
         _save_mask(labels == value, reference, args.output / f"{name}.nii.gz")

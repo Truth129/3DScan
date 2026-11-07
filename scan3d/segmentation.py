@@ -558,8 +558,9 @@ def segment(
                 "--report",
                 str(run_dir / f"{task}-report.json"),
             ]
+            progress_path = run_dir / f"{task}-progress.txt"
             if model:
-                command += ["--model-folder", str(nnunet_models.model_dir(model))]
+                command += ["--model-folder", str(nnunet_models.model_dir(model)), "--progress", str(progress_path)]
             for option in ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling"):
                 if options[option]:
                     command.append("--" + option)
@@ -592,12 +593,17 @@ def segment(
             log_path = run_dir / f"{task}.log"
             with log_path.open("wb") as log:
                 process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, **spawn_options)
+                shown = None
                 try:
                     while process.poll() is None:
                         resources.sample(process.pid)
                         if cancelled():
                             _stop(process)
                             raise SegmentationCancelled("Segmentation cancelled")
+                        # A pinned model's run can take minutes with nothing else to show.
+                        if model and progress_path.is_file() and (current := progress_path.read_text()) != shown:
+                            shown = current
+                            progress(f"Running full-resolution {engine}: {task}, {current} ({device})")
                         time.sleep(0.2)
                 except BaseException:
                     _stop(process)

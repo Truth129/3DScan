@@ -192,7 +192,8 @@ and saves run on a separate queue, so they do not wait behind a segmentation.
 
 **Whole body — MRSegmentator** is a separate model for CT and MRI, with 40 structures. Install it
 once with `scripts/download_segmentation_model.py mrsegmentator`. It runs alone, not with other
-tasks, without the crop or small-blob options, and always with all five folds.
+tasks, without the crop or small-blob options, and always with all five folds. The job shows which
+fold it is on.
 
 Its segments sit in their own **MRSegmentator** group, named like **Liver (MRSegmentator)**. A run
 of either model replaces only that model's earlier segments, so the two sets stay side by side.
