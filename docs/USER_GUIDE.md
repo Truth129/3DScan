@@ -203,6 +203,7 @@ CT angiography, from the ImageCAS-X benchmark. Install it with
 `scripts/download_segmentation_model.py imagecasx_coronary`. Its segment is **Coronary arteries
 (ImageCAS-X nnU-Net)**, beside TotalSegmentator's. It was trained at one centre on scans without
 artefacts, and it works at 0.35 mm, so a large non-cardiac CT needs a lot of memory and time.
+As in the benchmark, pieces of its mask smaller than 100 voxels are removed.
 
 ### TotalSegmentator license
 

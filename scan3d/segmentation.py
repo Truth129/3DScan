@@ -221,6 +221,7 @@ def _nnunet_descriptor(model):
         "engine": model.name,
         "version": model.version,
         "folds": list(model.folds),
+        "smallest_piece": model.smallest_piece,
         "worker_sha256": _digest(Path(__file__).with_name("nnunet_worker.py")),
         "files": files,
         "complete": matches,

@@ -38,6 +38,8 @@ class NnunetModel:
     archive_folder: str = ""
     # The names in the model's dataset.json, when 3DScan shows other names.
     dataset_labels: tuple[str, ...] = ()
+    # Pieces of a mask with fewer voxels than this, counted 26-connected, are dropped.
+    smallest_piece: int = 0
 
 
 MODELS = {
@@ -126,6 +128,8 @@ MODELS = {
             checkpoint="checkpoint_best.pth",
             # nnU-Net read the ImageCAS files unchanged, and all 800 ImageCAS-X label headers are LAS.
             axes="LAS",
+            # The ImageCAS-X paper scores every method after this cleanup (appendix E.4).
+            smallest_piece=100,
             files={
                 "dataset.json": "43d1e6d7b11c3af807484ce1bb4c660f1ae83ca1934eebf7390e675ab24403da",
                 "plans.json": "1d1d83ab3d0af4542f23ed047ea9769249e07058d85348ee483e95e757245e14",

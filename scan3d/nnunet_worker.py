@@ -15,6 +15,7 @@ import time
 
 from nibabel import orientations
 import numpy as np
+from scipy import ndimage as ndi
 
 from .imaging import _image, _save_mask
 from .nnunet_models import MODELS
@@ -38,6 +39,15 @@ def model_input(image, affine, axes="LPS"):
 
 def native_labels(labels, back):
     return orientations.apply_orientation(labels.transpose(2, 1, 0), back)
+
+
+def without_small_pieces(mask, smallest):
+    if not smallest:
+        return mask
+    pieces, _ = ndi.label(mask, structure=np.ones((3, 3, 3)))
+    keep = np.bincount(pieces.ravel()) >= smallest
+    keep[0] = False
+    return keep[pieces]
 
 
 def full_size_labels(logits, resample, properties, transpose_backward):
@@ -125,7 +135,7 @@ def main():
     labels, torch_version = predict(model, args.model_folder, image, spacing, args.device, step)
     labels = native_labels(labels, back)
     for value, name in enumerate(model.labels, 1):
-        _save_mask(labels == value, reference, args.output / f"{name}.nii.gz")
+        _save_mask(without_small_pieces(labels == value, model.smallest_piece), reference, args.output / f"{name}.nii.gz")
     report = {
         "device": "cpu" if args.device == "cpu" else "gpu",
         "fast": False,
