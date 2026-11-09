@@ -264,6 +264,12 @@ the skull first. Together they download 2.5 GB and keep 1.4 GB:
 .venv/bin/python scripts/download_segmentation_model.py flames_ms_lesions
 ```
 
+**BreastDivider** is an optional left and right breast model for MRI. It needs about 100 MB:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py breastdivider
+```
+
 The weights go to `.runtime/segmentation-models/`. Every file is checked against a pinned SHA-256
 when it is downloaded and before each run. Requests never download them.
 

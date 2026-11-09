@@ -211,6 +211,12 @@ removes the skull first, because FLAMeS was trained on images without one; **Bra
 that brain mask on its own. The segment is **White matter lesions (FLAMeS)**. It was trained on 668
 scans and often misses lesions under about 10 mm³.
 
+**Breasts — BreastDivider** marks the left and right breast on MRI of the breasts in any common
+sequence: T1 with or without contrast, T2 or DWI. Install it with
+`scripts/download_segmentation_model.py breastdivider`. Its segments are **Left breast
+(BreastDivider)** and **Right breast (BreastDivider)**, by the patient's side. It was trained on
+13,752 public scans, but its accuracy has been measured only against labels it helped make.
+
 ### TotalSegmentator license
 
 Tasks that need a license show **· license required**. Under **Segment CT…**, expand

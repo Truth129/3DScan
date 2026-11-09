@@ -29,7 +29,9 @@ class NnunetModel:
     # nnU-Net's fold "all" is one model trained on every case.
     folds: tuple[int | str, ...]
     tile_step_size: float
+    # A zip archive, or a folder URL ending in "/" when the model is published as separate files.
     url: str
+    # Empty when the files are separate; each file is still pinned below.
     archive_sha256: str
     files: dict[str, str]
     checkpoint: str = "checkpoint_final.pth"
@@ -193,6 +195,29 @@ MODELS = {
                 "fold_2/checkpoint_final.pth": "734be69b968cc6578bcf079bb79db166cd8f5edba0f0dc19a62bbe68021364d8",
                 "fold_3/checkpoint_final.pth": "8e989caccdcf45368cc8f1ef8a00598f9f072c1fbe23e57458fc572fea434c3f",
                 "fold_4/checkpoint_final.pth": "ff723a2eda28a7f78f75d96a993d029ea8f65aa3657f5aea7caab9b217792df2",
+            },
+        ),
+        NnunetModel(
+            id="breastdivider",
+            name="BreastDivider",
+            version="hf-e02a0ad",
+            label="Breasts — BreastDivider",
+            description="The left and right breast on MRI of the breasts in any common sequence, from BreastDivider, an nnU-Net trained on 13,752 public scans. Its accuracy has been measured only against labels it helped make.",
+            license="Weights CC BY-NC-SA 4.0 (Hugging Face ykirchhoff/BreastDividerModel); code Apache-2.0",
+            modalities=("MR",),
+            labels=("left_breast", "right_breast"),
+            dataset_labels=("left", "right"),
+            folds=("all",),
+            tile_step_size=0.5,
+            url="https://huggingface.co/ykirchhoff/BreastDividerModel/resolve/e02a0ad9c2200a20df4bbb490b8fd8d647337fb3/",
+            archive_sha256="",
+            # nnU-Net's reader turned every image to RAS, and the model never mirrors left to
+            # right, so this order decides which breast is which.
+            axes="RAS",
+            files={
+                "dataset.json": "0570e0acea9ee107c986732ed0656cb658e9e448ba9f3faa0391c136b9291e6a",
+                "plans.json": "5618d66983c643e8558f4c67fac7101d7fa6cc52465fabf8ce2c576f9d7dab0b",
+                "fold_all/checkpoint_final.pth": "18441fe5536ce9209d216f8a9ba6e6331c69f54a0acb3fa2fca6428214b92d18",
             },
         ),
     )

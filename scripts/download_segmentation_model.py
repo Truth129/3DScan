@@ -31,6 +31,26 @@ def install(model, archive: Path, target: Path):
         os.replace(folder, target)
 
 
+def fetch(url, destination: Path):
+    with requests.get(url, stream=True, timeout=60) as response, destination.open("wb") as output:
+        response.raise_for_status()
+        for block in response.iter_content(4 * 1024 * 1024):
+            output.write(block)
+
+
+def install_files(model, target: Path):
+    """For a model published as separate files: fetch each, and publish the folder only once all of them match."""
+    with tempfile.TemporaryDirectory(dir=target.parent) as staging:
+        folder = Path(staging) / target.name
+        for name, expected in model.files.items():
+            destination = folder / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            fetch(model.url + posixpath.join(model.archive_folder, name), destination)
+            if hash_file(destination) != expected:
+                raise RuntimeError(f"{model.name} file {name} failed its pinned checksum")
+        os.replace(folder, target)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", choices=sorted(MODELS))
@@ -45,13 +65,13 @@ def main():
         if target.exists():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=target.parent) as staging:
-            archive = Path(staging) / "weights.zip"
-            with requests.get(part.url, stream=True, timeout=60) as response, archive.open("wb") as output:
-                response.raise_for_status()
-                for block in response.iter_content(4 * 1024 * 1024):
-                    output.write(block)
-            install(part, archive, target)
+        if not part.archive_sha256:
+            install_files(part, target)
+        else:
+            with tempfile.TemporaryDirectory(dir=target.parent) as staging:
+                archive = Path(staging) / "weights.zip"
+                fetch(part.url, archive)
+                install(part, archive, target)
         print(f"{part.name} {part.version} verified at {target}")
         print(f"License: {part.license}")
 

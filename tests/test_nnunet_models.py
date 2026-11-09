@@ -132,7 +132,7 @@ def test_changed_weights_stop_a_run_before_any_child_can_load_them(pinned, tmp_p
         segmentation.segment(image, tmp_path / "output", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
 
 
-@pytest.mark.parametrize("axes", ["LPS", "LAS"])
+@pytest.mark.parametrize("axes", ["LPS", "LAS", "RAS"])
 @pytest.mark.parametrize("codes", [("L", "P", "S"), ("R", "A", "S"), ("A", "R", "I")])
 def test_model_input_matches_the_simpleitk_reader_the_model_was_trained_with(tmp_path, codes, axes):
     values = np.random.default_rng(1).integers(-1000, 1000, (7, 9, 11)).astype(np.int16)
@@ -310,3 +310,35 @@ def test_worker_gives_flames_only_the_voxels_hd_bet_keeps(tmp_path, monkeypatch)
     _, _, back = nnunet_worker.model_input(nib.load(tmp_path / "image.nii.gz"), affine, "LAS")
     np.testing.assert_allclose(mask.affine, affine)
     assert np.array_equal(np.asarray(mask.dataobj) > 0, nnunet_worker.native_labels(brain, back))
+
+
+def test_download_of_separate_files_publishes_only_files_that_match(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_SEGMENTATION_MODELS", str(tmp_path / "models"))
+    model = nnunet_models.MODELS["breastdivider"]
+    served = {f"{model.url}{name}": f"stand-in {name}".encode() for name in model.files}
+    model = replace(model, files={name: sha256(served[model.url + name]) for name in model.files})
+
+    class Response:
+        def __init__(self, url, **_):
+            self.content = served[url]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, _):
+            yield self.content
+
+    monkeypatch.setattr(download.requests, "get", Response)
+    target = nnunet_models.model_dir(model)
+    target.parent.mkdir(parents=True)
+    with pytest.raises(RuntimeError, match="plans.json failed"):
+        download.install_files(replace(model, files={**model.files, "plans.json": "0" * 64}), target)
+    assert list(target.parent.iterdir()) == []
+    download.install_files(model, target)
+    assert sorted(path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()) == sorted(model.files)
