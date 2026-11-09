@@ -1265,7 +1265,8 @@ watch(
       syncReview();
     }
     if (current[2] && !props.reviewActive && !props.initialSnapshot && ctVolumeAvailable.value) setVolumeEnabled(true);
-    else if (previous?.[2]) {
+    // Review keeps its own CT layers while a segment is added to a scan that had none; leaving it settles them.
+    else if (previous?.[2] && !props.reviewActive) {
       setVolumeEnabled(false);
       showPlane.value = false;
     }
@@ -1408,6 +1409,7 @@ watch(
 let volumeBeforeReview = showVolume.value;
 let segmentationBeforeReview = showSegmentation.value;
 let planeBeforeReview = showPlane.value;
+let ctOnlyBeforeReview = false;
 // Focus, or a rotate while the volume was hidden, fits clipping to the target or the surfaces; a volume
 // turned on afterwards would draw as a slab until the next rotate.
 watch(showVolume, visible => {
@@ -1421,12 +1423,17 @@ watch(
       volumeBeforeReview = showVolume.value;
       segmentationBeforeReview = showSegmentation.value;
       planeBeforeReview = showPlane.value;
+      ctOnlyBeforeReview = ctOnly.value;
       showSegmentation.value = true;
       setVolumeEnabled(vtkSelected.value && reviewVolume.open.value);
     } else {
       showSegmentation.value = segmentationBeforeReview;
-      showPlane.value = planeBeforeReview;
-      if (preferCornerstone) setVolumeEnabled(volumeBeforeReview);
+      // A segment saved in review on a scan that had none leaves it as a segmentation would:
+      // without the CT volume and plane that a scan alone opens with.
+      const segmented = ctOnlyBeforeReview && !ctOnly.value;
+      showPlane.value = segmented ? false : planeBeforeReview;
+      if (segmented) setVolumeEnabled(false);
+      else if (preferCornerstone) setVolumeEnabled(volumeBeforeReview);
     }
   },
 );

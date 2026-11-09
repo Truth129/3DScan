@@ -182,6 +182,20 @@ def test_new_segment_can_be_painted_without_model_or_segmentation(direct_case):
     assert revision["structures"][:-1] == base["structures"]
 
 
+def test_new_segment_can_be_painted_on_a_scan_never_segmented(direct_case):
+    service, case, base, _ = direct_case
+    scan = service.build_ct_revision(case["id"], Path(base["ct_file"]))
+    service.store.commit_revision(scan)
+    assert scan["kind"] == "ct" and scan["structures"] == []
+    draft = service.reviews.create_structure(case["id"], scan["id"], "Hand painted", method="direct")
+    draft = apply(service, case, scan, [stroke()], draft=draft)
+    accepted = execute(service, service.reviews.accept(case["id"], draft["id"], draft["generation"]))
+    revision = service.store.revision(case["id"], accepted["revision_id"])
+    assert revision["kind"] == "segmentation" and revision["parent_id"] == scan["id"]
+    assert [entry["id"] for entry in revision["structures"]] == [draft["structure_id"]]
+    assert revision["structures"][0]["voxel_count"] > 0
+
+
 def test_complete_erase_existing_target_saves_named_empty_mask_and_exact_revision_undo(direct_case):
     service, case, base, _ = direct_case
     source_bytes = Path(base["structures"][0]["mask_file"]).read_bytes()

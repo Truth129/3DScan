@@ -428,6 +428,10 @@ from the removed GPU keeps **Re-run on this GPU**, even with one GPU left. If th
 Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a relationship, then
 **Create empty segment**. Mark its extent on the CT, apply, inspect and choose **Save new segment**.
 
+A scan with no segmentation needs no model run first: choose **+ Add segment ↗** in the toolbar or
+**+ Add segment by hand** in the anatomy panel. Review opens on that form, in **Direct edit**. Saving
+makes the scan's first segmentation revision.
+
 ### Mark in the 3D view
 
 **Mark on**, under **Review tools**, selects **Surface point**, which locks picking to the target,

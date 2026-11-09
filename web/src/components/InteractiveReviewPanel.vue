@@ -116,6 +116,7 @@ let disposed = false,
   identityVersion = 0,
   targetVersion = 0,
   discoveryScope = '';
+const discovered = ref('');
 const current = computed(() => {
   void tick.value;
   return controller.value;
@@ -145,7 +146,8 @@ const methodDisabled = computed(
     props.busy ||
     !!current.value?.working ||
     !!current.value?.saving ||
-    !current.value?.loaded ||
+    // With no segment chosen there is no draft to protect, so a new segment can start in either method.
+    (!!current.value && !current.value.loaded) ||
     !!current.value?.conflict,
 );
 const hasImpact = computed(() => !!(candidate.value?.affected_structures?.length || candidate.value?.overlaps?.length));
@@ -226,6 +228,9 @@ async function discoverTargets() {
     if (draftMethods.has(props.selected)) void ensureController();
     const remembered = localStorage.getItem(rememberedTargetKey());
     if (remembered && props.selected === selected && draftTargets.value.some(item => item.id === remembered)) emit('select', remembered);
+    // After the page has taken the targets and selection, so the watcher below sees them.
+    await nextTick();
+    if (!disposed && identity === identityVersion && scope === `${props.caseId}:${props.revisionId}`) discovered.value = scope;
   } catch (reason) {
     if (identity === identityVersion) {
       discoveryScope = '';
@@ -333,6 +338,14 @@ async function discardCurrent() {
 }
 async function ensureController() {
   if (!props.active) return;
+  // A scan with no segments has nothing to review until one is added.
+  if (!props.selected) {
+    if (controller.value) {
+      controller.value = undefined;
+      publish();
+    }
+    return;
+  }
   const targetMethod = draftMethods.get(props.selected);
   if (targetMethod && targetMethod !== method.value) {
     method.value = targetMethod;
@@ -479,6 +492,7 @@ watch(
     identityVersion++;
     targetVersion++;
     discoveryScope = '';
+    discovered.value = '';
     draftMethods.clear();
     draftTargets.value = [];
     emit('targets', []);
@@ -506,6 +520,26 @@ watch(
     policyLoading.value = false;
     policyValid.value = true;
     methodError.value = '';
+  },
+);
+// A scan with no segments has nothing selected. Review returns to its unsaved new segment, the
+// remembered one first and otherwise the newest the server listed, or opens the form that adds one.
+watch(
+  () => [!!props.active && discovered.value === `${props.caseId}:${props.revisionId}` && !props.selected, draftTargets.value] as const,
+  ([idle, drafts]) => {
+    if (!idle || creating.value) return;
+    let remembered: string | null = null;
+    try {
+      remembered = localStorage.getItem(rememberedTargetKey());
+    } catch {
+      /* The newest draft stands in. */
+    }
+    const target = drafts.find(item => item.id === remembered) ?? drafts[0];
+    if (target) emit('select', target.id);
+    else if (!props.structures.length) {
+      addOpen.value = true;
+      policyOpen.value = false;
+    }
   },
 );
 watch(method, value => {
@@ -662,6 +696,9 @@ defineExpose({
             :disabled="creating || discarding || !!current?.working"
             @change="emit('select', ($event.target as HTMLSelectElement).value)"
           >
+            <option v-if="!structures.some(item => item.id === selected)" value="" disabled>
+              {{ structures.length ? 'Choose a segment' : 'No segments yet' }}
+            </option>
             <option v-for="item in structures" :key="item.id" :value="item.id">
               {{ prettyName(item.name) }}{{ draftTargets.some(target => target.id === item.id) ? ' · draft' : '' }}
             </option>
@@ -755,7 +792,8 @@ defineExpose({
         </div>
       </div>
       <div class="review-toolbar-context">
-        <span v-if="discarding">Closing draft…</span><span v-else-if="!current?.loaded">Loading saved work…</span
+        <span v-if="discarding">Closing draft…</span><span v-else-if="!current">Add a segment to start.</span
+        ><span v-else-if="!current.loaded">Loading saved work…</span
         ><span v-else-if="current.working" class="review-working"
           ><span class="spinner"></span>{{ current.accepted ? 'Opening the saved revision…' : current.job?.stage || 'Processing on workstation…'
           }}<button v-if="!current.accepted" class="text-button" @click="current.cancel()">Cancel</button></span

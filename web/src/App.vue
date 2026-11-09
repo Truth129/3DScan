@@ -596,7 +596,8 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
     segmentationOpen.value = false;
   }
   sourceAssets.value = assets;
-  if (revision.value?.id !== next.id) {
+  const changedRevision = revision.value?.id !== next.id;
+  if (changedRevision) {
     setInteractiveReview(undefined);
     pendingStructures.value = [];
   }
@@ -611,7 +612,8 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   }
   acquisition.value = acquisitionSelection(next.acquisition, activeCase.value?.phase);
   segmentationSettings.value = restoreSegmentationSettings(segmentationCatalog.value, next.segmentation_settings);
-  if (next.kind === 'ct' || !next.structures.length) {
+  // A scan with no segments can be in review to add one, which a reload of the same revision keeps.
+  if (changedRevision && (next.kind === 'ct' || !next.structures.length)) {
     workspaceMode.value = 'model';
     inspectorTab.value = 'selection';
     ctExpanded.value = false;
@@ -1454,6 +1456,7 @@ onBeforeUnmount(() => {
             ><button v-if="!synthetic" class="button secondary compact" :disabled="busy" :aria-expanded="segmentationOpen" @click="openSegmentation">
               Segment {{ sourceLabel }}…</button
             ><button v-if="!ctOnly" class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button
+            ><button v-else-if="canSegment" class="button secondary compact" @click="openInteractiveReview">+ Add segment ↗</button
             ><DicomSegImport
               v-if="activeModality === 'CT' || mrEnabled"
               :key="`seg-import:${activeCase.id}:${revision.id}`"
@@ -1630,7 +1633,10 @@ onBeforeUnmount(() => {
                 <h2>{{ sourceLabel }} ready</h2>
                 <p>Explore the scan in 3D and the linked source views. Anatomical segments will appear here after segmentation.</p>
                 <button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Choose segmentation task</button>
-                <p class="help">Opening the image does not start TotalSegmentator.</p>
+                <button v-if="canSegment && workspaceMode !== 'review'" class="button secondary compact" @click="openInteractiveReview">
+                  + Add segment by hand
+                </button>
+                <p class="help">Opening the image does not start TotalSegmentator, and a segment added by hand needs no AI model.</p>
               </div>
               <AnatomyPanel
                 v-else
@@ -2130,7 +2136,7 @@ onBeforeUnmount(() => {
         <footer class="app-footer">
           <span
             ><span class="live-dot"></span> LOCAL PROCESSING <i>·</i>
-            {{ synthetic ? 'SYNTHETIC FIXTURE' : ctOnly ? `SOURCE ${sourceLabel}` : 'TOTAL SEGMENTATOR' }}</span
+            {{ synthetic ? 'SYNTHETIC FIXTURE' : ctOnly ? `SOURCE ${sourceLabel}` : 'SEGMENTATION' }}</span
           ><span>{{
             revision
               ? `${ctOnly ? `${sourceLabel} ready` : `${revision.structures.length} structures`} · revision ${revision.id.slice(0, 8)}`

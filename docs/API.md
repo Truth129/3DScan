@@ -580,7 +580,7 @@ the structure, and starting a review changes no mask.
 **`POST /api/cases/{id}/reviews/new-structure`** takes `{revision_id, name, group?, color?,
 relationship?, method?}` and creates an empty draft target on the reference grid with a
 server-generated `custom:<id>`. `review-<sid>-0` exposes it on the read-only routes. Duplicate names
-keep distinct IDs.
+keep distinct IDs. The revision may be image-only, and saving then makes its first segmentation.
 
 **`PATCH /api/cases/{id}/reviews/{sid}`** takes `{expected_generation, prompts, options?,
 relationship?}` and replaces the complete ordered prompt list, with no inference.
