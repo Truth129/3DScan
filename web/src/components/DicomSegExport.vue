@@ -18,7 +18,8 @@ import { useDicomSegExport } from '../lib/use-dicom-seg-export';
 import { visibleVolumeMaskIds } from '../lib/volume-mask';
 import type { Revision, ReviewStatus, StructureDisplay } from '../types';
 
-const props = defineProps<{ caseId: string; revision: Revision; display: StructureDisplay; disabledReason: string }>();
+// A narrow top bar hides the button and opens the dialog from a menu, so the dialog stays mounted.
+const props = defineProps<{ caseId: string; revision: Revision; display: StructureDisplay; disabledReason: string; hideTrigger?: boolean }>();
 const dialog = ref<HTMLDialogElement>(),
   rankingList = ref<HTMLOListElement>(),
   cancelButton = ref<HTMLButtonElement>(),
@@ -161,11 +162,20 @@ function send() {
   else void start(selected.value, target.value.id, repeatDelivery.value, overlapPriority.value, chosenFormat.value);
 }
 onBeforeUnmount(() => dialog.value?.close());
+const label = computed(() => (pending.value ? (roiJob.value ? 'Exporting ROIs…' : 'Exporting SEG…') : 'Export SEG…'));
+defineExpose({ open, disabled, label });
 </script>
 
 <template>
-  <button class="button secondary compact dicom-seg-action" type="button" :disabled="!!disabled" :title="disabled || 'Export saved masks.'" @click="open">
-    {{ pending ? (roiJob ? 'Exporting ROIs…' : 'Exporting SEG…') : 'Export SEG…' }}
+  <button
+    v-show="!hideTrigger"
+    class="button secondary compact dicom-seg-action"
+    type="button"
+    :disabled="!!disabled"
+    :title="disabled || 'Export saved masks.'"
+    @click="open"
+  >
+    {{ label }}
   </button>
   <dialog
     ref="dialog"

@@ -11,6 +11,7 @@ import {
   saveWorkspacePanels,
   setWorkspacePanel,
   canHideWorkspacePanel,
+  toggleWorkspaceSidebar,
   readWorkspaceLayout,
   saveWorkspaceLayout,
   defaultWorkspaceLayout,
@@ -41,6 +42,7 @@ import DicomViewExport from './components/DicomViewExport.vue';
 import OrthancAddSeries from './components/OrthancAddSeries.vue';
 import SeriesPicker from './components/SeriesPicker.vue';
 import UserMenu from './components/UserMenu.vue';
+import TopBarMenu from './components/TopBarMenu.vue';
 import AcquisitionFields from './components/AcquisitionFields.vue';
 import { acquisitionBadges, acquisitionRequest, acquisitionSelection, acquisitionSelectionError, regionLabel } from './lib/acquisition';
 import { api, ApiError, revisionUrl } from './lib/api';
@@ -85,8 +87,8 @@ import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
 import { canUseArchive, forgetCase, setCaseCheck, startDownload } from './lib/session';
-import { useFloatingDetails } from './lib/use-floating-details';
 import { useFoldingControls } from './lib/use-folding-controls';
+import { topBarPlace, useTopBarFold, type TopBarAction } from './lib/top-bar';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
 import type {
   Case,
@@ -284,7 +286,13 @@ function setPanel(id: WorkspacePanelId, visible: boolean) {
     document.activeElement instanceof HTMLElement &&
     (document.activeElement.classList.contains('panel-hide') || document.activeElement.classList.contains('panel-collapse-button'));
   panels.value = setWorkspacePanel(panels.value, id, visible);
-  if (returnFocus) void nextTick(() => document.querySelector<HTMLButtonElement>('.panels-trigger')?.focus({ preventScroll: true }));
+  // A narrow window hides the layout control, so focus goes to the bottom navigation instead.
+  if (returnFocus)
+    void nextTick(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('.panels-trigger, .mobile-navigation button.active')]
+        .find(button => button.getClientRects().length)
+        ?.focus({ preventScroll: true }),
+    );
 }
 function setReviewFocus(focus: 'both' | 'ct' | 'model') {
   panels.value = { ...panels.value, model: focus !== 'ct', review: focus !== 'model' };
@@ -320,11 +328,17 @@ const segmentationPaths = computed(() => segmentationCatalog.value?.inference_pa
 const chosenSegmentationPath = computed({ get: () => segmentationPath.value, set: chooseSegmentationPath });
 const model = ref<InstanceType<typeof ModelViewport>>(),
   correctionInput = ref<HTMLInputElement>();
-const reviewStatus = ref<HTMLDetailsElement>(),
-  reviewStatusBody = ref<HTMLElement>();
 // Window, overlay and MPR controls can fold away so narrow slice tiles keep their images.
 const { open: ctControlsOpen, setOpen: setCTControlsOpen } = useFoldingControls('scan3d-ct-controls-open-v1', () => true);
-const { keyboard: reviewStatusKeyboard } = useFloatingDetails(reviewStatus, reviewStatusBody);
+// The top bar folds secondary case actions into menus as the window narrows. Folded dialogs stay
+// mounted, so a menu opens the same dialog its button would.
+const fold = useTopBarFold(() => chipShown.value);
+const place = (action: TopBarAction) => topBarPlace(fold.value, action);
+const topBar = ref<HTMLElement>(),
+  segmentButton = ref<HTMLButtonElement>(),
+  segImport = ref<InstanceType<typeof DicomSegImport>>(),
+  segExport = ref<InstanceType<typeof DicomSegExport>>();
+const segmentationLeft = ref<number>();
 function createVolumeView() {
   return defineAsyncComponent(() => import('./components/CornerstoneVolumeView.vue'));
 }
@@ -369,6 +383,15 @@ const canCompareSurfaces = computed(
 );
 const modelKey = computed(() => `${activeCase.value?.id}:${shownRevision.value ? referenceImageKey(shownRevision.value) : ''}`);
 const busyJob = computed(() => !!job.value && ['queued', 'running'].includes(job.value.status));
+// A job or newer-version chip takes the room of the case's extras, which then fold into ⋯ (top-bar.ts).
+const chipShown = computed(() => !!activeCase.value && ((!!job.value && (busyJob.value || job.value.status === 'failed')) || newerVersion.value));
+// The chip cuts this line short, so its tooltip and details show it whole: who started a job matters once cases are shared.
+const jobStatus = computed(() => {
+  const current = job.value;
+  if (!current) return '';
+  const state = current.status === 'failed' ? 'Processing failed' : current.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally';
+  return `${state}${current.inference_path ? ` · ${current.inference_path.label}` : ''}${current.started_by ? ` · started by ${current.started_by}` : ''}`;
+});
 const busy = computed(() => busyJob.value || actionBusy.value || segImportBusy.value);
 const base = computed(() => (activeCase.value && revision.value ? revisionUrl(activeCase.value.id, revision.value.id) : ''));
 const ctRevisionId = computed(() => reviewDisplayRevision(interactiveReview.value, interactiveCandidate.value) || revision.value?.id || '');
@@ -462,6 +485,15 @@ const workerText = computed(() => {
   return health.value.status === 'ok' ? 'Local workspace' : 'Connecting to local worker';
 });
 const series = computed(() => activeCase.value?.series.find(s => s.uid === seriesUid.value));
+// The case's own part of the top bar shows once it has loaded, as the case toolbar did.
+const caseOpen = computed(() => !!activeCase.value && !(loading.value && !revision.value));
+const caseEyebrow = computed(() =>
+  [synthetic.value ? 'SYNTHETIC DEMONSTRATION' : 'LOCAL CASE · RESEARCH USE ONLY', ...(revision.value ? acquisitionTags.value : [])].join(' · '),
+);
+// ⋯ holds the case actions a narrow window has no room for. Over the Library it is hidden, so Import scan stays out.
+const moreShown = computed(() => place('import-scan') === 'more' && caseOpen.value && !!revision.value && !libraryShown.value);
+// Without Segment CT…, as in the demo, there is room for Import DICOM SEG… itself.
+const segImportPlace = computed(() => (place('seg-import') === 'segment' && synthetic.value ? 'bar' : place('seg-import')));
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
 // The bundled models are research tools without regulatory clearance.
 const researchNotice = 'Research use only · not for diagnostic use';
@@ -1028,6 +1060,26 @@ function openSegmentation() {
   workspaceMode.value = 'model';
   segmentationOpen.value = true;
   void loadSegmentationOptions(!!segmentationCatalog.value);
+  void nextTick(placeSegmentation);
+}
+/** The panel hangs under Segment CT…, moved left only as far as the window needs. A narrow window shows it full width. */
+function placeSegmentation() {
+  const button = segmentButton.value,
+    bar = topBar.value;
+  if (!segmentationOpen.value || place('segment') !== 'bar' || !(button instanceof HTMLElement) || !(bar instanceof HTMLElement)) {
+    segmentationLeft.value = undefined;
+    return;
+  }
+  const width = Math.min(680, bar.clientWidth - 24),
+    left = button.getBoundingClientRect().left - bar.getBoundingClientRect().left;
+  segmentationLeft.value = Math.max(12, Math.min(left, bar.clientWidth - width - 12));
+}
+// A job or newer-version chip, its text or its progress bar moves the Segment button, so the panel follows it.
+watch([fold, chipShown, jobStatus, () => !!job.value?.progress?.total], () => void nextTick(placeSegmentation));
+function closeSegmentation() {
+  segmentationOpen.value = false;
+  // Its close button leaves with it, so focus goes back to the button that opens it: Segment CT… or ⋯.
+  (place('segment') === 'bar' ? segmentButton.value : topBar.value?.querySelector<HTMLButtonElement>('.more-menu > button'))?.focus({ preventScroll: true });
 }
 async function segment() {
   const current = activeCase.value,
@@ -1283,7 +1335,30 @@ async function toggleCT() {
   await nextTick();
   document.querySelector<HTMLButtonElement>('.ct-expand-button')?.focus();
 }
+/** Text fields keep their own keys. */
+function typing(target: EventTarget | null) {
+  return target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName));
+}
+/**
+ * \ hides or shows the side panels, unless a modal dialog or an expanded view holds the page. A focused viewer
+ * marks every key it sees as handled, so that mark does not stop it.
+ */
 function keyboard(event: KeyboardEvent) {
+  if (
+    event.key === '\\' &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    revision.value &&
+    !prepareOpen.value &&
+    !ctExpanded.value &&
+    !typing(event.target) &&
+    !document.querySelector('dialog[open], .viewport-expanded')
+  ) {
+    event.preventDefault();
+    panels.value = toggleWorkspaceSidebar(panels.value);
+    return;
+  }
   if (event.key === 'Escape' && ctExpanded.value) {
     ctExpanded.value = false;
     document.querySelector<HTMLButtonElement>('.ct-expand-button')?.focus();
@@ -1306,6 +1381,7 @@ function keyboard(event: KeyboardEvent) {
 }
 onMounted(async () => {
   document.addEventListener('keydown', keyboard);
+  window.addEventListener('resize', placeSegmentation);
   setCaseCheck(checkOpenCase);
   const results = await Promise.allSettled([api.cases(), api.health()]);
   if (results[0].status === 'fulfilled') {
@@ -1330,22 +1406,22 @@ onBeforeUnmount(() => {
   clearTimeout(noticeTimer);
   clearTimeout(trashOfferTimer);
   document.removeEventListener('keydown', keyboard);
+  window.removeEventListener('resize', placeSegmentation);
   setCaseCheck(undefined);
 });
 </script>
 
 <template>
   <div class="app-shell">
-    <header class="app-header">
+    <header ref="topBar" class="top-bar" :class="[`fold-${fold}`, { 'library-open': libraryShown && !!activeCase }]">
       <a class="brand" href="/" aria-label="3DScan home"
         ><svg viewBox="0 0 30 34" fill="none">
           <path d="m15 2 13 7.5v15L15 32 2 24.5v-15L15 2Z" />
           <path d="M15 2v15m0 0L2 9.5M15 17l13-7.5M15 17v15" /></svg
         ><span>3D<span>Scan</span></span></a
       >
-      <div class="header-divider"></div>
-      <span class="header-context">ANATOMY WORKSPACE</span>
       <div class="header-case">
+        <span v-if="caseOpen" class="eyebrow case-eyebrow" :title="`${caseEyebrow} · ${researchNotice}`">{{ caseEyebrow }}</span>
         <button
           ref="caseButton"
           class="case-button"
@@ -1359,26 +1435,319 @@ onBeforeUnmount(() => {
           {{ activeCase?.label ?? 'Library' }}
         </button>
       </div>
-      <div v-if="activeCase && job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
-        <span v-if="busyJob" class="spinner"></span>
-        <div>
-          <strong
-            >{{ job.status === 'failed' ? 'Processing failed' : job.status === 'queued' ? 'Waiting for the processing worker' : 'Processing locally'
-            }}{{ job.inference_path ? ` · ${job.inference_path.label}` : '' }}{{ job.started_by ? ` · started by ${job.started_by}` : '' }}</strong
-          ><span :title="job.error || job.stage"
-            >{{ job.error || job.stage
-            }}<template v-if="job.progress">
-              · {{ job.progress.completed }} / {{ job.progress.total }} {{ job.progress.phase === 'meshes' ? 'surfaces' : 'structures' }}</template
-            ></span
-          ><progress
-            v-if="busyJob && job.progress && job.progress.total"
-            :value="job.progress.completed"
-            :max="job.progress.total"
-            :aria-label="`${job.progress.phase} progress`"
-          ></progress>
-          <details v-if="busyJob && jobMeasurements?.structures.length" class="measurement-progress" :open="!revision">
-            <summary>{{ jobMeasurements.completed }} / {{ jobMeasurements.total }} measurements</summary>
-            <div class="measurement-progress-body">
+      <div v-if="caseOpen && activeCase" class="case-toolbar">
+        <div class="case-title">
+          <h1 class="sr-only">{{ activeCase.label }}</h1>
+        </div>
+        <div v-if="revision" class="case-tags">
+          <span v-if="ctOnly" class="pill">{{ sourceLabel }} ready</span>
+          <TopBarMenu
+            v-else
+            trigger-class="status-chip"
+            title="Review status and correction tools"
+            panel-class="review-status-popover"
+            panel-label="Review status"
+          >
+            <template #trigger
+              ><span class="status-dot" :class="revision.review_status">{{ reviewLabels[revision.review_status] }}</span
+              ><span class="menu-caret" aria-hidden="true">▾</span></template
+            >
+            <h3>Review &amp; correction</h3>
+            <label class="field"
+              >Revision status<select :value="revision.review_status" :disabled="busy" @change="review">
+                <option value="unreviewed">Unreviewed</option>
+                <option value="reviewed">Reviewed</option>
+                <option value="corrected">Corrected</option>
+              </select></label
+            >
+            <section v-if="revision.qc.length" class="qc-list">
+              <h4>{{ revision.qc.length }} automated check {{ revision.qc.length === 1 ? 'note' : 'notes' }}</h4>
+              <p v-for="message in revision.qc" :key="message">{{ message }}</p>
+            </section>
+            <section class="slicer-fallback">
+              <h4>External correction with Slicer</h4>
+              <div class="button-row">
+                <a class="button secondary compact" :href="`${base}/slicer.zip`" download @click.prevent="startDownload(`${base}/slicer.zip`).catch(fail)"
+                  >Slicer bundle ↓</a
+                ><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button>
+              </div>
+              <p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p>
+            </section>
+          </TopBarMenu>
+          <!-- Outside the popover, so a file chosen after it closes still arrives. -->
+          <input v-if="!ctOnly" ref="correctionInput" type="file" accept=".nrrd,.nhdr" hidden @change="correction" />
+        </div>
+        <select
+          v-if="revision && sourceChoices.length > 1"
+          v-show="place('series') === 'bar'"
+          class="source-image-select"
+          aria-label="Source image"
+          title="Source image"
+          :value="activeImageId"
+          :disabled="busy"
+          @change="activate(sourceChoices.find(item => item.id === ($event.target as HTMLSelectElement).value)?.revision.id || revision.id)"
+        >
+          <option v-for="item in sourceChoices" :key="item.id" :value="item.id">{{ item.label }}</option>
+        </select>
+        <button
+          v-if="revision && !synthetic && activeCase.series.length"
+          v-show="place('series') === 'bar'"
+          class="button secondary compact reprocess-action"
+          :disabled="busy"
+          aria-label="Select series or reprocess scan"
+          title="Select series or reprocess scan"
+          @click="openPrepare"
+        >
+          Series…
+        </button>
+      </div>
+      <button
+        v-show="place('import-scan') === 'bar' || !moreShown"
+        class="button secondary compact import-scan-action"
+        type="button"
+        @click="importOpen = true"
+      >
+        <span>+</span> Import scan
+      </button>
+      <div v-if="caseOpen && activeCase && revision" class="case-actions">
+        <div class="top-bar-group">
+          <button
+            v-if="!synthetic"
+            v-show="place('segment') === 'bar'"
+            ref="segmentButton"
+            class="button secondary compact segment-action"
+            :disabled="busy"
+            :aria-expanded="segmentationOpen"
+            @click="openSegmentation"
+          >
+            Segment {{ sourceLabel }}…</button
+          ><DicomSegImport
+            v-if="activeModality === 'CT' || mrEnabled"
+            ref="segImport"
+            :key="`seg-import:${activeCase.id}:${revision.id}`"
+            :case-id="activeCase.id"
+            :revision-id="revision.id"
+            :modality="activeModality"
+            :disabled-reason="segImportDisabledReason"
+            :hide-trigger="segImportPlace !== 'bar'"
+            @queued="track"
+            @busy="segImportBusy = $event"
+          /><TopBarMenu
+            v-if="segImportPlace === 'segment' && (activeModality === 'CT' || mrEnabled)"
+            class="segment-menu"
+            label="More segmentation actions"
+            title="More segmentation actions"
+            trigger-class="button secondary compact menu-split"
+          >
+            <template #trigger><span aria-hidden="true">▾</span></template>
+            <template #default="{ close }">
+              <button
+                type="button"
+                class="top-bar-menu-item"
+                :disabled="!!segImportDisabledReason || segImportBusy"
+                @click="
+                  close();
+                  segImport?.open();
+                "
+              >
+                Import DICOM SEG…</button
+              ><small v-if="segImportDisabledReason" class="top-bar-menu-note">{{ segImportDisabledReason }}</small>
+            </template>
+          </TopBarMenu>
+        </div>
+        <span v-if="!ctOnly || canSegment" class="top-bar-divider" aria-hidden="true"></span
+        ><button
+          v-if="!ctOnly"
+          class="button secondary compact review-action"
+          :class="{ active: workspaceMode === 'review' }"
+          :aria-current="workspaceMode === 'review' ? 'true' : undefined"
+          @click="openInteractiveReview"
+        >
+          <span>Review<span class="review-long"> segmentation</span> ↗</span></button
+        ><button
+          v-else-if="canSegment"
+          class="button secondary compact review-action"
+          :class="{ active: workspaceMode === 'review' }"
+          :aria-current="workspaceMode === 'review' ? 'true' : undefined"
+          @click="openInteractiveReview"
+        >
+          + Add segment ↗</button
+        ><span class="top-bar-divider" aria-hidden="true"></span>
+        <div class="top-bar-group">
+          <DicomSegExport
+            v-if="!ctOnly"
+            ref="segExport"
+            :key="`${activeCase.id}:${revision.id}`"
+            :case-id="activeCase.id"
+            :revision="revision"
+            :display="display"
+            :disabled-reason="savedExportDisabledReason"
+            :hide-trigger="place('seg-export') !== 'bar'"
+          /><button
+            v-show="place('export-viewer') === 'bar'"
+            class="button secondary compact export-viewer-button"
+            :disabled="!!savedExportDisabledReason"
+            :title="savedExportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'"
+            @click="openExport"
+          >
+            Export viewer ↗</button
+          ><TopBarMenu v-if="place('export-viewer') === 'export'" class="export-menu" title="Export saved masks or a portable viewer" panel-label="Export">
+            <template #trigger>Export <span aria-hidden="true">▾</span></template>
+            <template #default="{ close }">
+              <template v-if="!ctOnly && segExport"
+                ><button
+                  type="button"
+                  class="top-bar-menu-item"
+                  :disabled="!!segExport.disabled"
+                  @click="
+                    close();
+                    segExport?.open();
+                  "
+                >
+                  {{ segExport.label }}</button
+                ><small v-if="segExport.disabled" class="top-bar-menu-note">{{ segExport.disabled }}</small></template
+              ><button
+                type="button"
+                class="top-bar-menu-item"
+                :disabled="!!savedExportDisabledReason"
+                @click="
+                  close();
+                  openExport();
+                "
+              >
+                Export viewer ↗</button
+              ><small v-if="savedExportDisabledReason" class="top-bar-menu-note">{{ savedExportDisabledReason }}</small>
+            </template>
+          </TopBarMenu>
+        </div>
+        <TopBarMenu v-if="moreShown" class="more-menu" label="More actions" title="More actions" align="end">
+          <template #trigger><span aria-hidden="true">⋯</span></template>
+          <template #default="{ close }">
+            <label v-if="place('series') === 'more' && sourceChoices.length > 1" class="top-bar-menu-field"
+              >Source image<select
+                aria-label="Source image"
+                :value="activeImageId"
+                :disabled="busy"
+                @change="
+                  close();
+                  activate(sourceChoices.find(item => item.id === ($event.target as HTMLSelectElement).value)?.revision.id || revision.id);
+                "
+              >
+                <option v-for="item in sourceChoices" :key="item.id" :value="item.id">{{ item.label }}</option>
+              </select></label
+            >
+            <button
+              v-if="place('series') === 'more' && !synthetic && activeCase.series.length"
+              type="button"
+              class="top-bar-menu-item"
+              :disabled="busy"
+              @click="
+                close();
+                openPrepare();
+              "
+            >
+              Series…
+            </button>
+            <button
+              type="button"
+              class="top-bar-menu-item"
+              @click="
+                close();
+                importOpen = true;
+              "
+            >
+              + Import scan
+            </button>
+            <button
+              v-if="place('segment') === 'more' && !synthetic"
+              type="button"
+              class="top-bar-menu-item"
+              :disabled="busy"
+              @click="
+                close();
+                openSegmentation();
+              "
+            >
+              Segment {{ sourceLabel }}…
+            </button>
+            <template v-if="segImportPlace === 'more' && (activeModality === 'CT' || mrEnabled)"
+              ><button
+                type="button"
+                class="top-bar-menu-item"
+                :disabled="!!segImportDisabledReason || segImportBusy"
+                @click="
+                  close();
+                  segImport?.open();
+                "
+              >
+                Import DICOM SEG…</button
+              ><small v-if="segImportDisabledReason" class="top-bar-menu-note">{{ segImportDisabledReason }}</small></template
+            >
+            <template v-if="place('seg-export') === 'more' && !ctOnly && segExport"
+              ><button
+                type="button"
+                class="top-bar-menu-item"
+                :disabled="!!segExport.disabled"
+                @click="
+                  close();
+                  segExport?.open();
+                "
+              >
+                {{ segExport.label }}</button
+              ><small v-if="segExport.disabled" class="top-bar-menu-note">{{ segExport.disabled }}</small></template
+            >
+            <template v-if="place('export-viewer') === 'more'"
+              ><button
+                type="button"
+                class="top-bar-menu-item"
+                :disabled="!!savedExportDisabledReason"
+                @click="
+                  close();
+                  openExport();
+                "
+              >
+                Export viewer ↗</button
+              ><small v-if="savedExportDisabledReason" class="top-bar-menu-note">{{ savedExportDisabledReason }}</small></template
+            >
+          </template>
+        </TopBarMenu>
+      </div>
+      <div class="top-bar-end">
+        <WorkspacePanels
+          v-if="caseOpen && revision"
+          v-show="fold !== 'compact'"
+          v-model="panels"
+          v-model:layout="layout"
+          :review-label="`${sourceLabel} review`"
+        />
+        <div v-if="activeCase && job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
+          <span v-if="busyJob" class="spinner"></span
+          ><TopBarMenu
+            class="job-details-menu"
+            trigger-class="job-chip-summary"
+            :title="`${jobStatus}\n${job.error || job.stage}`"
+            panel-class="job-details"
+            panel-label="Job details"
+            align="end"
+          >
+            <template #trigger
+              ><strong>{{ jobStatus }}</strong
+              ><progress
+                v-if="busyJob && job.progress && job.progress.total"
+                :value="job.progress.completed"
+                :max="job.progress.total"
+                :aria-label="`${job.progress.phase} progress`"
+              ></progress
+            ></template>
+            <p class="job-status-line">{{ jobStatus }}</p>
+            <p class="job-stage">
+              {{ job.error || job.stage
+              }}<template v-if="job.progress">
+                · {{ job.progress.completed }} / {{ job.progress.total }} {{ job.progress.phase === 'meshes' ? 'surfaces' : 'structures' }}</template
+              >
+            </p>
+            <div v-if="busyJob && jobMeasurements?.structures.length" class="measurement-progress">
+              <strong>{{ jobMeasurements.completed }} / {{ jobMeasurements.total }} measurements</strong>
               <p>
                 Volumes are calculated from mask voxels.<template v-if="revision">
                   The current result stays available while this new revision is prepared.</template
@@ -1401,24 +1770,38 @@ onBeforeUnmount(() => {
                 </table>
               </div>
             </div>
-          </details>
+          </TopBarMenu>
+          <button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button
+          ><button v-else class="text-button" @click="job = undefined">Dismiss</button>
         </div>
-        <button v-if="busyJob" class="button secondary compact" @click="cancel">Cancel job</button
-        ><button v-else class="text-button" @click="job = undefined">Dismiss</button>
+        <div v-else-if="activeCase && newerVersion" class="job-banner newer-version" role="status">
+          <strong title="Someone else or another tab saved a newer version of this case. Work on the version shown here cannot be saved."
+            >Newer version saved</strong
+          ><span class="sr-only">Someone else or another tab saved a newer version of this case. Work on the version shown here cannot be saved.</span
+          ><button class="button secondary compact" type="button" @click="showNewerVersion(activeCase.id)">Show the newer version</button>
+        </div>
+        <UserMenu />
       </div>
-      <div v-else-if="activeCase && newerVersion" class="job-banner" role="status">
-        <div><strong>Someone else or another tab saved a newer version of this case.</strong><span>Work on the version shown here cannot be saved.</span></div>
-        <button class="button secondary compact" type="button" @click="showNewerVersion(activeCase.id)">Show the newer version</button>
-      </div>
-      <div class="worker-status">
-        <span class="live-dot"></span><span>{{ workerText }}</span>
-      </div>
-      <button class="button primary compact" @click="importOpen = true"><span>+</span> Import scan</button>
-      <UserMenu />
       <div v-if="error" class="error-banner" role="alert">
         <span>⚠ {{ error }}</span
         ><button aria-label="Dismiss error" @click="error = ''">×</button>
       </div>
+      <SegmentationControls
+        v-if="segmentationOpen && !prepareOpen && caseOpen && revision"
+        v-model="segmentationSettings"
+        v-model:inference-path="chosenSegmentationPath"
+        :style="segmentationLeft === undefined ? undefined : { left: `${segmentationLeft}px` }"
+        :path-notice="segmentationPathNotice"
+        :catalog="segmentationCatalog"
+        :busy="busy"
+        :loading="segmentationLoading"
+        :error="segmentationError"
+        @run="segment"
+        @close="closeSegmentation"
+        @retry="loadSegmentationOptions(segmentationPaths.length > 1)"
+        @recheck="loadSegmentationOptions(true)"
+        @license-changed="loadSegmentationOptions(true)"
+      />
     </header>
 
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
@@ -1434,77 +1817,6 @@ onBeforeUnmount(() => {
       </main>
 
       <template v-else-if="activeCase">
-        <div class="case-toolbar">
-          <div class="case-title">
-            <span class="eyebrow" :title="researchNotice">{{ synthetic ? 'SYNTHETIC DEMONSTRATION' : 'LOCAL CASE · RESEARCH USE ONLY' }}</span>
-            <h1>{{ activeCase.label }}</h1>
-          </div>
-          <div v-if="revision" class="case-tags acquisition-tags">
-            <span v-for="tag in acquisitionTags" :key="tag" class="pill">{{ tag }}</span
-            ><span v-if="ctOnly" class="pill">{{ sourceLabel }} ready</span
-            ><span v-else class="status-dot" :class="revision.review_status">{{ reviewLabels[revision.review_status] }}</span>
-          </div>
-          <div v-if="revision && sourceChoices.length > 1" class="source-image-picker">
-            <label
-              >Source image<select
-                aria-label="Source image"
-                :value="activeImageId"
-                :disabled="busy"
-                @change="activate(sourceChoices.find(item => item.id === ($event.target as HTMLSelectElement).value)?.revision.id || revision.id)"
-              >
-                <option v-for="item in sourceChoices" :key="item.id" :value="item.id">{{ item.label }}</option>
-              </select></label
-            >
-          </div>
-          <div v-if="revision" class="case-actions">
-            <WorkspacePanels v-model="panels" v-model:layout="layout" :review-label="`${sourceLabel} review`" /><button
-              v-if="!synthetic && activeCase.series.length"
-              class="button secondary compact reprocess-action"
-              :disabled="busy"
-              aria-label="Select series or reprocess scan"
-              @click="openPrepare"
-            >
-              <span class="reprocess-long">Select series</span><span class="reprocess-short">Series</span></button
-            ><button v-if="!synthetic" class="button secondary compact" :disabled="busy" :aria-expanded="segmentationOpen" @click="openSegmentation">
-              Segment {{ sourceLabel }}…</button
-            ><button v-if="!ctOnly" class="button secondary compact" @click="openInteractiveReview">Review segmentation ↗</button
-            ><button v-else-if="canSegment" class="button secondary compact" @click="openInteractiveReview">+ Add segment ↗</button
-            ><DicomSegImport
-              v-if="activeModality === 'CT' || mrEnabled"
-              :key="`seg-import:${activeCase.id}:${revision.id}`"
-              :case-id="activeCase.id"
-              :revision-id="revision.id"
-              :modality="activeModality"
-              :disabled-reason="segImportDisabledReason"
-              @queued="track"
-              @busy="segImportBusy = $event"
-            /><DicomSegExport
-              v-if="!ctOnly"
-              :key="`${activeCase.id}:${revision.id}`"
-              :case-id="activeCase.id"
-              :revision="revision"
-              :display="display"
-              :disabled-reason="savedExportDisabledReason"
-            /><button
-              class="button primary compact export-viewer-button"
-              :disabled="!!savedExportDisabledReason"
-              :title="savedExportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'"
-              :aria-describedby="savedExportDisabledReason && !busy ? 'export-disabled-note' : undefined"
-              @click="openExport"
-            >
-              Export viewer ↗</button
-            ><span
-              v-if="savedExportDisabledReason && !busy"
-              id="export-disabled-note"
-              class="export-disabled-note"
-              role="status"
-              tabindex="0"
-              :data-reason="savedExportDisabledReason"
-              ><span aria-hidden="true">i</span><span class="sr-only">{{ savedExportDisabledReason }}</span></span
-            >
-          </div>
-        </div>
-
         <div v-if="!revision || prepareOpen" class="prepare-workspace">
           <section class="prepare-panel">
             <div class="prepare-heading">
@@ -2087,58 +2399,16 @@ onBeforeUnmount(() => {
                   >{{ formatImageValue(hu, imageDisplay.units) }} <small>{{ imageDisplay.units }}</small></strong
                 >
               </div>
-              <details v-if="!ctOnly" ref="reviewStatus" class="review-status" @keydown="reviewStatusKeyboard">
-                <summary>Review status &amp; tools</summary>
-                <div ref="reviewStatusBody" class="review-status-body">
-                  <div class="section-title"><h3>Review & correction</h3></div>
-                  <label class="field"
-                    >Revision status<select :value="revision.review_status" :disabled="busy" @change="review">
-                      <option value="unreviewed">Unreviewed</option>
-                      <option value="reviewed">Reviewed</option>
-                      <option value="corrected">Corrected</option>
-                    </select></label
-                  >
-                  <details class="slicer-fallback">
-                    <summary>External correction with Slicer</summary>
-                    <div class="button-row">
-                      <a class="button secondary compact" :href="`${base}/slicer.zip`" download @click.prevent="startDownload(`${base}/slicer.zip`).catch(fail)"
-                        >Slicer bundle ↓</a
-                      ><button class="button secondary compact" :disabled="busy" @click="correctionInput?.click()">Import correction ↑</button>
-                    </div>
-                    <p class="help">Reimport a named .seg.nrrd from Slicer. Alignment is checked before a new revision is created.</p>
-                  </details>
-                  <input ref="correctionInput" type="file" accept=".nrrd,.nhdr" hidden @change="correction" />
-                  <div v-if="revision.qc.length" class="qc-list">
-                    <details>
-                      <summary>{{ revision.qc.length }} automated check {{ revision.qc.length === 1 ? 'note' : 'notes' }}</summary>
-                      <p v-for="message in revision.qc" :key="message">{{ message }}</p>
-                    </details>
-                  </div>
-                </div>
-              </details>
             </aside>
           </div>
-          <SegmentationControls
-            v-if="segmentationOpen && !prepareOpen"
-            v-model="segmentationSettings"
-            v-model:inference-path="chosenSegmentationPath"
-            :path-notice="segmentationPathNotice"
-            :catalog="segmentationCatalog"
-            :busy="busy"
-            :loading="segmentationLoading"
-            :error="segmentationError"
-            @run="segment"
-            @close="segmentationOpen = false"
-            @retry="loadSegmentationOptions(segmentationPaths.length > 1)"
-            @recheck="loadSegmentationOptions(true)"
-            @license-changed="loadSegmentationOptions(true)"
-          />
         </div>
         <nav v-if="revision && !prepareOpen" class="mobile-navigation" aria-label="Mobile workspace panels">
+          <!-- ☷ Anatomy shows the whole side panel, since a narrow window has no layout control to bring its details back. -->
           <button
             :class="{ active: mobilePanel === 'anatomy' }"
             @click="
               setPanel('anatomy', true);
+              setPanel('inspector', true);
               mobilePanel = 'anatomy';
             "
           >
@@ -2161,17 +2431,6 @@ onBeforeUnmount(() => {
             ⊞ {{ sourceLabel }} review
           </button>
         </nav>
-        <footer class="app-footer">
-          <span
-            ><span class="live-dot"></span> LOCAL PROCESSING <i>·</i>
-            {{ synthetic ? 'SYNTHETIC FIXTURE' : ctOnly ? `SOURCE ${sourceLabel}` : 'SEGMENTATION' }}</span
-          ><span>{{
-            revision
-              ? `${ctOnly ? `${sourceLabel} ready` : `${revision.structures.length} structures`} · revision ${revision.id.slice(0, 8)}`
-              : 'Select a series to begin'
-          }}</span
-          ><span>Verify anatomy on the source images</span>
-        </footer>
       </template>
       <CaseLibrary
         v-if="libraryShown"
@@ -2193,6 +2452,21 @@ onBeforeUnmount(() => {
         @purged="forgetPurged"
       />
     </div>
+    <footer class="app-footer status-bar">
+      <span class="status-bar-worker"
+        ><span class="worker-status"><span class="live-dot"></span>{{ workerText }}</span
+        ><i>·</i> LOCAL PROCESSING<template v-if="caseOpen && revision">
+          <i>·</i> {{ synthetic ? 'SYNTHETIC FIXTURE' : ctOnly ? `SOURCE ${sourceLabel}` : 'SEGMENTATION' }}</template
+        ></span
+      ><span class="status-bar-case">{{
+        caseOpen
+          ? revision
+            ? `${ctOnly ? `${sourceLabel} ready` : `${revision.structures.length} structures`} · revision ${revision.id.slice(0, 8)}`
+            : 'Select a series to begin'
+          : ''
+      }}</span
+      ><span class="status-bar-note">Verify anatomy on the source images</span>
+    </footer>
     <ImportDialog v-if="importOpen" :busy="importing" :mr-enabled="mrEnabled" @close="importOpen = false" @imported="imported" @demo="demo" />
     <OrthancLaunchDialog
       v-if="orthancLaunch.kind !== 'none' && !loading"

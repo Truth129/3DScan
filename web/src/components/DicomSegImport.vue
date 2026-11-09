@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { dicomSegSelectionError, useDicomSegImport } from '../lib/use-dicom-seg-import';
 import type { Job } from '../types';
 
-const props = defineProps<{ caseId: string; revisionId: string; disabledReason: string; modality?: string }>();
+// A narrow top bar hides the button and opens the dialog from a menu, so the dialog stays mounted.
+const props = defineProps<{ caseId: string; revisionId: string; disabledReason: string; modality?: string; hideTrigger?: boolean }>();
 const emit = defineEmits<{ queued: [job: Job]; busy: [value: boolean] }>();
 const dialog = ref<HTMLDialogElement>(),
   input = ref<HTMLInputElement>(),
@@ -47,10 +48,12 @@ onBeforeUnmount(() => {
   dialog.value?.close();
   emit('busy', false);
 });
+defineExpose({ open });
 </script>
 
 <template>
   <button
+    v-show="!hideTrigger"
     class="button secondary compact dicom-seg-import-action"
     type="button"
     :disabled="!!disabledReason || submitting"

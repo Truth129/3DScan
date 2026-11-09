@@ -24,7 +24,7 @@ Over a network, use the HTTPS address.
 .venv/bin/scan3d users add NAME --admin
 ```
 
-It asks for a password of 10 to 1,024 characters. `--display-name` sets the name in the header.
+It asks for a password of 10 to 1,024 characters. `--display-name` sets the name in the top bar.
 
 **Setting your password.** Open the link an admin sent you, type a password twice and choose **Set
 password**. That signs you in, in place of anyone signed in on this browser. The link works once,
@@ -38,7 +38,7 @@ marks intact. Signing in as someone else reloads the page.
 **Shared computer.** Tick this on a computer other people use. You are signed out when the browser
 closes, or after 12 hours at most, and the browser stores no scan data for the session.
 
-Choose your name in the header for **Sign out**, or **Sign out other devices** to end this account's
+Choose your name in the top bar for **Sign out**, or **Sign out other devices** to end this account's
 other sessions. For a forgotten password, ask an admin for a reset link; an admin with nobody to ask
 uses `scan3d users passwd` on the [command line](#command-line).
 
@@ -70,7 +70,7 @@ member or given a new password.
 
 The Library lists every case, the ones you opened last first, with **Added by** on cases someone
 else added. Cases made on the command line or with sign-in off name the oldest admin. Choose the
-case name in the header to open the Library; **Esc** or **×** returns to your case.
+case name in the top bar to open the Library; **Esc** or **×** returns to your case.
 
 - **Search cases:** every word must appear in the case name, who added it, a series description or
   modality, or the status. **Enter** opens the first match.
@@ -112,7 +112,7 @@ Two people, or two tabs, can work on one case at once, and no saved version or d
 unseen. A job or draft someone else started shows **started by** and their name.
 
 When your page is not running its own work and someone else or another tab saves a newer version,
-the header says so within a minute, or when you return to the tab: choose **Show the newer
+the top bar says so within a minute, or when you return to the tab: choose **Show the newer
 version**. Until then a refine, a correction, opening a series or **Activate** is refused, and a
 correction made on the old version cannot be saved.
 
@@ -122,7 +122,7 @@ saved: **Reload saved work** or **Discard draft** opens their draft, so place th
 
 ## Import a study
 
-Choose **+ Import scan** in the header. Do not put patient identifiers in **Case label**.
+Choose **+ Import scan** in the top bar. Do not put patient identifiers in **Case label**.
 
 **Browser upload.** On the **Folder / ZIP** tab, drop files or use **Choose folder** or **Choose
 ZIP / files**, then choose **Import scan →**. The limit is 16 GiB in total. **Cancel upload**
@@ -162,8 +162,8 @@ have replaced its files.
    (% R–R)**.
 3. Choose **Open CT →**.
 
-These fields are labels only: they change no pixels, rendering or tasks. **Select series** in the
-toolbar opens another series and keeps your result, and **Source image** switches between opened
+These fields are labels only: they change no pixels, rendering or tasks. **Series…** in the top bar
+opens another series and keeps your result, and **Source image** beside it switches between opened
 images.
 
 For a case from an archive, **Add series from Orthanc** or **Add series from DICOM archive**, under
@@ -185,8 +185,9 @@ whitespace. Other segments are kept, and the earlier revision stays in **Revisio
 
 A task's weights download on its first run. AI jobs run one at a time across all GPUs, on the device
 set by `SCAN3D_DEVICE` unless you [choose another GPU](#choose-a-gpu), and a CPU is much slower.
-Progress shows at the top of the window, with **Cancel job**. Imports, opening a CT, direct edits
-and saves run on a separate queue, so they do not wait behind a segmentation.
+Progress shows in a chip at the top right, with **Cancel job**; choose the chip for the full status,
+the stage and the measurements so far. Imports, opening a CT, direct edits and saves run on a separate queue, so
+they do not wait behind a segmentation.
 
 ### Compare a second model
 
@@ -294,11 +295,26 @@ it.
 
 ## Arrange the workspace
 
+The top bar reads in the order of the work: the case and its review status, **Series…** and
+**+ Import scan**, then **Segment CT…**, **Review segmentation ↗** and the exports, then the layout,
+any job and your name. The worker shows at the bottom left.
+
+- Below 1400 px wide, **Import DICOM SEG…** moves under the **▾** beside **Segment CT…** when that
+  is offered, and **Export SEG…** and **Export viewer ↗** under **Export ▾**. Below 1200 px, or
+  below 1400 px while a job or newer-version chip shows, **Series…**, **Source image** and
+  **+ Import scan** move under **⋯**.
+- At 1000 px and narrower, every case action but review moves under **⋯**; the job chip and your
+  name stay. The layout control is hidden, and **☷ Anatomy** shows the whole sidebar.
+- While such a chip shows below 1500 px, only the layout **▾** stays; it has every arrangement.
+- Disabled buttons give their reason on hover, and in a menu under the item.
+- **Esc** or a click elsewhere closes a top bar menu. **Esc** also closes the segmentation settings.
+
 The sidebar holds the anatomy list and the **Selected structure**, **Refinement** and **Revision
 history** tabs. The stage tiles the 3D view and **CT review**.
 
-- The layout buttons beside **Panels** show views side by side, stacked or alone.
-- **Panels** toggles each area, and **Reset layout** restores the defaults.
+- The layout icons at the top right show both views, the 3D view alone or CT review alone. Their
+  **▾** chooses side by side or stacked, shows or hides each area or the **Side panels**, and has
+  **Reset layout**. **\\** also hides or shows the side panels.
 - Drag a divider to resize, and double-click it to reset.
 - **Layers** folds the 3D controls, and **Display** the CT controls.
 
@@ -476,7 +492,7 @@ from the removed GPU keeps **Re-run on this GPU**, even with one GPU left. If th
 Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a relationship, then
 **Create empty segment**. Mark its extent on the CT, apply, inspect and choose **Save new segment**.
 
-A scan with no segmentation needs no model run first: choose **+ Add segment ↗** in the toolbar or
+A scan with no segmentation needs no model run first: choose **+ Add segment ↗** in the top bar or
 **+ Add segment by hand** in the anatomy panel. Review opens on that form, in **Direct edit**. Saving
 makes the scan's first segmentation revision.
 
@@ -551,8 +567,8 @@ Once a segmentation is active, **Reset to scan** activates the image-only revisi
 segmentation. Nothing is deleted, an open draft stays with its version, and the case leaves pooled
 agreement until a segmentation is active again. The demo does not offer it.
 
-To record your review, set **Revision status** under **Review status & tools** to **Unreviewed**,
-**Reviewed** or **Corrected**. It applies to the whole revision.
+To record your review, choose the status chip beside the case name and set **Revision status** to
+**Unreviewed**, **Reviewed** or **Corrected**. It applies to the whole revision.
 
 ### Other correction routes
 
@@ -560,7 +576,7 @@ The **Refinement** tab offers **Keep component at seed**, **Remove component at 
 inside region** and **Erase inside region**. Click a slice or surface to place a seed, or enter
 coordinates or bounds in patient RAS millimetres, then choose **Create refinement revision →**.
 
-For 3D Slicer, expand **External correction with Slicer** under **Review status & tools**:
+For 3D Slicer, use **External correction with Slicer** under the status chip:
 
 1. **Slicer bundle ↓** downloads the reference CT, a `.seg.nrrd` and a mapping file.
 2. Edit in 3D Slicer, keeping the segment tags.

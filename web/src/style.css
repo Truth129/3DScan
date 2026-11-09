@@ -575,46 +575,6 @@ h3 {
   color: var(--muted);
   white-space: nowrap;
 }
-.header-case {
-  margin-left: 12px;
-  max-width: 300px;
-  min-width: 0;
-  flex: 1;
-}
-.case-button {
-  width: 100%;
-  overflow: hidden;
-  /* A chevron in two strokes, because an ::after would be clipped with the name. */
-  background:
-    linear-gradient(45deg, transparent 40%, var(--text-secondary) 40%, var(--text-secondary) 65%, transparent 65%) no-repeat right 15px center / 5px 5px,
-    linear-gradient(-45deg, transparent 40%, var(--text-secondary) 40%, var(--text-secondary) 65%, transparent 65%) no-repeat right 11px center / 5px 5px,
-    var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  color: var(--white);
-  font-size: 11px;
-  padding: 8px 28px 8px 11px;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.case-button:hover {
-  border-color: var(--control-border-hover);
-}
-.worker-status {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--text-secondary);
-  font-size: 10px;
-  white-space: nowrap;
-}
-.worker-status span:last-child {
-  max-width: 230px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .user-menu {
   position: relative;
   flex-shrink: 0;
@@ -666,11 +626,6 @@ h3 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.case-tags {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
 .status-dot {
   display: inline-flex;
   align-items: center;
@@ -690,11 +645,6 @@ h3 {
 .status-dot.reviewed,
 .status-dot.corrected {
   color: var(--text-secondary);
-}
-.case-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 8px;
 }
 .app-footer {
   height: 29px;
@@ -723,7 +673,7 @@ h3 {
   font-size: 8px;
   letter-spacing: 0.04em;
 }
-/* An error lies over the case toolbar until dismissed, so it neither moves nor covers a viewer. */
+/* An error lies under the top bar, over the tile headers, until dismissed, so it never moves a viewer. */
 .error-banner {
   position: absolute;
   top: 100%;
@@ -774,53 +724,6 @@ h3 {
   align-items: center;
   gap: 14px;
   pointer-events: auto;
-}
-/* Job status lives in the fixed header, so a running job never takes height from a viewer. */
-.job-banner {
-  position: relative;
-  display: flex;
-  flex: 1 1 0;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 3px 10px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-hover);
-}
-.job-banner > div {
-  display: grid;
-  flex: 1 1 0;
-  grid-template-columns: minmax(80px, 1fr) minmax(0, auto);
-  align-items: center;
-  gap: 1px 12px;
-  min-width: 0;
-  font-size: 11px;
-}
-.job-banner > div > span {
-  grid-area: 2 / 1;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.job-banner > .button {
-  flex: none;
-  white-space: nowrap;
-}
-.job-banner.failed {
-  padding-block: 1px;
-  background: #382b25;
-  border-color: #624631;
-}
-.job-banner.failed > div > span {
-  grid-column: 1 / -1;
-  max-height: 24px;
-  overflow-y: auto;
-  color: #d5a88d;
-  line-height: 12px;
-  white-space: normal;
 }
 .workspace {
   display: grid;
@@ -1741,45 +1644,6 @@ h3 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.review-status {
-  padding: 16px 14px 18px;
-  border-top: 1px solid var(--line);
-}
-.review-status .section-title h3 {
-  font-size: 11px;
-}
-.review-status .field {
-  font-size: 9px;
-}
-.review-status select {
-  font-size: 10px;
-  padding: 8px;
-}
-.review-status .button-row {
-  margin: 12px 0;
-}
-.review-status .button {
-  font-size: 9px;
-  padding: 7px 9px;
-  flex: 1;
-}
-.review-status .help {
-  font-size: 9px;
-}
-.qc-list {
-  margin-top: 12px;
-  border-top: 1px solid var(--line);
-  padding-top: 11px;
-  color: #b9aa83;
-  font-size: 10px;
-}
-.qc-list summary {
-  cursor: pointer;
-}
-.qc-list p {
-  font-size: 10px;
-  margin-top: 8px;
-}
 .app-loading {
   display: flex;
   flex: 1;
@@ -2164,10 +2028,6 @@ h3 {
   .header-context {
     display: none;
   }
-  .header-case {
-    margin-left: 0;
-    max-width: 260px;
-  }
   .workspace {
     grid-template-columns: 225px minmax(330px, 1fr) 265px;
   }
@@ -2177,9 +2037,6 @@ h3 {
   .case-toolbar {
     gap: 14px;
     padding: 17px 18px;
-  }
-  .case-tags .pill {
-    display: none;
   }
   .case-title h1 {
     font-size: 18px;
@@ -2236,10 +2093,6 @@ h3 {
   }
   .viewport-hint {
     font-size: 7px;
-  }
-  .review-status .button {
-    font-size: 8px;
-    padding: 7px 6px;
   }
   .model-scale {
     display: none;
@@ -2304,14 +2157,6 @@ h3 {
   .brand > span {
     font-size: 22px;
   }
-  .header-case {
-    max-width: none;
-    flex: 1;
-    margin-left: 0;
-  }
-  .worker-status {
-    display: none;
-  }
   .case-toolbar {
     height: 83px;
     min-height: 83px;
@@ -2320,16 +2165,6 @@ h3 {
   }
   .case-title h1 {
     max-width: 300px;
-  }
-  .case-tags {
-    margin-left: auto;
-  }
-  .case-actions {
-    margin-left: 0;
-  }
-  .case-actions a {
-    font-size: 10px;
-    padding: 8px;
   }
   .workspace {
     display: block;
@@ -2500,28 +2335,6 @@ h3 {
   .probe-readout > span {
     font-size: 11px;
   }
-  .review-status {
-    max-width: 520px;
-    margin: 0 auto;
-    padding: 20px;
-  }
-  .review-status .field {
-    font-size: 11px;
-  }
-  .review-status select {
-    font-size: 12px;
-    padding: 10px;
-  }
-  .review-status .button {
-    font-size: 11px;
-    padding: 10px;
-  }
-  .review-status .help {
-    font-size: 11px;
-  }
-  .review-status .section-title h3 {
-    font-size: 13px;
-  }
   .compare-check {
     font-size: 12px;
   }
@@ -2591,15 +2404,6 @@ h3 {
   }
   .prepare-guide {
     display: none;
-  }
-  .app-header:has(> .job-banner) {
-    flex-wrap: wrap;
-    height: auto;
-    padding-block: 10px;
-  }
-  .app-header > .job-banner {
-    flex: 1 0 100%;
-    order: 1;
   }
   .offline-workspace {
     display: block;
@@ -2693,11 +2497,6 @@ h3 {
   .brand > span {
     font-size: 20px;
   }
-  .case-button {
-    font-size: 10px;
-    padding: 7px 26px 7px 7px;
-    max-width: 160px;
-  }
   .app-header > .button {
     font-size: 10px;
     padding: 8px;
@@ -2727,17 +2526,6 @@ h3 {
     font-size: 17px;
     margin-top: 8px;
     max-width: 240px;
-  }
-  .case-tags {
-    margin-left: 0;
-    order: 3;
-    flex-basis: 100%;
-    display: none;
-  }
-  .case-actions a {
-    min-height: 31px;
-    font-size: 9px;
-    padding: 7px;
   }
   .case-title .eyebrow {
     letter-spacing: 0.1em;
@@ -2901,9 +2689,6 @@ h3 {
   .probe-readout > span {
     font-size: 10px;
   }
-  .review-status {
-    padding-top: 18px;
-  }
   .prepare-workspace {
     padding: 28px 20px 35px;
   }
@@ -2929,15 +2714,6 @@ h3 {
   }
   .series-list {
     margin: 22px 0;
-  }
-  .job-banner > .button {
-    font-size: 9px;
-    padding: 7px;
-    min-height: 30px;
-  }
-  .job-banner .spinner {
-    width: 14px;
-    height: 14px;
   }
   .dialog-backdrop {
     padding: 12px;
@@ -3205,10 +2981,6 @@ h3 {
 .ct-expanded .probe-readout > strong {
   font-size: 15px;
 }
-.ct-expanded .review-status {
-  max-width: 550px;
-  padding: 16px 24px;
-}
 .ct-expanded .compare-check {
   font-size: 12px;
 }
@@ -3244,9 +3016,6 @@ h3 {
   }
 }
 
-.reprocess-short {
-  display: none;
-}
 .prepare-heading {
   display: flex;
   align-items: center;
@@ -3262,16 +3031,6 @@ h3 {
   font-size: 11px;
 }
 @media (max-width: 600px) {
-  .reprocess-long {
-    display: none;
-  }
-  .reprocess-short {
-    display: inline;
-  }
-  .case-actions .reprocess-action {
-    padding: 7px 8px;
-    font-size: 9px;
-  }
   .prepare-heading .eyebrow {
     font-size: 8px;
   }
@@ -3301,63 +3060,6 @@ h3 {
     width: 20px;
     height: 20px;
   }
-}
-.job-banner progress {
-  grid-area: 1 / 2;
-  width: 110px;
-  max-width: 25vw;
-  height: 5px;
-  accent-color: var(--accent);
-}
-.measurement-progress {
-  grid-area: 2 / 2;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.job-banner > div > .measurement-progress > summary {
-  padding: 0 6px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-/* The table opens over the workspace on request instead of pushing the viewers down. */
-.measurement-progress-body {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 60;
-  width: min(420px, calc(100vw - 32px));
-  padding: 4px 12px 10px;
-  border: 1px solid var(--control-border);
-  border-radius: 7px;
-  background: var(--panel);
-  box-shadow: 0 12px 32px #0008;
-}
-.measurement-progress-body > p {
-  margin: 9px 0;
-  color: var(--text-secondary);
-  font-size: 10px;
-}
-.measurement-progress-body > div {
-  overflow: auto;
-  max-height: 160px;
-  scrollbar-width: thin;
-}
-.measurement-progress table {
-  border-collapse: collapse;
-  max-width: 660px;
-  width: 100%;
-  font-size: 11px;
-}
-.measurement-progress th,
-.measurement-progress td {
-  text-align: left;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--line);
-}
-.measurement-progress th:last-child,
-.measurement-progress td:last-child {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 .viewport-state.surface-update {
   inset: auto 16px auto auto;
@@ -3550,15 +3252,6 @@ h3 {
 .ct-image.ct-marking canvas {
   cursor: cell;
 }
-.slicer-fallback {
-  margin-top: 15px;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.slicer-fallback > summary {
-  cursor: pointer;
-  padding: 7px 0;
-}
 /* A fixed heading holds the review state, so opening a draft never resizes the slices. */
 .ct-review-active {
   display: flex;
@@ -3581,44 +3274,12 @@ h3 {
   flex-shrink: 0;
 }
 @media (min-width: 1100px) {
-  .ct-expanded.interactive-review-open {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    grid-auto-rows: min-content;
-    align-content: start;
-  }
-  .ct-expanded.interactive-review-open > :not(.review-status) {
-    grid-column: 1;
-    min-width: 0;
-  }
-  .ct-expanded.interactive-review-open > .review-status {
-    grid-column: 2;
-    grid-row: 1 / span 10;
-    margin: 0;
-    max-width: none;
-    padding: 20px 14px;
-    border-top: 0;
-    border-left: 1px solid var(--line);
-    overflow: auto;
-    min-height: 0;
-    max-height: calc(100dvh - 82px);
-  }
   .ct-expanded.interactive-review-open .ct-slices {
     gap: 12px;
     padding: 10px 18px;
   }
   .ct-expanded.interactive-review-open .ct-image {
     height: clamp(250px, 48vh, 570px);
-  }
-  .ct-expanded.interactive-review-open .review-status .button {
-    font-size: 11px;
-    min-height: 34px;
-  }
-  .ct-expanded.interactive-review-open .review-status .help {
-    font-size: 11px;
-  }
-  .ct-expanded.interactive-review-open .section-title {
-    margin-bottom: 8px;
   }
 }
 /* Accepted 3D anatomy and native CT annotation share a desktop editing toolbar. */
@@ -3685,19 +3346,6 @@ h3 {
   .review-workspace .probe-readout {
     padding: 9px 14px;
   }
-  .review-workspace .review-status {
-    padding: 10px 14px;
-  }
-  .review-workspace .review-status > .section-title {
-    display: none;
-  }
-  .review-workspace .review-status > .field {
-    max-width: 240px;
-  }
-  .review-workspace .review-status .qc-list {
-    margin-top: 7px;
-    padding-top: 7px;
-  }
   .review-workspace .model-header {
     padding: 0 10px;
   }
@@ -3717,11 +3365,4 @@ h3 {
   .review-workspace .viewport-caption {
     font-size: 8px;
   }
-}
-
-.review-workspace .review-status > summary {
-  font-size: 10px;
-  color: var(--text-secondary);
-  padding: 4px 0;
-  cursor: pointer;
 }

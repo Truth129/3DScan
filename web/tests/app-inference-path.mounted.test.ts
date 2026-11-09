@@ -847,7 +847,7 @@ describe('the Library', () => {
       await press(root.button('OTHER'));
       expect(api.revision).toHaveBeenCalledExactlyOnceWith('case', 'prepared');
       expect(root.named('case-toolbar')).toBeDefined();
-      expect(root.button('Select series'), 'not left on the series page').toBeUndefined();
+      expect(root.button('Series…'), 'not left on the series page').toBeUndefined();
       expect(stored.get('scan3d-case')).toBe('case');
       expect(root.content).toContain(text);
     });
@@ -922,7 +922,7 @@ describe('the Library', () => {
     await heartbeat();
     expect(root.named('case-title')?.content).toContain('RENAMED');
     expect(api.revision).not.toHaveBeenCalled();
-    expect(root.button('Select series'), 'the series this tab read stay').toBeUndefined();
+    expect(root.button('Series…'), 'the series this tab read stay').toBeUndefined();
   });
   it('says when someone else saves a newer version, and shows it', async () => {
     const later: Revision = { ...prepared, id: 'later', parent_id: 'prepared' };
@@ -947,10 +947,10 @@ describe('the Library', () => {
     vi.mocked(api.case).mockResolvedValue({ ...scan, series: [series('FIRST')] });
     const root = await start();
     vi.mocked(api.case).mockResolvedValue({ ...scan, series: [series('FIRST'), series('ADDED')] });
-    await press(root.button('Select series'));
+    await press(root.button('Series…'));
     expect(root.content).toContain('ADDED');
     vi.mocked(api.case).mockResolvedValue({ ...scan, series: [series('FIRST')] });
-    await press(root.button('Select series'));
+    await press(root.button('Series…'));
     expect(root.content, 'a stale read').toContain('ADDED');
   });
   it('names the version it shows when it opens a series, so a newer save elsewhere stays', async () => {
@@ -959,7 +959,7 @@ describe('the Library', () => {
     vi.mocked(api.case).mockResolvedValue({ ...scan, series, selected_series_uid: 'first', phase: 'arterial' });
     const prepare = vi.spyOn(api, 'process').mockImplementation(async () => ({ ...queued, kind: 'process' }));
     const root = await start();
-    await press(root.button('Select series'));
+    await press(root.button('Series…'));
     await press(root.button('Open CT'));
     expect(prepare).toHaveBeenCalledExactlyOnceWith('case', { series_uid: 'first', profile: 'chest_abdomen', phase: 'arterial' }, 'prepared');
   });
@@ -1038,7 +1038,7 @@ describe('the Library', () => {
         elsewhere = { ...imported, active_revision_id: 'elsewhere' };
       vi.mocked(api.case).mockImplementation(async () => imported);
       const root = await start();
-      await press(root.button('Select series'));
+      await press(root.button('Series…'));
       vi.mocked(api.case).mockImplementation(async () => elsewhere);
       (root.named('add-series') as unknown as { __vueParentComponent: ComponentInternalInstance }).__vueParentComponent.emit('added', elsewhere, 'first');
       await settled();

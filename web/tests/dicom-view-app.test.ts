@@ -433,6 +433,9 @@ describe('a held capture', () => {
     vi.spyOn(api, 'review').mockImplementation(async (_id, rid) => ({ ...revisions[rid], review_status: 'reviewed' }));
     const view = await app();
     await view.export();
+    // Revision status sits in the popover under the status chip.
+    click(view.all(element => element.getAttribute('title') === 'Review status and correction tools')[0]);
+    await settled();
     const status = view.all(element => element.tagName === 'SELECT' && element.textContent.includes('Unreviewed'))[0];
     Object.assign(status, { value: 'reviewed' });
     status.dispatchEvent(new Event('change'));

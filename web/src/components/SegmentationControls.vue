@@ -61,13 +61,20 @@ function selectTask(event: Event) {
     high_order_resampling: next?.high_order_resampling_supported !== false && !!props.catalog?.defaults.high_order_resampling,
   });
 }
+/** Escape closes the panel as its × does, once it has cleared a search typed into it. */
+function escape(event: KeyboardEvent) {
+  const field = event.target as Partial<HTMLInputElement> | null;
+  if (licensePending.value || (field?.type === 'search' && field.value)) return;
+  event.stopPropagation();
+  emit('close');
+}
 function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_order_resampling', event: Event) {
   emit('update:modelValue', { ...props.modelValue, [field]: (event.target as HTMLInputElement).checked });
 }
 </script>
 
 <template>
-  <section class="segmentation-panel" aria-label="Segmentation settings">
+  <section class="segmentation-panel" aria-label="Segmentation settings" @keydown.esc="escape">
     <header>
       <div>
         <h2>Run segmentation</h2>

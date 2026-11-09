@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue';
+import { computed, ref, useId } from 'vue';
 import {
   applyWorkspacePreset,
   canHideWorkspacePanel,
@@ -13,6 +13,7 @@ import {
   type WorkspacePanelsState,
   type WorkspacePreset,
 } from '../lib/workspace-panels';
+import { usePopover } from '../lib/use-popover';
 
 const props = withDefaults(defineProps<{ modelValue: WorkspacePanelsState; layout?: WorkspaceLayoutState; reviewLabel?: string }>(), {
   layout: defaultWorkspaceLayout,
@@ -20,23 +21,27 @@ const props = withDefaults(defineProps<{ modelValue: WorkspacePanelsState; layou
 });
 const emit = defineEmits<{ 'update:modelValue': [value: WorkspacePanelsState]; 'update:layout': [value: WorkspaceLayoutState] }>();
 const root = ref<HTMLElement>(),
-  trigger = ref<HTMLButtonElement>();
-const open = ref(false),
-  panelId = useId(),
+  trigger = ref<HTMLButtonElement>(),
+  popover = ref<HTMLElement>();
+const panelId = useId(),
   helpId = useId();
+const { open, close, toggle } = usePopover(root, trigger, popover);
 const options = computed(() => [
   { id: 'anatomy' as const, label: 'Anatomy' },
   { id: 'model' as const, label: '3D view' },
   { id: 'review' as const, label: props.reviewLabel },
   { id: 'inspector' as const, label: 'Selection & history' },
 ]);
-const presets = computed(() => [
-  { id: 'columns' as const, label: `3D and ${props.reviewLabel} side by side` },
-  { id: 'rows' as const, label: `3D above ${props.reviewLabel}` },
-  { id: 'model' as const, label: '3D view only' },
-  { id: 'review' as const, label: `${props.reviewLabel} only` },
-]);
+const labels = computed<Record<WorkspacePreset, string>>(() => ({
+  columns: `3D and ${props.reviewLabel} side by side`,
+  rows: `3D above ${props.reviewLabel}`,
+  model: '3D view only',
+  review: `${props.reviewLabel} only`,
+}));
 const preset = computed(() => workspacePreset(props.modelValue, props.layout));
+// The first icon shows both views in the arrangement they last had; the menu switches between the two.
+const quick = computed(() => [props.layout.arrangement, 'model' as const, 'review' as const]);
+const arrangements = ['columns', 'rows', 'model', 'review'] as const;
 const sidebarShown = computed(() => props.modelValue.anatomy || props.modelValue.inspector);
 
 function disabled(id: WorkspacePanelId): boolean {
@@ -54,99 +59,70 @@ function reset() {
   emit('update:modelValue', defaultWorkspacePanels());
   emit('update:layout', defaultWorkspaceLayout());
 }
-async function close(restoreFocus: boolean) {
-  if (!open.value) return;
-  open.value = false;
-  if (restoreFocus) {
-    await nextTick();
-    trigger.value?.focus({ preventScroll: true });
-  }
-}
-function outside(event: PointerEvent) {
-  if (open.value && event.target instanceof Node && !root.value?.contains(event.target)) void close(true);
-}
-function keyboard(event: KeyboardEvent) {
-  if (open.value && event.key === 'Escape') {
-    event.preventDefault();
-    event.stopPropagation();
-    void close(true);
-  }
-}
-onMounted(() => {
-  document.addEventListener('pointerdown', outside);
-  document.addEventListener('keydown', keyboard);
-});
-onBeforeUnmount(() => {
-  document.removeEventListener('pointerdown', outside);
-  document.removeEventListener('keydown', keyboard);
-});
 </script>
 
 <template>
   <div ref="root" class="workspace-panels">
     <div class="layout-presets" role="group" aria-label="Workspace layout">
       <button
+        v-for="item in quick"
+        :key="item"
         type="button"
         class="layout-preset"
-        :aria-pressed="sidebarShown"
-        :aria-label="sidebarShown ? 'Hide sidebar' : 'Show sidebar'"
-        :title="sidebarShown ? 'Hide sidebar' : 'Show sidebar'"
-        @click="emit('update:modelValue', toggleWorkspaceSidebar(modelValue))"
+        :aria-pressed="preset === item"
+        :aria-label="labels[item]"
+        :title="labels[item]"
+        @click="choose(item)"
       >
         <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
           <rect x="2.5" y="3.5" width="15" height="13" rx="1.5" />
-          <path d="M7.5 3.5v13" />
-          <path class="layout-fill" d="M3.5 4.5h3v11h-3z" />
-        </svg></button
-      ><span class="layout-divider" aria-hidden="true"></span
-      ><button
-        v-for="item in presets"
-        :key="item.id"
-        type="button"
-        class="layout-preset"
-        :aria-pressed="preset === item.id"
-        :aria-label="item.label"
-        :title="item.label"
-        @click="choose(item.id)"
-      >
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <rect x="2.5" y="3.5" width="15" height="13" rx="1.5" />
-          <template v-if="item.id === 'columns'">
+          <template v-if="item === 'columns'">
             <path d="M11 3.5v13" />
             <path class="layout-fill" d="M3.5 4.5h6.5v11H3.5z" />
           </template>
-          <template v-else-if="item.id === 'rows'">
+          <template v-else-if="item === 'rows'">
             <path d="M2.5 10.5h15" />
             <path class="layout-fill" d="M3.5 4.5h13v5h-13z" />
           </template>
-          <path v-else-if="item.id === 'model'" class="layout-fill" d="M3.5 4.5h13v11h-13z" />
+          <path v-else-if="item === 'model'" class="layout-fill" d="M3.5 4.5h13v11h-13z" />
           <template v-else>
             <path d="M7.5 3.5v13m5-13v13" />
             <path class="layout-fill layout-fill-faint" d="M3.5 4.5h13v11h-13z" />
           </template>
-        </svg>
+        </svg></button
+      ><button
+        ref="trigger"
+        type="button"
+        class="layout-preset panels-trigger"
+        aria-label="Layout and panels"
+        title="Layout and panels"
+        :aria-expanded="open"
+        :aria-controls="panelId"
+        @click="toggle"
+      >
+        <span aria-hidden="true">▾</span>
       </button>
     </div>
-    <button
-      ref="trigger"
-      type="button"
-      class="button secondary compact panels-trigger"
-      aria-label="Panels"
-      :aria-expanded="open"
-      :aria-controls="panelId"
-      @click="open = !open"
-    >
-      <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-        <rect x="2.5" y="3.5" width="15" height="13" rx="1.5" />
-        <path d="M7 4v12m6-12v12" />
-      </svg>
-      Panels <span aria-hidden="true">{{ open ? '⌃' : '⌄' }}</span>
-    </button>
-    <section v-if="open" :id="panelId" class="panels-popover" aria-label="Workspace panels" :aria-describedby="helpId">
+    <section v-if="open" :id="panelId" ref="popover" class="panels-popover" aria-label="Workspace panels" :aria-describedby="helpId">
       <div class="panels-heading">
-        <strong>Workspace panels</strong><button type="button" class="panels-close" aria-label="Close panel options" @click="close(true)">×</button>
+        <strong>Layout</strong><button type="button" class="panels-close" aria-label="Close panel options" @click="close()">×</button>
+      </div>
+      <div class="panels-arrangement" role="group" aria-label="Arrangement">
+        <button v-for="item in arrangements" :key="item" type="button" class="panels-arrangement-option" :aria-pressed="preset === item" @click="choose(item)">
+          {{ item === 'columns' ? 'Side by side' : item === 'rows' ? 'Stacked' : labels[item] }}
+        </button>
       </div>
       <p :id="helpId">Show the sections you need. Keep at least one viewer open. Drag the dividers between areas to resize them.</p>
+      <label class="panel-option side-panels-option">
+        <input
+          type="checkbox"
+          :checked="sidebarShown"
+          aria-controls="workspace-sidebar"
+          aria-keyshortcuts="\"
+          @change="emit('update:modelValue', toggleWorkspaceSidebar(modelValue))"
+        />
+        <span>Side panels<small>Or press \</small></span>
+      </label>
       <label v-for="option in options" :key="option.id" class="panel-option" :class="{ disabled: disabled(option.id) }">
         <input
           type="checkbox"
@@ -169,11 +145,11 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
 }
 .layout-presets {
   display: flex;
   align-items: center;
+  gap: 1px;
   padding: 2px;
   border: 1px solid var(--control-border);
   border-radius: 6px;
@@ -183,7 +159,7 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   width: 28px;
-  height: 26px;
+  height: 24px;
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -220,41 +196,26 @@ onBeforeUnmount(() => {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-.layout-divider {
-  width: 1px;
-  height: 16px;
-  margin: 0 3px;
-  background: var(--control-border);
-}
-/* Narrow screens show one view at a time through the bottom navigation. */
-@media (max-width: 1000px) {
-  .layout-presets {
-    display: none;
-  }
-}
 .panels-trigger {
-  gap: 6px;
-  white-space: nowrap;
-}
-.panels-trigger svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
-  stroke-width: 1.4;
+  width: 22px;
+  margin-left: 2px;
+  border-left: 1px solid var(--control-border);
+  border-radius: 0 4px 4px 0;
+  font-size: 11px;
 }
 .panels-trigger[aria-expanded='true'] {
-  border-color: var(--control-border-hover);
   background: var(--surface-hover);
   color: var(--white);
 }
 .panels-popover {
   position: absolute;
   top: calc(100% + 8px);
-  left: 0;
-  width: 248px;
+  right: 0;
+  width: 264px;
   max-width: calc(100vw - 28px);
   padding: 12px;
-  z-index: 65;
+  /* Over the error strip, like the other top-bar popovers. */
+  z-index: 1010;
   border: 1px solid var(--control-border);
   border-radius: 7px;
   background: var(--panel);
@@ -284,8 +245,32 @@ onBeforeUnmount(() => {
   font-size: 19px;
   cursor: pointer;
 }
+.panels-arrangement {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 10px;
+}
+.panels-arrangement-option {
+  min-height: 28px;
+  padding: 5px 7px;
+  overflow: hidden;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.panels-arrangement-option[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--surface-active);
+  color: var(--white);
+}
 .panels-popover > p {
-  margin: 5px 0 9px;
+  margin: 9px 0 6px;
   color: var(--text-secondary);
   font-size: 10px;
   line-height: 1.6;
@@ -294,13 +279,18 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 7px;
+  padding: 8px 7px;
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
 }
 .panel-option:hover {
   background: var(--surface-hover);
+}
+.side-panels-option {
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 4px 4px 0 0;
 }
 .panel-option input {
   flex-shrink: 0;
@@ -339,7 +329,8 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 .panel-reset:hover,
-.panels-close:hover {
+.panels-close:hover,
+.panels-arrangement-option:hover {
   border-color: var(--control-border-hover);
   background: var(--surface-hover);
   color: var(--white);
