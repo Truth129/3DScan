@@ -426,12 +426,13 @@ second GPU copy of the CT.
 - **Solid fallback.** Without WebGL 2 float targets, 13 texture units, the memory or a working
   merge, surfaces stay solid and the view says why. A failed merge holds until the viewer is
   rebuilt, and a tile size the memory refuses until the size changes.
-- **Mask to segmentation** uses one cropped OR union of the chosen structures, built on the server,
-  with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a boundary by
-  a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong tissue.
+- **Limit to segments** (masking) uses one cropped OR union of the chosen structures, built on the
+  server, with an optional margin of 0–5 mm. Crops over the limit are pooled, which can grow a
+  boundary by a grid cell. An empty, loading or failed mask hides CT rather than showing the wrong
+  tissue.
 - **Color segments** tints the CT before lighting from a label union, largest structure first.
-- **Review** can show the CT volume. Mask to segmentation there uses the saved revision, not the
-  candidate; colouring and Cinematic heart stay off because they would follow it. While the reader
+- **Review** can show the CT volume. Masking there uses the saved revision, not the candidate;
+  colouring and Cinematic heart stay off because they would follow it. While the reader
   marks on the CT plane, the crop plane on its axis moves to the slice to cut away the camera's
   side, because vtk.js volume shaders take six clipping planes.
 - **All three** planes add a plane layer for each other native axis through the same point, in

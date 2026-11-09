@@ -253,13 +253,21 @@ const acquisitionTags = computed(() =>
       ].filter(Boolean),
 );
 const mobilePanel = ref<'model' | 'anatomy' | 'review'>('model'),
-  inspectorTab = ref<'selection' | 'refine' | 'history' | 'coronary'>('selection');
+  inspectorTab = ref<'selection' | 'refine' | 'history' | 'volume' | 'coronary'>('selection');
+// The 3D view docks its volume settings in the 3D tab. It reports whether it has any, and errors.
+const volumeSettings = ref({ shown: false, error: false });
 // Research CT-FFR: the tab shows for a revision with a coronary lumen, and the panel owns the 3D tube.
 const coronaryAvailable = computed(() => !!revision.value && hasCoronaryLumen(revision.value.structures)),
   coronaryTube = shallowRef<CoronaryTube>(),
   nativeView = ref(false);
 watch(coronaryAvailable, available => {
   if (!available && inspectorTab.value === 'coronary') inspectorTab.value = 'selection';
+});
+// The volume settings live in the 3D tab, so opening it from FFR keeps the panel, its tube and its
+// inputs while the volume is tuned around the tube. Any other tab closes the panel.
+const coronaryKept = ref(false);
+watch(inspectorTab, tab => {
+  if (tab !== 'volume') coronaryKept.value = tab === 'coronary';
 });
 const panels = ref(readWorkspacePanels()),
   layout = ref(readWorkspaceLayout());
@@ -334,6 +342,16 @@ const { open: ctControlsOpen, setOpen: setCTControlsOpen } = useFoldingControls(
 // mounted, so a menu opens the same dialog its button would.
 const fold = useTopBarFold(() => chipShown.value);
 const place = (action: TopBarAction) => topBarPlace(fold.value, action);
+// A narrow window shows one area at a time, so the settings stay in the 3D view's own Layers card.
+const volumeTabShown = computed(() => volumeSettings.value.shown && fold.value !== 'compact');
+/** The 3D tab stays chosen while it is away, as during a case switch, and shows again when it returns. */
+const shownInspectorTab = computed(() => (inspectorTab.value === 'volume' && !volumeTabShown.value ? 'selection' : inspectorTab.value));
+function showVolumeSettings() {
+  setPanel('inspector', true);
+  inspectorTab.value = 'volume';
+  // The tab sits before the view in reading order, so focus follows the reader there, not to a control.
+  void nextTick(() => document.querySelector<HTMLButtonElement>('.inspector-volume-tab')?.focus({ preventScroll: true }));
+}
 const topBar = ref<HTMLElement>(),
   segmentButton = ref<HTMLButtonElement>(),
   segImport = ref<InstanceType<typeof DicomSegImport>>(),
@@ -657,7 +675,8 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   // A scan with no segments can be in review to add one, which a reload of the same revision keeps.
   if (changedRevision && (next.kind === 'ct' || !next.structures.length)) {
     workspaceMode.value = 'model';
-    inspectorTab.value = 'selection';
+    // A scan alone has no Refine tab; the 3D tab still applies.
+    if (inspectorTab.value !== 'volume') inspectorTab.value = 'selection';
     ctExpanded.value = false;
   }
   const previous = display.value;
@@ -1977,24 +1996,44 @@ onBeforeUnmount(() => {
                 @hide-all="hideAll"
               />
             </aside>
-            <section id="workspace-inspector-panel" v-show="panels.inspector" class="inspector" aria-label="Selection and history">
+            <section
+              id="workspace-inspector-panel"
+              v-show="panels.inspector"
+              class="inspector"
+              :class="{ 'inspector-volume-active': shownInspectorTab === 'volume' }"
+              aria-label="Selection and history"
+            >
               <header class="inspector-tabs">
-                <button :class="{ active: inspectorTab === 'selection' }" @click="inspectorTab = 'selection'">
+                <button :class="{ active: shownInspectorTab === 'selection' }" @click="inspectorTab = 'selection'">
                   <span class="tab-long">{{ ctOnly ? `Source ${sourceLabel}` : 'Selected structure' }}</span
                   ><span class="tab-short" aria-hidden="true">{{ ctOnly ? sourceLabel : 'Structure' }}</span></button
                 ><button
                   v-if="!ctOnly"
-                  :class="{ active: inspectorTab === 'refine' }"
+                  :class="{ active: shownInspectorTab === 'refine' }"
                   @click="
                     inspectorTab = 'refine';
                     before = false;
                   "
                 >
                   <span class="tab-long">Refinement</span><span class="tab-short" aria-hidden="true">Refine</span></button
-                ><button :class="{ active: inspectorTab === 'history' }" @click="inspectorTab = 'history'">
+                ><button :class="{ active: shownInspectorTab === 'history' }" @click="inspectorTab = 'history'">
                   <span class="tab-long">Revision history</span><span class="tab-short" aria-hidden="true">History</span>
                   <span class="tab-count">{{ revisions.length }}</span></button
-                ><button v-if="coronaryAvailable" :class="{ active: inspectorTab === 'coronary' }" @click="inspectorTab = 'coronary'">
+                ><button
+                  v-if="volumeTabShown"
+                  class="inspector-volume-tab"
+                  :class="{ active: shownInspectorTab === 'volume' }"
+                  :title="volumeSettings.error ? 'The 3D view has a problem; its settings say what failed' : '3D view and volume settings'"
+                  @click="inspectorTab = 'volume'"
+                >
+                  <span class="tab-long">3D view</span><span class="tab-short" aria-hidden="true">3D</span
+                  ><span v-if="volumeSettings.error" class="tab-alert" role="img" aria-label="needs attention"></span></button
+                ><button
+                  v-if="coronaryAvailable"
+                  class="inspector-coronary-tab"
+                  :class="{ active: shownInspectorTab === 'coronary' }"
+                  @click="inspectorTab = 'coronary'"
+                >
                   <span class="tab-long">Coronary FFR</span><span class="tab-short" aria-hidden="true">FFR</span></button
                 ><button
                   type="button"
@@ -2006,9 +2045,10 @@ onBeforeUnmount(() => {
                   ×
                 </button>
               </header>
-              <AgreementPanel v-if="inspectorTab === 'history' && !ctOnly" :case-id="activeCase.id" :revision="revision" @select="select" />
+              <AgreementPanel v-if="shownInspectorTab === 'history' && !ctOnly" :case-id="activeCase.id" :revision="revision" @select="select" />
               <CoronaryPanel
-                v-if="inspectorTab === 'coronary' && coronaryAvailable"
+                v-if="coronaryAvailable && (shownInspectorTab === 'coronary' || (coronaryKept && shownInspectorTab === 'volume'))"
+                v-show="shownInspectorTab === 'coronary'"
                 :case-id="activeCase.id"
                 :revision="revision"
                 :point="point"
@@ -2016,7 +2056,7 @@ onBeforeUnmount(() => {
                 @select="picked"
                 @tube="coronaryTube = $event"
               />
-              <div v-if="ctOnly && inspectorTab === 'selection'" class="ct-only-summary">
+              <div v-if="ctOnly && shownInspectorTab === 'selection'" class="ct-only-summary">
                 <div>
                   <span class="eyebrow">{{ sourceLabel }} GEOMETRY</span>
                   <p>
@@ -2027,7 +2067,7 @@ onBeforeUnmount(() => {
                 </div>
                 <button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Segment {{ sourceLabel }}…</button>
               </div>
-              <div v-if="inspectorTab === 'selection' && structure" class="selection-content">
+              <div v-if="shownInspectorTab === 'selection' && structure" class="selection-content">
                 <div class="selection-identity">
                   <i :style="{ background: colorCss(structure.color) }"></i>
                   <div>
@@ -2067,7 +2107,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <RefinementPanel
-                v-else-if="!ctOnly && inspectorTab === 'refine' && revision.structures.some(s => s.id === selected)"
+                v-else-if="!ctOnly && shownInspectorTab === 'refine' && revision.structures.some(s => s.id === selected)"
                 :key="revision.id"
                 :point="point"
                 :geometry="revision.geometry"
@@ -2075,7 +2115,7 @@ onBeforeUnmount(() => {
                 :busy="busy"
                 @apply="refine"
               />
-              <div v-else-if="inspectorTab === 'history'" class="history-content">
+              <div v-else-if="shownInspectorTab === 'history'" class="history-content">
                 <div class="history-heading">
                   <p class="help">Activate a previous revision for exact undo. Every mask and measurement is preserved.</p>
                   <button class="button secondary compact" :disabled="!revision.parent_id || busy" @click="revision.parent_id && activate(revision.parent_id)">
@@ -2108,6 +2148,8 @@ onBeforeUnmount(() => {
                   <button class="text-button" :disabled="revision.id === item.id || busy" @click="activate(item.id)">Activate</button>
                 </div>
               </div>
+              <!-- Always rendered: the 3D view teleports its volume settings here once, when it mounts. -->
+              <div id="workspace-volume-settings" v-show="shownInspectorTab === 'volume'" class="inspector-volume"></div>
             </section>
           </div>
           <WorkspaceSplitter
@@ -2194,6 +2236,10 @@ onBeforeUnmount(() => {
                 :level="displayLevel"
                 :dicom-view-block-reason="viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
                 :coronary-tube="before || coronaryTube?.result.revision_id !== shownRevision.id ? undefined : coronaryTube"
+                volume-settings-target="#workspace-volume-settings"
+                :volume-settings-dock="fold === 'compact' ? undefined : panels.inspector ? 'shown' : 'hidden'"
+                @volume-settings="volumeSettings = $event"
+                @show-volume-settings="showVolumeSettings"
                 @export-view="exportView"
                 @native-view="nativeView = $event"
                 @unread-refusal="alertViewExport"

@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, useId } from 'vue';
 import { freshNativeVolumeLighting, type NativeVolumeLightingSettings } from '../lib/volume-lighting';
+import InfoTip from './InfoTip.vue';
 
 const props = defineProps<{ settings: NativeVolumeLightingSettings; disabled?: boolean }>();
 const emit = defineEmits<{ update: [settings: NativeVolumeLightingSettings] }>();
 const manual = computed(() => props.settings.mode !== 'preset');
+const tip = useId();
 const materials = [
   { key: 'ambient', label: 'Ambient', aria: 'Volume ambient light', min: 0, max: 1, step: 0.05 },
   { key: 'diffuse', label: 'Diffuse', aria: 'Volume diffuse light', min: 0, max: 1, step: 0.05 },
@@ -20,53 +22,42 @@ function update(change: Partial<NativeVolumeLightingSettings>) {
 </script>
 
 <template>
-  <details class="native-lighting-controls">
-    <summary>
-      Lighting and shadows
-      <span>{{
-        settings.mode === 'preset' ? 'Preset' : settings.mode === 'cinematic' ? 'Cinematic' : settings.mode === 'standard' ? 'Standard' : 'Ambient occlusion'
-      }}</span>
-    </summary>
-    <div class="lighting-heading">
-      <label
-        >Rendering method
-        <select
-          aria-label="Volume rendering method"
-          :value="settings.mode"
-          :disabled="disabled"
-          @change="update({ mode: ($event.target as HTMLSelectElement).value as NativeVolumeLightingSettings['mode'] })"
-        >
-          <option value="preset">Preset lighting</option>
-          <option value="standard">Standard</option>
-          <option value="cinematic">Cinematic (VolView Hybrid)</option>
-          <option value="ambient-occlusion">Ambient occlusion</option>
-        </select>
-      </label>
-      <button type="button" class="text-button" :disabled="disabled" @click="emit('update', freshNativeVolumeLighting())">Reset lighting</button>
-    </div>
-    <p v-if="!manual" class="lighting-note">
-      Uses this appearance preset’s lighting. Choose a rendering method to adjust the light and shadows for any CT preset.
-    </p>
+  <!-- The rows of the Lighting section. VolumeControls owns its header, summary and Reset lighting. -->
+  <div class="native-lighting-controls">
+    <label class="volume-row"
+      ><span>Method</span
+      ><select
+        aria-label="Volume rendering method"
+        :aria-describedby="manual && settings.mode !== 'standard' ? `${tip}-cost` : undefined"
+        :value="settings.mode"
+        :disabled="disabled"
+        @change="update({ mode: ($event.target as HTMLSelectElement).value as NativeVolumeLightingSettings['mode'] })"
+      >
+        <option value="preset">Preset lighting</option>
+        <option value="standard">Standard</option>
+        <option value="cinematic">Cinematic (VolView Hybrid)</option>
+        <option value="ambient-occlusion">Ambient occlusion</option>
+      </select></label
+    >
+    <p v-if="!manual" class="volume-note">Uses the appearance preset’s own lighting. Choose a method to set light and shadows.</p>
     <template v-else>
-      <div class="lighting-grid">
-        <label v-for="control in materials" :key="control.key" class="lighting-slider">
-          {{ control.label }} <output>{{ control.key === 'specularPower' ? settings[control.key] : `${Math.round(settings[control.key] * 100)}%` }}</output>
-          <input
-            type="range"
-            :aria-label="control.aria"
-            :min="control.min"
-            :max="control.max"
-            :step="control.step"
-            :value="settings[control.key]"
-            :disabled="disabled"
-            @input="update({ [control.key]: number($event) })"
-          />
-        </label>
-      </div>
-      <div v-if="settings.mode === 'cinematic'" class="lighting-grid">
-        <label class="lighting-slider"
-          >Scattering <output>{{ Math.round(settings.scattering * 100) }}%</output>
-          <input
+      <label v-for="control in materials" :key="control.key" class="volume-row"
+        ><span>{{ control.label }}</span
+        ><input
+          type="range"
+          :aria-label="control.aria"
+          :min="control.min"
+          :max="control.max"
+          :step="control.step"
+          :value="settings[control.key]"
+          :disabled="disabled"
+          @input="update({ [control.key]: number($event) })"
+        /><output>{{ control.key === 'specularPower' ? settings[control.key] : `${Math.round(settings[control.key] * 100)}%` }}</output></label
+      >
+      <template v-if="settings.mode === 'cinematic'">
+        <label class="volume-row"
+          ><span>Scattering</span
+          ><input
             type="range"
             aria-label="Volume scattering"
             min="0"
@@ -75,11 +66,11 @@ function update(change: Partial<NativeVolumeLightingSettings>) {
             :value="settings.scattering"
             :disabled="disabled"
             @input="update({ scattering: number($event) })"
-          />
-        </label>
-        <label class="lighting-slider"
-          >Shadow reach <output>{{ Math.round(settings.reach * 100) }}%</output>
-          <input
+          /><output>{{ Math.round(settings.scattering * 100) }}%</output></label
+        >
+        <label class="volume-row"
+          ><span>Shadow reach</span
+          ><input
             type="range"
             aria-label="Volume shadow reach"
             min="0"
@@ -88,13 +79,13 @@ function update(change: Partial<NativeVolumeLightingSettings>) {
             :value="settings.reach"
             :disabled="disabled || settings.scattering === 0"
             @input="update({ reach: number($event) })"
-          />
-        </label>
-      </div>
-      <div v-if="settings.mode === 'ambient-occlusion'" class="lighting-grid">
-        <label class="lighting-slider"
-          >Occlusion samples <output>{{ settings.aoKernelSize }}</output>
-          <input
+          /><output>{{ Math.round(settings.reach * 100) }}%</output></label
+        >
+      </template>
+      <template v-if="settings.mode === 'ambient-occlusion'">
+        <label class="volume-row"
+          ><span>Occlusion samples</span
+          ><input
             type="range"
             aria-label="Volume ambient occlusion samples"
             min="1"
@@ -103,11 +94,11 @@ function update(change: Partial<NativeVolumeLightingSettings>) {
             :value="settings.aoKernelSize"
             :disabled="disabled"
             @input="update({ aoKernelSize: number($event) })"
-          />
-        </label>
-        <label class="lighting-slider"
-          >Occlusion radius <output>{{ settings.aoRadius }} steps</output>
-          <input
+          /><output>{{ settings.aoKernelSize }}</output></label
+        >
+        <label class="volume-row"
+          ><span>Occlusion radius</span
+          ><input
             type="range"
             aria-label="Volume ambient occlusion radius"
             min="1"
@@ -116,138 +107,68 @@ function update(change: Partial<NativeVolumeLightingSettings>) {
             :value="settings.aoRadius"
             :disabled="disabled"
             @input="update({ aoRadius: number($event) })"
-          />
-        </label>
+          /><output>{{ settings.aoRadius }} steps</output></label
+        >
+      </template>
+      <div class="volume-row volume-check-row">
+        <label
+          ><input
+            type="checkbox"
+            aria-label="Light follows camera"
+            :aria-describedby="`${tip}-follow`"
+            :checked="settings.lightFollowsCamera"
+            :disabled="disabled"
+            @change="update({ lightFollowsCamera: ($event.target as HTMLInputElement).checked })"
+          />Light follows camera</label
+        ><InfoTip
+          :id="`${tip}-follow`"
+          :text="
+            settings.lightFollowsCamera
+              ? 'The light moves with your view, at the angles below from it. Turn this off to keep the light fixed while you rotate.'
+              : 'The light stays fixed in the scene. Either angle places it from the current view.'
+          "
+        />
       </div>
-      <label class="lighting-follow"
+      <!-- The angles stay live while the light follows: they set its offset from the view. -->
+      <label class="volume-row"
+        ><span>Azimuth</span
         ><input
-          type="checkbox"
-          aria-label="Light follows camera"
-          :checked="settings.lightFollowsCamera"
+          type="range"
+          aria-label="Volume light azimuth"
+          min="-180"
+          max="180"
+          step="5"
+          :value="settings.azimuth"
           :disabled="disabled"
-          @change="update({ lightFollowsCamera: ($event.target as HTMLInputElement).checked })"
-        />Light follows camera</label
+          @input="update({ azimuth: number($event) })"
+        /><output>{{ settings.azimuth }}°</output></label
       >
-      <div class="lighting-grid">
-        <label class="lighting-slider"
-          >Light azimuth <output>{{ settings.azimuth }}°</output>
-          <input
-            type="range"
-            aria-label="Volume light azimuth"
-            min="-180"
-            max="180"
-            step="5"
-            :value="settings.azimuth"
-            :disabled="disabled"
-            @input="update({ azimuth: number($event) })"
-          />
-        </label>
-        <label class="lighting-slider"
-          >Light elevation <output>{{ settings.elevation }}°</output>
-          <input
-            type="range"
-            aria-label="Volume light elevation"
-            min="-89"
-            max="89"
-            step="1"
-            :value="settings.elevation"
-            :disabled="disabled"
-            @input="update({ elevation: number($event) })"
-          />
-        </label>
-      </div>
-      <p class="lighting-note">
-        {{
-          settings.lightFollowsCamera
-            ? 'The light moves with your view. Turn this off to keep the light fixed while you rotate.'
-            : 'The light stays fixed in the scene. Adjust either angle to position it from the current view.'
-        }}
-      </p>
-      <p v-if="settings.mode !== 'standard'" class="lighting-note">
-        Cinematic shadows and ambient occlusion use VolView’s vtk.js techniques. More scattering, reach or occlusion samples can slow interaction.
+      <label class="volume-row"
+        ><span>Elevation</span
+        ><input
+          type="range"
+          aria-label="Volume light elevation"
+          min="-89"
+          max="89"
+          step="1"
+          :value="settings.elevation"
+          :disabled="disabled"
+          @input="update({ elevation: number($event) })"
+        /><output>{{ settings.elevation }}°</output></label
+      >
+      <p v-if="settings.mode !== 'standard'" class="volume-note">
+        More scattering, reach or samples can slow rotation.<InfoTip
+          :id="`${tip}-cost`"
+          text="Cinematic shadows and ambient occlusion use VolView’s vtk.js techniques."
+        />
       </p>
     </template>
-  </details>
+  </div>
 </template>
 
 <style scoped>
 .native-lighting-controls {
-  border-top: 1px solid var(--line);
-  margin-top: 10px;
-  padding-top: 8px;
-  color: #bac7d9;
-  font-size: 10px;
-}
-summary {
-  cursor: pointer;
-  color: #c8d4e7;
-  padding: 3px 0;
-}
-summary span {
-  color: #8395b0;
-  font-size: 9px;
-  margin-left: 6px;
-}
-.lighting-heading {
-  display: flex;
-  align-items: end;
-  gap: 8px;
-  margin: 10px 0;
-}
-.lighting-heading label {
   display: grid;
-  gap: 5px;
-  flex: 1;
-  min-width: 0;
-}
-.lighting-heading select {
-  width: 100%;
-  min-width: 0;
-  font-size: 10px;
-}
-.lighting-heading button {
-  font-size: 9px;
-  white-space: nowrap;
-  min-height: 28px;
-}
-.lighting-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
-  margin: 10px 0;
-}
-.lighting-slider {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 5px;
-  align-items: center;
-  min-width: 0;
-  font-size: 9px;
-  color: #a2b2c8;
-}
-.lighting-slider output {
-  color: #d1dced;
-  font-variant-numeric: tabular-nums;
-}
-.lighting-slider input {
-  grid-column: 1 / -1;
-  width: 100%;
-  min-width: 0;
-  accent-color: #8aabff;
-}
-.lighting-follow {
-  display: flex;
-  align-items: center;
   gap: 6px;
-  font-size: 10px;
-}
-.lighting-follow input {
-  accent-color: #8aabff;
-}
-.lighting-note {
-  margin: 8px 0 4px;
-  font-size: 9px;
-  color: #8395b0;
-  line-height: 1.5;
 }
 </style>

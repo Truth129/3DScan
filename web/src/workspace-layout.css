@@ -40,6 +40,20 @@
 .inspector-tabs .tab-short {
   display: none;
 }
+/* A failure in the docked volume settings marks their tab without switching to it. The dot sits on
+   the tab's corner, so the strip keeps its width. */
+.inspector-tabs .inspector-volume-tab {
+  position: relative;
+}
+.inspector-tabs .tab-alert {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
 .model-header .model-scale {
   margin-left: auto;
 }
@@ -703,6 +717,13 @@ header.top-bar.fold-compact > .segmentation-panel {
     max-height: 48%;
     overflow: auto;
   }
+  /* The 3D tab's settings are longer than a selection, so it takes more of the column, at a fixed
+     height so the list above stays put as sections fold. Only the list gives up height: the column
+     keeps its width, so the viewers never resize. */
+  .workspace-sidebar > .inspector.inspector-volume-active {
+    height: max(48%, calc(100% - 320px));
+    max-height: max(48%, calc(100% - 320px));
+  }
   .workspace.modular-workspace.panel-anatomy-hidden .workspace-sidebar > .inspector {
     flex: 1 1 auto;
     max-height: none;
@@ -794,14 +815,14 @@ header.top-bar.fold-compact > .segmentation-panel {
   .workspace-sidebar .history-heading {
     flex-wrap: wrap;
   }
-  @container workspace-sidebar (max-width: 419px) {
-    /* Tight enough for four tabs and the hide button at the default 280 px. */
+  /* Four tabs and the hide button need about 460 px with long labels, so narrower sidebars use the short ones. */
+  @container workspace-sidebar (max-width: 479px) {
     .workspace-sidebar .inspector-tabs {
       gap: 6px;
-      padding: 0 6px 0 10px;
+      padding-left: 10px;
     }
     .workspace-sidebar .inspector-tabs > button:not(.inspector-hide) {
-      padding: 5px 6px;
+      padding-inline: 6px;
     }
     .workspace-sidebar .inspector-tabs .tab-long {
       position: absolute;
@@ -814,9 +835,16 @@ header.top-bar.fold-compact > .segmentation-panel {
     .workspace-sidebar .inspector-tabs .tab-short {
       display: inline;
     }
+    /* If the strip still overflows, the words shorten before the hide button leaves it. */
+    .workspace-sidebar .inspector-tabs > button:not(.inspector-hide, .inspector-volume-tab, .inspector-coronary-tab) {
+      flex: 0 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   }
-  /* Four tabs (the fifth child is the hide button) overflow even the widest sidebar with full names. */
-  .workspace-sidebar .inspector-tabs:has(> :nth-child(5)) .tab-long {
+  /* Five tabs (the sixth child is the hide button) overflow even the widest sidebar with full names. */
+  .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) .tab-long {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -824,8 +852,28 @@ header.top-bar.fold-compact > .segmentation-panel {
     clip-path: inset(50%);
     white-space: nowrap;
   }
-  .workspace-sidebar .inspector-tabs:has(> :nth-child(5)) .tab-short {
+  .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) .tab-short {
     display: inline;
+  }
+  /* Five tabs fit the default 280 px sidebar only closer together and without the revision count. */
+  @container workspace-sidebar (max-width: 339px) {
+    .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) {
+      gap: 4px;
+    }
+    .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) > button:not(.inspector-hide) {
+      padding-inline: 5px;
+    }
+    .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) .tab-count {
+      display: none;
+    }
+  }
+  @container workspace-sidebar (max-width: 279px) {
+    .workspace-sidebar .inspector-tabs > button:not(.inspector-hide) {
+      padding-inline: 5px;
+    }
+    .workspace-sidebar .inspector-tabs {
+      gap: 4px;
+    }
   }
   @container workspace-sidebar (min-width: 420px) {
     .workspace-sidebar .selection-controls {

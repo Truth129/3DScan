@@ -309,14 +309,16 @@ any job and your name. The worker shows at the bottom left.
 - Disabled buttons give their reason on hover, and in a menu under the item.
 - **Esc** or a click elsewhere closes a top bar menu. **Esc** also closes the segmentation settings.
 
-The sidebar holds the anatomy list and the **Selected structure**, **Refinement** and **Revision
-history** tabs. The stage tiles the 3D view and **CT review**.
+The sidebar holds the anatomy list and the **Selected structure**, **Refinement**, **Revision
+history** and **3D view** tabs, with **Coronary FFR** last when the revision has a coronary lumen.
+The stage tiles the 3D view and **CT review**.
 
 - The layout icons at the top right show both views, the 3D view alone or CT review alone. Their
   **▾** chooses side by side or stacked, shows or hides each area or the **Side panels**, and has
   **Reset layout**. **\\** also hides or shows the side panels.
 - Drag a divider to resize, and double-click it to reset.
-- **Layers** folds the 3D controls, and **Display** the CT controls.
+- **Layers** folds the 3D view's layer card, and **Display** the CT controls. Neither resizes a
+  view.
 
 **Show all**, **Hide all** and **Show selected only** apply to the whole case even when the list is
 filtered. A section's eye hides it, and its arrow collapses it.
@@ -348,14 +350,18 @@ original voxels.
 
 ### 3D view
 
-**Layers** opens the **Rendering stack**: **Segmentation**, **CT volume** and **CT plane**. Drag to
+**Layers** switches what is drawn: **Segmentation**, **CT volume** and **CT plane**. Drag to
 rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and **Restore ↙** or
 **Escape** returns.
 
-- **All segment opacity** works with **CT volume** visible: CT in front of a segment covers it,
-  and CT behind shows through. If the browser lacks a feature this needs or GPU memory runs short,
-  segments stay solid and the **Rendering stack** says why. If the GPU cannot compile the
-  see-through shader, the 3D view fails instead.
+- The slider beside **Segmentation** is **All segment opacity**. It works with **CT volume**
+  visible: CT in front of a segment covers it, and CT behind shows through. If the browser lacks a
+  feature this needs or GPU memory runs short, segments stay solid; the slider reads **Solid** and
+  its tooltip says why. If the GPU cannot compile the see-through shader, the 3D view fails instead.
+- **Settings ›** on the **CT volume** row opens the sidebar's **3D view** tab, showing the sidebar
+  if it is hidden. In the expanded view and at 1000 px or narrower, it opens the settings inside
+  **Layers** instead. If the volume fails, the row shows **Retry volume** or **Retry mask**, and the
+  tab a dot.
 - **CT plane** shows one native slice: choose **Native i**, **j** or **k**, move its slider, or use
   **Face plane**. **All three** adds the other two native slices through the same point, which
   follows CT review. It carries into review and back. Three.js and the portable page show one plane.
@@ -366,21 +372,24 @@ rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and 
 
 ### CT volume settings
 
-These settings change the display only, never source images, masks or measurements.
+These settings change the display only, never source images, masks or measurements. They sit in
+the sidebar's **3D view** tab, in one column. The header shows the volume's state and **Reset
+volume**; while the volume is off it shows **Turn on**, and the sections stay listed but greyed.
+Each section folds. A folded section shows a summary, opens by itself when its setting changes, and
+your browser remembers which are open. **ⓘ** gives help on hover, or when you click or tap it.
 
-- **Appearance** picks a preset, adjusted by **Intensity** and **Opacity**. **Crop volume** limits
-  the native i, j and k ranges.
-- **Mask to segmentation** shows the CT only in chosen segments. Pick them with **Use selected**,
-  **Use visible** or the list, and set **Show volume** to inside or outside. **Display margin**
-  retains thin walls.
-- **Color segments** (Cornerstone3D) tints the CT inside chosen segments with their anatomy-list
-  colors, blended by **Color strength**.
-- **Lighting and shadows** (Cornerstone3D) sets the **Rendering method**: **Preset lighting**,
-  **Standard**, **Cinematic (VolView Hybrid)** or **Ambient occlusion**. **Reset lighting** returns
-  to the preset.
-- **Cinematic heart** is a cardiac appearance. **Measure from segments** sets its reference HU from
-  myocardium and aorta or left-heart masks. Or enter **Myocardium** and **Blood pool** and choose
-  **Apply reference HU**.
+- **Appearance:** **Preset**, then **Intensity**, **Volume opacity** and **Quality**.
+- **Lighting** (Cornerstone3D): the **Method** is **Preset lighting**, **Standard**, **Cinematic
+  (VolView Hybrid)** or **Ambient occlusion**. **Reset lighting** returns to the preset.
+- **Limit to segments:** its switch shows the CT only inside or outside chosen segments. Pick them
+  under **Choose segments** with **Use selected**, **Use visible** or the list. **Margin** retains
+  thin walls.
+- **Color segments** (Cornerstone3D, not in review): its switch tints the CT inside chosen segments
+  with their anatomy-list colors, blended by **Color strength**.
+- **Crop** limits the native i, j and k ranges.
+- **Cinematic heart**, under **Appearance**, is a cardiac preset. **Measure from segments** sets
+  its reference HU from myocardium and aorta or left-heart masks. Or enter **Myocardium** and
+  **Blood pool** and choose **Apply reference HU**.
 
 ## Review and correct masks
 
@@ -518,7 +527,7 @@ With **CT volume** on in review:
   mark; see-through surfaces do not block it. **Surface point** refuses a surface the volume covers.
 - While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps the
   whole CT in depth.
-- **Mask to segmentation** masks by the saved segmentation, not your draft, so your edits do not
+- **Limit to segments** masks by the saved segmentation, not your draft, so your edits do not
   change it until you save. **Volume point** sees only the CT the mask shows.
 - **Color segments** and **Cinematic heart** stay off. A Cinematic heart volume shows the default
   preset, and returns on **Exit review** unless you choose another.
@@ -669,7 +678,8 @@ nominal solve.
 In the native 3D view a centreline tube shows the result, sized to the lumen. Every coronary lumen
 segment fades behind it, or hides where surfaces are drawn solid. Colour by **FFR**: red at 0.75
 and below, amber at 0.80, blue from 0.90, grey where FFR is not reported. Or by **Diameter**, dark
-to light blue from 1 to 5 mm. The legend sits at the lower left.
+to light blue from 1 to 5 mm. The legend sits at the lower left. The tube shows while the
+**Coronary FFR** tab is open, or the **3D view** tab opened from it.
 PNG and DICOM view exports leave the tube out and draw the lumens as set. The Three.js view (MR,
 sheared grids) shows the table only.
 

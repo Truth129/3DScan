@@ -2,17 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { h, type ComponentInternalInstance } from 'vue';
 import App from '../src/App.vue';
 import { api, ApiError } from '../src/lib/api';
+import { coronaryApi } from '../src/lib/coronary';
 import { SEGMENT_PATH_KEY } from '../src/lib/inference-path';
 import { ARCHIVE_OFF, runCaseCheck, session } from '../src/lib/session';
 import type { Case, InferencePathRow, InteractiveReview, Job, Revision, SegmentationCatalog, Structure } from '../src/types';
 import { choose, createApp, FakeElement, press, settled } from './fake-dom';
 
 // These draw on a GPU canvas. The call sites under test are in App itself, and every other
-// child is the real component.
+// child is the real component. The 3D view's attributes stay reachable, so a test can emit for it.
+const viewport = vi.hoisted(() => ({ attrs: {} as Record<string, unknown> }));
 vi.mock('../src/components/ModelViewport.vue', () => ({
   default: {
     inheritAttrs: false,
-    setup(_props: unknown, { expose }: { expose: (exposed: object) => void }) {
+    setup(_props: unknown, { expose, attrs }: { expose: (exposed: object) => void; attrs: Record<string, unknown> }) {
+      viewport.attrs = attrs;
       expose({ showRefusal: () => false });
       return () => null;
     },
@@ -423,6 +426,41 @@ describe('the revision history', () => {
       '5 changed voxels · 1.0 → 2.0 mL · code test · Run on NVIDIA Test GPU',
       'Run on NVIDIA Test GPU · reused saved result · part re-ran in system memory',
     ]);
+  });
+});
+
+describe('the Coronary FFR tab', () => {
+  it('stays open under the 3D tab opened from it, so the tube stays while the volume is tuned', async () => {
+    const lumen: Structure = {
+      id: 'coronary_arteries:coronary_arteries',
+      name: 'coronary_arteries',
+      task: 'coronary_arteries',
+      group: 'vessels',
+      color: '#aa0000',
+      volume_ml: 1,
+      voxel_count: 1,
+      centroid_ras: null,
+      bounds_ras: null,
+      qc: [],
+    };
+    workstation([amd], { revisions: [{ ...prepared, id: 'coronary', kind: 'segmentation', source: 'segmented', structures: [lumen] }] });
+    const list = vi.spyOn(coronaryApi, 'list').mockResolvedValue([]);
+    const root = await start();
+    (viewport.attrs.onVolumeSettings as (state: object) => void)({ shown: true, error: false });
+    await settled();
+    await press(root.button('Coronary FFR'));
+    const panel = root.named('coronary-panel');
+    expect(panel).toBeDefined();
+    await press(root.button('3D view'));
+    expect(root.named('coronary-panel')).toBe(panel);
+    expect(panel!.style).toMatchObject({ display: 'none' });
+    await press(root.button('Coronary FFR'));
+    expect(root.named('coronary-panel')).toBe(panel);
+    expect(list).toHaveBeenCalledOnce();
+    // Another tab closes it, and the 3D tab opened from there does not bring it back.
+    await press(root.button('Selected structure'));
+    await press(root.button('3D view'));
+    expect(root.named('coronary-panel')).toBeUndefined();
   });
 });
 

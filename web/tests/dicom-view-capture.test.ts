@@ -669,7 +669,8 @@ describe('see-through segments over the native CT', () => {
     await settled();
     expect(mode()).toBe('solid');
     expect(slider().disabled).toBe(true);
-    expect(shown.text()).toContain(reason);
+    // The reason is the slider's tooltip, beside its 'Solid' value.
+    expect(slider().getAttribute('title')).toContain(reason);
   });
 });
 

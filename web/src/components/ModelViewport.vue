@@ -113,6 +113,13 @@ const props = defineProps<{
   volumeViewComponent?: Component;
   /** Set by the live app alone, to show DICOM ↗. Empty means the export may start. */
   dicomViewBlockReason?: string;
+  /**
+   * The side panel's 3D tab, where the volume settings dock. It must stay the same for this view's
+   * lifetime, because Teleport resolves it once, when it mounts.
+   */
+  volumeSettingsTarget?: string | HTMLElement;
+  /** 'shown' while that tab's panel is on screen; 'hidden' while it could be shown. Absent where nothing docks. */
+  volumeSettingsDock?: 'shown' | 'hidden';
   /** The research centreline tube. Only the native 3D view draws it. */
   coronaryTube?: CoronaryTube;
 }>();
@@ -126,6 +133,10 @@ const emit = defineEmits<{
   opacity: [value: number];
   retryVolumeView: [];
   exportView: [];
+  /** Whether the docked settings have anything to show, and whether they hold an error, for the 3D tab. */
+  volumeSettings: [state: { shown: boolean; error: boolean }];
+  /** Settings › asks for the 3D tab, and for the side panel if it is hidden. */
+  showVolumeSettings: [];
   nativeView: [active: boolean];
 }>();
 interface VolumePreview {
@@ -414,19 +425,16 @@ const volumeMaskMessage = computed(
       ? `Showing ${volumeMask.value.mode} ${volumeMaskIds.value.length} selected ${volumeMaskIds.value.length === 1 ? 'segment' : 'segments'}.`
       : ''),
 );
-const volumeMessage = computed(
-  () =>
-    (vtkSelected.value
-      ? vtkError.value || (vtkReady.value ? 'Cornerstone3D · drag to rotate; scroll to zoom.' : 'Waiting for the full CT to finish loading.')
-      : '') ||
-    volumeError.value ||
-    (!props.fullResolution
-      ? `Preloading full ${modality.value}. Progress and cache errors appear in source review.`
-      : volumeReady.value
-        ? ctOnly.value
-          ? `${modality.value} ${sourcePresentation.value.units} · drag to rotate; scroll to zoom.`
-          : 'Rotate to compare the volume and visible segments.'
-        : `Preparing ${modality.value} volume…`),
+// Progress and errors for the settings footer; once the volume shows, there is nothing to say.
+const volumeMessage = computed(() =>
+  vtkSelected.value
+    ? vtkError.value || (vtkReady.value ? '' : 'Waiting for the full CT to finish loading.')
+    : volumeError.value ||
+      (!props.fullResolution
+        ? `Preloading full ${modality.value}. Progress and cache errors appear in source review.`
+        : volumeReady.value
+          ? ''
+          : `Preparing ${modality.value} volume…`),
 );
 const volumeStackStatus = computed(() => {
   if (vtkSelected.value ? vtkError.value : volumeError.value) return 'Unavailable';
@@ -440,6 +448,43 @@ const volumeStackStatus = computed(() => {
   if (vtkSelected.value) return vtkReady.value ? 'Visible · Cornerstone' : 'Caching full CT…';
   return volumeReady.value ? 'Visible' : `Waiting for ${modality.value}`;
 });
+/** Retry on the Layers row, for a failure the settings would otherwise show only where they dock. */
+const volumeRowRetry = computed(() =>
+  !showVolume.value
+    ? undefined
+    : (vtkSelected.value ? vtkError.value : volumeError.value)
+      ? retryVolume
+      : volumeMask.value.enabled && effectiveMaskError.value && !volumeMaskLoading.value
+        ? retryVolumeMask
+        : undefined,
+);
+/** Segment colours are Cornerstone's alone; this says why another renderer draws this view. */
+const colorsUnavailableReason = computed(() =>
+  !props.volumeViewComponent || props.initialSnapshot || props.localSession?.networkFree
+    ? 'Not available in an exported viewer.'
+    : modality.value !== 'CT'
+      ? `Not available for ${modality.value}.`
+      : 'Not available on a tilted-gantry or sheared CT.',
+);
+// The checkbox already says the volume shows; the row speaks up only while it is not ready. A
+// failure's status is read out but not drawn: its Retry says what failed, which leaves the row room.
+const volumeRowStatus = computed(() => (!showVolume.value || volumeStackStatus.value.startsWith('Visible') ? '' : volumeStackStatus.value));
+// Only for a 3D view on screen: a hidden one (CT only, Focus CT) is not in review, so its settings would
+// offer review the main page's options.
+const volumeSettingsShown = computed(() => props.viewportActive !== false && (!props.reviewActive || vtkSelected.value) && ctVolumeAvailable.value);
+const volumeSettingsError = computed(() => !!volumeRowRetry.value || (showVolume.value && !!nativeColorStatus.value.error));
+watch([volumeSettingsShown, volumeSettingsError], ([shown, error]) => emit('volumeSettings', { shown, error }), { immediate: true });
+// The settings dock in the side panel when the app has one on screen. Teleport moves the same
+// elements, so their state survives. They come back here while the view is expanded, because
+// expanding makes everything outside it inert, and they stay here when nothing resolved the target.
+const volumeOptionsId = useId();
+const volumeTargetResolved = ref(false);
+const volumeDockable = computed(() => volumeTargetResolved.value && !!props.volumeSettingsDock && !expanded.value);
+const volumeDocked = computed(() => volumeDockable.value && props.volumeSettingsDock === 'shown');
+function openVolumeSettings() {
+  if (volumeDockable.value) emit('showVolumeSettings');
+  else volumeOptionsOpen.value = !volumeOptionsOpen.value;
+}
 const gpuActive = computed(() => needsPlane.value && !!gpuFamilyReady.value && gpuFamilyReady.value === gpuFamily.value);
 const gpuMeta = computed(() => {
   const descriptor = props.localSession?.descriptor,
@@ -1259,12 +1304,17 @@ async function initializeThree() {
   }
 }
 onMounted(() => {
+  // The deferred Teleport has just resolved the same target, in this same flush. Enabling one whose
+  // target was missing would move the settings into nothing.
+  const target = props.volumeSettingsTarget;
+  volumeTargetResolved.value = typeof target === 'string' ? !!document.querySelector(target) : !!target;
   if (vtkSelected.value) {
     loading.value = false;
     queueReviewPlane();
   } else initializeThree();
 });
 onBeforeUnmount(() => {
+  emit('volumeSettings', { shown: false, error: false });
   legacyInitialization++;
   void setExpanded(false, false);
   // Its watcher will not run now that this view is going.
@@ -1516,8 +1566,10 @@ watch(
 watch(
   () => [volumeError.value, effectiveMaskError.value],
   ([volumeFailure, maskFailure]) => {
+    // The Layers row shows the failure and its Retry; inline settings open too. Dockable ones only
+    // mark the 3D tab, so a failure never switches the reader's tab or covers the render.
     if (volumeFailure || maskFailure) {
-      volumeOptionsOpen.value = true;
+      if (!volumeDockable.value) volumeOptionsOpen.value = true;
       controlsOpen.value = true;
     }
   },
@@ -1900,14 +1952,25 @@ defineExpose({
         {{ expanded ? 'Restore ↙' : 'Expand ↗' }}
       </button>
     </div>
-    <div v-if="controlsVisible" v-show="controlsOpen" :id="controlsId" class="model-review-controls" :class="{ 'main-plane-controls': !reviewActive }">
+    <div
+      v-if="controlsVisible"
+      v-show="controlsOpen"
+      :id="controlsId"
+      class="model-review-controls"
+      :class="{ 'main-plane-controls': !reviewActive, 'volume-options-inline': !volumeDockable && volumeOptionsOpen }"
+    >
+      <div v-if="reviewActive && reviewTool !== 'scissors'" class="model-review-row review-marking-row">
+        <label
+          >Mark on
+          <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode">
+            <option value="surface">Surface point</option>
+            <option v-if="volumeMarkAvailable" value="volume">Volume point</option>
+            <option value="plane">{{ modality }} plane</option>
+          </select></label
+        >
+      </div>
+      <!-- Layers only switch what is drawn. The volume's settings dock in the side panel's 3D tab. -->
       <section class="rendering-stack" aria-label="Rendering stack">
-        <div class="rendering-stack-heading">Rendering stack <span>One aligned 3D view</span></div>
-        <p v-if="vtkSelected" class="volume-preview-note" role="status">
-          {{
-            surfacesSolidOverCT ? `Segments stay solid over the CT volume here. ${nativeSurfaceLayers.reason} Turn CT volume off to adjust transparency. ` : ''
-          }}PNG captures the current view.
-        </p>
         <div class="rendering-stack-layer">
           <label
             class="rendering-stack-toggle"
@@ -1920,22 +1983,22 @@ defineExpose({
               @change="showSegmentation = ($event.target as HTMLInputElement).checked"
             />
             Segmentation</label
-          >
-          <label
+          ><input
             class="rendering-stack-opacity"
-            title="Set every segment’s opacity together. Visibility stays unchanged; 100% makes every visible segment opaque."
-            >All segment opacity
-            <input
-              type="range"
-              aria-label="All segment opacity"
-              :aria-valuetext="segmentationOpacityMixed ? 'Mixed segment values' : `${Math.round(segmentationOpacity * 100)}%`"
-              min="0"
-              max="1"
-              step="0.01"
-              v-model.number="segmentationOpacity"
-              :disabled="surfacesSolidOverCT || !segmentationAvailable || !showSegmentation"
-            /><output>{{ surfacesSolidOverCT ? 'Solid' : segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%` }}</output></label
-          >
+            type="range"
+            aria-label="All segment opacity"
+            :aria-valuetext="segmentationOpacityMixed ? 'Mixed segment values' : `${Math.round(segmentationOpacity * 100)}%`"
+            :title="
+              surfacesSolidOverCT
+                ? `Segments stay solid over the CT volume here. ${nativeSurfaceLayers.reason} Turn CT volume off to adjust transparency.`
+                : 'All segment opacity: sets every segment’s opacity together. Visibility stays unchanged; 100% makes every visible segment opaque.'
+            "
+            min="0"
+            max="1"
+            step="0.01"
+            v-model.number="segmentationOpacity"
+            :disabled="surfacesSolidOverCT || !segmentationAvailable || !showSegmentation"
+          /><output>{{ surfacesSolidOverCT ? 'Solid' : segmentationOpacityMixed ? 'Mixed' : `${Math.round(segmentationOpacity * 100)}%` }}</output>
         </div>
         <div v-if="ctVolumeAvailable && (!reviewActive || vtkSelected)" class="rendering-stack-layer">
           <label class="rendering-stack-toggle"
@@ -1946,8 +2009,26 @@ defineExpose({
               @change="chooseVolume(($event.target as HTMLInputElement).checked)"
             />
             {{ modality }} volume</label
+          ><span class="rendering-stack-status" role="status" :title="volumeRowStatus || undefined"
+            ><span :class="{ 'sr-only': !!volumeRowRetry }">{{ volumeRowStatus }}</span></span
+          ><!-- Not a bare 'Retry': the slices' own Retry after a lost context is found by that text. --><button
+            v-if="volumeRowRetry"
+            type="button"
+            class="text-button"
+            :title="volumeStackStatus"
+            @click="volumeRowRetry()"
           >
-          <span v-if="showVolume" class="rendering-stack-status" role="status">{{ volumeStackStatus }}</span>
+            {{ volumeRowRetry === retryVolumeMask ? 'Retry mask' : 'Retry volume' }}</button
+          ><button
+            type="button"
+            class="text-button volume-settings-button"
+            :aria-expanded="volumeDockable ? undefined : volumeOptionsOpen"
+            :aria-controls="volumeDockable ? undefined : volumeOptionsId"
+            :title="volumeDockable ? `${modality} volume settings, in the side panel’s 3D tab` : `${modality} volume settings`"
+            @click="openVolumeSettings"
+          >
+            {{ volumeDockable ? 'Settings ›' : volumeOptionsOpen ? 'Settings ▴' : 'Settings ▾' }}
+          </button>
         </div>
         <div v-if="ctPlaneAvailable" class="rendering-stack-layer">
           <label class="rendering-stack-toggle"
@@ -1962,71 +2043,6 @@ defineExpose({
           <button v-if="showPlane" class="text-button" :disabled="vtkSelected ? !vtkReady : !planeReady" @click="facePlane">Face plane</button>
         </div>
       </section>
-      <details
-        v-if="(!reviewActive || vtkSelected) && ctVolumeAvailable"
-        v-show="showVolume"
-        class="stack-volume-options"
-        :open="volumeOptionsOpen"
-        @toggle="
-          volumeOptionsOpen = ($event.target as HTMLDetailsElement).open;
-          if (volumeOptionsOpen) controlsOpen = true;
-        "
-      >
-        <!-- prettier-ignore -->
-        <summary>{{ modality }} volume settings <span>Appearance · lighting · mask · crop</span></summary>
-        <p v-if="reviewActive" class="volume-preview-note">
-          Mask to segmentation uses the saved segmentation, not your draft. Color segments and Cinematic heart are off in review, because they would follow the
-          mask being edited.
-        </p>
-        <VolumeControls
-          headerless
-          :enabled="showVolume"
-          :settings="renderVolumeSettings"
-          :native-lighting="vtkSelected ? nativeLighting : undefined"
-          :modality="modality"
-          :heart-view-available="!!heartCamera && !reviewActive && (!vtkSelected || vtkReady)"
-          @heart-view="showHeartView"
-          :reference-available="referenceAvailable"
-          :reference-loading="referenceLoading"
-          :reference-message="referenceMessage"
-          :reference-error="referenceError"
-          @measure-reference="measureCinematicReference()"
-          :ready="vtkSelected ? vtkReady && (!volumeMask.enabled || volumeMaskReady) : volumeReady && !volumeError"
-          :loading="vtkSelected ? (!vtkReady && !vtkError) || volumeMaskLoading : needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
-          :mask="volumeMask"
-          :structures="availableMaskStructures"
-          :selected="selected"
-          :display="display"
-          :mask-margin-fixed="!!props.localSession?.networkFree"
-          :cinematic-available="segmentDrivenVolume"
-          :mask-loading="volumeMaskLoading"
-          :mask-message="volumeMaskMessage"
-          :mask-error="!!effectiveMaskError"
-          :message="showVolume ? volumeMessage : ''"
-          @update:enabled="setVolumeEnabled"
-          @update:settings="updateVolumeSettings"
-          @update:native-lighting="nativeLighting = $event"
-          @update:mask="setVolumeMask"
-          @retry-mask="retryVolumeMask"
-          :colors="volumeColors"
-          :colors-available="vtkSelected && segmentDrivenVolume"
-          :colors-loading="nativeColorStatus.loading"
-          :colors-error="nativeColorStatus.error"
-          @update:colors="setVolumeColors"
-          @retry-colors="volumePreview?.retryColors()"
-          @retry="retryVolume"
-        />
-      </details>
-      <div v-if="reviewActive && reviewTool !== 'scissors'" class="model-review-row review-marking-row">
-        <label v-if="reviewActive"
-          >Mark on
-          <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode">
-            <option value="surface">Surface point</option>
-            <option v-if="volumeMarkAvailable" value="volume">Volume point</option>
-            <option value="plane">{{ modality }} plane</option>
-          </select></label
-        >
-      </div>
       <div v-if="showPlane || (reviewActive && reviewMode === 'plane')" class="model-review-row model-plane-navigation">
         <select :aria-label="`3D ${modality} plane`" :value="reviewPlane" @change="changePlane">
           <option value="axial">Native k</option>
@@ -2048,6 +2064,57 @@ defineExpose({
           ><input type="checkbox" :aria-label="`Show all three ${modality} planes`" v-model="allPlanes" /> All three</label
         >
       </div>
+      <Teleport defer :to="volumeSettingsTarget ?? 'body'" :disabled="!volumeDocked">
+        <div
+          v-if="(!reviewActive || vtkSelected) && ctVolumeAvailable"
+          v-show="volumeDocked || (!volumeDockable && volumeOptionsOpen)"
+          :id="volumeOptionsId"
+          class="stack-volume-options"
+          :class="{ docked: volumeDocked }"
+        >
+          <!-- Ready and loading describe the volume alone; Limit to segments reports the mask's own states. -->
+          <VolumeControls
+            :enabled="showVolume"
+            :status="volumeStackStatus"
+            :settings="renderVolumeSettings"
+            :native-lighting="vtkSelected ? nativeLighting : undefined"
+            :modality="modality"
+            :heart-view-available="!!heartCamera && !reviewActive && (!vtkSelected || vtkReady)"
+            @heart-view="showHeartView"
+            :reference-available="referenceAvailable"
+            :reference-loading="referenceLoading"
+            :reference-message="referenceMessage"
+            :reference-error="referenceError"
+            @measure-reference="measureCinematicReference()"
+            :ready="vtkSelected ? vtkReady : volumeReady && !volumeError"
+            :loading="vtkSelected ? !vtkReady && !vtkError : needsVolume && !volumeError && (!fullResolution || gpuPreparing)"
+            :mask="volumeMask"
+            :structures="availableMaskStructures"
+            :selected="selected"
+            :display="display"
+            :mask-margin-fixed="!!props.localSession?.networkFree"
+            :review="!!reviewActive"
+            :cinematic-available="segmentDrivenVolume"
+            :mask-loading="volumeMaskLoading"
+            :mask-message="volumeMaskMessage"
+            :mask-error="!!effectiveMaskError"
+            :message="showVolume ? volumeMessage : ''"
+            @update:enabled="chooseVolume"
+            @update:settings="updateVolumeSettings"
+            @update:native-lighting="nativeLighting = $event"
+            @update:mask="setVolumeMask"
+            @retry-mask="retryVolumeMask"
+            :colors="volumeColors"
+            :colors-available="vtkSelected && segmentDrivenVolume"
+            :colors-reason="vtkSelected ? 'Off in review, because the colours would follow the mask being edited.' : colorsUnavailableReason"
+            :colors-loading="nativeColorStatus.loading"
+            :colors-error="nativeColorStatus.error"
+            @update:colors="setVolumeColors"
+            @retry-colors="volumePreview?.retryColors()"
+            @retry="retryVolume"
+          />
+        </div>
+      </Teleport>
     </div>
     <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
       {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
@@ -2251,19 +2318,23 @@ defineExpose({
   top: 44px;
   right: 10px;
   z-index: 4;
-  width: min(300px, calc(100% - 20px));
+  width: min(272px, calc(100% - 20px));
   max-height: max(96px, calc(100% - 44px - var(--viewport-toolbar-space)));
-  padding: 8px 10px;
-  border: 1px solid #414b5d;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
   border-radius: 6px;
   background: #171d27e6;
   box-shadow: 0 6px 20px #0005;
   backdrop-filter: blur(6px);
-  color: #bac7d9;
-  font-size: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
+}
+/* Only the fallback holds the volume settings here, and then it may scroll. */
+.model-review-controls.volume-options-inline {
+  width: min(320px, calc(100% - 20px));
 }
 /* Narrow tiles stack the camera views above the tools; wide tiles keep one bottom row. */
 .camera-strip {
@@ -2307,101 +2378,78 @@ defineExpose({
     display: none;
   }
 }
-.rendering-stack-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 5px;
-  color: #d8e2ef;
-  font-size: 10px;
-  font-weight: 600;
-}
-.rendering-stack-heading > span {
-  font-weight: 400;
-  font-size: 9px;
-  color: #8596ae;
-}
-.volume-preview-note {
-  margin: 5px 0;
-  color: #a2b2c8;
-  font-size: 10px;
-  line-height: 1.5;
-}
+/* Three rows, one per drawn layer, so the card never needs to scroll. */
 .rendering-stack-layer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 29px;
+  gap: 8px;
+  min-height: 30px;
 }
 .rendering-stack-toggle {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  color: var(--white);
+  font-size: 11px;
   white-space: nowrap;
 }
 .rendering-stack-toggle input {
-  accent-color: #8aabff;
   margin: 0;
   width: 13px;
   height: 13px;
 }
 .rendering-stack-opacity {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 9px;
-  color: #a2b2c8;
-  min-width: 0;
-}
-.rendering-stack-opacity input {
-  width: clamp(52px, 10vw, 140px);
+  flex: 1;
   min-width: 40px;
   height: 18px;
-  accent-color: #8aabff;
   margin: 0;
 }
-.rendering-stack-opacity output {
-  min-width: 31px;
+.rendering-stack-layer > output {
+  flex: none;
+  min-width: 34px;
+  color: var(--white);
+  font: 11px var(--mono);
   text-align: right;
-  font: 9px var(--mono);
-  color: #c3d0e4;
 }
 .rendering-stack-layer > .text-button {
-  font-size: 10px;
-  padding: 4px 7px;
+  flex: none;
+  margin-left: auto;
+  padding: 3px 7px;
+  font-size: 11px;
 }
 .rendering-stack-status {
-  font-size: 9px;
-  color: #a2b2c8;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
   text-align: right;
+  text-overflow: ellipsis;
+}
+.rendering-stack-status + .text-button {
+  margin-left: 0;
+}
+.volume-settings-button {
+  min-width: 74px;
 }
 .stack-volume-options {
   margin-top: 6px;
-  border-top: 1px solid #343e50;
-  padding-top: 7px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
 }
-.stack-volume-options > summary {
-  cursor: pointer;
-  user-select: none;
-  color: #c3d0e4;
-  font-size: 10px;
-  line-height: 1.6;
-}
-.stack-volume-options > summary > span {
-  margin-left: 8px;
-  color: #8596ae;
-  font-size: 9px;
-}
-.stack-volume-options > .volume-controls {
-  margin-top: 7px;
+/* Docked in the side panel's 3D tab, the settings use the panel's own spacing. */
+.stack-volume-options.docked {
+  margin: 0;
+  padding: 12px 14px 16px;
+  border: 0;
 }
 .review-marking-row {
-  margin-top: 7px;
-  padding-top: 7px;
-  border-top: 1px solid #343e50;
+  min-height: 30px;
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--line);
 }
 .model-review .orientation-gizmo,
 .model-plane .orientation-gizmo {
@@ -2438,8 +2486,13 @@ defineExpose({
   margin-left: auto;
   white-space: nowrap;
 }
+/* All three takes its own line, so the slice slider keeps room to place the plane in a narrow card. */
 .model-plane-navigation {
+  flex-wrap: wrap;
   margin-top: 7px;
+}
+.model-plane-navigation > label {
+  flex-basis: 100%;
 }
 .model-plane-navigation > input {
   flex: 1;

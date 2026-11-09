@@ -27,6 +27,7 @@
   --primary: #e1e7f1;
   --primary-hover: #f5f7fb;
   --ink: #11141b;
+  --warning: #f2ba9c;
 }
 * {
   box-sizing: border-box;
