@@ -43,6 +43,18 @@ def test_throat_area_of_a_70_percent_stenosis(grid):
     assert result.area[np.abs(s - 20) <= 5].min() == pytest.approx(np.pi * 0.45**2, rel=0.2)
 
 
+@pytest.mark.parametrize("grid", GRIDS)
+def test_lumen_the_stations_do_not_follow_is_left_out(grid):
+    """Stations along only the first half of a tube: the far half is not the last station's area."""
+    vessel = Vessel(1.5, 30)
+    mask, affine = vessel.mask(GRIDS[grid])
+    found = lumen(mask, affine)
+    s = np.arange(0, 15 + 1e-9, 0.5)
+    (result,), unassigned = measure(found, [vessel.axis(s)])
+    assert unassigned == 0 and result.spur[-1] and not result.spur[(s > 1) & (s < 14.5)].any()
+    assert 16 < result.count.sum() * found.voxel_volume / (np.pi * 1.5**2) < 18
+
+
 # Murray's law: 1.5³ = 2 × 1.19³. The ball fills the notch the cylinders leave at the junction.
 Y = Phantom(
     (Vessel(1.5, 15), Vessel(1.2, 15, start=(15, 0, 0), heading=35), Vessel(1.2, 15, start=(15, 0, 0), heading=-35)),

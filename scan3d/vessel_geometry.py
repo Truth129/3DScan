@@ -69,6 +69,8 @@ class Stations:
     count: np.ndarray  # lumen voxels assigned to each station
     area: np.ndarray  # mean lumen area over the window centred on each station, mm²
     inscribed: np.ndarray  # distance from each station to the nearest wall midpoint, mm
+    spur: np.ndarray  # some of the station's voxels were too far from it to count, such as a pruned stub
+    junction: np.ndarray  # within reach of a junction, where the branches' lumen mixes
 
 
 def lumen(mask: np.ndarray, affine: np.ndarray) -> Lumen:
@@ -352,29 +354,47 @@ def assign(lumen: Lumen, branches: list[np.ndarray], reach: int = 4) -> np.ndarr
     return result
 
 
-def measure(lumen: Lumen, branches: list[np.ndarray], window: float = 1.0) -> tuple[list[Stations], int]:
+def measure(lumen: Lumen, branches: list[np.ndarray], window: float = 1.0, parents: list[int] | None = None) -> tuple[list[Stations], int]:
     """Area and inscribed radius at each station, and the count of lumen voxels left unassigned.
 
     Each station's cell runs between the midpoints to its neighbours, so a cell's voxel volume
     over its length is its mean area. Spreading each cell's volume evenly along it gives the
     mean area over `window` mm centred on each station, clipped at the branch ends. Voxels beyond
-    an end station's point count towards that station.
+    an end station's point count towards that station. A voxel farther from its station than
+    the cover distance (as `centrelines` uses) is lumen the tree does not follow, such as a
+    pruned stub, so it is left out and the station marked `spur`. With `parents` (each branch's
+    parent, -1 at a root), stations within that distance of a junction are marked `junction`.
+    At blunt ends the rule also drops real end-cap lumen, so end stations read low; the physics
+    holds spur stations. Feed it `centrelines` output: at an eccentric narrowing off the true
+    axis, the spur rule would remove real lumen.
     """
     if any(len(branch) < 2 for branch in branches):
         raise ValueError("Each branch needs at least two stations")
     if window <= 0:
         raise ValueError("The area window must be positive")
+    if parents is not None and len(parents) != len(branches):
+        raise ValueError("Each branch needs one parent")
     owner = assign(lumen, branches)
-    counts = np.bincount(owner[owner >= 0], minlength=sum(len(branch) for branch in branches))
-    inscribed, _ = lumen.wall.query(np.concatenate(branches))
+    points = np.concatenate(branches)
+    inscribed, _ = lumen.wall.query(points)
+    inside = np.flatnonzero(owner >= 0)
+    far = np.linalg.norm(lumen.points[inside] - points[owner[inside]], axis=1) > _COVER * inscribed[owner[inside]] + lumen.edge
+    counts = np.bincount(owner[inside[~far]], minlength=len(points))
+    spur = np.bincount(owner[inside[far]], minlength=len(points)) > 0
     result, start = [], 0
     for branch in branches:
         stop = start + len(branch)
-        s = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(branch, axis=0), axis=1))])
+        s = _arc(branch)
         edges = np.concatenate([s[:1], (s[1:] + s[:-1]) / 2, s[-1:]])
         volume = np.concatenate([[0.0], np.cumsum(counts[start:stop] * lumen.voxel_volume)])
         low, high = np.clip(s - window / 2, s[0], s[-1]), np.clip(s + window / 2, s[0], s[-1])
         area = (np.interp(high, edges, volume) - np.interp(low, edges, volume)) / (high - low)
-        result.append(Stations(branch, s, counts[start:stop], area, inscribed[start:stop]))
+        junction = np.zeros(len(branch), dtype=bool)
+        result.append(Stations(branch, s, counts[start:stop], area, inscribed[start:stop], spur[start:stop], junction))
         start = stop
+    for child, parent in enumerate(parents or ()):
+        if parent >= 0:
+            reach = _COVER * result[parent].inscribed[-1] + lumen.edge
+            result[parent].junction[result[parent].s >= result[parent].s[-1] - reach] = True
+            result[child].junction[result[child].s <= reach] = True
     return result, int((owner < 0).sum())
