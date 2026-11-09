@@ -56,6 +56,9 @@ docker compose exec scan3d python scripts/download_segmentation_model.py flames_
 docker compose exec scan3d python scripts/download_segmentation_model.py breastdivider
 ```
 
+The MAMA-MIA tumour model needs a sign-in to download. Copy the zip into the `/app/.runtime`
+volume, then run the same script with `mamamia_breast_tumour --archive /app/.runtime/<zip>`.
+
 Check the licenses first. See [AI models](INSTALL.md#ai-models).
 
 ## GPU

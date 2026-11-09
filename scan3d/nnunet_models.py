@@ -46,6 +46,8 @@ class NnunetModel:
     # Another pinned model whose first label keeps the voxels this model sees, for a model
     # trained on skull-stripped images. Everything outside it is set to zero first.
     skull_strip: str = ""
+    # The archive needs a sign-in to download, so it is installed from a file someone fetched.
+    sign_in: bool = False
 
 
 MODELS = {
@@ -220,6 +222,35 @@ MODELS = {
                 "fold_all/checkpoint_final.pth": "18441fe5536ce9209d216f8a9ba6e6331c69f54a0acb3fa2fca6428214b92d18",
             },
         ),
+        NnunetModel(
+            id="mamamia_breast_tumour",
+            name="MAMA-MIA nnU-Net",
+            version="synapse-syn61906708.1",
+            label="Breast tumour — MAMA-MIA",
+            description="The primary breast tumour on one post-contrast DCE phase, from the MAMA-MIA challenge baseline, an nnU-Net trained on 1,506 cases. It scored Dice 0.69 on 516 exams from three unseen centres. It can also mark enhancing tissue away from the tumour.",
+            license="Weights CC BY-NC 4.0 (Synapse syn61906708)",
+            modalities=("MR",),
+            labels=("breast_tumour",),
+            dataset_labels=("tumor",),
+            folds=(0, 1, 2, 3, 4),
+            tile_step_size=0.5,
+            url="https://www.synapse.org/Synapse:syn61906708",
+            archive_sha256="cac74adc7920d1f29b2302d4e91c5fcab3f76e895a0a9a4980c6068222fb486b",
+            archive_folder="full_image_dce_mri_tumor_segmentation",
+            sign_in=True,
+            # Its training images kept their acquisition order: axial Duke scans and sagittal
+            # I-SPY scans. Axial order suits axial DCE, and the model mirrors on all three axes.
+            axes="LPS",
+            files={
+                "dataset.json": "cedd8b4e1e709784de09c41348b3a774541b38e5113ceb5a6fdc92301d5a6061",
+                "plans.json": "15013ddf2434e407253d1a051871545a8d2ee055e5a7aa25c92c2a64137799a0",
+                "fold_0/checkpoint_final.pth": "d9a4738be5b148a4fe367d50a73ad473b3395ce432a21695562c84d699dd73ee",
+                "fold_1/checkpoint_final.pth": "99385966691e55081cf70400bb4d56f4c20165087d5af83c3dc335fb6d851174",
+                "fold_2/checkpoint_final.pth": "197473a0ffaa43069a389305edef787adbde20939d48bfd4d5eb2f72560b538e",
+                "fold_3/checkpoint_final.pth": "1e8eae1ad1ceaeb9cb374f3e2214473696feb84f1ffa0e7cb3454f5b26515b2a",
+                "fold_4/checkpoint_final.pth": "24d8308c1e44d849b39983f4e059221abf8ffbecc85c76fcef91b11ceb8ac445",
+            },
+        ),
     )
 }
 
@@ -244,4 +275,9 @@ def installed(model: NnunetModel) -> bool:
 
 
 def install_hint(model: NnunetModel) -> str:
+    if model.sign_in:
+        return (
+            f"{model.name} weights are not installed; download them from {model.url} (free sign-in), then run "
+            f"scripts/download_segmentation_model.py {model.id} --archive FILE on the workstation"
+        )
     return f"{model.name} weights are not installed; run scripts/download_segmentation_model.py {model.id} on the workstation"

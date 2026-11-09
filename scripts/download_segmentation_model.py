@@ -54,18 +54,23 @@ def install_files(model, target: Path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", choices=sorted(MODELS))
+    parser.add_argument("--archive", type=Path, help="Install the model from this zip, downloaded by hand, instead of fetching it")
     args = parser.parse_args()
     load_environment()
     model = MODELS[args.model]
     if model_dir(model).exists():
         raise SystemExit(f"{model_dir(model)} already exists; move it aside to download {model.name} again")
+    if model.sign_in and not args.archive:
+        raise SystemExit(f"{model.name} needs a sign-in to download: get the zip from {model.url}, then run this again with --archive FILE")
     # A model that runs another first needs that one too; one already here is checked before each run.
     for part in reversed(required(model)):
         target = model_dir(part)
         if target.exists():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        if not part.archive_sha256:
+        if part is model and args.archive:
+            install(part, args.archive, target)
+        elif not part.archive_sha256:
             install_files(part, target)
         else:
             with tempfile.TemporaryDirectory(dir=target.parent) as staging:

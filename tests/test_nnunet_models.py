@@ -342,3 +342,16 @@ def test_download_of_separate_files_publishes_only_files_that_match(tmp_path, mo
     assert list(target.parent.iterdir()) == []
     download.install_files(model, target)
     assert sorted(path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()) == sorted(model.files)
+
+
+def test_a_model_behind_a_sign_in_installs_only_from_a_downloaded_zip(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_SEGMENTATION_MODELS", str(tmp_path / "models"))
+    model, archive = stand_in("mamamia_breast_tumour", tmp_path, monkeypatch)
+    assert "--archive FILE" in nnunet_models.install_hint(model) and model.url in nnunet_models.install_hint(model)
+    monkeypatch.setattr(download.requests, "get", lambda *_, **__: pytest.fail("A sign-in download was attempted"))
+    monkeypatch.setattr(sys, "argv", ["download", model.id])
+    with pytest.raises(SystemExit, match="--archive FILE"):
+        download.main()
+    monkeypatch.setattr(sys, "argv", ["download", model.id, "--archive", str(archive)])
+    download.main()
+    assert nnunet_models.installed(model)

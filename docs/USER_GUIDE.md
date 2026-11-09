@@ -217,6 +217,12 @@ sequence: T1 with or without contrast, T2 or DWI. Install it with
 (BreastDivider)** and **Right breast (BreastDivider)**, by the patient's side. It was trained on
 13,752 public scans, but its accuracy has been measured only against labels it helped make.
 
+**Breast tumour — MAMA-MIA** marks the primary breast tumour on one post-contrast phase of a DCE
+series; the authors used the first. Install it as [Install](INSTALL.md#ai-models) describes: the
+weights need a free Synapse sign-in. The segment is **Breast tumour (MAMA-MIA nnU-Net)**. It was
+trained on 1,506 cases and scored Dice 0.69 on 516 exams from three unseen centres. In a fifth of
+its own test cases it also marked tissue well away from the tumour, so check what it outlines.
+
 ### TotalSegmentator license
 
 Tasks that need a license show **· license required**. Under **Segment CT…**, expand

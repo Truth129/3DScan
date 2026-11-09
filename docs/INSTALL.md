@@ -270,6 +270,14 @@ the skull first. Together they download 2.5 GB and keep 1.4 GB:
 .venv/bin/python scripts/download_segmentation_model.py breastdivider
 ```
 
+**MAMA-MIA nnU-Net** is an optional breast tumour model for DCE MRI. Its weights need a free
+Synapse sign-in, so download `full_image_dce_mri_tumor_segmentation.zip` (1.2 GB) from
+<https://www.synapse.org/Synapse:syn61906708> yourself, then install it:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py mamamia_breast_tumour --archive full_image_dce_mri_tumor_segmentation.zip
+```
+
 The weights go to `.runtime/segmentation-models/`. Every file is checked against a pinned SHA-256
 when it is downloaded and before each run. Requests never download them.
 
