@@ -21,7 +21,7 @@ _FACES = np.array([[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 
 
 # Centreline settings, checked by gate G1 on the synthetic phantoms.
 _WALL_POWER = 2  # a traced path costs 1/(wall distance)^power per mm, so it keeps to the centre
-_COVER = 1.5  # a traced path covers the lumen within this many wall distances of it, plus a voxel
+_COVER = 1.5  # a traced path covers the lumen within this many vessel radii of it, plus a voxel
 _SPUR = 3.0  # mm; a shorter end branch is a spur, as is one shorter than twice the radius it leaves
 _SMOOTH = 2  # stations on each side of a moving average, applied twice when recentring
 _PASSES = 2  # recentring passes
@@ -243,16 +243,32 @@ def contact(lumen: Lumen, tree: Tree, apart: float = 10.0) -> list[np.ndarray]:
 
 
 def _skeleton(lumen: Lumen, roots: np.ndarray, radius: np.ndarray, reach: np.ndarray, previous: np.ndarray) -> np.ndarray:
-    """TEASAR's tree as the parent of each lumen voxel: -1 at a root, -2 off the tree."""
-    parent = np.full(len(lumen.points), -2)
+    """TEASAR's tree as the parent of each lumen voxel: -1 at a root, -2 off the tree.
+
+    A new path covers the lumen within _COVER vessel radii of it, plus a voxel, measured through
+    the lumen so that the cover cannot jump to a nearby vessel. A path voxel's vessel radius is the
+    largest wall distance among the path voxels whose own wall distance reaches it along the path.
+    Towards the far end an end face is the nearest wall, so the path voxels within two radii of the
+    tip cover a vessel diameter, plus a voxel, taking the radius as the largest wall distance among
+    the path voxels within two of their own wall distances of the tip, plus half a voxel. Otherwise
+    the rim across a blunt end, or across where a loop is cut, is traced as a false fork.
+    """
+    n = len(lumen.points)
+    parent = np.full(n, -2)
     parent[roots] = -1
     pending = np.isfinite(reach)
-    search = cKDTree(lumen.points)
-    new = roots
+    # The lumen graph both ways, plus a node n with an edge to every voxel. Only the new path's
+    # edges are finite, each the most cover less the voxel's own, so one search within the most
+    # cover finds the voxels within some path voxel's cover.
+    both = (lumen.graph + lumen.graph.T).tocsr()
+    indptr = np.append(both.indptr, both.indptr[-1] + n).astype(np.int32)
+    indices = np.append(both.indices, np.arange(n)).astype(np.int32)
+    graph = csr_array((np.append(both.data, np.full(n, np.inf)), indices, indptr), shape=(n + 1, n + 1))
+    new, cover = roots, _COVER * radius[roots] + lumen.edge
     while True:
-        hits = search.query_ball_point(lumen.points[new], _COVER * radius[new] + lumen.edge, return_sorted=False)
-        pending[new] = False
-        pending[np.fromiter(itertools.chain.from_iterable(hits), dtype=int)] = False
+        graph.data[both.nnz + new] = cover.max() - cover
+        pending[dijkstra(graph, indices=n, limit=cover.max())[:n] <= cover.max()] = False
+        graph.data[both.nnz + new] = np.inf
         far = int(np.argmax(np.where(pending, reach, -1.0)))
         if not pending[far]:
             return parent
@@ -262,6 +278,11 @@ def _skeleton(lumen: Lumen, roots: np.ndarray, radius: np.ndarray, reach: np.nda
             voxel = int(previous[voxel])
         new = np.array(path)
         parent[new] = np.append(new[1:], voxel)
+        s, wall = _arc(lumen.points[new]), radius[new]
+        cover = _COVER * np.where(np.abs(s[:, None] - s) <= wall, wall, 0.0).max(1) + lumen.edge
+        end = wall[s <= 2 * wall].max()
+        tip = s <= 2 * end
+        cover[tip] = np.maximum(cover[tip], 2 * (end + lumen.edge))
 
 
 def _chains(parent: np.ndarray, roots: np.ndarray) -> list[tuple[list[int], int, int]]:

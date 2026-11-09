@@ -98,6 +98,15 @@ def test_centreline_tree_follows_the_true_axes(phantom, grid):
         assert np.abs(error).mean() <= (0.12 if vessel.radius < 1.5 else 0.07)
 
 
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_blunt_end_grows_one_branch_and_a_short_side_branch_stays(grid):
+    """TEASAR reaches both rims of a flat end; the two paths must not become a fork."""
+    tube = Vessel(1.5, 40)
+    assert len(grow(Phantom((tube,)), GRIDS[grid])[1].branches) == 1
+    side = Vessel(0.8, 6, start=(20, 0, 0), heading=70)
+    assert len(grow(Phantom((tube, side), joints=(((20, 0, 0), 0.8),)), GRIDS[grid])[1].branches) == 3
+
+
 def test_a_gap_and_touching_vessels_are_flagged():
     """The branch ending at a break is a gap and the far piece has no root; two trees whose
     vessels touch are flagged there and nowhere else."""
