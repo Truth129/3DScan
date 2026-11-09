@@ -257,6 +257,13 @@ pinned `nnInteractive_v1.0` model into `.runtime/nninteractive/` and checks its 
 .venv/bin/python scripts/download_segmentation_model.py imagecasx_coronary
 ```
 
+**FLAMeS** is an optional MS lesion model for FLAIR MRI. It also installs **HD-BET**, which removes
+the skull first. Together they download 2.5 GB and keep 1.4 GB:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py flames_ms_lesions
+```
+
 The weights go to `.runtime/segmentation-models/`. Every file is checked against a pinned SHA-256
 when it is downloaded and before each run. Requests never download them.
 

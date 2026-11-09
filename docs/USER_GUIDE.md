@@ -205,6 +205,12 @@ CT angiography, from the ImageCAS-X benchmark. Install it with
 artefacts, and it works at 0.35 mm, so a large non-cardiac CT needs a lot of memory and time.
 As in the benchmark, pieces of its mask smaller than 100 voxels are removed.
 
+**MS lesions — FLAMeS** marks multiple sclerosis white-matter lesions on a FLAIR series. Install it
+with `scripts/download_segmentation_model.py flames_ms_lesions`, which also installs HD-BET. HD-BET
+removes the skull first, because FLAMeS was trained on images without one; **Brain — HD-BET** shows
+that brain mask on its own. The segment is **White matter lesions (FLAMeS)**. It was trained on 668
+scans and often misses lesions under about 10 mm³.
+
 ### TotalSegmentator license
 
 Tasks that need a license show **· license required**. Under **Segment CT…**, expand

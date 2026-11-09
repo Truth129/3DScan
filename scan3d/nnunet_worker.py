@@ -41,6 +41,11 @@ def native_labels(labels, back):
     return orientations.apply_orientation(labels.transpose(2, 1, 0), back)
 
 
+def skull_stripped(image, labels):
+    """The model input with every voxel outside label 1 at zero, as in skull-stripped training images."""
+    return np.where(labels == 1, image, np.float32(0))
+
+
 def without_small_pieces(mask, smallest):
     if not smallest:
         return mask
@@ -117,6 +122,7 @@ def main():
     parser.add_argument("-o", dest="output", type=Path, required=True)
     parser.add_argument("--task", required=True, choices=sorted(MODELS))
     parser.add_argument("--model-folder", type=Path, required=True)
+    parser.add_argument("--skull-strip-folder", type=Path, help="The folder of the model named by the model's skull_strip")
     parser.add_argument("--device", required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--progress", type=Path, help="A file that always holds the current step, for the parent to show")
@@ -132,6 +138,12 @@ def main():
 
     reference, affine = _image(args.image)
     image, spacing, back = model_input(reference, affine, model.axes)
+    if model.skull_strip:
+        if not args.skull_strip_folder:
+            raise RuntimeError(f"{model.name} needs --skull-strip-folder")
+        # The registry gives both models the same voxel order, so the mask fits this array as it is.
+        brain, _ = predict(MODELS[model.skull_strip], args.skull_strip_folder, image, spacing, args.device, lambda text: step(f"removing the skull, {text}"))
+        image = skull_stripped(image, brain)
     labels, torch_version = predict(model, args.model_folder, image, spacing, args.device, step)
     labels = native_labels(labels, back)
     for value, name in enumerate(model.labels, 1):

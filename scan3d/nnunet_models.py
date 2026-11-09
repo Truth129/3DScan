@@ -26,7 +26,8 @@ class NnunetModel:
     modalities: tuple[str, ...]
     # In nnU-Net label order, starting at label 1.
     labels: tuple[str, ...]
-    folds: tuple[int, ...]
+    # nnU-Net's fold "all" is one model trained on every case.
+    folds: tuple[int | str, ...]
     tile_step_size: float
     url: str
     archive_sha256: str
@@ -40,6 +41,9 @@ class NnunetModel:
     dataset_labels: tuple[str, ...] = ()
     # Pieces of a mask with fewer voxels than this, counted 26-connected, are dropped.
     smallest_piece: int = 0
+    # Another pinned model whose first label keeps the voxels this model sees, for a model
+    # trained on skull-stripped images. Everything outside it is set to zero first.
+    skull_strip: str = ""
 
 
 MODELS = {
@@ -140,12 +144,68 @@ MODELS = {
                 "fold_4/checkpoint_best.pth": "c4449840327b7d2275346531c98fa2fcc3f620df088d4a960918ed57070f29a2",
             },
         ),
+        NnunetModel(
+            id="hdbet_brain",
+            name="HD-BET",
+            version="zenodo-14445620",
+            label="Brain — HD-BET",
+            description="The brain without skull, scalp or orbits on MRI of any contrast, from HD-BET 2.0. FLAMeS uses it to remove the skull first.",
+            license="Weights CC BY-NC 4.0 (Zenodo record 14445620); code Apache-2.0",
+            modalities=("MR",),
+            labels=("brain",),
+            folds=("all",),
+            tile_step_size=0.5,
+            url="https://zenodo.org/records/14445620/files/release_v1.5.0.zip",
+            archive_sha256="125c40e2a19acd8827a42a0e922c6140ed5518e20ff7ccfadc0ebdf32e17dfc8",
+            # FLAMeS's voxel order, so this model's mask lines up with FLAMeS's input.
+            axes="LAS",
+            files={
+                "dataset.json": "aad907d0ec0abbd49da7eabacf640a768efd83e8e96e8b60322a2739b7de766a",
+                "plans.json": "c4994d570255573277d57dfd2789a4c5c25dfe6c4c050625f1d186adbbcf8811",
+                "fold_all/checkpoint_final.pth": "d31dc59b4c5fe0028070901870c44c0b526f48c507ce50804941344356df7b52",
+            },
+        ),
+        NnunetModel(
+            id="flames_ms_lesions",
+            name="FLAMeS",
+            version="hf-ea055ae",
+            label="MS lesions — FLAMeS",
+            description="Multiple sclerosis white-matter lesions on a FLAIR series, from FLAMeS, an nnU-Net trained on 668 scans from three vendors at 1.5 and 3 T. HD-BET removes the skull first. Lesions under about 10 mm³ are often missed.",
+            license="Weights CC BY-NC 4.0 (Hugging Face FrancescoLR/FLAMeS-model); HD-BET weights CC BY-NC 4.0",
+            modalities=("MR",),
+            labels=("white_matter_lesions",),
+            dataset_labels=("Lesion",),
+            folds=(0, 1, 2, 3, 4),
+            tile_step_size=0.5,
+            url="https://huggingface.co/FrancescoLR/FLAMeS-model/resolve/ea055aec0f55baa15d984c4fe92035aaa21c7b5c/Dataset004_WML.zip",
+            archive_sha256="943f49d4997fc752322f0892b4aa6dcfce64f99a8a8c445d38785f54af09c277",
+            archive_folder="Dataset004_WML/nnUNetTrainer_8000epochs__nnUNetPlans__3d_fullres",
+            # Its training images are stored left to right, front to back, then foot to head, as
+            # after registration to MNI152; which way each axis runs is unpublished. The model
+            # mirrors on all three axes, so only the axis order matters.
+            axes="LAS",
+            skull_strip="hdbet_brain",
+            files={
+                "dataset.json": "833d31b097702f812940f9a8fd51eece30e75f3ba472ece975cbb657d671f06a",
+                "plans.json": "387d1440eb8ef62a930623d4a0bf9ee4e4886e12a922977c2b60d7b90b791d33",
+                "fold_0/checkpoint_final.pth": "4fc7db24e7c1541b59023df2a2f498a964eb629fe38f4eaec763297dd3fdf861",
+                "fold_1/checkpoint_final.pth": "3966dd256074a0ea3c7d16c3a8e7412a6cb5071220df71b54745aeb50c33c33c",
+                "fold_2/checkpoint_final.pth": "734be69b968cc6578bcf079bb79db166cd8f5edba0f0dc19a62bbe68021364d8",
+                "fold_3/checkpoint_final.pth": "8e989caccdcf45368cc8f1ef8a00598f9f072c1fbe23e57458fc572fea434c3f",
+                "fold_4/checkpoint_final.pth": "ff723a2eda28a7f78f75d96a993d029ea8f65aa3657f5aea7caab9b217792df2",
+            },
+        ),
     )
 }
 
 
 def models_for(modality: str) -> list[NnunetModel]:
     return [model for model in MODELS.values() if modality in model.modalities]
+
+
+def required(model: NnunetModel) -> tuple[NnunetModel, ...]:
+    """The model and any model it runs first."""
+    return (model, MODELS[model.skull_strip]) if model.skull_strip else (model,)
 
 
 def model_dir(model: NnunetModel) -> Path:
@@ -155,8 +215,7 @@ def model_dir(model: NnunetModel) -> Path:
 
 def installed(model: NnunetModel) -> bool:
     """File presence only, because the catalog is read often. A run checks the hashes."""
-    directory = model_dir(model)
-    return all((directory / name).is_file() for name in model.files)
+    return all((model_dir(part) / name).is_file() for part in required(model) for name in part.files)
 
 
 def install_hint(model: NnunetModel) -> str:

@@ -203,19 +203,20 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
 
 
 def _nnunet_descriptor(model):
-    """Identity of one pinned model. Complete only when every file matches its pin."""
-    directory = nnunet_models.model_dir(model)
+    """Identity of one pinned model and any model it runs first. Complete only when every file matches its pin."""
     files = []
     matches = True
-    for name, expected in model.files.items():
-        path = directory / name
-        if not path.is_file():
-            matches = False
-            continue
-        stat = path.stat()
-        digest = _checkpoint_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-        matches = matches and digest == expected
-        files.append({"name": f"{directory.name}/{name}", "bytes": stat.st_size, "sha256": digest})
+    for part in nnunet_models.required(model):
+        directory = nnunet_models.model_dir(part)
+        for name, expected in part.files.items():
+            path = directory / name
+            if not path.is_file():
+                matches = False
+                continue
+            stat = path.stat()
+            digest = _checkpoint_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            matches = matches and digest == expected
+            files.append({"name": f"{directory.name}/{name}", "bytes": stat.st_size, "sha256": digest})
     return {
         "task": model.id,
         "engine": model.name,
@@ -562,6 +563,8 @@ def segment(
             progress_path = run_dir / f"{task}-progress.txt"
             if model:
                 command += ["--model-folder", str(nnunet_models.model_dir(model)), "--progress", str(progress_path)]
+                if model.skull_strip:
+                    command += ["--skull-strip-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.skull_strip]))]
             for option in ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling"):
                 if options[option]:
                     command.append("--" + option)

@@ -18,8 +18,8 @@ other service.
 - **Import:** browser upload, `scan3d import`, an optional [Orthanc](docs/ORTHANC.md), or any
   [DICOMweb archive](docs/ARCHIVES.md). Static MRI is experimental and opt-in.
 - **Segmentation:** selected TotalSegmentator tasks on a GPU or the CPU, plus optional
-  MRSegmentator and an ImageCAS-X coronary model to compare beside them. With
-  [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
+  MRSegmentator and an ImageCAS-X coronary model to compare beside them, and FLAMeS for MS
+  lesions on FLAIR MRI. With [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
 - **Corrections:** nnInteractive prompts, direct mask edits, scissors and recipes, with
   exact undo.
 - **Library:** one library for everyone signed in, with search, rename, Trash with undo, and
@@ -86,6 +86,8 @@ downloads with their own terms, which you must accept yourself:
 - **MRSegmentator:** the code is Apache-2.0. Its repository states no separate license for the
   weights.
 - **ImageCAS-X nnU-Net:** the weights are CC BY 4.0 on Zenodo, and the code is MIT.
+- **FLAMeS and HD-BET:** the weights are **CC BY-NC 4.0, which is noncommercial**. HD-BET's code
+  is Apache-2.0.
 
 Using these models commercially may require permission from their authors. Third-party
 notices are in [`web/public/licenses/`](web/public/licenses/). A viewer build adds

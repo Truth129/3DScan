@@ -11,7 +11,7 @@ import requests
 
 from scan3d.config import load_environment
 from scan3d.fileio import hash_file
-from scan3d.nnunet_models import MODELS, model_dir
+from scan3d.nnunet_models import MODELS, model_dir, required
 
 
 def install(model, archive: Path, target: Path):
@@ -37,19 +37,23 @@ def main():
     args = parser.parse_args()
     load_environment()
     model = MODELS[args.model]
-    target = model_dir(model)
-    if target.exists():
-        raise SystemExit(f"{target} already exists; move it aside to download {model.name} again")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=target.parent) as staging:
-        archive = Path(staging) / "weights.zip"
-        with requests.get(model.url, stream=True, timeout=60) as response, archive.open("wb") as output:
-            response.raise_for_status()
-            for block in response.iter_content(4 * 1024 * 1024):
-                output.write(block)
-        install(model, archive, target)
-    print(f"{model.name} {model.version} verified at {target}")
-    print(f"License: {model.license}")
+    if model_dir(model).exists():
+        raise SystemExit(f"{model_dir(model)} already exists; move it aside to download {model.name} again")
+    # A model that runs another first needs that one too; one already here is checked before each run.
+    for part in reversed(required(model)):
+        target = model_dir(part)
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=target.parent) as staging:
+            archive = Path(staging) / "weights.zip"
+            with requests.get(part.url, stream=True, timeout=60) as response, archive.open("wb") as output:
+                response.raise_for_status()
+                for block in response.iter_content(4 * 1024 * 1024):
+                    output.write(block)
+            install(part, archive, target)
+        print(f"{part.name} {part.version} verified at {target}")
+        print(f"License: {part.license}")
 
 
 if __name__ == "__main__":

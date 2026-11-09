@@ -219,6 +219,8 @@ def test_every_pinned_model_lists_its_own_checkpoint_for_each_fold():
     for model in nnunet_models.MODELS.values():
         assert {f"fold_{fold}/{model.checkpoint}" for fold in model.folds} | {"dataset.json", "plans.json"} == set(model.files)
         assert not model.dataset_labels or len(model.dataset_labels) == len(model.labels)
+        # The worker applies the first model's mask to the second model's input array unchanged.
+        assert not model.skull_strip or nnunet_models.MODELS[model.skull_strip].axes == model.axes
 
 
 def test_download_publishes_only_pinned_files_that_match(pinned):
@@ -232,3 +234,79 @@ def test_download_publishes_only_pinned_files_that_match(pinned):
     assert list(target.parent.iterdir()) == []
     download.install(model, archive, target)
     assert sorted(path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()) == sorted(model.files)
+
+
+def stand_in(model_id, tmp_path, monkeypatch):
+    """A registry entry with small stand-in weights in an archive laid out like the real one."""
+    model = nnunet_models.MODELS[model_id]
+    contents = {name: f"{model_id} {name}".encode() for name in model.files}
+    archive = tmp_path / f"{model_id}.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for name, value in contents.items():
+            bundle.writestr(f"{model.archive_folder}/{name}" if model.archive_folder else name, value)
+    model = replace(model, files={name: sha256(value) for name, value in contents.items()}, archive_sha256=sha256(archive.read_bytes()))
+    monkeypatch.setitem(nnunet_models.MODELS, model.id, model)
+    return model, archive
+
+
+def test_flames_needs_hd_bet_and_a_run_checks_both_before_starting(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_SEGMENTATION_MODELS", str(tmp_path / "models"))
+    flames, flames_archive = stand_in("flames_ms_lesions", tmp_path, monkeypatch)
+    hdbet, hdbet_archive = stand_in("hdbet_brain", tmp_path, monkeypatch)
+    install(flames, flames_archive)
+    assert not nnunet_models.installed(flames)
+    install(hdbet, hdbet_archive)
+    assert nnunet_models.installed(flames) and nnunet_models.installed(hdbet)
+    descriptor = segmentation._nnunet_descriptor(flames)
+    folders = {item["name"].split("/")[0] for item in descriptor["files"]}
+    assert descriptor["complete"] and folders == {"flames_ms_lesions-hf-ea055ae", "hdbet_brain-zenodo-14445620"}
+    image = tmp_path / "image.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((4, 4, 4), np.int16), np.eye(4)), image)
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "cpu", "torch": "test"})
+    commands = []
+
+    class Started(Exception):
+        pass
+
+    def started(command, **_):
+        commands.append(command)
+        raise Started
+
+    monkeypatch.setattr(segmentation.subprocess, "Popen", started)
+    with pytest.raises(Started):
+        segmentation.segment(image, tmp_path / "run", "other", lambda _: None, lambda: False, {"tasks": [flames.id]}, modality="MR")
+    assert commands[0][commands[0].index("--skull-strip-folder") + 1] == str(nnunet_models.model_dir(hdbet))
+    (nnunet_models.model_dir(hdbet) / "fold_all" / "checkpoint_final.pth").write_bytes(b"not the pinned weights")
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: pytest.fail("A child started"))
+    with pytest.raises(RuntimeError, match="pinned checksums"):
+        segmentation.segment(image, tmp_path / "again", "other", lambda _: None, lambda: False, {"tasks": [flames.id]}, modality="MR")
+
+
+def test_worker_gives_flames_only_the_voxels_hd_bet_keeps(tmp_path, monkeypatch):
+    shape = (6, 7, 8)
+    affine = np.array([[-0.9, 0.1, 0.0, 30.0], [0.1, 0.0, 1.0, -60.0], [0.0, 1.2, 0.1, 10.0], [0.0, 0.0, 0.0, 1.0]])
+    values = np.random.default_rng(3).integers(1, 1000, shape).astype(np.int16)
+    nib.save(nib.Nifti1Image(values, affine), tmp_path / "image.nii.gz")
+    seen = []
+
+    def predict(model, folder, image, spacing, device, step):
+        seen.append((model.id, folder, image.copy()))
+        if model.id == "hdbet_brain":
+            brain = np.zeros(image.shape[1:], np.uint8)
+            brain[1:4, 2:5, 3:6] = 1
+            return brain, "test"
+        return (image[0] > 0).astype(np.uint8), "test"
+
+    monkeypatch.setattr(nnunet_worker, "predict", predict)
+    arguments = f"-i {tmp_path}/image.nii.gz -o {tmp_path} --task flames_ms_lesions --model-folder flames --skull-strip-folder hdbet"
+    monkeypatch.setattr(sys, "argv", ["worker", *arguments.split(), "--device", "cpu", "--report", str(tmp_path / "report.json")])
+    nnunet_worker.main()
+    assert [(model, str(folder)) for model, folder, _ in seen] == [("hdbet_brain", "hdbet"), ("flames_ms_lesions", "flames")]
+    raw, stripped = seen[0][2][0], seen[1][2][0]
+    brain = np.zeros(raw.shape, bool)
+    brain[1:4, 2:5, 3:6] = True
+    assert np.array_equal(stripped[brain], raw[brain]) and not stripped[~brain].any()
+    mask = nib.load(tmp_path / "white_matter_lesions.nii.gz")
+    _, _, back = nnunet_worker.model_input(nib.load(tmp_path / "image.nii.gz"), affine, "LAS")
+    np.testing.assert_allclose(mask.affine, affine)
+    assert np.array_equal(np.asarray(mask.dataobj) > 0, nnunet_worker.native_labels(brain, back))

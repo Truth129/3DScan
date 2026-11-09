@@ -149,6 +149,8 @@ record is committed only after its files are complete. Records store absolute pa
   conflicting result fails before anything is published.
 - **Comparing models.** A pinned nnU-Net model's structures match only that model's, so
   `mrsegmentator:liver` and `total:liver` stay side by side. Its run has the source `nnunet_model`.
+  A pinned model can run another first in the same worker: FLAMeS runs HD-BET and sets every voxel
+  outside its brain mask to zero. Both models' weights are checked before the run.
 
 Other tables:
 
