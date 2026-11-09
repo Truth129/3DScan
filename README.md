@@ -58,6 +58,7 @@ Open <http://127.0.0.1:9010> and choose **Explore synthetic demo**, or import a 
 | [Archives](docs/ARCHIVES.md)           | DICOMweb archives and direct DICOM sends       |
 | [Architecture](docs/ARCHITECTURE.md)   | How the system works                           |
 | [API](docs/API.md)                     | HTTP API and data model                        |
+| [MCP](docs/MCP.md)                     | Working 3DScan from an MCP client like Claude  |
 | [Development](docs/DEVELOPMENT.md)     | Tests, checks and project rules                |
 
 ## Platform support

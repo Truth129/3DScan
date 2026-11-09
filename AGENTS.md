@@ -14,6 +14,7 @@ Read before changing anything:
 | Settings                             | `docs/CONFIGURATION.md`|
 | System overview                      | `docs/ARCHITECTURE.md` |
 | HTTP API, data model, error mapping  | `docs/API.md`          |
+| MCP server                           | `docs/MCP.md`          |
 | Using the app                        | `docs/USER_GUIDE.md`   |
 | Orthanc integration                  | `docs/ORTHANC.md`      |
 | DICOMweb archives and direct sends   | `docs/ARCHIVES.md`     |
