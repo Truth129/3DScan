@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { ffrColour, LUMEN_IDS, NOT_REPORTED, preferred, tubeGeometry, tubeLegend, type CoronaryBranch, type CoronaryResult } from '../src/lib/coronary';
+import {
+  coronaryTrees,
+  fadeUnderTube,
+  ffrColour,
+  LUMEN_IDS,
+  NOT_REPORTED,
+  preferred,
+  tubeGeometry,
+  tubeLegend,
+  type CoronaryBranch,
+  type CoronaryResult,
+} from '../src/lib/coronary';
 import type { Structure } from '../src/types';
 
 const RED = [208, 59, 59],
@@ -89,5 +100,40 @@ describe('coronary inputs', () => {
     expect(preferred(ids('coronary_arteries:coronary_arteries', 'imagecasx_coronary:coronary_arteries'), LUMEN_IDS)).toBe(
       'imagecasx_coronary:coronary_arteries',
     );
+  });
+});
+
+describe('coronary lumens and flow', () => {
+  it('fades every coronary lumen around the tube and leaves other segments as set', () => {
+    const display = {
+      'imagecasx_coronary:coronary_arteries': { visible: true, opacity: 0.5 },
+      'imagecasx_cas_net:coronary_arteries': { visible: true, opacity: 0.5 },
+      'coronary_arteries:coronary_arteries': { visible: true, opacity: 0.1 },
+      'heartchambers_highres:aorta': { visible: true, opacity: 0.5 },
+    };
+    const faded = fadeUnderTube(display, 'imagecasx_cas_net:coronary_arteries', false, 0.15);
+    expect(Object.fromEntries(Object.entries(faded).map(([id, state]) => [id, state.opacity]))).toEqual({
+      'imagecasx_coronary:coronary_arteries': 0.15,
+      'imagecasx_cas_net:coronary_arteries': 0.15,
+      'coronary_arteries:coronary_arteries': 0.1,
+      'heartchambers_highres:aorta': 0.5,
+    });
+    const hidden = Object.entries(fadeUnderTube(display, 'imagecasx_coronary:coronary_arteries', true, 0.15)).filter(([, state]) => !state.visible);
+    expect(hidden.map(([id]) => id).sort()).toEqual([...LUMEN_IDS].sort());
+    expect(display['imagecasx_cas_net:coronary_arteries'].opacity).toBe(0.5);
+  });
+
+  it("gives each tree its root branches' inflow and its part of all trees' inflow", () => {
+    const flows = (tree: number, parent: number, flow: number | null) => ({ ...branch(), tree, parent, flow });
+    const split = {
+      roots: [],
+      lesions: [],
+      branches: [flows(0, -1, 150), flows(0, 0, 100), flows(1, -1, 40), flows(1, -1, 10), flows(2, -1, null)],
+    } as unknown as CoronaryResult;
+    expect(coronaryTrees(split).map(({ tree, inflow, fraction }) => ({ tree, inflow, fraction }))).toEqual([
+      { tree: 0, inflow: 150, fraction: 0.75 },
+      { tree: 1, inflow: 50, fraction: 0.25 },
+      { tree: 2, inflow: null, fraction: null },
+    ]);
   });
 });

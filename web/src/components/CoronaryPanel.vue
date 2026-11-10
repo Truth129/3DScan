@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, useId, watch } from 'vue';
 import { api } from '../lib/api';
 import { jobIsGone } from '../lib/jobs';
 import {
@@ -15,17 +15,21 @@ import {
   cssColour,
   ffrColour,
   formatFFR,
+  formatFlow,
   formatMM,
   formatStenosis,
   lesionPoint,
   needsShare,
   preferred,
+  shareFlag,
+  splitTrees,
   type CoronaryAnalysis,
   type CoronaryBranch,
   type CoronaryForm,
   type CoronaryInput,
   type CoronaryLesion,
   type CoronaryResult,
+  type CoronaryTreeRows,
   type CoronaryTube,
   type TubeColouring,
 } from '../lib/coronary';
@@ -60,6 +64,12 @@ const check = computed(() => coronaryRequest(form));
 const complete = computed(() => analyses.value.filter(row => row.state === 'completed'));
 const trees = computed(() => (result.value ? coronaryTrees(result.value) : []));
 const shareNeeded = computed(() => !!result.value && needsShare(result.value));
+/** A share is for one tree, so one applied to several scales them all; it shows above the table, not only among the flags. */
+const shareWarning = computed(() => {
+  const flag = result.value && shareFlag(result.value);
+  return flag ? `${flag[0].toUpperCase()}${flag.slice(1)}, which scales every tree's flow. Clear the flow share and run again.` : '';
+});
+const shareHelpId = useId();
 const running = computed(() => !!pending.value && ['queued', 'running'].includes(pending.value.status));
 /** A newer failed run is context for the table, which shows the newest complete one; it clears once the user runs again. */
 const lastFailure = computed(() => {
@@ -112,7 +122,8 @@ async function load(prefer?: string, prefill = false) {
     analyses.value = rows;
     const active = rows.find(row => ['queued', 'running'].includes(row.state));
     // The running analysis becomes the one shown; a failed one alone still prefills, so it can be corrected.
-    if (prefill && rows[0]) fill((active ?? complete.value[0] ?? rows[0]).inputs);
+    const filled = prefill && rows[0] ? (active ?? complete.value[0] ?? rows[0]) : undefined;
+    if (filled) fill(filled.inputs);
     if (active && active.analysis_id !== pollId) {
       pending.value = {
         id: active.analysis_id,
@@ -135,6 +146,8 @@ async function load(prefer?: string, prefill = false) {
       if (controller !== request) return;
       result.value = next;
     }
+    // A share given for one tree and carried into a split of two or more would scale every tree again.
+    if (filled?.analysis_id === target.analysis_id && result.value && splitTrees(result.value) > 1) form.share = '';
     shownId.value = target.analysis_id;
   } catch (reason) {
     if (controller === request && !request.signal.aborted) error.value = failure(reason, 'Earlier analyses could not be loaded.');
@@ -232,11 +245,16 @@ function branchNotes(branch: CoronaryBranch) {
 }
 function lesionNotes(lesion: CoronaryLesion) {
   const notes = [lesion.beyond.note];
-  if (lesion.held) notes.push('touches a held station, so the narrowing may be under-read');
+  if (lesion.held) notes.push("uses a neighbour's area (ostium, junction or vessel end), so its %DS and drop are uncertain");
   return notes.filter(Boolean).join('; ');
 }
 const swatch = (ffr: number | null) => (ffr === null ? undefined : { background: cssColour(ffrColour(ffr)) });
-const branchDetail = (branch: CoronaryBranch) => [branch.parent >= 0 ? `from ${branch.parent}` : '', formatMM(branch.length)].filter(Boolean).join(' · ');
+const branchDetail = (branch: CoronaryBranch) =>
+  [branch.parent >= 0 ? `from ${branch.parent}` : '', formatMM(branch.length), branch.flow === null ? '' : formatFlow(branch.flow)].filter(Boolean).join(' · ');
+const treeFlow = (tree: CoronaryTreeRows) =>
+  tree.inflow === null
+    ? ''
+    : [formatFlow(tree.inflow), tree.fraction === null ? '' : `${Math.round(tree.fraction * 100)}% of inflow`].filter(Boolean).join(' · ');
 const lesionDetail = (lesion: CoronaryLesion) =>
   `${formatMM(lesion.length)} at ${lesion.start.toFixed(1)}–${lesion.end.toFixed(1)} mm · MLD ${formatMM(lesion.mld)}`;
 /** Units of the model constants; the others are dimensionless. */
@@ -298,13 +316,15 @@ onBeforeUnmount(() => {
       <label class="field">Heart rate, bpm<input v-model.number="form.heart_rate" aria-label="Heart rate" type="number" min="20" max="250" step="1" /></label>
       <label class="field" :class="{ 'coronary-needed': shareNeeded && form.share === '' }"
         >Flow share, 0–1<span v-if="shareNeeded && form.share === ''" class="coronary-required">needed</span
-        ><input v-model.number="form.share" aria-label="Flow share" type="number" min="0" max="1" step="0.05"
+        ><span :id="shareHelpId" class="help">One tree only: the fraction of the heart's flow it carries</span
+        ><input v-model.number="form.share" aria-label="Flow share" :aria-describedby="shareHelpId" type="number" min="0" max="1" step="0.05"
       /></label>
       <div class="coronary-ostia">
         <div class="field-label">
           Ostium points · RAS mm
           <button type="button" class="text-button" :disabled="!point || form.ostia.length >= MAX_OSTIA" @click="addOstium">Add ostium at crosshair</button>
         </div>
+        <p class="help">Only for an artery whose start does not touch the aorta mask: put the crosshair on the lumen where it starts.</p>
         <ul v-if="form.ostia.length">
           <li v-for="(item, index) in form.ostia" :key="index">
             <span>{{ coordinates(item) }}</span>
@@ -349,6 +369,7 @@ onBeforeUnmount(() => {
       <p v-if="shareNeeded" class="coronary-warning">
         One coronary tree was found, so FFR is not reported. Enter the share of the heart's flow it carries and run again.
       </p>
+      <p v-if="shareWarning" class="coronary-warning">{{ shareWarning }}</p>
       <div class="coronary-table" role="region" aria-label="CT-FFR by tree and branch" tabindex="0">
         <table>
           <caption class="sr-only">
@@ -367,6 +388,7 @@ onBeforeUnmount(() => {
             <tr class="coronary-tree">
               <th scope="rowgroup" colspan="4">
                 Tree {{ tree.tree + 1 }}
+                <span v-if="treeFlow(tree)" class="coronary-inflow" title="Hyperaemic inflow, and its part of all trees' inflow">· {{ treeFlow(tree) }}</span>
                 <button v-for="(root, index) in tree.roots" :key="index" type="button" class="coronary-root" @click="show(root.point)">
                   Root {{ index + 1 }} · {{ root.source }}
                 </button>
@@ -554,6 +576,10 @@ onBeforeUnmount(() => {
   margin: 0;
   font-size: 10px;
 }
+.coronary-form .help {
+  margin: 0;
+  line-height: 1.4;
+}
 .coronary-run {
   display: flex;
   align-items: center;
@@ -675,6 +701,10 @@ tbody th button:hover {
 tr.coronary-tree th {
   background: var(--surface-hover);
   font-weight: 500;
+}
+.coronary-inflow {
+  font: 9px var(--mono);
+  color: var(--muted);
 }
 .coronary-root {
   margin-left: 10px;

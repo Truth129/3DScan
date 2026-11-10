@@ -1,4 +1,4 @@
-import type { Job, Point, Structure } from '../types';
+import type { Job, Point, Structure, StructureDisplay } from '../types';
 import { request, revisionUrl } from './api';
 import { rasToLps } from './cornerstone-frame';
 
@@ -115,6 +115,18 @@ export const coronaryApi = {
 export const LUMEN_IDS = ['imagecasx_cas_net:coronary_arteries', 'imagecasx_coronary:coronary_arteries', 'coronary_arteries:coronary_arteries'];
 export const AORTA_IDS = ['total:aorta', 'heartchambers_highres:aorta'];
 export const MYOCARDIUM_IDS = ['heartchambers_highres:heart_myocardium'];
+/**
+ * Every coronary lumen surface encloses the tube, not only the analysed one, so each fades while the
+ * tube shows; where surfaces are drawn solid they are hidden instead.
+ */
+export function fadeUnderTube(display: StructureDisplay, lumen: string, solid: boolean, opacity: number): StructureDisplay {
+  const next = { ...display };
+  for (const id of new Set([lumen, ...LUMEN_IDS])) {
+    const state = display[id];
+    if (state) next[id] = solid ? { ...state, visible: false } : { ...state, opacity: Math.min(state.opacity, opacity) };
+  }
+  return next;
+}
 export const hasCoronaryLumen = (structures: readonly Structure[]) => structures.some(item => LUMEN_IDS.includes(item.id));
 export const preferred = (structures: readonly Structure[], ids: readonly string[]) => ids.find(id => structures.some(item => item.id === id)) ?? null;
 
@@ -168,22 +180,37 @@ const DASH = '—';
 export const formatFFR = (value: number | null | undefined) => (finite(value) ? value.toFixed(2) : DASH);
 export const formatMM = (value: number | null | undefined) => (finite(value) ? `${value.toFixed(1)} mm` : DASH);
 export const formatStenosis = (value: number | null | undefined) => (finite(value) ? `${Math.round(value * 100)}%` : DASH);
+export const formatFlow = (value: number | null | undefined) => (finite(value) ? `${Math.round(value)} mL/min` : DASH);
 
 export interface CoronaryTreeRows {
   tree: number;
   roots: CoronaryRoot[];
+  /** Hyperaemic inflow in mL/min, the sum of its root branches' flow; null where none was solved. */
+  inflow: number | null;
+  /** The tree's part of every tree's inflow, 0–1. */
+  fraction: number | null;
   branches: { branch: CoronaryBranch; lesions: CoronaryLesion[] }[];
 }
 /** Branches grouped by tree, parents before children as the result lists them, each with its lesions. */
 export function coronaryTrees(result: CoronaryResult): CoronaryTreeRows[] {
   const trees = [...new Set([...result.roots.map(root => root.tree), ...result.branches.map(branch => branch.tree)])].sort((a, b) => a - b);
-  return trees.map(tree => ({
-    tree,
-    roots: result.roots.filter(root => root.tree === tree),
-    branches: result.branches
-      .filter(branch => branch.tree === tree)
-      .map(branch => ({ branch, lesions: result.lesions.filter(lesion => lesion.branch === branch.id) })),
-  }));
+  const inflows = trees.map(tree => {
+      const flows = result.branches.filter(branch => branch.tree === tree && branch.parent < 0).map(branch => branch.flow);
+      return flows.some(finite) ? flows.filter(finite).reduce((sum, flow) => sum + flow, 0) : null;
+    }),
+    total = inflows.reduce<number>((sum, flow) => sum + (flow ?? 0), 0);
+  return trees.map((tree, index) => {
+    const inflow = inflows[index];
+    return {
+      tree,
+      roots: result.roots.filter(root => root.tree === tree),
+      inflow,
+      fraction: inflow !== null && total > 0 ? inflow / total : null,
+      branches: result.branches
+        .filter(branch => branch.tree === tree)
+        .map(branch => ({ branch, lesions: result.lesions.filter(lesion => lesion.branch === branch.id) })),
+    };
+  });
 }
 /** Where a branch row moves the crosshair: the station its distal FFR is read at, else its end. */
 export function branchPoint(branch: CoronaryBranch): Point | undefined {
@@ -195,6 +222,11 @@ export function lesionPoint(result: CoronaryResult, lesion: CoronaryLesion): Poi
 }
 /** The FFR is withheld from every branch because the flow split needs this tree's share of the heart's flow. */
 export const needsShare = (result: CoronaryResult) => result.branches.some(branch => branch.reason === 'one coronary tree only');
+/** Trees that shared the heart's flow; a share is for one tree, so it is not carried over from a split of two or more. */
+export const splitTrees = (result: CoronaryResult) =>
+  new Set(result.branches.filter(branch => branch.reason !== 'tree left out of the flow split').map(branch => branch.tree)).size;
+/** The flag the server raises when a flow share scaled more than one tree. */
+export const shareFlag = (result: CoronaryResult) => result.flags.find(flag => flag.startsWith('flow share') && flag.includes('applied to'));
 
 // Tube colours. The tube is drawn on the black 3D view and hidden from every capture.
 export type TubeColouring = 'ffr' | 'diameter';

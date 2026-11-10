@@ -10,7 +10,7 @@ import { VTKReviewPlane } from '../lib/vtk-review-plane';
 import { VTKCTPlane, type VTKCTPlaneState } from '../lib/vtk-ct-plane';
 import { VTKSurfaceScene, type NativeSurfaceLayerStatus } from '../lib/vtk-surface-scene';
 import { VTKCoronaryTube } from '../lib/vtk-coronary-tube';
-import type { CoronaryTube } from '../lib/coronary';
+import { fadeUnderTube, type CoronaryTube } from '../lib/coronary';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib/volume-lighting';
 import type { CTVolumeSettings } from '../lib/volume-presets';
@@ -645,16 +645,15 @@ function syncSurfaces(instance: CornerstoneVolume3D) {
   publishSurfaceLayerStatus({ mode, layers: instance.surfaceLayerCount, reason });
 }
 /**
- * The lumen surface would tint the tube inside it, so it fades while the tube shows. Solid surfaces
- * over the CT ignore opacity, so there it is hidden instead. A capture has no tube, so it gets the
- * lumen as set. Loading reads `props.display`, so the fade never reloads a surface.
+ * Coronary lumen surfaces would tint the tube inside them, so they fade while the tube shows. Solid
+ * surfaces over the CT ignore opacity, so there they are hidden instead. A capture has no tube, so it
+ * gets the lumens as set. Loading reads `props.display`, so the fade never reloads a surface.
  */
 function surfaceDisplay(mode: NativeSurfaceLayerStatus['mode']) {
   const display = props.display ?? {},
-    lumen = props.tube?.result.inputs.lumen,
-    state = lumen ? display[lumen] : undefined;
-  if (!lumen || !state || capturing || !tubeLayer?.visible) return display;
-  return { ...display, [lumen]: mode === 'solid' ? { ...state, visible: false } : { ...state, opacity: Math.min(state.opacity, LUMEN_UNDER_TUBE) } };
+    lumen = props.tube?.result.inputs.lumen;
+  if (!lumen || capturing || !tubeLayer?.visible) return display;
+  return fadeUnderTube(display, lumen, mode === 'solid', LUMEN_UNDER_TUBE);
 }
 /** A tube that cannot be drawn, such as one refused memory, leaves the rest of the view alone. */
 function syncTube() {

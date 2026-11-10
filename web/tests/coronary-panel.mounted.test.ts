@@ -133,7 +133,7 @@ describe('Coronary panel', () => {
     // Four columns fit the sidebar: one FFR column holds a branch's distal FFR and a lesion's FFR +20 mm.
     expect(view.all(element => element.getAttribute('scope') === 'col').map(cell => cell.textContent.trim())).toEqual(['Vessel', '%DS', 'FFR', 'ΔFFR']);
     const [branch, lesion] = view.all(element => element.tagName === 'TR' && element.children[0]?.getAttribute('scope') === 'row');
-    expect(cells(branch)).toEqual(['Branch 030.0 mm', '—', '0.91', '—']);
+    expect(cells(branch)).toEqual(['Branch 030.0 mm · 100 mL/min', '—', '0.91', '—']);
     expect(cells(lesion)).toEqual(['Lesion 02.9 mm at 21.6–24.5 mm · MLD 1.1 mm', '60%', '0.74', '0.12']);
     click(view.labelled('Show branch 0'));
     expect(select).toHaveBeenCalledWith('imagecasx_coronary:coronary_arteries', [4, 5, 6]);
@@ -155,6 +155,25 @@ describe('Coronary panel', () => {
     await settled();
     expect(coronaryApi.start).toHaveBeenCalledWith('c1', 'r1', expect.objectContaining({ aorta: 'total:aorta', ostia: [] }));
     expect(view.text()).not.toContain('The newest run failed');
+  });
+
+  it('does not prefill a share that a two-tree split applied to both trees, and warns of it above the table', async () => {
+    const shared = { ...inputs, share: 0.6 };
+    vi.mocked(coronaryApi.list).mockResolvedValue([analysis('done', 'completed', { inputs: shared })]);
+    vi.spyOn(coronaryApi, 'result').mockResolvedValue({
+      ...result,
+      inputs: shared,
+      flags: ['flow share 0.6 applied to 2 trees'],
+      branches: [...result.branches, { ...result.branches[0], id: 1, tree: 1 }],
+    });
+    vi.spyOn(coronaryApi, 'start').mockResolvedValue(queued);
+    const view = mount(CoronaryPanel, () => ({ caseId: 'c1', revision, native: true }));
+    await settled();
+    const warnings = view.all(element => element.className === 'coronary-warning').map(element => element.textContent.trim());
+    expect(warnings).toEqual(["Flow share 0.6 applied to 2 trees, which scales every tree's flow. Clear the flow share and run again."]);
+    view.labelled('Coronary analysis inputs')!.dispatchEvent(new Event('submit'));
+    await settled();
+    expect(coronaryApi.start).toHaveBeenCalledWith('c1', 'r1', expect.objectContaining({ share: null }));
   });
 
   it('does not poll a run whose start answers after the panel closed', async () => {

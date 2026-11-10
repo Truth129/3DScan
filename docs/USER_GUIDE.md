@@ -566,9 +566,9 @@ mask it took voxels from.
 > **Research use only · not for diagnostic use.** CT-FFR here is an unvalidated research model.
 > Check the centrelines and diameters on the source images before reading any FFR.
 
-The **Coronary FFR** tab appears when the revision has **Coronary arteries** from ImageCAS-X or
-TotalSegmentator. It traces centrelines in the lumen mask on its own grid, measures lumen area along
-them and solves steady hyperaemic pressure.
+The **Coronary FFR** tab appears when the revision has **Coronary arteries** from ImageCAS-X
+(nnU-Net or CAS-Net) or TotalSegmentator. It traces centrelines in the lumen mask on its own grid,
+measures lumen area along them and solves steady hyperaemic pressure.
 
 Inputs:
 
@@ -576,39 +576,47 @@ Inputs:
   CAS-Net's, then the ImageCAS-X nnU-Net's, then TotalSegmentator's, whichever the revision has.
 - **LV mass** is required without a myocardium mask. With one, its volume × 1.05 g/mL is used.
 - **SBP**, **DBP** and **heart rate** are optional. Missing blood pressure is taken as 120/80 and
-  marked as assumed. Heart rate is recorded only.
-- **Flow share** is the fraction of the heart's flow in the trees solved. With one tree found, FFR
-  is not reported until you give it. It scales the flow into every tree solved, so clear it once
-  both trees are found. The result flags a share applied to more than one tree.
-- **Add ostium at crosshair** adds a tree root, up to four. Use it when the lumen does not touch the
-  aorta mask, or without an aorta.
+  marked as assumed. Heart rate is recorded only and never assumed.
+- **Flow share** is for one tree only: the fraction of the heart's flow it carries. With one tree
+  found, FFR is not reported until you give it. It scales the flow into every tree solved, so clear
+  it once both trees are found. A share applied to more than one tree is warned of above the table,
+  and is not prefilled from that result.
+- **Add ostium at crosshair** adds a tree root, up to four. Use it only for an artery whose start
+  does not touch the aorta mask, or without an aorta: put the crosshair on the lumen where it
+  starts. A point partway along a vessel already traced from the aorta, more than 5 mm from it, is
+  refused.
 
 **Run CT-FFR** works in the background. The same inputs on unchanged masks return the earlier
 result at once. Earlier results for the revision load when you open the tab.
 
 The table lists each tree, its roots and branches, and each lesion. Select a row to move the
-crosshair there.
+crosshair there. Each tree row gives the tree's hyperaemic inflow in mL/min and its percentage of
+all trees' inflow.
 
 | Column     | Meaning                                                                                                                                                                                      |
 | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Vessel** | The branch or lesion. Below it, a branch's parent and length, or a lesion's length, its span from the ostium and its minimum lumen diameter (MLD).                                           |
-| **%DS**    | Diameter stenosis against the fitted healthy reference. Lesions are 30% or more over 1 mm or longer.                                                                                         |
+| **Vessel** | The branch or lesion. Below it, a branch's parent, length and hyperaemic inflow, or a lesion's length, its span from the ostium and its minimum lumen diameter (MLD).                        |
+| **%DS**    | Diameter stenosis against the fitted healthy reference. Lesions are 30% or more over 1 mm or longer, where the reference is at least 1.8 mm. Runs less than 1 mm apart are one lesion.       |
 | **FFR**    | Branch rows: distal FFR, at the last station whose reference diameter is at least 1.8 mm. Lesion rows: FFR +20 mm, 20 mm beyond the lesion end, following the larger daughter at a junction. |
 | **ΔFFR**   | FFR before the lesion minus FFR beyond it.                                                                                                                                                   |
 
 FFR +20 mm is read nearer, with a note, if the vessel ends or FFR is not reported there. Stations
-under 1.8 mm are solved but not reported. Notes under a row say why a value is missing. Every
-input, assumption and model constant is listed under the table, with units.
+under 1.8 mm are solved but not reported. Notes under a row say why a value is missing, or that a
+lesion uses a neighbour's area (ostium, junction or vessel end), so its %DS and drop are uncertain.
+Every input, assumption and model constant is listed under the table, with units.
 
-In the native 3D view a centreline tube shows the result, sized to the lumen, which fades behind
-it. Colour by **FFR**: red at 0.75 and below, amber at 0.80, blue from 0.90, grey where FFR is not
-reported. Or by **Diameter**, dark to light blue from 1 to 5 mm. The legend sits at the lower left.
-PNG and DICOM view exports leave the tube out and draw the lumen as set. The Three.js view (MR,
+In the native 3D view a centreline tube shows the result, sized to the lumen. Every coronary lumen
+segment fades behind it, or hides where surfaces are drawn solid. Colour by **FFR**: red at 0.75
+and below, amber at 0.80, blue from 0.90, grey where FFR is not reported. Or by **Diameter**, dark
+to light blue from 1 to 5 mm. The legend sits at the lower left.
+PNG and DICOM view exports leave the tube out and draw the lumens as set. The Three.js view (MR,
 sheared grids) shows the table only.
 
 Limits:
 
-- Blunt or oblique vessel ends can still fork the centreline.
+- Blunt or oblique distal vessel ends can still fork the centreline.
+- The ostium face is not traced as branches, so a side branch about 1 mm across within about
+  1.5 mm of the aorta may be lost.
 - Where two vessels touch, their areas can mix. Such branches carry a contact note.
 - A lumen gap withholds FFR on the branch that ends at it, since the flow beyond is unknown. FFR
   above the gap is still shown, with a flag that it may read low.
