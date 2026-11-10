@@ -611,6 +611,13 @@ under 1.8 mm are solved but not reported. Notes under a row say why a value is m
 lesion uses a neighbour's area (ostium, junction or vessel end), so its %DS and drop are uncertain.
 Every input, assumption and model constant is listed under the table, with units.
 
+Each FFR shows a band in brackets, such as 0.84 (0.78–0.90): the lowest and highest FFR when the
+solve is repeated with every lumen half a voxel wider or narrower, resting flow 25% lower or higher,
+TCRI 0.22 or 0.40 and flow-split exponent 3 or 7/3, in all 16 combinations. It is a range over
+assumptions, not a confidence interval. **Indeterminate** means the band crosses 0.80, so those
+assumptions alone decide which side of 0.80 the reading falls. The value before the brackets is the
+nominal solve.
+
 In the native 3D view a centreline tube shows the result, sized to the lumen. Every coronary lumen
 segment fades behind it, or hides where surfaces are drawn solid. Colour by **FFR**: red at 0.75
 and below, amber at 0.80, blue from 0.90, grey where FFR is not reported. Or by **Diameter**, dark

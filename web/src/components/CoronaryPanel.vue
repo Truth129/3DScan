@@ -14,6 +14,7 @@ import {
   coronaryTrees,
   cssColour,
   ffrColour,
+  formatBand,
   formatFFR,
   formatFlow,
   formatMM,
@@ -401,7 +402,10 @@ onBeforeUnmount(() => {
                   <small class="coronary-detail">{{ branchDetail(branch) }}</small>
                 </th>
                 <td>—</td>
-                <td><i v-if="swatch(branch.distal.ffr)" class="coronary-swatch" :style="swatch(branch.distal.ffr)"></i>{{ formatFFR(branch.distal.ffr) }}</td>
+                <td>
+                  <i v-if="swatch(branch.distal.ffr)" class="coronary-swatch" :style="swatch(branch.distal.ffr)"></i>{{ formatBand(branch.distal) }}
+                  <small class="coronary-indeterminate">{{ branch.distal.indeterminate ? 'indeterminate' : '' }}</small>
+                </td>
                 <td>—</td>
               </tr>
               <tr v-if="branchNotes(branch)" class="coronary-note">
@@ -414,7 +418,10 @@ onBeforeUnmount(() => {
                     <small class="coronary-detail">{{ lesionDetail(lesion) }}</small>
                   </th>
                   <td>{{ formatStenosis(lesion.stenosis) }}</td>
-                  <td><i v-if="swatch(lesion.beyond.ffr)" class="coronary-swatch" :style="swatch(lesion.beyond.ffr)"></i>{{ formatFFR(lesion.beyond.ffr) }}</td>
+                  <td>
+                    <i v-if="swatch(lesion.beyond.ffr)" class="coronary-swatch" :style="swatch(lesion.beyond.ffr)"></i>{{ formatBand(lesion.beyond) }}
+                    <small class="coronary-indeterminate">{{ lesion.beyond.indeterminate ? 'indeterminate' : '' }}</small>
+                  </td>
                   <td>{{ formatFFR(lesion.delta_ffr) }}</td>
                 </tr>
                 <tr v-if="lesionNotes(lesion)" class="coronary-note">
@@ -425,6 +432,10 @@ onBeforeUnmount(() => {
           </tbody>
         </table>
       </div>
+      <p v-if="result.band" class="help">
+        Brackets: the lowest and highest FFR over 16 corners of the flow, resistance, area and flow-split assumptions, a corner band and not a confidence
+        interval. Indeterminate: the band crosses 0.80.
+      </p>
       <ul v-if="result.flags.length || result.pieces.length" class="coronary-flags" aria-label="Flags">
         <li v-for="flag in result.flags" :key="flag">⚑ {{ flag }}</li>
         <li v-if="result.pieces.length">⚑ {{ result.pieces.length }} lumen {{ result.pieces.length === 1 ? 'piece' : 'pieces' }} with no root, not solved</li>
@@ -721,6 +732,16 @@ tr.coronary-note td {
   white-space: normal;
   font-family: inherit;
   color: var(--muted);
+}
+/* Always rendered, so a cell holds no v-if placeholder; empty when the band does not cross 0.80. */
+.coronary-indeterminate {
+  display: block;
+  font: 8px var(--mono);
+  text-transform: uppercase;
+  color: #dfbb83;
+}
+.coronary-indeterminate:empty {
+  display: none;
 }
 .coronary-swatch {
   display: inline-block;

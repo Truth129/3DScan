@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 from synthetic_vessels import GRIDS, Phantom, Stenosis, Vessel
 
-from scan3d.ffr_physics import MMHG, Network, Physiology, analyse, expansion, poiseuille, solve, stenosis
+from scan3d.coronary import indeterminate
+from scan3d.ffr_physics import MMHG, Network, Physiology, analyse, band, expansion, poiseuille, solve, stenosis
 from scan3d.vessel_geometry import Branch, Stations, Tree, centrelines, lumen, measure, ostia
 
 MU, RHO, KT = 0.0035, 1060.0, 1.52
@@ -174,6 +175,25 @@ def test_runs_under_a_lesion_length_apart_are_one_lesion():
     stations[0] = replace(stations[0], area=area)
     (lesion,) = analyse(tree, stations, Physiology(150, share=1 / 3)).lesions
     assert lesion.length == pytest.approx(4.04, abs=0.2) and lesion.stenosis == pytest.approx(0.6, abs=0.05)
+
+
+def test_the_band_holds_the_nominal_and_widens_at_a_lesion():
+    """The 60% narrowing's band crosses 0.80; the same tree without it stays above, and narrower."""
+    tree, stations = hand_tree(gap=True)
+    healthy = [replace(stations[0], area=np.pi * (1.6 - 0.15 * stations[0].s / 20) ** 2), *stations[1:]]
+    widths = []
+    for sample in (stations, healthy):
+        result = analyse(tree, sample, Physiology(150, 120, 80, 60, share=1 / 3))
+        low, high = band(result, tree, sample, 0.4)
+        for nominal, below, above in zip(result.ffr, low, high):
+            assert np.array_equal(np.isnan(nominal), np.isnan(below)) and np.array_equal(np.isnan(nominal), np.isnan(above))
+            shown = ~np.isnan(nominal)
+            assert np.all(below[shown] <= nominal[shown]) and np.all(nominal[shown] <= above[shown])
+        widths.append(high[1][-1] - low[1][-1])
+        crosses = indeterminate(low[1][-1], high[1][-1])
+        assert crosses if sample is stations else not crosses
+    assert widths[0] > 2 * widths[1]
+    assert indeterminate(0.80, 0.81) and not indeterminate(0.81, 0.9) and not indeterminate(0.7, 0.80)
 
 
 def test_a_narrowed_daughter_reads_lower_ffr_end_to_end():

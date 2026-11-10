@@ -40,6 +40,9 @@ export interface CoronaryStations {
   diameter: (number | null)[];
   reference_diameter: (number | null)[];
   ffr: (number | null)[];
+  /** The uncertainty band per station; absent from results saved before it existed. */
+  ffr_low?: (number | null)[];
+  ffr_high?: (number | null)[];
   pressure: (number | null)[];
   reported: boolean[];
   held: boolean[];
@@ -47,8 +50,15 @@ export interface CoronaryStations {
   spur: boolean[];
   contact: boolean[];
 }
-export interface CoronaryReading {
+/** An FFR with its corner band; the band is null where the FFR is, and absent from older results. */
+export interface CoronaryBand {
   ffr: number | null;
+  low?: number | null;
+  high?: number | null;
+  /** The band crosses 0.80: low ≤ 0.80 < high. */
+  indeterminate?: boolean | null;
+}
+export interface CoronaryReading extends CoronaryBand {
   branch: number | null;
   station: number | null;
   note?: string | null;
@@ -61,7 +71,7 @@ export interface CoronaryBranch {
   length: number;
   flow: number | null;
   reason: string | null;
-  distal: { ffr: number | null; station: number | null; note: string | null };
+  distal: CoronaryBand & { station: number | null; note: string | null };
   stations: CoronaryStations;
 }
 export interface CoronaryLesion {
@@ -93,6 +103,8 @@ export interface CoronaryResult {
   created_at: string;
   inputs: CoronaryInput & { lv_mass_source: 'myocardium mask' | 'typed' };
   constants: Record<string, number>;
+  /** The band's corners: voxel size in mm, resting flow factors, TCRI values and flow-split exponents. */
+  band?: { voxel: number; flow: number[]; tcri: number[]; exponent: number[]; cutoff: number };
   aortic_pressure: number;
   assumed: string[];
   flags: string[];
@@ -178,6 +190,11 @@ export function coronaryRequest(form: CoronaryForm): { input?: CoronaryInput; pr
 const finite = (value: number | null | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
 const DASH = '—';
 export const formatFFR = (value: number | null | undefined) => (finite(value) ? value.toFixed(2) : DASH);
+/** "0.84 (0.78–0.90)", or the FFR alone where there is no band. */
+export const formatBand = (reading: CoronaryBand) =>
+  finite(reading.ffr) && finite(reading.low) && finite(reading.high)
+    ? `${formatFFR(reading.ffr)} (${formatFFR(reading.low)}–${formatFFR(reading.high)})`
+    : formatFFR(reading.ffr);
 export const formatMM = (value: number | null | undefined) => (finite(value) ? `${value.toFixed(1)} mm` : DASH);
 export const formatStenosis = (value: number | null | undefined) => (finite(value) ? `${Math.round(value * 100)}%` : DASH);
 export const formatFlow = (value: number | null | undefined) => (finite(value) ? `${Math.round(value)} mL/min` : DASH);

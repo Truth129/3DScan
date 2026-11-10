@@ -24,7 +24,7 @@ from scipy.spatial import cKDTree
 
 from . import identity, imaging, review_volume
 from .errors import NotFound
-from .ffr_physics import Physiology, analyse
+from .ffr_physics import BAND_EXPONENT, BAND_FLOW, BAND_TCRI, Physiology, analyse, band
 from .fileio import atomic_json, atomic_text
 from .identifiers import identifier
 from .store import now, safe_id
@@ -37,6 +37,7 @@ SPACING = 0.5  # mm between stations
 WINDOW = 1.0  # mm of lumen averaged into each station's area
 REPORT_DIAMETER = 1.8  # mm; thinner stations, and lesions at them, are solved but not reported
 REPORT_BEYOND = 20.0  # mm past a lesion's end where its FFR is read
+CUTOFF = 0.80  # a band with its low end at or below this and its high end above it is indeterminate
 _DAUGHTER = 3.0  # mm of each daughter whose median reference diameter picks the larger one
 _SNAP = 3.0  # mm; a clicked ostium snaps to lumen this close, and is dropped this close to another root
 _CONTACT = 1.5  # mm; lumen this close to the aorta is an ostium patch, as `ostia` uses
@@ -306,6 +307,13 @@ def _analyse(service, job, revision, inputs, key):
 
     service.stage(job, "Pressure")
     result = analyse(tree, stations, physiology, touching)
+    voxel = found.voxel_volume ** (1 / 3)  # |det A|^(1/3), the voxel's size on any grid
+    try:
+        low, high = band(result, tree, stations, voxel, touching)
+    except ValueError as reason:
+        # A corner that cannot be solved leaves the nominal FFR standing, with no band.
+        low = high = [np.full(len(values), np.nan) for values in result.ffr]
+        flags.append(f"uncertainty band not computed: {reason}")
 
     service.stage(job, "Saving")
     depth = np.zeros(len(parents))
@@ -320,6 +328,14 @@ def _analyse(service, job, revision, inputs, key):
     def ffr_at(branch, station):
         return None if station is None else _number(result.ffr[branch][station], 3)
 
+    def reading(branch, station):
+        """FFR at a station with its band; the band is null wherever the FFR is."""
+        ffr = ffr_at(branch, station)
+        bounds = None if ffr is None else (_number(low[branch][station], 3), _number(high[branch][station], 3))
+        if bounds is None or None in bounds:
+            return {"ffr": ffr, "low": None, "high": None, "indeterminate": None}
+        return {"ffr": ffr, "low": bounds[0], "high": bounds[1], "indeterminate": indeterminate(*bounds)}
+
     branches = []
     for b, (branch, st) in enumerate(zip(tree.branches, stations)):
         station, note = distal(readings.shown[b], result.reason[b])
@@ -332,7 +348,7 @@ def _analyse(service, job, revision, inputs, key):
                 "length": _number(st.s[-1], 2),
                 "flow": _number(result.flow[b], 2),
                 "reason": result.reason[b],
-                "distal": {"ffr": ffr_at(b, station), "station": station, "note": note},
+                "distal": {**reading(b, station), "station": station, "note": note},
                 "stations": {
                     "point": _column(st.points, 2),
                     "s": _column(st.s, 2),
@@ -340,6 +356,8 @@ def _analyse(service, job, revision, inputs, key):
                     "diameter": _column(2 * np.sqrt(st.area / np.pi), 2),
                     "reference_diameter": _column(diameter[b], 2),
                     "ffr": _column(result.ffr[b], 3),
+                    "ffr_low": _column(low[b], 3),
+                    "ffr_high": _column(high[b], 3),
                     "pressure": _column(result.pressure[b], 2),
                     "reported": readings.shown[b].tolist(),
                     "held": result.held[b].tolist(),
@@ -367,8 +385,8 @@ def _analyse(service, job, revision, inputs, key):
                 "mld": _number(lesion.mld, 2),
                 "stenosis": _number(lesion.stenosis, 3),
                 "held": bool(lesion.held),
-                "beyond": {"ffr": ffr_at(after, after_station), "branch": after, "station": after_station, "note": note},
-                "before": {"ffr": ffr_at(prior, prior_station), "branch": prior, "station": prior_station},
+                "beyond": {**reading(after, after_station), "branch": after, "station": after_station, "note": note},
+                "before": {**reading(prior, prior_station), "branch": prior, "station": prior_station},
                 "delta_ffr": drop,
             }
         )
@@ -398,6 +416,7 @@ def _analyse(service, job, revision, inputs, key):
             "ostia": inputs["ostia"],
         },
         "constants": {**constants, "spacing": SPACING, "window": WINDOW, "report_diameter": REPORT_DIAMETER, "report_beyond": REPORT_BEYOND},
+        "band": {"voxel": _number(voxel, 3), "flow": list(BAND_FLOW), "tcri": list(BAND_TCRI), "exponent": _column(BAND_EXPONENT, 3), "cutoff": CUTOFF},
         "aortic_pressure": _number(result.aortic, 2),
         "assumed": list(physiology.assumed()),
         "flags": [*result.flags, *flags],
@@ -475,6 +494,14 @@ def listed(lesions, reference_diameter):
     A thinner one still has its expansion loss in the solve; it is just not listed.
     """
     return [lesion for lesion in lesions if reference_diameter[lesion.branch][lesion.throat] >= REPORT_DIAMETER]
+
+
+def indeterminate(low, high):
+    """Whether a band crosses the 0.80 cut-off: its low end at or below it and its high end above it.
+
+    So a band that reads positive (high ≤ 0.80) or negative (low > 0.80) at every corner is not.
+    """
+    return low <= CUTOFF < high
 
 
 def distal(shown, reason):

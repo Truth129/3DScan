@@ -9,7 +9,8 @@ arrives in mm and mm² from vessel_geometry; the solver works in SI and reports 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import itertools
 
 import numpy as np
 from scipy.optimize import least_squares, root
@@ -35,6 +36,11 @@ _FLAG_DIAMETER = 1.8  # mm; the speed check skips vessels thinner than the app r
 _SLOW = 0.15  # m/s; two benchmark vessels read slower
 _FAST = 1.5  # m/s; above every benchmark vessel
 _THIN_PARENT = 0.85  # parent over its daughters' Murray size; 6 of 36 benchmark junctions fall under it
+# Uncertainty band corners. On the Carson 2019 benchmark such choices moved one lesion's FFR by 0.14 at the median.
+BAND_FLOW = (0.75, 1.25)  # resting flow, times the nominal
+BAND_TCRI = (0.22, 0.40)  # either side of Danad 2014's 0.31
+BAND_EXPONENT = (3.0, 7 / 3)  # Murray, and the 7/3 of measured coronary trees
+_BAND_SHRINK = 0.5  # the narrow area corner never takes a station's radius below this fraction of its own
 
 
 @dataclass(frozen=True)
@@ -340,6 +346,30 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
     ffr = [values / aortic if text is None else np.full(len(values), np.nan) for values, text in zip(pressure, reason)]
     flags += _plausibility(flow, reference, reason, children, physiology.exponent)
     return Result(physiology, aortic, network, reference, lesions, outlet_radius, flow * 6e7, pressure, ffr, reason, held, tuple(flags))
+
+
+def band(result: Result, tree: Tree, stations: list[Stations], voxel: float, contact: list[np.ndarray] | None = None) -> tuple[list, list]:
+    """Lowest and highest FFR per station over 16 corners and the nominal solve; NaN where any is NaN.
+
+    The corners: every station's equivalent radius half a voxel (`voxel`, mm) wider, or every one
+    narrower, so its area scales by (1 ± h/2r_eq)²; resting flow ×0.75 and ×1.25; TCRI 0.22 and
+    0.40; flow-split exponent 3 and 7/3. Each corner is a whole `analyse`, so the reference fit,
+    held stations and narrowings follow the scaled areas as they would on a lumen read that much
+    wider or narrower. A corner band over assumptions, not a confidence interval.
+    """
+    low, high = list(result.ffr), list(result.ffr)
+    for sign, flow, tcri, exponent in itertools.product((1, -1), BAND_FLOW, BAND_TCRI, BAND_EXPONENT):
+        scaled = []
+        for st in stations:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                factor = np.maximum(1 + sign * voxel / (2 * np.sqrt(st.area / np.pi)), _BAND_SHRINK) ** 2
+            # An empty station stays empty: analyse holds it or refuses it, as it does the nominal one.
+            scaled.append(replace(st, area=np.where(st.area > 0, st.area * factor, st.area)))
+        inputs = replace(result.inputs, perfusion=result.inputs.perfusion * flow, tcri=tcri, exponent=exponent)
+        for branch, values in enumerate(analyse(tree, scaled, inputs, contact).ffr):
+            # NaN carries: FFR withheld at the nominal is withheld at every corner, as the reasons are the same.
+            low[branch], high[branch] = np.minimum(low[branch], values), np.maximum(high[branch], values)
+    return low, high
 
 
 def _plausibility(flow: np.ndarray, reference: list[np.ndarray], reason: list[str | None], children: list[list[int]], exponent: float) -> list[str]:

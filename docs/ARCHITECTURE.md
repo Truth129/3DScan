@@ -357,7 +357,8 @@ Research use only. A `coronary_analysis` job (`scan3d/coronary.py`) on the CPU l
    model (`ffr_physics.py`). Ostium, tip and junction zones are held at the nearest trusted area,
    with spur runs that touch them; an isolated spur run is a throat and is kept. A branch with no
    trusted station takes its reference area. Runs under 0.7 of the reference less than 1 mm apart
-   are one lesion.
+   are one lesion. Solves 16 more times, each corner of lumen ± half a voxel, resting flow ±25%,
+   TCRI and flow-split exponent, for each FFR's band.
 6. Applies the reading rules and writes `result.json`, then `complete.json`. Lesions whose reference
    diameter at the throat is under 1.8 mm are not listed, but their loss stays in the solve.
 

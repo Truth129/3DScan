@@ -1050,14 +1050,16 @@ case, revision or kind, before it completes, and when its saved files fail their
           heart_rate, share, ostia},
  constants: {perfusion, heart_factor, tcri, exponent, venous, viscosity, density, kt, spacing,
              window, report_diameter, report_beyond},
+ band: {voxel, flow, tcri, exponent, cutoff},
  aortic_pressure, assumed, flags,
  roots: [{tree, point, source: "aorta" | "ostium point"}],
  pieces: [{point, volume}],
- branches: [{id, parent, tree, gap, length, flow, reason, distal: {ffr, station, note},
-             stations: {point, s, area, diameter, reference_diameter, ffr, pressure, reported, held,
-                        junction, spur, contact}}],
+ branches: [{id, parent, tree, gap, length, flow, reason, distal: {ffr, low, high, indeterminate, station, note},
+             stations: {point, s, area, diameter, reference_diameter, ffr, ffr_low, ffr_high,
+                        pressure, reported, held, junction, spur, contact}}],
  lesions: [{id, branch, throat, start, end, length, mld, stenosis, held,
-            beyond: {ffr, branch, station, note}, before: {ffr, branch, station}, delta_ffr}]}
+            beyond: {ffr, low, high, indeterminate, branch, station, note},
+            before: {ffr, low, high, indeterminate, branch, station}, delta_ffr}]}
 ```
 
 - Points are RAS mm. Lengths are mm, areas mm², flow mL/min, pressure mmHg. NaN is null.
@@ -1073,6 +1075,16 @@ case, revision or kind, before it completes, and when its saved files fail their
 - `reason` says why a branch's FFR is not reported, such as one tree with no `share`, or a lumen gap.
 - `assumed` is `["blood pressure"]` when neither pressure is given, else empty.
 - `pieces` are lumen components no root reaches, not solved.
+- `ffr_low` and `ffr_high`, and `low` and `high` beside a reading's `ffr`, are the uncertainty band:
+  the lowest and highest FFR over the nominal solve and 16 corners. The corners are every station's
+  area scaled by (1 ± h/2r_eq)², all up or all down, with h = |det A|^⅓ (`band.voxel`, mm) and r_eq
+  the station's equivalent radius, never below half of it; resting flow ×0.75 and ×1.25
+  (`band.flow`); TCRI 0.22 and 0.40; flow-split exponent 3 and 7/3. Each corner refits the reference
+  and lesions. `ffr` stays the nominal value. The band is null wherever `ffr` is, and missing from
+  results saved before it existed. If a corner cannot be solved the band is null and a flag says so.
+- `indeterminate` is `low <= 0.80 < high` (`band.cutoff`) on the rounded values, so the band
+  crosses 0.80; null with no band. Stations carry no such field; apply the same test to
+  `ffr_low` and `ffr_high`.
 - `flags` lists assumed values, gaps, dropped ostium points, a `share` applied to more than one tree,
   unmeasured voxels and lumen that touches lumen far along the tree. Plausibility flags change no
   number and come as at most one line per kind, naming the branches: hyperaemic mean speed at a

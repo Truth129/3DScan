@@ -139,6 +139,23 @@ describe('Coronary panel', () => {
     expect(select).toHaveBeenCalledWith('imagecasx_coronary:coronary_arteries', [4, 5, 6]);
   });
 
+  it('shows each FFR with its band and marks a band that crosses 0.80 indeterminate', async () => {
+    const banded = {
+      ...result,
+      band: { voxel: 0.4, flow: [0.75, 1.25], tcri: [0.22, 0.4], exponent: [3, 2.333], cutoff: 0.8 },
+      branches: [{ ...result.branches[0], distal: { ffr: 0.91, low: 0.86, high: 0.95, indeterminate: false, station: 0, note: null } }],
+      lesions: [{ ...result.lesions[0], beyond: { ffr: 0.74, low: 0.62, high: 0.86, indeterminate: true, branch: 0, station: 0, note: null } }],
+    };
+    vi.mocked(coronaryApi.list).mockResolvedValue([analysis('done', 'completed')]);
+    vi.spyOn(coronaryApi, 'result').mockResolvedValue(banded);
+    const view = mount(CoronaryPanel, () => ({ caseId: 'c1', revision, native: true }));
+    await settled();
+    const [branch, lesion] = view.all(element => element.tagName === 'TR' && element.children[0]?.getAttribute('scope') === 'row');
+    expect(cells(branch)[2]).toBe('0.91 (0.86–0.95)');
+    expect(cells(lesion)[2]).toBe('0.74 (0.62–0.86) indeterminate');
+    expect(view.text()).toContain('a corner band and not a confidence interval');
+  });
+
   it('prefills from the result shown, not a newer failed run, and clears that failure on a rerun', async () => {
     const failed = { aorta: null, ostia: [[9, 9, 9]] } as Partial<CoronaryAnalysis['inputs']>;
     vi.mocked(coronaryApi.list).mockResolvedValue([

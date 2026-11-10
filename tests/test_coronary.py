@@ -110,6 +110,8 @@ def test_a_narrowed_daughter_reads_a_drop_across_its_lesion(rig):
     assert service.store.get("jobs", queued["id"])["status"] == "completed"
     (lesion,) = http.get(f"{route}/{queued['id']}").json()["lesions"]
     assert lesion["beyond"]["ffr"] is not None and lesion["delta_ffr"] > 0
+    for read in (lesion["beyond"], lesion["before"]):
+        assert read["low"] <= read["ffr"] <= read["high"] and read["indeterminate"] == (read["low"] <= 0.8 < read["high"])
 
 
 def test_a_run_with_no_aorta_and_no_ostium_is_refused(rig):
