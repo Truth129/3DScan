@@ -13,5 +13,6 @@ nibabel
 pydicom
 requests
 nnunetv2==2.8.1
+onnxruntime==1.31.1
 TotalSegmentator==2.18.0
 nnInteractive==2.6.0

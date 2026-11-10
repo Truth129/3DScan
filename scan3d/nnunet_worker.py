@@ -41,6 +41,15 @@ def native_labels(labels, back):
     return orientations.apply_orientation(labels.transpose(2, 1, 0), back)
 
 
+def toolbox_spacing(zooms):
+    """The Spinal Cord Toolbox's spacing: each float32 header zoom rounded to that float's own precision.
+
+    Upstream gives nnU-Net these, not the affine's float64 column norms, and nnU-Net's resampled
+    shape rounds at exact halves, so the two can differ by a voxel.
+    """
+    return [round(float(zoom), -int(np.floor(np.log10(np.spacing(zoom)))) - 1) for zoom in np.asarray(zooms, dtype=np.float32)]
+
+
 def skull_stripped(image, labels):
     """The model input with every voxel outside label 1 at zero, as in skull-stripped training images."""
     return np.where(labels == 1, image, np.float32(0))
@@ -75,14 +84,58 @@ def full_size_labels(logits, resample, properties, transpose_backward):
     return restored.transpose(transpose_backward)
 
 
+def fold_weights(model, model_folder):
+    """Each fold's checkpoint in turn, loaded only when asked for, so folds are never all in memory at once."""
+    import torch
+
+    for fold in model.folds:
+        # A pickle, checked against its pin before this child started.
+        checkpoint = torch.load(Path(model_folder) / f"fold_{fold}" / model.checkpoint, map_location="cpu", weights_only=False)
+        kept = {key: checkpoint.get(key) for key in ("network_weights", "trainer_name", "init_args", "inference_allowed_mirroring_axes")}
+        del checkpoint
+        yield kept
+
+
+def initialize(predictor, model, model_folder, first):
+    """As initialize_from_trained_model_folder, with the registry's stock trainer building the network.
+
+    Upstream looks the checkpoint's trainer up by name, and a trainer nnU-Net lacks would fail.
+    """
+    from nnunetv2.utilities.find_objects import recursive_find_trainer_class_by_name
+    from nnunetv2.utilities.label_handling.label_handling import determine_num_input_channels
+    from nnunetv2.utilities.plans_handling.plans_handler import PlansManager
+
+    dataset_json = json.loads((Path(model_folder) / "dataset.json").read_text())
+    plans = PlansManager(json.loads((Path(model_folder) / "plans.json").read_text()))
+    configuration = plans.get_configuration(first["init_args"]["configuration"])
+    network = recursive_find_trainer_class_by_name(model.trainer).build_network_architecture(
+        plans,
+        configuration,
+        determine_num_input_channels(plans, configuration, dataset_json),
+        plans.get_label_manager(dataset_json).num_segmentation_heads,
+        enable_deep_supervision=False,
+    )
+    network.load_state_dict(first["network_weights"])
+    predictor.manual_initialization(
+        network, plans, configuration, [first["network_weights"]], dataset_json, first["trainer_name"], first["inference_allowed_mirroring_axes"]
+    )
+
+
 def predict(model, model_folder, image, spacing, device, step=lambda _: None):
     import torch
     from nnunetv2.inference.data_iterators import PreprocessAdapterFromNpy
     from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
 
     selected = torch.device("cpu") if device == "cpu" else torch.device("cuda", int(device.partition(":")[2] or 0))
-    predictor = nnUNetPredictor(tile_step_size=model.tile_step_size, use_gaussian=True, use_mirroring=True, device=selected, allow_tqdm=False)
-    predictor.initialize_from_trained_model_folder(str(model_folder), use_folds=model.folds, checkpoint_name=model.checkpoint)
+    predictor = nnUNetPredictor(tile_step_size=model.tile_step_size, use_gaussian=True, use_mirroring=model.mirror, device=selected, allow_tqdm=False)
+    if model.trainer:
+        weights = fold_weights(model, model_folder)
+        initialize(predictor, model, model_folder, next(weights))
+        if not model.vote:
+            predictor.list_of_parameters += [fold["network_weights"] for fold in weights]
+    else:
+        predictor.initialize_from_trained_model_folder(str(model_folder), use_folds=model.folds, checkpoint_name=model.checkpoint)
+        weights = iter(())
     # A wrong order here would silently mislabel anatomy.
     named = sorted((value, name) for name, value in predictor.dataset_json["labels"].items() if value)
     expected = model.dataset_labels or model.labels
@@ -104,17 +157,39 @@ def predict(model, model_folder, image, spacing, device, step=lambda _: None):
         return sliding_window(data)
 
     predictor.predict_sliding_window_return_logits = counted
-    logits = predictor.predict_logits_from_preprocessed_data(prepared["data"]).cpu()
-    del prepared
-    step("saving the masks")
     shape = properties["shape_after_cropping_and_before_resampling"]
     target = [spacing[axis] for axis in plans.transpose_forward]
-    return full_size_labels(
-        logits,
-        lambda channel: configuration.resampling_fn_probabilities(channel, shape, configuration.spacing, target),
-        properties,
-        plans.transpose_backward,
-    ), torch.__version__
+
+    def export(logits):
+        return full_size_labels(
+            logits,
+            lambda channel: configuration.resampling_fn_probabilities(channel, shape, configuration.spacing, target),
+            properties,
+            plans.transpose_backward,
+        )
+
+    if not model.vote:
+        logits = predictor.predict_logits_from_preprocessed_data(prepared["data"]).cpu()
+        del prepared
+        step("saving the masks")
+        return export(logits), torch.__version__
+    # As the Spinal Cord Toolbox: each fold's own mask, then the voxels more than half the folds mark.
+    votes = None
+    for fold in range(len(model.folds)):
+        if fold:
+            predictor.list_of_parameters = [next(weights)["network_weights"]]
+        labels = export(predictor.predict_logits_from_preprocessed_data(prepared["data"]).cpu())
+        predictor.list_of_parameters = []
+        if votes is None:
+            votes = np.zeros((len(model.labels), *labels.shape), dtype=np.uint8)
+        for value, count in enumerate(votes, 1):
+            count += labels == value
+    del prepared
+    step("saving the masks")
+    labels = np.zeros(votes.shape[1:], dtype=np.uint8)
+    for value, count in enumerate(votes, 1):
+        labels[count > len(model.folds) / 2] = value
+    return labels, torch.__version__
 
 
 def run(model, model_folder, image, spacing, device, step=lambda _: None):
@@ -132,6 +207,7 @@ def main():
     parser.add_argument("--task", required=True, choices=sorted(MODELS))
     parser.add_argument("--model-folder", type=Path, required=True)
     parser.add_argument("--skull-strip-folder", type=Path, help="The folder of the model named by the model's skull_strip")
+    parser.add_argument("--crop-folder", type=Path, help="The folder of the helper named by the model's crop")
     parser.add_argument("--device", required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--progress", type=Path, help="A file that always holds the current step, for the parent to show")
@@ -146,7 +222,29 @@ def main():
             os.replace(pending, args.progress)
 
     reference, affine = _image(args.image)
-    image, spacing, back = model_input(reference, affine, model.axes)
+    source, box = reference, ()
+    if model.crop:
+        if not args.crop_folder:
+            raise RuntimeError(f"{model.name} needs --crop-folder")
+        from . import sc_crop  # Imports onnxruntime, which only this child may do.
+
+        step("finding the spinal cord")
+        try:
+            box = tuple(slice(*bounds) for bounds in sc_crop.crop_box(reference, args.crop_folder, model.crop_padding))
+        except RuntimeError as error:
+            # No cord found, or a scan or install the search cannot use: a sentence the reader can act on.
+            args.report.write_text(json.dumps({"error": str(error)}))
+            raise SystemExit(1) from error
+        # As upstream, the model sees only the box. Upstream first saves the crop in the file's integer type,
+        # which rounds a scaled image and, when it has negative values, leaves nnU-Net's nonzero crop no exact
+        # zeros; these are the file's own values, so zero margins are still cropped.
+        source = reference.slicer[box]
+    image, spacing, back = model_input(source, affine, model.axes)
+    if model.crop:
+        # The toolbox writes the crop with a new affine, which resets the zooms to its column norms; the
+        # file's own zooms survive only a crop at the origin of an image already in the model's axes.
+        kept = not any(part.start for part in box) and np.array_equal(orientations.io_orientation(affine), orientations.axcodes2ornt(tuple(model.axes)))
+        spacing = toolbox_spacing(reference.header.get_zooms()[2::-1] if kept else spacing)
     if model.skull_strip:
         if not args.skull_strip_folder:
             raise RuntimeError(f"{model.name} needs --skull-strip-folder")
@@ -155,6 +253,10 @@ def main():
         image = skull_stripped(image, brain)
     labels, torch_version = run(model, args.model_folder, image, spacing, args.device, step)
     labels = native_labels(labels, back)
+    if box:
+        full = np.zeros(reference.shape, dtype=np.uint8)
+        full[box] = labels
+        labels = full
     for value, name in enumerate(model.labels, 1):
         _save_mask(without_small_pieces(labels == value, model.smallest_piece), reference, args.output / f"{name}.nii.gz")
     report = {

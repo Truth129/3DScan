@@ -8,7 +8,7 @@ every file against these hashes first.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 
@@ -29,9 +29,9 @@ class NnunetModel:
     # nnU-Net's fold "all" is one model trained on every case.
     folds: tuple[int | str, ...]
     tile_step_size: float
-    # A zip archive, or a folder URL ending in "/" when the model is published as separate files.
+    # A zip archive, or a folder URL ending in "/" when the model is published as separate files or zips.
     url: str
-    # Empty when the files are separate; each file is still pinned below.
+    # Empty when the files are separate or in several zips; each file is still pinned below.
     archive_sha256: str
     files: dict[str, str]
     checkpoint: str = "checkpoint_final.pth"
@@ -50,7 +50,21 @@ class NnunetModel:
     sign_in: bool = False
     # "nnunet" runs nnU-Net's predictor; "cas_net" runs ImageCAS-X's CAS-Net (scan3d/cas_net.py),
     # one network whose checkpoint is the only file and whose tile_step_size is its tile overlap.
+    # "sc_crop" is a helper another model crops to (scan3d/sc_crop.py), never a task of its own.
     engine: str = "nnunet"
+    # Several zips under url, by name, each with its SHA-256; each pinned file comes from the first zip holding it.
+    archives: dict[str, str] = field(default_factory=dict)
+    # A helper whose box around the anatomy the image is cropped to first, and the box's margins in mm by
+    # side; the model runs on the crop and its mask goes back into the full image.
+    crop: str = ""
+    crop_padding: dict[str, float] = field(default_factory=dict)
+    # Off when upstream predicts without mirrored copies.
+    mirror: bool = True
+    # Each fold makes its own mask, and a voxel is kept where more than half the folds mark it, instead of
+    # averaging the folds' scores.
+    vote: bool = False
+    # A stock nnU-Net trainer that builds the network, when the checkpoint names a trainer nnU-Net lacks.
+    trainer: str = ""
 
 
 MODELS = {
@@ -224,6 +238,70 @@ MODELS = {
             },
         ),
         NnunetModel(
+            id="sc_crop_detector",
+            name="sc-crop",
+            version="v0.0.11",
+            label="Spinal cord box — sc-crop",
+            description="Finds the spinal cord, so the Spinal Cord Toolbox lesion model sees only the cord.",
+            license="Code MIT (ivadomed/sc-crop); the ONNX files carry Ultralytics' AGPL-3.0 export notice",
+            # A helper, so no modality offers it.
+            modalities=(),
+            labels=(),
+            folds=(),
+            tile_step_size=0.5,
+            url="https://github.com/ivadomed/sc-crop/releases/download/v0.0.11/",
+            archive_sha256="",
+            engine="sc_crop",
+            files={
+                "det_model.onnx": "052abe794f3878422e2acc2df4e4942f995aab3788ad513bbcc92b66b16ee9c0",
+                "cls_model.onnx": "25fc911e501ae944dbfb66546e36d32f26021e35506c2495b0f71d4ff6bf3d6b",
+            },
+        ),
+        NnunetModel(
+            id="sct_cord_ms_lesions",
+            name="Spinal Cord Toolbox",
+            version="r20260703",
+            label="Spinal cord MS lesions — Spinal Cord Toolbox",
+            description="Multiple sclerosis lesions in the spinal cord on one series of the cord in T2, T2*, PSIR, STIR, MP2RAGE UNIT1 or T1, from the Spinal Cord Toolbox's nnU-Net, trained and tested on 4,428 images from 1,849 people at 23 centres. sc-crop finds the cord and crops to it first, so lesions outside the part it finds are missed.",
+            license="Code MIT (ivadomed/seg-sc-ms-lesion-multicontrast), which states no separate license for the weights; sc-crop code MIT, and its detector files carry Ultralytics' AGPL-3.0 export notice",
+            modalities=("MR",),
+            labels=("spinal_cord_lesions",),
+            dataset_labels=("lesion",),
+            folds=(0, 1, 2, 3, 4),
+            tile_step_size=0.5,
+            url="https://github.com/ivadomed/seg-sc-ms-lesion-multicontrast/releases/download/r20260703/",
+            archive_sha256="",
+            # One zip per fold, each with the same dataset.json and plans.json.
+            archives={
+                "model_fold0.zip": "20ef069660539dac5281d3ff5b605894d134399231468333e61ca19822a06dda",
+                "model_fold1.zip": "12f395c272a2e93f7c2d30f3bea1b538300ff5f856f3535f8dbebb8d122d434d",
+                "model_fold2.zip": "54576d8a9717cec2c5fbea9b881c9285a05acd97edb451c097613557f2005493",
+                "model_fold3.zip": "6ad1b124b6a29344f3f746e82c46414d7d7d5c7919c1a779eb026fda32aeb5d3",
+                "model_fold4.zip": "41c66ccff635811bc705049a9d41cae1a93acd8f0dcb1fc2eab4564fa0f3cf1c",
+            },
+            archive_folder="nnUNetTrainerDiceCELoss_noSmooth_4000epochs__nnUNetResEncUNetL0p5x0p5x0p5_Model2_Plans__3d_fullres",
+            # The release ships no final checkpoint.
+            checkpoint="checkpoint_best.pth",
+            # dataset.json's "RPI" in the toolbox's letters, which name where each axis starts.
+            axes="LAS",
+            crop="sc_crop_detector",
+            # The release's crop_metadata.json.
+            crop_padding={"superior": 40.0, "inferior": 100.0, "left": 20.0, "right": 20.0, "anterior": 20.0, "posterior": 20.0},
+            mirror=False,
+            vote=True,
+            # The release's own trainer only changes the epoch count, and is code, so it is never fetched or run.
+            trainer="nnUNetTrainerDiceCELoss_noSmooth",
+            files={
+                "dataset.json": "f812371e322e1bcd8ae1fc26014f6f48e68ea0aede76dc019c961176a306236c",
+                "plans.json": "6f576aa2979d00e3f3d2c033801f8f15544ca10171fff5f1db51e1c970011b67",
+                "fold_0/checkpoint_best.pth": "accdc77a95b7d82f9d25591735d6049cc6f303aa228c764c2fddede8ec202dac",
+                "fold_1/checkpoint_best.pth": "66b7ff258599d528b3bdeb4af5d594f09fc42483faf6d8a634e8bb7caf925726",
+                "fold_2/checkpoint_best.pth": "8f51d149ebf709572ee528176c078a88330be5e23c64636454d3d3466ed66f00",
+                "fold_3/checkpoint_best.pth": "f4705a4be7e41a5e56320cd7f7cd0f74cc1dcff66f98f3aca61a48ba5f4b79d5",
+                "fold_4/checkpoint_best.pth": "78eea456f582ff47036184c719e126e62d1295ba8a9ea099c493923d6fcdb887",
+            },
+        ),
+        NnunetModel(
             id="breastdivider",
             name="BreastDivider",
             version="hf-e02a0ad",
@@ -285,7 +363,7 @@ def models_for(modality: str) -> list[NnunetModel]:
 
 def required(model: NnunetModel) -> tuple[NnunetModel, ...]:
     """The model and any model it runs first."""
-    return (model, MODELS[model.skull_strip]) if model.skull_strip else (model,)
+    return (model, *(MODELS[name] for name in (model.skull_strip, model.crop) if name))
 
 
 def model_dir(model: NnunetModel) -> Path:

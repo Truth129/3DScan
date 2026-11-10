@@ -184,6 +184,6 @@ def test_the_lock_keeps_the_constraints():
 def test_the_ai_pins_equal_the_project_extra():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     extra = dict(pin.split("==") for pin in project["optional-dependencies"]["ai"])
-    assert len(extra) == 3
+    assert len(extra) == 4
     wanted = requirements()
     assert {canonical(name): version for name, version in extra.items()} == {canonical(name): wanted[canonical(name)] for name in extra}

@@ -49,6 +49,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/dicom.py`, `enhanced_mr.py`, `modalities.py`, `image_assets.py` | Series validation, conversion, image identity           |
 | `scan3d/segmentation*.py`                                               | TotalSegmentator runs, task catalog, result merging     |
 | `scan3d/nnunet_models.py`, `nnunet_worker.py`, `cas_net.py`             | Pinned nnU-Net models, CAS-Net and their worker         |
+| `scan3d/sc_crop.py`                                                     | Spinal cord box for the cord lesion model               |
 | `scan3d/review.py`, `relationships.py`, `direct_edit.py`, `scissors.py` | Correction sessions and deterministic edits             |
 | `scan3d/interactive*.py`                                                | nnInteractive engine, worker, batching, prompts         |
 | `scan3d/inference_paths.py`                                             | Inference paths: discovery, binding, child environment  |
@@ -153,6 +154,10 @@ record is committed only after its files are complete. Records store absolute pa
   `mrsegmentator:liver` and `total:liver` stay side by side. Its run has the source `nnunet_model`.
   A pinned model can run another first in the same worker: FLAMeS runs HD-BET and sets every voxel
   outside its brain mask to zero. Both models' weights are checked before the run.
+  A pinned model can also crop to a helper's box first and let its folds vote: the Spinal Cord
+  Toolbox lesion model runs on the box the sc-crop detector finds around the cord, keeps the voxels
+  at least three of its five folds mark, and puts the mask back into the full image. The detector
+  runs in the worker on the CPU through onnxruntime.
 
 Other tables:
 

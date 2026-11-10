@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import zipfile
 
 import nibabel as nib
@@ -13,6 +14,8 @@ import pytest
 from scipy import ndimage as ndi
 import SimpleITK as sitk
 
+from inference_path_stub import add_package
+import scan3d
 from scan3d import nnunet_models, nnunet_worker, segmentation
 from scan3d.config import ROOT
 from scan3d.imaging import _image
@@ -243,7 +246,11 @@ def test_download_takes_the_model_from_its_folder_in_a_larger_archive(pinned, tm
 
 def test_every_pinned_model_lists_its_own_checkpoint_for_each_fold():
     for model in nnunet_models.MODELS.values():
-        assert model.engine in ("nnunet", "cas_net")
+        assert model.engine in ("nnunet", "cas_net", "sc_crop")
+        if model.engine == "sc_crop":
+            assert set(model.files) == {"det_model.onnx", "cls_model.onnx"} and not model.modalities
+            continue
+        assert not model.crop or nnunet_models.MODELS[model.crop].engine == "sc_crop"
         if model.engine == "cas_net":
             assert set(model.files) == {model.checkpoint} and not model.folds and not model.skull_strip
             assert "cas_net_sha256" in segmentation._nnunet_descriptor(model)
@@ -386,3 +393,273 @@ def test_a_model_behind_a_sign_in_installs_only_from_a_downloaded_zip(tmp_path, 
     monkeypatch.setattr(sys, "argv", ["download", model.id, "--archive", str(archive)])
     download.main()
     assert nnunet_models.installed(model)
+
+
+def placed(model_id, monkeypatch):
+    """A registry entry with small stand-in files already in its model folder."""
+    model = nnunet_models.MODELS[model_id]
+    contents = {name: f"{model_id} {name}".encode() for name in model.files}
+    model = replace(model, files={name: sha256(value) for name, value in contents.items()})
+    monkeypatch.setitem(nnunet_models.MODELS, model.id, model)
+    for name, value in contents.items():
+        (nnunet_models.model_dir(model) / name).parent.mkdir(parents=True, exist_ok=True)
+        (nnunet_models.model_dir(model) / name).write_bytes(value)
+    return model
+
+
+def test_cord_lesions_are_offered_on_mr_only_need_the_hidden_detector_and_a_run_checks_both(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_SEGMENTATION_MODELS", str(tmp_path / "models"))
+    model, detector = nnunet_models.MODELS["sct_cord_ms_lesions"], nnunet_models.MODELS["sc_crop_detector"]
+    assert model.id in task_ids("MR") and model.id not in task_ids("CT")
+    assert detector.id not in task_ids("MR") + task_ids("CT")
+    with pytest.raises(ValueError, match="supported MR segmentation task"):
+        normalize_options("other", {"tasks": [detector.id]}, modality="MR")
+    model = placed(model.id, monkeypatch)
+    entry = next(item for item in segmentation_catalog("MR")["tasks"] if item["id"] == model.id)
+    assert entry["available"] is False and f"download_segmentation_model.py {model.id}" in entry["description"]
+    detector = placed(detector.id, monkeypatch)
+    assert next(item for item in segmentation_catalog("MR")["tasks"] if item["id"] == model.id)["available"] is True
+    descriptor = segmentation._nnunet_descriptor(model)
+    assert descriptor["complete"] and {item["name"].split("/")[0] for item in descriptor["files"]} == {
+        "sct_cord_ms_lesions-r20260703",
+        "sc_crop_detector-v0.0.11",
+    }
+    assert descriptor["sc_crop_sha256"] and descriptor["onnxruntime_version"] and descriptor["crop_padding"]["inferior"] == 100.0
+    # An added path's worker imports its own onnxruntime, so the version comes from its site-packages.
+    added = SimpleNamespace(site_packages=tmp_path / "site")
+    assert segmentation._nnunet_descriptor(model, added)["onnxruntime_version"] == "unavailable"
+    add_package(added.site_packages, "onnxruntime", "9.9.9")
+    assert segmentation._nnunet_descriptor(model, added)["onnxruntime_version"] == "9.9.9"
+    image = tmp_path / "image.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((4, 4, 4), np.int16), np.eye(4)), image)
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "cpu", "torch": "test"})
+    commands = []
+
+    class NoCord:
+        pid = None  # Completed in-process fixture; no native worker to sample.
+        returncode = 1
+        report = {"error": "No spinal cord was found in this series."}
+
+        def __init__(self, command, **_):
+            commands.append(command)
+            Path(command[command.index("--report") + 1]).write_text(json.dumps(self.report))
+
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(segmentation.subprocess, "Popen", NoCord)
+    with pytest.raises(RuntimeError, match="^No spinal cord was found in this series.$"):
+        segmentation.segment(image, tmp_path / "run", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
+    assert commands[0][commands[0].index("--crop-folder") + 1] == str(nnunet_models.model_dir(detector))
+    NoCord.report = {}
+    with pytest.raises(RuntimeError, match=r"failed \(exit 1\)"):
+        segmentation.segment(image, tmp_path / "bare", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
+    (nnunet_models.model_dir(detector) / "det_model.onnx").write_bytes(b"not the pinned detector")
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: pytest.fail("A child started"))
+    with pytest.raises(RuntimeError, match=r"checksums; nothing ran\. Move sc_crop_detector-v0\.0\.11 aside and run .*\.py sct_cord_ms_lesions again\.$"):
+        segmentation.segment(image, tmp_path / "again", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
+
+
+def test_a_model_in_several_zips_installs_only_when_every_zip_and_file_matches(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_SEGMENTATION_MODELS", str(tmp_path / "models"))
+    model = nnunet_models.MODELS["sct_cord_ms_lesions"]
+    shared = {"dataset.json": b"{}", "plans.json": b"[]", "trainer_class.py": b"never unpacked"}
+    zips = {}
+    for fold in (0, 1):
+        zips[fold] = tmp_path / f"model_fold{fold}.zip"
+        with zipfile.ZipFile(zips[fold], "w") as bundle:
+            bundle.writestr("crop_metadata.json", b"{}")
+            for name, value in {**shared, f"fold_{fold}/checkpoint_best.pth": f"fold {fold}".encode()}.items():
+                bundle.writestr(f"{model.archive_folder}/{name}", value)
+    files = {name: sha256(shared[name]) for name in ("dataset.json", "plans.json")}
+    files |= {f"fold_{fold}/checkpoint_best.pth": sha256(f"fold {fold}".encode()) for fold in (0, 1)}
+    model = replace(model, folds=(0, 1), files=files, archives={path.name: sha256(path.read_bytes()) for path in zips.values()})
+    monkeypatch.setitem(nnunet_models.MODELS, model.id, model)
+    target = nnunet_models.model_dir(model)
+    target.parent.mkdir(parents=True)
+    other = tmp_path / "other.zip"
+    with zipfile.ZipFile(other, "w") as bundle:
+        bundle.writestr("weights.pt", b"not this model")
+    with pytest.raises(RuntimeError, match="archive failed"):
+        download.install(model, [zips[0], other], target)
+    with pytest.raises(RuntimeError, match="needs all 2"):
+        download.install(model, [zips[0]], target)
+    with pytest.raises(RuntimeError, match="fold_1/checkpoint_best.pth failed"):
+        download.install(replace(model, files={**files, "fold_1/checkpoint_best.pth": "0" * 64}), list(zips.values()), target)
+    assert list(target.parent.iterdir()) == []
+    detector = nnunet_models.MODELS[model.crop]
+    served = {detector.url + name: f"stand-in {name}".encode() for name in detector.files}
+    monkeypatch.setitem(nnunet_models.MODELS, detector.id, replace(detector, files={name: sha256(served[detector.url + name]) for name in detector.files}))
+
+    class Response:
+        def __init__(self, url, **_):
+            self.content = served[url]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, _):
+            yield self.content
+
+    monkeypatch.setattr(download.requests, "get", Response)
+    monkeypatch.setattr(sys, "argv", ["download", model.id, "--archive", str(zips[1]), "--archive", str(zips[0])])
+    download.main()
+    assert nnunet_models.installed(model)
+    assert sorted(path.relative_to(target).as_posix() for path in target.rglob("*") if path.is_file()) == sorted(files)
+    # A detector folder moved aside comes back alone; the served files hold no zip.
+    nnunet_models.model_dir(detector).rename(tmp_path / "aside")
+    monkeypatch.setattr(sys, "argv", ["download", model.id])
+    download.main()
+    assert nnunet_models.installed(model)
+    with pytest.raises(SystemExit, match="already exists"):
+        download.main()
+    # With its own folder moved aside, the model comes back from its zips, fetched this time.
+    served |= {model.url + path.name: path.read_bytes() for path in zips.values()}
+    target.rename(tmp_path / "aside-model")
+    download.main()
+    assert nnunet_models.installed(model)
+
+
+def cord_crop(monkeypatch, crop_box):
+    """A stand-in for scan3d.sc_crop, whose real crop_box needs onnxruntime and the detector files."""
+    stand_in = SimpleNamespace(crop_box=crop_box, CordNotFound=type("CordNotFound", (RuntimeError,), {}))
+    monkeypatch.setitem(sys.modules, "scan3d.sc_crop", stand_in)
+    monkeypatch.setattr(scan3d, "sc_crop", stand_in, raising=False)
+    return stand_in
+
+
+def test_worker_runs_the_cord_model_on_the_box_and_puts_the_mask_back_on_a_reflected_sheared_grid(tmp_path, monkeypatch):
+    shape = (9, 10, 11)
+    # A reflected first axis and two sheared ones, whose float64 lengths are not the rounded float32 zooms the toolbox reads.
+    affine = np.array([[-0.74999999925, 0.1, 0.05, 30.0], [0.0, 0.0, 1.1, -60.0], [0.0, 1.2, 0.2, 10.0], [0.0, 0.0, 0.0, 1.0]])
+    values = np.random.default_rng(4).integers(1, 1000, shape).astype(np.int16)
+    nib.save(nib.Nifti1Image(values, affine), tmp_path / "image.nii.gz")
+    bounds = ((2, 7), (1, 9), (3, 8))
+    box = tuple(slice(*limits) for limits in bounds)
+    calls = []
+
+    def crop_box(image, folder, padding):
+        calls.append((image.shape, str(folder), padding))
+        return bounds
+
+    stand_in = cord_crop(monkeypatch, crop_box)
+    seen = []
+
+    def predict(model, folder, image, spacing, device, step):
+        seen.append((image.copy(), spacing))
+        return (image[0] % 2 == 0).astype(np.uint8), "test"
+
+    monkeypatch.setattr(nnunet_worker, "predict", predict)
+    steps = tmp_path / "progress.txt"
+    arguments = f"-i {tmp_path}/image.nii.gz -o {tmp_path} --task sct_cord_ms_lesions --model-folder lesions --crop-folder detector"
+    report = tmp_path / "report.json"
+    monkeypatch.setattr(sys, "argv", ["worker", *arguments.split(), "--device", "cpu", "--report", str(report), "--progress", str(steps)])
+    nnunet_worker.main()
+    model = nnunet_models.MODELS["sct_cord_ms_lesions"]
+    assert calls == [(shape, "detector", model.crop_padding)]
+    cropped_affine = affine.copy()
+    cropped_affine[:3, 3] = affine[:3, :3] @ [2, 1, 3] + affine[:3, 3]
+    expected, spacing, _ = nnunet_worker.model_input(nib.Nifti1Image(values[box], cropped_affine), cropped_affine, "LAS")
+    assert np.array_equal(seen[0][0], expected) and seen[0][1] == [1.204159, 1.119151, 0.75] != spacing
+    assert steps.read_text() == "finding the spinal cord"
+    mask = nib.load(tmp_path / "spinal_cord_lesions.nii.gz")
+    full = np.zeros(shape, bool)
+    full[box] = values[box] % 2 == 0
+    np.testing.assert_allclose(mask.affine, affine)
+    assert np.array_equal(np.asarray(mask.dataobj) > 0, full)
+
+    def no_cord(*_):
+        raise stand_in.CordNotFound("No spinal cord was found in this series.")
+
+    stand_in.crop_box = no_cord
+    with pytest.raises(SystemExit):
+        nnunet_worker.main()
+    assert json.loads(report.read_text()) == {"error": "No spinal cord was found in this series."}
+
+
+@pytest.mark.parametrize(("left", "start", "own"), [(-0.8, 0, True), (-0.8, 1, False), (0.8, 0, False)])
+def test_cord_model_spacing_is_the_files_own_zooms_only_for_an_uncut_corner_in_the_models_axes(tmp_path, monkeypatch, left, start, own):
+    image = nib.Nifti1Image(np.ones((6, 7, 8), np.int16), np.diag([left, 0.9, 1.1, 1.0]))
+    image.header.set_zooms((0.5, 0.6, 0.7))  # Apart from the affine's, which the toolbox takes once it moves or turns the image.
+    nib.save(image, tmp_path / "image.nii.gz")
+    cord_crop(monkeypatch, lambda *_: ((start, 6), (0, 7), (0, 8)))
+    seen = []
+
+    def predict(model, folder, image, spacing, device, step):
+        seen.append(spacing)
+        return np.zeros(image.shape[1:], np.uint8), "test"
+
+    monkeypatch.setattr(nnunet_worker, "predict", predict)
+    arguments = f"-i {tmp_path}/image.nii.gz -o {tmp_path} --task sct_cord_ms_lesions --model-folder lesions --crop-folder detector"
+    monkeypatch.setattr(sys, "argv", ["worker", *arguments.split(), "--device", "cpu", "--report", str(tmp_path / "report.json")])
+    nnunet_worker.main()
+    assert seen == [[0.7, 0.6, 0.5] if own else [1.1, 0.9, 0.8]]
+
+
+def test_cord_model_folds_vote_without_mirrors_while_other_models_average_and_mirror(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from nnunetv2.inference import data_iterators, predict_from_raw_data
+
+    scan = np.arange(6, dtype=np.float32).reshape(1, 1, 2, 3)  # Values 0 to 5.
+    made, loaded = [], []
+
+    class Predictor:
+        def __init__(self, **options):
+            made.append(options)
+
+        def initialize_from_trained_model_folder(self, folder, use_folds, checkpoint_name):
+            self.manual_initialization(None, None, None, list(use_folds), None, "own", (0, 1, 2))
+
+        def manual_initialization(self, network, plans, configuration, parameters, dataset_json, trainer_name, mirror_axes):
+            self.list_of_parameters, self.label_manager = parameters, SimpleNamespace(has_regions=False)
+            self.dataset_json = {"labels": {"background": 0, name: 1}}
+            self.plans_manager = SimpleNamespace(transpose_forward=[0, 1, 2], transpose_backward=[0, 1, 2])
+            self.configuration_manager = SimpleNamespace(spacing=[1, 1, 1], resampling_fn_probabilities=lambda logits, *_: logits)
+
+        def predict_sliding_window_return_logits(self, data):
+            # Fold k gives the lesion a strong score above k and a weak one below.
+            fold = loaded[-1]
+            return torch.stack([torch.zeros_like(data[0]), torch.where(data[0] > fold, 10.0, -1.0)])
+
+        def predict_logits_from_preprocessed_data(self, data):
+            assert len(self.list_of_parameters) == (1 if made[-1]["use_mirroring"] is False else 5)
+            total = 0
+            for fold in self.list_of_parameters:
+                loaded.append(fold)
+                total = total + self.predict_sliding_window_return_logits(data)
+            return total / len(self.list_of_parameters)
+
+    def adapter(images, *_):
+        cropped = images[0].shape[1:]
+        yield {
+            "data": torch.from_numpy(images[0]),
+            "data_properties": {
+                "shape_after_cropping_and_before_resampling": cropped,
+                "shape_before_cropping": cropped,
+                "bbox_used_for_cropping": [[0, n] for n in cropped],
+            },
+        }
+
+    monkeypatch.setattr(predict_from_raw_data, "nnUNetPredictor", Predictor)
+    monkeypatch.setattr(data_iterators, "PreprocessAdapterFromNpy", adapter)
+    monkeypatch.setattr(nnunet_worker, "fold_weights", lambda model, _: iter({"network_weights": fold} for fold in model.folds))
+    monkeypatch.setattr(
+        nnunet_worker,
+        "initialize",
+        lambda predictor, model, _, first: predictor.manual_initialization(*[None] * 3, [first["network_weights"]], None, "stock", (0, 1, 2)),
+    )
+    name, steps = "lesion", []
+    labels, _ = nnunet_worker.predict(nnunet_models.MODELS["sct_cord_ms_lesions"], "folder", scan, [1, 1, 1], "cpu", steps.append)
+    assert made[-1]["use_mirroring"] is False and loaded == [0, 1, 2, 3, 4]
+    # A voxel needs three of five folds; averaging the scores keeps any voxel one fold marks strongly.
+    assert np.array_equal(labels, scan[0] >= 3)
+    assert steps == ["preparing the scan", *(f"fold {n} of 5" for n in range(1, 6)), "saving the masks"]
+    name = "Lesion"
+    labels, _ = nnunet_worker.predict(nnunet_models.MODELS["flames_ms_lesions"], "folder", scan, [1, 1, 1], "cpu")
+    assert made[-1]["use_mirroring"] is True and np.array_equal(labels, scan[0] >= 1)

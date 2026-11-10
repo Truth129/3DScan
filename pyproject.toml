@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # AI segmentation and corrections. Install PyTorch for your hardware first: see docs/INSTALL.md.
-ai = ["nnunetv2==2.8.1", "TotalSegmentator==2.18.0", "nnInteractive==2.6.0"]
+ai = ["nnunetv2==2.8.1", "onnxruntime==1.31.1", "TotalSegmentator==2.18.0", "nnInteractive==2.6.0"]
 # SimpleITK checks that model input matches the reader nnU-Net models were trained with.
 test = ["pytest>=8,<10", "httpx>=0.28,<1", "SimpleITK>=2.4,<3"]
 # Keep in step with the ruff-pre-commit `rev` in .pre-commit-config.yaml.

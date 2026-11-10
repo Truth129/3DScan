@@ -32,6 +32,7 @@ dynamic-network-architectures==0.4.4
 einops==0.8.2
 fastapi==0.115.12
 filelock==4.2.0
+flatbuffers==25.12.19
 fonttools==4.67.0
 frozenlist==1.8.0
 fsspec==2026.9.0
@@ -79,12 +80,14 @@ nninteractive-client==2.6.0
 nnunetv2==2.8.1
 numexpr==2.14.2
 numpy==2.3.5
+onnxruntime==1.31.1
 orderly-set==5.5.0
 packaging==26.3
 pandas==3.0.6
 pillow==11.3.0
 pluggy==1.6.0
 propcache==0.5.4
+protobuf==7.36.2
 pyarrow==26.0.0
 pydantic==2.14.1
 pydantic-core==2.50.1

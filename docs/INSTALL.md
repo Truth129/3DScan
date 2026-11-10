@@ -185,9 +185,9 @@ The script ends with a GPU check. Its proof, `nvidia.json` in `.runtime/inferenc
 reads that folder offers the GPU the next time a panel opens, with no restart. Like the default
 path's check, it does not prove that a model fits in memory or gives good results.
 
-**Run the script again** after a driver change, after anything changes that environment, and
-whenever the app shows the GPU as unavailable. It keeps a finished environment that equals the
-lock, with no install and no network, and rebuilds anything else from empty.
+**Run the script again** after updating 3DScan, after a driver change, after anything changes that
+environment, and whenever the app shows the GPU as unavailable. It keeps a finished environment that
+equals the lock, with no install and no network, and rebuilds anything else from empty.
 
 A finished environment is rebuilt only when the job queue can be read and is empty, and once uv has
 built its replacement elsewhere. If not, it stays as it was.
@@ -270,6 +270,21 @@ the skull first. Together they download 2.5 GB and keep 1.4 GB:
 ```bash
 .venv/bin/python scripts/download_segmentation_model.py flames_ms_lesions
 ```
+
+**Spinal Cord Toolbox MS lesions** is an optional model for MS lesions in the spinal cord on MRI.
+It also installs the **sc-crop** cord detector, which finds the cord first. Together they
+download and keep about 4 GB:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py sct_cord_ms_lesions
+```
+
+To install from the five `model_foldN.zip` files of
+[release r20260703](https://github.com/ivadomed/seg-sc-ms-lesion-multicontrast/releases/tag/r20260703),
+downloaded by hand, pass `--archive` once for each zip. The detector (16 MB) is still downloaded; to
+avoid that, first put `det_model.onnx` and `cls_model.onnx` from
+[sc-crop v0.0.11](https://github.com/ivadomed/sc-crop/releases/tag/v0.0.11) in
+`.runtime/segmentation-models/sc_crop_detector-v0.0.11/`.
 
 **BreastDivider** is an optional left and right breast model for MRI. It needs about 100 MB:
 

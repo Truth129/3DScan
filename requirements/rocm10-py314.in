@@ -20,5 +20,6 @@ requests==2.34.2
 Pillow==11.3.0
 pytest==8.4.2
 nnunetv2==2.8.1
+onnxruntime==1.31.1
 TotalSegmentator==2.18.0
 nnInteractive==2.6.0

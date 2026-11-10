@@ -202,21 +202,31 @@ def _model_configurations(options: dict) -> list[tuple[str, dict]]:
     return configurations
 
 
-def _nnunet_descriptor(model):
+def _pinned_files(part):
+    """One model folder's files, and whether every pinned file is there and matches."""
+    directory = nnunet_models.model_dir(part)
+    files = []
+    matches = True
+    for name, expected in part.files.items():
+        path = directory / name
+        if not path.is_file():
+            matches = False
+            continue
+        stat = path.stat()
+        digest = _checkpoint_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        matches = matches and digest == expected
+        files.append({"name": f"{directory.name}/{name}", "bytes": stat.st_size, "sha256": digest})
+    return files, matches
+
+
+def _nnunet_descriptor(model, inference_path=None):
     """Identity of one pinned model and any model it runs first. Complete only when every file matches its pin."""
     files = []
     matches = True
     for part in nnunet_models.required(model):
-        directory = nnunet_models.model_dir(part)
-        for name, expected in part.files.items():
-            path = directory / name
-            if not path.is_file():
-                matches = False
-                continue
-            stat = path.stat()
-            digest = _checkpoint_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
-            matches = matches and digest == expected
-            files.append({"name": f"{directory.name}/{name}", "bytes": stat.st_size, "sha256": digest})
+        part_files, part_matches = _pinned_files(part)
+        files += part_files
+        matches = matches and part_matches
     descriptor = {
         "task": model.id,
         "engine": model.name,
@@ -230,6 +240,20 @@ def _nnunet_descriptor(model):
     if model.engine == "cas_net":
         # Its network and inference are this repository's code, not a package's.
         descriptor["cas_net_sha256"] = _digest(Path(__file__).with_name("cas_net.py"))
+    if model.crop:
+        # The crop box comes from this repository's port of sc-crop, run by onnxruntime.
+        descriptor["crop_padding"] = model.crop_padding
+        descriptor["sc_crop_sha256"] = _digest(Path(__file__).with_name("sc_crop.py"))
+        try:
+            # The version the worker's interpreter imports, as inference_path.versions() reads.
+            if inference_path:
+                from .inference_paths import installed
+
+                descriptor["onnxruntime_version"] = installed(inference_path.site_packages, "onnxruntime")
+            else:
+                descriptor["onnxruntime_version"] = metadata.version("onnxruntime")
+        except metadata.PackageNotFoundError:
+            descriptor["onnxruntime_version"] = "unavailable"
     return descriptor
 
 
@@ -264,7 +288,7 @@ def model_fingerprint(profile: str, options: dict | None = None, *, modality: st
     models = []
     for task, config in configurations:
         if "nnunet_model" in config:
-            models.append(_nnunet_descriptor(nnunet_models.MODELS[task]))
+            models.append(_nnunet_descriptor(nnunet_models.MODELS[task], inference_path))
             continue
         ids = config["task_id"] if isinstance(config["task_id"], list) else [config["task_id"]]
         for dataset_id in ids:
@@ -494,7 +518,12 @@ def segment(
     engine, engine_version = (model.name, model.version) if model else ("TotalSegmentator", metadata.version("TotalSegmentator"))
     # Before any child starts, because loading a checkpoint runs its pickle.
     if model and not _nnunet_descriptor(model)["complete"]:
-        raise RuntimeError(f"{model.name} weights do not match their pinned checksums; nothing ran. Move the folder aside and download them again.")
+        # A model run first has its own folder, and the script fetches only the folders that are gone.
+        folders = " and ".join(nnunet_models.model_dir(part).name for part in nnunet_models.required(model) if not _pinned_files(part)[1])
+        raise RuntimeError(
+            f"{model.name} weights do not match their pinned checksums; nothing ran. "
+            f"Move {folders} aside and run scripts/download_segmentation_model.py {model.id} again."
+        )
     device = inference_path.device if inference_path else device_request()
     runtime = _resolve_device(device, cancelled, inference_path)
     effective_device = runtime["selected_device"]
@@ -569,6 +598,8 @@ def segment(
                 command += ["--model-folder", str(nnunet_models.model_dir(model)), "--progress", str(progress_path)]
                 if model.skull_strip:
                     command += ["--skull-strip-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.skull_strip]))]
+                if model.crop:
+                    command += ["--crop-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.crop]))]
             for option in ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling"):
                 if options[option]:
                     command.append("--" + option)
@@ -623,6 +654,9 @@ def segment(
             record["returncode"] = process.returncode
             if process.returncode:
                 record["status"] = "failed"
+                # A pinned model's worker leaves a sentence in its report for a failure the reader can act on.
+                if model and (failure := run_dir / f"{task}-report.json").is_file() and (sentence := json.loads(failure.read_text()).get("error")):
+                    raise RuntimeError(sentence)
                 if inference_path:
                     cause = _failure_cause(process.returncode, log_path)
                     raise RuntimeError(f"{engine} {task} failed on {inference_path.label}: {cause}. No other GPU was tried.")
@@ -679,7 +713,8 @@ def segment(
             record["mask_validation_seconds"] = round(time.monotonic() - validation_started, 3)
             save_manifest()
         if not structures:
-            raise RuntimeError("No nonempty structures were found in the requested task outputs")
+            # For a lesion model this is the answer on a scan without lesions, not a fault.
+            raise RuntimeError(f"{engine} marked nothing in this scan." if model else "No nonempty structures were found in the requested task outputs")
         progress("Recording model checkpoint checksums")
         source_options = {"modality": modality} if modality != "CT" else {}
         if inference_path:

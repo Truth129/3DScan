@@ -217,6 +217,15 @@ removes the skull first, because FLAMeS was trained on images without one; **Bra
 that brain mask on its own. The segment is **White matter lesions (FLAMeS)**. It was trained on 668
 scans and often misses lesions under about 10 mm³.
 
+**Spinal cord MS lesions — Spinal Cord Toolbox** marks multiple sclerosis lesions in the spinal
+cord on an MRI series of the spine, axial or sagittal, such as T2, T2\*, STIR or PSIR. Install it
+with `scripts/download_segmentation_model.py sct_cord_ms_lesions`, which also installs the sc-crop
+cord detector. The detector finds the cord and the model runs on a box around it. The run fails and
+says why if it finds no cord, if the slices are too narrow to search, or if it marks no lesion. The
+segment is **Spinal cord lesions (Spinal Cord Toolbox)**. It was trained and tested on 4,428 images
+from 1,849 people with MS at 23 centres, and it can miss small lesions. On an AMD GPU a run took
+about 23 GB of GPU memory whatever the scan's size, and on the CPU about 7 GB of RAM.
+
 **Breasts — BreastDivider** marks the left and right breast on MRI of the breasts in any common
 sequence: T1 with or without contrast, T2 or DWI. Install it with
 `scripts/download_segmentation_model.py breastdivider`. Its segments are **Left breast
