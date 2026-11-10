@@ -30,6 +30,11 @@ _STEP = 8  # a largest child with fewer candidates continues its parent's refere
 _FEW = 3  # a reference group with fewer fitted stations takes its median radius
 _FLOOR = 0.05  # mm; a reference fit never goes thinner than this
 _SMALL_TREE = 10.0  # mm; shorter trees are left out of the flow split
+_FLAG_DIAMETER = 1.8  # mm; the speed check skips vessels thinner than the app reports
+# Carson 2019 benchmark: 55 branches of 1.8 mm or more run 0.11-1.33 m/s (median 0.41).
+_SLOW = 0.15  # m/s; two benchmark vessels read slower
+_FAST = 1.5  # m/s; above every benchmark vessel
+_THIN_PARENT = 0.85  # parent over its daughters' Murray size; 6 of 36 benchmark junctions fall under it
 
 
 @dataclass(frozen=True)
@@ -312,7 +317,49 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
     flow, pressure = solve(network, aortic * MMHG, physiology.venous * MMHG)
     pressure = [values / MMHG for values in pressure]
     ffr = [values / aortic if text is None else np.full(len(values), np.nan) for values, text in zip(pressure, reason)]
+    flags += _plausibility(flow, reference, reason, children, physiology.exponent)
     return Result(physiology, aortic, network, reference, lesions, outlet_radius, flow * 6e7, pressure, ffr, reason, held, tuple(flags))
+
+
+def _plausibility(flow: np.ndarray, reference: list[np.ndarray], reason: list[str | None], children: list[list[int]], exponent: float) -> list[str]:
+    """Flags for numbers a reader should doubt; they change nothing solved.
+
+    The speed is mean hyperaemic flow over the healthy lumen at a branch's start, on branches whose
+    FFR is reported. A parent is compared with Murray's size for its daughters, (Σ r^e)^(1/e),
+    whether or not FFR is solved, since that is geometry alone. One line per kind, naming every
+    branch, so a tree of stubs does not flood the list.
+    """
+    slow, fast, thin = {}, {}, {}
+    for branch, text in enumerate(reason):
+        radius = reference[branch][0] * 1e-3  # m
+        if text is not None or not (np.isfinite(flow[branch]) and flow[branch] > 0) or not 2e3 * radius >= _FLAG_DIAMETER:
+            continue
+        speed = round(flow[branch] / (np.pi * radius**2), 2)  # flow is the solve's m³/s, not Result's mL/min; rounded as printed
+        if speed < _SLOW:
+            slow[branch] = speed
+        elif speed > _FAST:
+            fast[branch] = speed
+    for branch, daughters in enumerate(children):
+        if len(daughters) < 2:
+            continue
+        expected = sum(reference[child][0] ** exponent for child in daughters) ** (1 / exponent)
+        ratio = round(reference[branch][-1] / expected, 2)  # rounded as printed, so 85% never shows
+        if ratio < _THIN_PARENT:
+            thin[branch] = ratio
+
+    def where(found: dict[int, float], unit: str, scale: float, digits: int) -> str:
+        low, high = f"{scale * min(found.values()):.{digits}f}", f"{scale * max(found.values()):.{digits}f}"
+        who = f"branch {next(iter(found))}" if len(found) == 1 else "branches " + ", ".join(map(str, found))
+        return f"on {who} ({low if low == high else f'{low} to {high}'}{unit}"
+
+    flags = [
+        f"flow is {word} for the vessel's size {where(found, ' m/s)', 1, 2)}: the flow split or the reference diameter may be off"
+        for word, found in (("slow", slow), ("fast", fast))
+        if found
+    ]
+    if thin:
+        flags.append(f"parent is thinner than its daughters imply {where(thin, '% of the expected diameter)', 100, 0)}: diameters there may read small")
+    return flags
 
 
 def _held(stations: list[Stations], parents: list[int], children: list[list[int]]) -> tuple[list[np.ndarray], list[np.ndarray]]:

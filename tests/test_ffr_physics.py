@@ -111,6 +111,35 @@ def test_ffr_is_withheld_with_a_reason():
     assert lone.reason == ["one coronary tree only"] * 3 and np.isnan(lone.flow).all()
 
 
+def test_a_plausible_tree_raises_no_plausibility_flag():
+    result = analyse(*hand_tree(), Physiology(150, 120, 80, 60, share=1 / 3))
+    assert not [flag for flag in result.flags if "for the vessel's size" in flag or "daughters imply" in flag]
+
+
+def test_a_wide_branch_given_too_little_flow_reads_slow():
+    """A 3.2 mm trunk and its continuation at 3% of the heart's flow run at 0.04-0.05 m/s, below a resting heart's; one line names both."""
+    result = analyse(*hand_tree(), Physiology(150, 120, 80, 60, share=0.03))
+    assert "flow is slow for the vessel's size on branches 0, 2 (0.04 to 0.05 m/s): the flow split or the reference diameter may be off" in result.flags
+    assert len([flag for flag in result.flags if "slow" in flag]) == 1
+
+
+def test_a_wide_branch_given_too_much_flow_reads_fast():
+    """A lone 3 mm tube taking all of the heart's flow runs at 1.62 m/s."""
+    s = np.arange(0, 30 + 1e-9, 0.5)
+    points = np.column_stack([s, np.zeros(len(s)), np.zeros(len(s))])
+    radius, none = np.full(len(s), 1.5), np.zeros(len(s), dtype=bool)
+    tree = Tree(np.zeros((1, 3)), [Branch(points, -1, 0, False)], np.empty((0, 3)), np.empty(0))
+    stations = [Stations(points, s, np.ones(len(s), dtype=int), np.pi * radius**2, radius - 0.2, none, s >= s[-1] - 2.3)]
+    result = analyse(tree, stations, Physiology(150, 120, 80, 60, share=1.0))
+    assert "flow is fast for the vessel's size on branch 0 (1.62 m/s): the flow split or the reference diameter may be off" in result.flags
+
+
+def test_a_parent_thinner_than_its_daughters_is_flagged():
+    """A 2.9 mm trunk feeding a 5.0 mm continuation and a 1.6 mm side branch, whose Murray size is 5.1 mm."""
+    result = analyse(*hand_tree(onward_radius=2.5), Physiology(150, 120, 80, 60, share=1 / 3))
+    assert "parent is thinner than its daughters imply on branch 0 (57% of the expected diameter): diameters there may read small" in result.flags
+
+
 def test_an_isolated_spur_run_at_a_throat_is_not_held():
     """A throat's inscribed radius collapses, so its stations read spur; holding them erased a real lesion.
     A spur run touching the ostium zone is still held."""

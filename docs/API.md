@@ -1073,7 +1073,10 @@ case, revision or kind, before it completes, and when its saved files fail their
 - `assumed` is `["blood pressure"]` when neither pressure is given, else empty.
 - `pieces` are lumen components no root reaches, not solved.
 - `flags` lists assumed values, gaps, dropped ostium points, a `share` applied to more than one tree,
-  unmeasured voxels and lumen that touches lumen far along the tree.
+  unmeasured voxels and lumen that touches lumen far along the tree. Plausibility flags change no
+  number and come as at most one line per kind, naming the branches: hyperaemic mean speed at a
+  solved branch's start under 0.15 or over 1.5 m/s where the reference is at least 1.8 mm, and a
+  parent's reference under 0.85 of its daughters' Murray size.
 
 Reading rules:
 
