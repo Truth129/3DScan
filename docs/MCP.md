@@ -38,6 +38,7 @@ only what that account can.
 | Segmentation | `segmentation_options`, `prepare_series`, `run_segmentation`, `list_jobs`, `wait_for_job`, `cancel_job`                                                |
 | Revisions    | `list_revisions`, `get_revision`, `activate_revision`, `set_review_status`, `agreement`, `probe`                                                       |
 | Viewing      | `view_slice_image`: one axial, coronal or sagittal slice as a PNG, with masks drawn on it                                                              |
+| Coronary     | `run_coronary_analysis`, `list_coronary_analyses`, `get_coronary_analysis`: CT-FFR, for research use only                                              |
 | Corrections  | `start_correction`, `start_new_segment`, `get_correction`, `add_marks`, `remove_last_marks`, `run_correction`, `save_correction`, `discard_correction` |
 | Export       | `export_seg_file`: a DICOM SEG file written on the machine running the MCP server                                                                      |
 | Anything     | `api_get`: any JSON `GET` route                                                                                                                        |

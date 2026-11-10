@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from test_coronary import RUN, rig
 
 from scan3d.api import create_app
 from scan3d.config import Settings
@@ -72,3 +73,19 @@ def test_drawings_keep_the_view_plane_or_are_refused():
     tilted = {"affine_ras": np.block([[rotation * 3, np.zeros((3, 1))], [np.zeros((1, 3)), np.ones((1, 1))]]).tolist(), "shape": [80, 80, 112]}
     with pytest.raises(ApiError, match="one slice"):
         native_drawing(tilted, [[20, 5, 55], [40, 5, 55]], "axial")
+
+
+def test_coronary_analysis_runs_lists_and_reads_one_branch_in_full(rig):
+    http, service, case_id, revision_id, _ = rig
+    tools = Tools(Scan3D(http=http))
+    assert tools.run_coronary_analysis(case_id, revision_id=revision_id, wait_seconds=0, **RUN)["job"]["status"] == "queued"
+    service.execute(service.store.claim("cpu"))
+    # The same inputs return the same run, now complete, read without its station arrays.
+    result = tools.run_coronary_analysis(case_id, revision_id=revision_id, wait_seconds=0, **RUN)
+    assert result["notice"] == "Research use only. Not for diagnostic use." and len(result["branches"]) == 3 and "stations" not in result
+    (listed,) = tools.list_coronary_analyses(case_id, revision_id)["analyses"]
+    daughter = next(branch["id"] for branch in result["branches"] if branch["parent"] >= 0)
+    one = tools.get_coronary_analysis(case_id, listed["analysis_id"], revision_id, station_branches=[daughter])
+    assert list(one["stations"]) == [str(daughter)] and len(one["stations"][str(daughter)]["ffr"]) > 1
+    with pytest.raises(ApiError, match="No such branch"):
+        tools.get_coronary_analysis(case_id, listed["analysis_id"], revision_id, station_branches=[99])

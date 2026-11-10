@@ -507,6 +507,32 @@ def revision_row(revision: dict, structures: bool = False) -> dict:
     return row
 
 
+def _compact(value, digits=3):
+    """Round every float in a nested result, so long numeric arrays stay readable."""
+    if isinstance(value, float):
+        return round(value, digits)
+    if isinstance(value, list):
+        return [_compact(v, digits) for v in value]
+    if isinstance(value, dict):
+        return {key: _compact(v, digits) for key, v in value.items()}
+    return value
+
+
+def coronary_row(result: dict, station_branches=()) -> dict:
+    """A coronary analysis without its per-station arrays, which run to hundreds of numbers a branch."""
+    keys = ("notice", "analysis_id", "revision_id", "created_at", "inputs", "aortic_pressure", "assumed", "flags", "roots", "pieces", "lesions")
+    row = {key: result[key] for key in keys if key in result}
+    branches = result.get("branches") or []
+    row["branches"] = [{key: b.get(key) for key in ("id", "parent", "tree", "gap", "length", "flow", "reason", "distal")} for b in branches]
+    wanted = set(station_branches or ())
+    if wanted:
+        unknown = wanted - {b.get("id") for b in branches}
+        if unknown:
+            raise ApiError(f"No such branch: {', '.join(str(b) for b in sorted(unknown))}")
+        row["stations"] = {str(b["id"]): b.get("stations") for b in branches if b.get("id") in wanted}
+    return _compact(row)
+
+
 def job_row(job: dict) -> dict:
     keys = ("id", "case_id", "kind", "status", "stage", "error", "revision_id", "review_session_id", "created_at", "completed_at", "progress")
     row = {key: job.get(key) for key in keys if job.get(key) is not None}
@@ -569,6 +595,8 @@ class Tools:
         "get_revision",
         "agreement",
         "probe",
+        "list_coronary_analyses",
+        "get_coronary_analysis",
         "view_slice_image",
         "get_correction",
         "api_get",
@@ -723,6 +751,49 @@ class Tools:
             raise ApiError("ras must be [R, A, S]")
         rid = self.api.revision_id(case_id, revision_id)
         return self.api.get(f"/api/cases/{case_id}/revisions/{rid}/probe", x=ras[0], y=ras[1], z=ras[2])
+
+    def run_coronary_analysis(
+        self,
+        case_id: str,
+        lumen: str,
+        revision_id: str | None = None,
+        aorta: str | None = None,
+        myocardium: str | None = None,
+        lv_mass: float | None = None,
+        sbp: float | None = None,
+        dbp: float | None = None,
+        heart_rate: float | None = None,
+        share: float | None = None,
+        ostia: list[list[float]] | None = None,
+        wait_seconds: float = 120,
+    ) -> dict:
+        """Research use only, not for diagnostic use. Trace centrelines in a coronary lumen mask, measure lumen area
+        and solve steady hyperaemic pressure to estimate FFR (CT-FFR). Runs on the CPU and makes no revision.
+        lumen, aorta and myocardium are structure IDs of the revision. Give aorta or up to four ostia RAS points.
+        Give myocardium or lv_mass (g, 20 to 1000), not both. sbp and dbp (mmHg) go together; neither means 120/80.
+        share is the fraction of whole-heart flow into the trees solved. A finished run returns its result as
+        get_coronary_analysis does; the same inputs return the same run."""
+        rid = self.api.revision_id(case_id, revision_id)
+        body = {"lumen": lumen, "aorta": aorta, "myocardium": myocardium, "lv_mass": lv_mass, "sbp": sbp, "dbp": dbp, "heart_rate": heart_rate}
+        body.update(share=share, ostia=ostia)
+        job = self.api.post(f"/api/cases/{case_id}/revisions/{rid}/coronary-analysis", _params(body))
+        job = self.api.wait(job["id"], wait_seconds) if wait_seconds > 0 else job
+        if job["status"] != "completed":
+            return {"job": job_row(job)}
+        return coronary_row(self.api.get(f"/api/cases/{case_id}/revisions/{rid}/coronary-analysis/{job['id']}"))
+
+    def list_coronary_analyses(self, case_id: str, revision_id: str | None = None) -> dict:
+        """A revision's coronary analysis runs, newest first, each with its inputs and a summary once complete."""
+        rid = self.api.revision_id(case_id, revision_id)
+        return _compact(self.api.get(f"/api/cases/{case_id}/revisions/{rid}/coronary-analysis"))
+
+    def get_coronary_analysis(self, case_id: str, analysis_id: str, revision_id: str | None = None, station_branches: list[int] | None = None) -> dict:
+        """Research use only. One coronary analysis: roots, branches with their distal FFR and uncertainty band,
+        lesions with FFR before and beyond them, and flags. station_branches adds the per-station arrays (0.5 mm
+        apart: area, diameters, FFR and its band) for those branch IDs. docs/API.md "Coronary analysis" defines
+        every field and the reading rules."""
+        rid = self.api.revision_id(case_id, revision_id)
+        return coronary_row(self.api.get(f"/api/cases/{case_id}/revisions/{rid}/coronary-analysis/{analysis_id}"), station_branches)
 
     def view_slice_image(
         self,
