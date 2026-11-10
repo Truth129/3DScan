@@ -30,6 +30,8 @@ import { readOrthancLaunch, withoutOrthancLaunch } from './lib/orthanc';
 import { archiveSourceFor, readArchiveLaunch, withoutArchiveLaunch } from './lib/archive';
 import RefinementPanel from './components/RefinementPanel.vue';
 import AgreementPanel from './components/AgreementPanel.vue';
+import CoronaryPanel from './components/CoronaryPanel.vue';
+import { hasCoronaryLumen, type CoronaryTube } from './lib/coronary';
 import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
 import SegmentationControls from './components/SegmentationControls.vue';
 import ExportViewerDialog from './components/ExportViewerDialog.vue';
@@ -248,7 +250,14 @@ const acquisitionTags = computed(() =>
       ].filter(Boolean),
 );
 const mobilePanel = ref<'model' | 'anatomy' | 'review'>('model'),
-  inspectorTab = ref<'selection' | 'refine' | 'history'>('selection');
+  inspectorTab = ref<'selection' | 'refine' | 'history' | 'coronary'>('selection');
+// Research CT-FFR: the tab shows for a revision with a coronary lumen, and the panel owns the 3D tube.
+const coronaryAvailable = computed(() => !!revision.value && hasCoronaryLumen(revision.value.structures)),
+  coronaryTube = shallowRef<CoronaryTube>(),
+  nativeView = ref(false);
+watch(coronaryAvailable, available => {
+  if (!available && inspectorTab.value === 'coronary') inspectorTab.value = 'selection';
+});
 const panels = ref(readWorkspacePanels()),
   layout = ref(readWorkspaceLayout());
 if (!panels.value.model) mobilePanel.value = 'review';
@@ -1670,6 +1679,8 @@ onBeforeUnmount(() => {
                 ><button :class="{ active: inspectorTab === 'history' }" @click="inspectorTab = 'history'">
                   <span class="tab-long">Revision history</span><span class="tab-short" aria-hidden="true">History</span>
                   <span class="tab-count">{{ revisions.length }}</span></button
+                ><button v-if="coronaryAvailable" :class="{ active: inspectorTab === 'coronary' }" @click="inspectorTab = 'coronary'">
+                  <span class="tab-long">Coronary FFR</span><span class="tab-short" aria-hidden="true">FFR</span></button
                 ><button
                   type="button"
                   class="panel-hide inspector-hide"
@@ -1681,6 +1692,15 @@ onBeforeUnmount(() => {
                 </button>
               </header>
               <AgreementPanel v-if="inspectorTab === 'history' && !ctOnly" :case-id="activeCase.id" :revision="revision" @select="select" />
+              <CoronaryPanel
+                v-if="inspectorTab === 'coronary' && coronaryAvailable"
+                :case-id="activeCase.id"
+                :revision="revision"
+                :point="point"
+                :native="nativeView"
+                @select="picked"
+                @tube="coronaryTube = $event"
+              />
               <div v-if="ctOnly && inspectorTab === 'selection'" class="ct-only-summary">
                 <div>
                   <span class="eyebrow">{{ sourceLabel }} GEOMETRY</span>
@@ -1858,7 +1878,9 @@ onBeforeUnmount(() => {
                 :window="displayWindow"
                 :level="displayLevel"
                 :dicom-view-block-reason="viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
+                :coronary-tube="before || coronaryTube?.result.revision_id !== shownRevision.id ? undefined : coronaryTube"
                 @export-view="exportView"
+                @native-view="nativeView = $event"
                 @unread-refusal="alertViewExport"
                 @pick="picked"
                 @point="setPoint"

@@ -320,8 +320,13 @@
     flex-wrap: wrap;
   }
   @container workspace-sidebar (max-width: 419px) {
+    /* Tight enough for four tabs and the hide button at the default 280 px. */
     .workspace-sidebar .inspector-tabs {
-      gap: 12px;
+      gap: 6px;
+      padding: 0 6px 0 10px;
+    }
+    .workspace-sidebar .inspector-tabs > button:not(.inspector-hide) {
+      padding: 5px 6px;
     }
     .workspace-sidebar .inspector-tabs .tab-long {
       position: absolute;
@@ -334,6 +339,18 @@
     .workspace-sidebar .inspector-tabs .tab-short {
       display: inline;
     }
+  }
+  /* Four tabs (the fifth child is the hide button) overflow even the widest sidebar with full names. */
+  .workspace-sidebar .inspector-tabs:has(> :nth-child(5)) .tab-long {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .workspace-sidebar .inspector-tabs:has(> :nth-child(5)) .tab-short {
+    display: inline;
   }
   @container workspace-sidebar (min-width: 420px) {
     .workspace-sidebar .selection-controls {

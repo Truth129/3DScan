@@ -70,6 +70,7 @@ import {
   type ViewportCapture,
 } from '../lib/dicom-view';
 import { apiFetch } from '../lib/api-fetch';
+import { NOT_REPORTED, tubeLegend, type CoronaryTube } from '../lib/coronary';
 const props = defineProps<{
   modelUrl?: string;
   manifestUrl?: string;
@@ -112,6 +113,8 @@ const props = defineProps<{
   volumeViewComponent?: Component;
   /** Set by the live app alone, to show DICOM ↗. Empty means the export may start. */
   dicomViewBlockReason?: string;
+  /** The research centreline tube. Only the native 3D view draws it. */
+  coronaryTube?: CoronaryTube;
 }>();
 const emit = defineEmits<{
   unreadRefusal: [message: string];
@@ -121,6 +124,7 @@ const emit = defineEmits<{
   opacity: [value: number];
   retryVolumeView: [];
   exportView: [];
+  nativeView: [active: boolean];
 }>();
 interface VolumePreview {
   capturePNG(): Promise<string>;
@@ -324,6 +328,11 @@ const vtkSelected = computed(
     ctVolumeAvailable.value,
 );
 const vtkSession = computed(() => (props.localReady && props.fullResolution ? props.localSession : undefined));
+watch(vtkSelected, active => emit('nativeView', active), { immediate: true });
+// The native view fades the lumen under the tube itself, so captures can draw it as set.
+const tube = computed(() => (vtkSelected.value ? props.coronaryTube : undefined)),
+  tubeError = ref(''),
+  legend = computed(() => tube.value && tubeLegend(tube.value.colouring));
 const vtkPlane = computed(() => {
   if (!props.geometry || !props.point || !showPlane.value) return undefined;
   const native = nativeSliceFor(props.geometry, reviewPlane.value, props.point);
@@ -1798,6 +1807,7 @@ defineExpose({
       :review-level="level ?? 40"
       :review-overlay-count="planeRequest?.overlays.length ?? 0"
       :review-compare="compare"
+      :tube="tube"
       @review-status="nativeReviewStatus = $event"
       @retry-plane="queueReviewPlane"
       @gesture="reviewGesture"
@@ -1810,7 +1820,17 @@ defineExpose({
       @mask-status="nativeMaskStatus = $event"
       @color-status="nativeColorStatus = $event"
       @surface-layer-status="nativeSurfaceLayers = $event"
+      @tube-error="tubeError = $event"
     />
+    <div v-if="legend" class="coronary-legend" role="img" :aria-label="`${legend.title} colour scale`">
+      <span class="coronary-legend-title">{{ legend.title }}</span>
+      <span class="coronary-legend-bar" :style="{ background: legend.gradient }"></span>
+      <span class="coronary-legend-ticks">
+        <span v-for="tick in legend.ticks" :key="tick.label" :class="{ strong: tick.strong }" :style="{ left: `${tick.at}%` }">{{ tick.label }}</span>
+      </span>
+      <span v-if="legend.notReported" class="coronary-legend-grey"><i :style="{ background: NOT_REPORTED }"></i>Not reported</span>
+      <span v-if="tubeError" class="coronary-legend-error" role="alert">Tube hidden: {{ tubeError }}</span>
+    </div>
     <div v-if="vtkSelected && vtkComponentFailed" class="viewport-state error-state" role="alert">
       <strong>Cornerstone3D unavailable</strong>
       <p>{{ vtkError }}</p>
@@ -2082,6 +2102,74 @@ defineExpose({
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* Drawn over the black 3D view, so it keeps its own dark backing. Captures leave it and the tube out. */
+.coronary-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 28px;
+  z-index: 4;
+  display: grid;
+  gap: 4px;
+  width: 172px;
+  padding: 7px 10px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #0b0c10d9;
+  font: 9px var(--mono);
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+.coronary-legend-title {
+  color: var(--white);
+  letter-spacing: 0.04em;
+}
+.coronary-legend-bar {
+  display: block;
+  height: 8px;
+  border-radius: 2px;
+}
+.coronary-legend-ticks {
+  position: relative;
+  height: 12px;
+}
+.coronary-legend-ticks span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.coronary-legend-ticks span:first-child {
+  transform: none;
+}
+.coronary-legend-ticks span:last-child {
+  transform: translateX(-100%);
+}
+.coronary-legend-ticks span.strong {
+  color: var(--white);
+  font-weight: 600;
+}
+.coronary-legend-ticks span.strong::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: -13px;
+  width: 1px;
+  height: 12px;
+  background: var(--white);
+}
+.coronary-legend-grey {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.coronary-legend-grey i {
+  width: 14px;
+  height: 8px;
+  border-radius: 2px;
+}
+.coronary-legend-error {
+  color: #dfbb83;
 }
 .viewport-expand-button,
 .viewport-controls-toggle {

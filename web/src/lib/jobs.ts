@@ -16,8 +16,10 @@ export const outboundExportKinds = [
   'direct_seg_export',
   'direct_view_export',
 ];
+/** Kinds a panel polls itself. None makes a revision, so the workspace never waits for one. */
+const ownPollerKinds = ['review_predict', 'coronary_analysis'];
 const active = (job: Job, caseId: string) =>
-  job.case_id === caseId && !['review_predict', ...outboundExportKinds].includes(job.kind) && ['queued', 'running'].includes(job.status);
+  job.case_id === caseId && ![...ownPollerKinds, ...outboundExportKinds].includes(job.kind) && ['queued', 'running'].includes(job.status);
 
 /** Asking again cannot bring back a job that has gone. A 401 clears once someone signs in again. */
 export const jobIsGone = (reason: unknown) => reason instanceof ApiError && reason.status === 404;

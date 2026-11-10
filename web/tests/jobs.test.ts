@@ -46,6 +46,11 @@ describe('case job recovery', () => {
     const reader = { job: vi.fn().mockResolvedValue(exporting), jobs: vi.fn().mockResolvedValue([prediction, exporting, rois, acceptance]) };
     expect(await recoverCaseJob('ct', 'prediction', reader)).toEqual(acceptance);
   });
+  it('leaves a coronary analysis to its panel, so the workspace neither waits for it nor reloads the revision', async () => {
+    const analysis = { ...job('analysis', 'ct', 'running'), kind: 'coronary_analysis' };
+    const reader = { job: vi.fn().mockResolvedValue(analysis), jobs: vi.fn().mockResolvedValue([analysis]) };
+    expect(await recoverCaseJob('ct', 'analysis', reader)).toBeUndefined();
+  });
   it('tolerates an older API without case jobs while retaining real server errors', async () => {
     const original = globalThis.fetch;
     try {

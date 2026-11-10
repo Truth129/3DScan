@@ -9,6 +9,8 @@ import { VTKReviewInput, type NativeReviewState } from '../lib/vtk-review-input'
 import { VTKReviewPlane } from '../lib/vtk-review-plane';
 import { VTKCTPlane, type VTKCTPlaneState } from '../lib/vtk-ct-plane';
 import { VTKSurfaceScene, type NativeSurfaceLayerStatus } from '../lib/vtk-surface-scene';
+import { VTKCoronaryTube } from '../lib/vtk-coronary-tube';
+import type { CoronaryTube } from '../lib/coronary';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib/volume-lighting';
 import type { CTVolumeSettings } from '../lib/volume-presets';
@@ -50,6 +52,8 @@ const props = defineProps<{
   reviewLevel?: number;
   reviewOverlayCount?: number;
   reviewCompare?: boolean;
+  /** The research centreline tube, or nothing. It never reaches a capture. */
+  tube?: CoronaryTube;
 }>();
 const emit = defineEmits<{
   ready: [value: boolean];
@@ -66,6 +70,7 @@ const emit = defineEmits<{
     status: { surfaceLoading: boolean; surfaceError: string; surfaceRevision: string; targetReady: boolean; planeReady: boolean; planeError: string },
   ];
   surfaceLayerStatus: [status: NativeSurfaceLayerStatus];
+  tubeError: [message: string];
 }>();
 const host = ref<HTMLDivElement>();
 const ready = ref(false),
@@ -92,6 +97,10 @@ let viewer: CornerstoneVolume3D | undefined, controller: AbortController | undef
 let lease: CornerstoneSourceLease | undefined, planeLayer: VTKCTPlane | undefined, surfaces: VTKSurfaceScene | undefined;
 let featureRenderer: vtkRenderer | undefined;
 let reviewInput: VTKReviewInput | undefined, reviewPlaneLayer: VTKReviewPlane | undefined;
+let tubeLayer: VTKCoronaryTube | undefined,
+  tubeError = '',
+  capturing = false;
+const LUMEN_UNDER_TUBE = 0.15;
 let reserveReviewFrames: ((bytes: number) => void) | undefined, reserveSurfaceLayers: ((bytes: number) => void) | undefined;
 let presentationVersion = 0,
   syncing = false;
@@ -184,6 +193,11 @@ function disposeFeatures() {
     featureRenderer?.removeViewProp(reviewPlaneLayer.actor);
     reviewPlaneLayer.dispose();
     reviewPlaneLayer = undefined;
+  }
+  if (tubeLayer) {
+    featureRenderer?.removeViewProp(tubeLayer.actor);
+    tubeLayer.dispose();
+    tubeLayer = undefined;
   }
   reviewPlaneReady.value = false;
   reserveReviewFrames?.(0);
@@ -330,6 +344,7 @@ async function initialize() {
       maskTransport: 0,
       colors: 0,
       colorTransport: 0,
+      tube: 0,
     };
     const reserveFeature = (feature: keyof typeof featureBytes) => (bytes: number) => {
       const previous = featureBytes[feature];
@@ -354,6 +369,8 @@ async function initialize() {
     reserveSurfaceLayers = reserveFeature('surfaceLayers');
     reviewPlaneLayer = new VTKReviewPlane(reserveFeature('reviewPlane'));
     instance.nativeRenderer.addViewProp(reviewPlaneLayer.actor);
+    tubeLayer = new VTKCoronaryTube(reserveFeature('tube'));
+    instance.nativeRenderer.addViewProp(tubeLayer.actor);
     reviewInput = new VTKReviewInput(host.value, instance.nativeViewport, {
       actors: () => surfaces?.actors ?? [],
       volume: () => (viewer === instance && props.volumeVisible !== false ? instance.rayVolume() : undefined),
@@ -614,18 +631,66 @@ function syncPresentationNow(viewer: CornerstoneVolume3D) {
     planeError.value = reason instanceof Error ? reason.message : 'The CT plane could not load.';
   }
   syncCut();
+  syncSurfaces(viewer);
+  syncReviewInput();
+}
+/** The tube first, since whether it shows decides how the lumen around it is drawn. */
+function syncSurfaces(instance: CornerstoneVolume3D) {
+  syncTube();
   // A failed or pending revision replacement must not present old surfaces
   // as though they belonged to the currently selected masks.
   const visible = props.segmentationVisible !== false && !surfaceLoading.value && !surfaceError.value,
-    { mode, binding, reason } = surfaceMode(viewer);
-  surfaces?.setPresentation(props.structures ?? [], props.display ?? {}, props.selected ?? '', { visible, mode, binding });
-  publishSurfaceLayerStatus({ mode, layers: viewer.surfaceLayerCount, reason });
-  syncReviewInput();
+    { mode, binding, reason } = surfaceMode(instance);
+  surfaces?.setPresentation(props.structures ?? [], surfaceDisplay(mode), props.selected ?? '', { visible, mode, binding });
+  publishSurfaceLayerStatus({ mode, layers: instance.surfaceLayerCount, reason });
+}
+/**
+ * The lumen surface would tint the tube inside it, so it fades while the tube shows. Solid surfaces
+ * over the CT ignore opacity, so there it is hidden instead. A capture has no tube, so it gets the
+ * lumen as set. Loading reads `props.display`, so the fade never reloads a surface.
+ */
+function surfaceDisplay(mode: NativeSurfaceLayerStatus['mode']) {
+  const display = props.display ?? {},
+    lumen = props.tube?.result.inputs.lumen,
+    state = lumen ? display[lumen] : undefined;
+  if (!lumen || !state || capturing || !tubeLayer?.visible) return display;
+  return { ...display, [lumen]: mode === 'solid' ? { ...state, visible: false } : { ...state, opacity: Math.min(state.opacity, LUMEN_UNDER_TUBE) } };
+}
+/** A tube that cannot be drawn, such as one refused memory, leaves the rest of the view alone. */
+function syncTube() {
+  let message = '';
+  try {
+    tubeLayer?.setTube(props.tube);
+  } catch (reason) {
+    tubeLayer?.setTube(undefined);
+    message = reason instanceof Error ? reason.message : 'The centreline tube could not be drawn.';
+  }
+  if (message !== tubeError) emit('tubeError', (tubeError = message));
 }
 /** Only while marking on the plane: shown edge-on in another mode, a cut would remove half the volume. */
 function syncCut() {
   const cut = props.reviewPlaneActive && props.review?.mode === 'plane' && !planeError.value && props.plane;
   viewer?.setReviewCut(cut ? { axis: props.plane!.axis, index: props.plane!.index } : undefined);
+}
+/**
+ * The research tube stays out of every saved image, and the lumen it faded is drawn as set. The view
+ * draws the tube and the fade again once the capture is read, whether or not it succeeded.
+ */
+async function withoutTube(instance: CornerstoneVolume3D) {
+  const layer = tubeLayer;
+  if (!layer?.visible) return instance.capturePNG();
+  capturing = true;
+  try {
+    syncSurfaces(instance);
+    return await layer.hideFor(() => instance.capturePNG());
+  } finally {
+    capturing = false;
+    if (!disposed && viewer === instance) syncSurfaces(instance);
+    const id = generation;
+    void renderFeatures(instance, id).catch(reason => {
+      if (!disposed && id === generation && viewer === instance) fail(reason);
+    });
+  }
 }
 function retryPlane() {
   if (viewer) {
@@ -765,6 +830,21 @@ watch(
   },
   { deep: true },
 );
+// A new tube object per change; a deep watch would walk every station of the result.
+watch(
+  () => props.tube,
+  async () => {
+    const instance = viewer,
+      id = generation;
+    if (!instance) return;
+    try {
+      syncSurfaces(instance);
+      await renderFeatures(instance, id);
+    } catch (reason) {
+      if (!disposed && id === generation && viewer === instance) fail(reason);
+    }
+  },
+);
 watch(() => props.review, syncReviewInput, { deep: true });
 // A mode change moves only the cut: a full presentation sync would wait for a plane frame that is not coming.
 watch(
@@ -864,6 +944,7 @@ defineExpose({
     review: reviewInput?.diagnostics(),
     reviewPlane: reviewPlaneLayer?.stats(),
     surfaces: surfaces?.stats(),
+    tube: tubeLayer?.visible ?? false,
     surfaceLoading: surfaceLoading.value,
     surfaceError: surfaceError.value,
     planeError: planeError.value,
@@ -878,14 +959,14 @@ defineExpose({
   }),
   capturePNG: async () => {
     if (!viewer || !ready.value) throw new Error('Wait for the Cornerstone viewer to finish rendering.');
-    const image = await viewer.capturePNG();
+    const image = await withoutTube(viewer);
     return reviewInput ? reviewInput.compositePNG(image) : image;
   },
   /** The frame is checked on both sides of the render, and its pixels are read with no task between them. */
   captureExportPNG: async (expected: ViewCaptureRequest): Promise<ViewportCapture> => {
     if (!presents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
     const instance = viewer!,
-      url = await instance.capturePNG();
+      url = await withoutTube(instance);
     if (viewer !== instance || !presents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
     return { url, referenceImageId: lease!.source.descriptor.reference_image_id!, surfaceRevisionId: surfacePresentedRevision.value };
   },
