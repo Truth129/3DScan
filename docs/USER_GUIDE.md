@@ -321,7 +321,7 @@ rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and 
   see-through shader, the 3D view fails instead.
 - **CT plane** shows one native slice: choose **Native i**, **j** or **k**, move its slider, or use
   **Face plane**. **All three** adds the other two native slices through the same point, which
-  follows CT review. Review, Three.js and the portable page show one plane.
+  follows CT review. It carries into review and back. Three.js and the portable page show one plane.
 - Tilted-gantry scans, MRI and the [portable HTML](#portable-offline-html) page use Three.js instead
   of Cornerstone3D.
 - The browser memory budget is up to 3 GiB. If a view does not fit, close CT review or use **Show
@@ -458,11 +458,15 @@ makes the scan's first segmentation revision.
 **Volume point**. Right drag rotates while marking, and a 3D point moves the linked CT crosshair so
 you can confirm it. **Face plane** faces the CT plane at any time.
 
+With **All three**, the other two planes stay on while you mark on the CT plane, but keep only
+their side beyond it, so nothing covers the slice you draw on. **Surface point** refuses a surface
+that a CT plane covers.
+
 With **CT volume** on in review:
 
 - **Volume point** marks the voxel centre nearest where your click first meets half-opaque volume.
   In AI assist, **Point** adds it as an Include or Exclude; other tools move the crosshair there.
-- A click on no visible volume, or on an opaque surface or the CT plane in front of it, makes no
+- A click on no visible volume, or on an opaque surface or a CT plane in front of it, makes no
   mark; see-through surfaces do not block it. **Surface point** refuses a surface the volume covers.
 - While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps the
   whole CT in depth.

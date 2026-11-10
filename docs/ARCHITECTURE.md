@@ -428,19 +428,20 @@ second GPU copy of the CT.
   candidate; colouring and Cinematic heart stay off because they would follow it. While the reader
   marks on the CT plane, the crop plane on its axis moves to the slice to cut away the camera's
   side, because vtk.js volume shaders take six clipping planes.
-- **All three** planes add a plane layer for each other native axis through the same point. Each
-  is made on first use and keeps its raster and memory charge until the viewer is rebuilt, as the
-  main plane does. One refused by memory or its slice limit hides only itself. Review hides them
-  and marks on one plane.
+- **All three** planes add a plane layer for each other native axis through the same point, in
+  review too. Each is made on first use and keeps its raster and memory charge until the viewer is
+  rebuilt, as the main plane does. One refused by memory or its slice limit hides only itself.
+  While the reader marks on the CT plane, a clipping plane keeps only their side beyond it, as the
+  cut does for the volume, and review clicks treat them as opaque.
 - **Volume point** marches the click's ray on the CPU through the shared ImageVolume
   (`volume-ray.ts`), because vtk.js cannot pick a shared GPU volume. It samples trilinearly every
   half smallest spacing and takes the first sample where opacity, accumulated as vtk.js does,
-  reaches 0.5, within the clipping, near and far planes and before opaque surfaces and the CT plane.
+  reaches 0.5, within the clipping, near and far planes and before opaque surfaces and CT planes.
   A mask hides samples by the shader's own nearest-voxel test on a one-bit CPU copy of its crop.
 - **Volume point limits.** See-through surfaces neither stop nor dim it, and gradient opacity and
   lighting are not modelled.
-- **Surface point** is refused when visible volume lies in front of it by more than the coarsest
-  voxel spacing or 1 mm, whichever is larger.
+- **Surface point** is refused when visible volume or a CT plane lies in front of it by more than
+  the coarsest voxel spacing or 1 mm, whichever is larger.
 
 Masking and colouring patch exact shader anchors through a factory local to one actor. That bridge
 checks the installed versions (Cornerstone3D 5.13.1, vtk.js 36.4.1) and throws on a mismatch.

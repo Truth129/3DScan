@@ -339,8 +339,8 @@ const vtkPlane = computed(() => {
   const native = nativeSliceFor(props.geometry, reviewPlane.value, props.point);
   return { visible: true, axis: native.axis as 0 | 1 | 2, index: native.index, window: props.window || 400, level: props.level ?? 40 };
 });
-/** All three: the other two native planes through the same point, for display only. Review marks on one plane. */
-const allPlanesShown = computed(() => allPlanes.value && vtkSelected.value && !props.reviewActive && !!vtkPlane.value);
+/** All three: the other two native planes through the same point, on the main page and in review alike. */
+const allPlanesShown = computed(() => allPlanes.value && vtkSelected.value && !!vtkPlane.value);
 const vtkOtherPlanes = computed(() => {
   const main = vtkPlane.value;
   if (!allPlanesShown.value || !main || !props.geometry || !props.point) return undefined;
@@ -2026,7 +2026,7 @@ defineExpose({
           @input="slidePlane"
         />
         <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
-        <label v-if="vtkSelected && showPlane && !reviewActive" title="Also show the other two native planes through the same point."
+        <label v-if="vtkSelected && showPlane" title="Also show the other two native planes through the same point."
           ><input type="checkbox" :aria-label="`Show all three ${modality} planes`" v-model="allPlanes" /> All three</label
         >
       </div>

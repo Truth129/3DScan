@@ -75,6 +75,8 @@ vi.mock('../src/lib/vtk-ct-plane', () => ({
   VTKCTPlane: class {
     actor = {};
     setState = vi.fn();
+    setCut = vi.fn();
+    shownRect() {}
     dispose() {}
     stats() {}
     constructor() {
@@ -577,7 +579,7 @@ describe('viewport capture through Cornerstone', () => {
 });
 
 describe('all three CT planes in the native view', () => {
-  it('draws the other two native planes through the same point, and only the main one in review', async () => {
+  it('draws the other two native planes through the same point, in review too, cut to the far side while marking on the plane', async () => {
     const shown = await viewport({ localSession: session(), point: [1, 2, 3] });
     shown.toggle('Show CT plane', true);
     await settled();
@@ -595,10 +597,33 @@ describe('all three CT planes in the native view', () => {
       [1, 2],
       [2, 3],
     ]);
+    // Review keeps the same setting. Its own plane replaces the main one there, so two remain.
     shown.state.reviewActive = true;
     await settled();
-    expect(shown.labelled('Show all three CT planes')).toBeFalsy();
-    expect(shownAxes()).toEqual([]);
+    expect((shown.labelled('Show all three CT planes') as unknown as HTMLInputElement).checked).toBe(true);
+    expect(shownAxes()).toEqual([
+      [0, 1],
+      [1, 2],
+    ]);
+    // A camera above the axial slice: the cut keeps the far side, towards the feet.
+    Object.assign(fake.viewer.camera, { positionRAS: [1, 2, 100], focalPointRAS: [1, 2, 3] });
+    fake.lease.source.descriptor.affine_ras = orthogonal.affine_ras;
+    const mode = shown.labelled('3D marking mode') as unknown as HTMLSelectElement;
+    mode.value = 'plane';
+    mode.dispatchEvent(new Event('change'));
+    await settled();
+    expect(shownAxes()).toHaveLength(2);
+    // The kept side is S 3 and below.
+    for (const plane of fake.planes.slice(1)) {
+      const { normal, origin } = plane.setCut.mock.lastCall[0];
+      expect(normal.map(Math.abs)).toEqual([0, 0, 1]);
+      expect(normal[2]).toBe(-1);
+      expect(origin[2]).toBe(3);
+    }
+    mode.value = 'surface';
+    mode.dispatchEvent(new Event('change'));
+    await settled();
+    expect(fake.planes.slice(1).map(plane => plane.setCut.mock.lastCall?.[0])).toEqual([undefined, undefined]);
     shown.state.reviewActive = false;
     await settled();
     expect(shownAxes()).toHaveLength(3);

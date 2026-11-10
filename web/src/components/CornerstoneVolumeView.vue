@@ -21,6 +21,8 @@ import type { VolumeColorRequest } from '../lib/volume-colors';
 import { revisionUrl } from '../lib/api';
 import { VIEW_NOT_READY_MESSAGE, type ViewCaptureRequest, type ViewportCapture } from '../lib/dicom-view';
 import { apiFetch } from '../lib/api-fetch';
+import { inverseAffine, transformPoint } from '../lib/ct-reslice';
+import { rasToLps } from '../lib/cornerstone-frame';
 
 const props = defineProps<{
   session?: RenderCTSession;
@@ -31,7 +33,7 @@ const props = defineProps<{
   volumeVisible?: boolean;
   segmentationVisible?: boolean;
   plane?: VTKCTPlaneState;
-  /** All three: the other native planes through the same point as `plane`. They never show in review. */
+  /** All three: the other native planes through the same point as `plane`, beside the review plane in review. */
   otherPlanes?: readonly VTKCTPlaneState[];
   manifestUrl?: string;
   modelUrl?: string;
@@ -102,6 +104,7 @@ let featureRenderer: vtkRenderer | undefined;
 /** One layer per native axis, made on first use; a hidden one keeps its raster until disposal, as the main plane does. */
 const otherPlaneLayers = new Map<0 | 1 | 2, VTKCTPlane>();
 let createOtherPlane: ((axis: 0 | 1 | 2) => VTKCTPlane) | undefined;
+let otherPlaneCut: { axis: 0 | 1 | 2; index: number } | undefined;
 let reviewInput: VTKReviewInput | undefined, reviewPlaneLayer: VTKReviewPlane | undefined;
 let tubeLayer: VTKCoronaryTube | undefined,
   tubeError = '',
@@ -170,6 +173,8 @@ function syncReviewInput() {
     props.review
       ? {
           ...props.review,
+          // A review plane hidden by its error must not stop clicks it no longer covers.
+          showPlane: props.review.showPlane !== false && !planeError.value,
           disabled:
             props.review.disabled ||
             (props.review.mode === 'plane' && (!reviewPlaneReady.value || !!planeError.value)) ||
@@ -242,6 +247,7 @@ function disposeFeatures() {
   }
   otherPlaneLayers.clear();
   createOtherPlane = undefined;
+  otherPlaneCut = undefined;
   otherPlaneError.value = '';
   featureRenderer = undefined;
   publishReviewStatus();
@@ -302,6 +308,7 @@ async function initialize() {
       onCamera: camera => {
         if (disposed || id !== generation || !viewer) return;
         cameraKey = JSON.stringify(camera);
+        if (otherPlaneCut) syncOtherPlaneCut();
         emit('camera', camera);
         reviewInput?.updateOverlay();
       },
@@ -399,6 +406,7 @@ async function initialize() {
     instance.nativeRenderer.addViewProp(tubeLayer.actor);
     reviewInput = new VTKReviewInput(host.value, instance.nativeViewport, {
       actors: () => surfaces?.actors ?? [],
+      planes: () => [...otherPlaneLayers.values()].flatMap(layer => layer.shownRect() ?? []),
       volume: () => (viewer === instance && props.volumeVisible !== false ? instance.rayVolume() : undefined),
       onGesture: prompt => emit('gesture', prompt),
       onPick: (id, ras) => emit('pick', id, ras),
@@ -665,7 +673,7 @@ function syncPresentationNow(viewer: CornerstoneVolume3D) {
 }
 /** A plane refused here, by memory or its slice limit, hides only itself: the main plane and export stay as they were. */
 function syncOtherPlanes() {
-  const main = props.reviewPlaneActive ? undefined : props.plane,
+  const main = props.plane,
     wanted = main ? (props.otherPlanes ?? []).filter(state => state.axis !== main.axis) : [];
   let failure = '';
   for (const [axis, layer] of otherPlaneLayers) if (!wanted.some(state => state.axis === axis)) layer.setState(undefined);
@@ -716,7 +724,26 @@ function syncTube() {
 /** Only while marking on the plane: shown edge-on in another mode, a cut would remove half the volume. */
 function syncCut() {
   const cut = props.reviewPlaneActive && props.review?.mode === 'plane' && !planeError.value && props.plane;
-  viewer?.setReviewCut(cut ? { axis: props.plane!.axis, index: props.plane!.index } : undefined);
+  otherPlaneCut = cut ? { axis: props.plane!.axis, index: props.plane!.index } : undefined;
+  viewer?.setReviewCut(otherPlaneCut);
+  syncOtherPlaneCut();
+}
+/** The other planes keep only the side beyond the slice being marked, as the CT volume does, so nothing covers it. */
+function syncOtherPlaneCut() {
+  const slice = otherPlaneCut,
+    descriptor = lease?.source.descriptor,
+    camera = slice && viewer && !viewer.isDisposed ? viewer.camera : undefined;
+  let cut: { normal: Point; origin: Point } | undefined;
+  if (slice && descriptor && camera?.focalPointRAS && camera.positionRAS) {
+    // Index grows along this row of the inverse affine, so its sign towards the view says which side lies beyond.
+    const gradient = inverseAffine(descriptor.affine_ras)[slice.axis].slice(0, 3),
+      view = camera.focalPointRAS.map((value, axis) => value - camera.positionRAS[axis]),
+      sign = gradient.reduce((sum, value, axis) => sum + value * view[axis], 0) >= 0 ? 1 : -1,
+      voxel: Point = [0, 0, 0];
+    voxel[slice.axis] = slice.index;
+    cut = { normal: rasToLps(gradient.map(value => value * sign)), origin: rasToLps(transformPoint(descriptor.affine_ras, voxel)) };
+  }
+  for (const layer of otherPlaneLayers.values()) layer.setCut(cut);
 }
 /**
  * The research tube stays out of every saved image, and the lumen it faded is drawn as set. The view

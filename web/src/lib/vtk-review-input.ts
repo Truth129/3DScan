@@ -45,8 +45,12 @@ export interface NativeReviewActor {
   id: string;
   actor: vtkActor;
 }
+/** Enough of a drawn native plane to meet a ray. */
+export type NativeReviewPlaneRect = Pick<SliceMeta, 'width' | 'height' | 'pixel_to_ras'>;
 export interface NativeReviewOptions {
   actors(): NativeReviewActor[];
+  /** Opaque CT planes drawn beside the review plane, such as All three's. */
+  planes?(): readonly NativeReviewPlaneRect[];
   /** The CT volume as drawn, for picks that must see it; nothing while it is hidden. */
   volume?(): VolumeRaySource | undefined;
   onGesture(prompt: InteractivePrompt): void;
@@ -58,9 +62,10 @@ export interface NativeReviewOptions {
   onError(message: string): void;
 }
 export const VOLUME_MISSED_MESSAGE = 'No visible CT volume under the pointer.';
-export const VOLUME_COVERED_MESSAGE = 'An opaque surface or the CT plane is in front of the CT volume here.';
+export const VOLUME_COVERED_MESSAGE = 'An opaque surface or a CT plane is in front of the CT volume here.';
 export const VOLUME_UNREADABLE_MESSAGE = 'The CT volume could not be read here; try again.';
 export const SURFACE_COVERED_MESSAGE = 'The CT volume covers this surface here. Use Volume point, or turn CT volume off.';
+export const SURFACE_PLANE_COVERED_MESSAGE = 'A CT plane covers this surface here. Rotate, or turn the plane off.';
 const svgNS = 'http://www.w3.org/2000/svg';
 const dot = (a: readonly number[], b: readonly number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
 const cross = (a: readonly number[], b: readonly number[]): Point => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -72,7 +77,7 @@ const unit = (point: Point): Point => {
 };
 
 /** Intersect the physical plane, keeping its exact source-grid pixel coordinates. */
-export function intersectNativeReviewPlane(originRAS: Point, directionRAS: Point, meta: SliceMeta) {
+export function intersectNativeReviewPlane(originRAS: Point, directionRAS: Point, meta: NativeReviewPlaneRect) {
   const origin = pixelToRas(meta.pixel_to_ras, 0, 0),
     x = subtract(pixelToRas(meta.pixel_to_ras, 1, 0), origin),
     y = subtract(pixelToRas(meta.pixel_to_ras, 0, 1), origin),
@@ -287,8 +292,22 @@ export class VTKReviewInput {
       return null;
     }
   }
+  /** How far along the ray each drawn CT plane lies: the review plane and any others. A part the near or far clip cuts away hides nothing. */
+  private planeDepths(ray: { origin: Point; direction: Point; clip: VolumeRayHalfSpace[] }, state: NativeReviewState) {
+    const planes = [...(state.planeMeta && state.showPlane !== false ? [state.planeMeta] : []), ...(this.options.planes?.() ?? [])];
+    return planes.flatMap(plane => {
+      const hit = intersectNativeReviewPlane(ray.origin, ray.direction, plane);
+      return hit && ray.clip.every(({ normal, origin }) => dot(subtract(hit.ras, origin), normal) >= 0)
+        ? [dot(subtract(hit.ras, ray.origin), ray.direction)]
+        : [];
+    });
+  }
+  /** Meshes can sit up to a voxel off the CT they trace, so only what lies clearly in front hides a surface. */
+  private surfaceTolerance(geometry: Geometry) {
+    return Math.max(1, ...[0, 1, 2].map(axis => Math.hypot(...geometry.affine_ras.slice(0, 3).map(row => row[axis]))));
+  }
   /**
-   * Opaque surfaces and the CT plane hide the volume behind them, so the ray stops at the nearest.
+   * Opaque surfaces and the CT planes hide the volume behind them, so the ray stops at the nearest.
    * See-through surfaces neither stop nor dim it: the mark is a CT voxel, so only CT counts towards the threshold.
    */
   private volumePoint(event: PointerEvent, state: NativeReviewState) {
@@ -298,8 +317,7 @@ export class VTKReviewInput {
     const opaque = this.options.actors().filter(({ actor }) => actor.getProperty().getOpacity() >= 1);
     const ray = this.ray(event),
       surface = pickNativeReviewSurface(this.viewport, this.canvasPoint(event), opaque),
-      plane = state.planeMeta && state.showPlane !== false ? intersectNativeReviewPlane(ray.origin, ray.direction, state.planeMeta) : undefined,
-      depths = [surface, plane].flatMap(hit => (hit ? [dot(subtract(hit.ras, ray.origin), ray.direction)] : [])),
+      depths = [...(surface ? [dot(subtract(surface.ras, ray.origin), ray.direction)] : []), ...this.planeDepths(ray, state)],
       limit = depths.length ? Math.min(...depths) : undefined,
       hit = this.volumeHit(ray, source, limit),
       ras = hit && nativeReviewVoxelCentre(hit.ras, state.geometry);
@@ -312,9 +330,14 @@ export class VTKReviewInput {
   private surfaceCovered(event: PointerEvent, surface: Point, geometry: Geometry) {
     const source = this.options.volume?.();
     if (!source) return false;
+    const ray = this.ray(event);
+    return !!this.volumeHit(ray, source, dot(subtract(surface, ray.origin), ray.direction) - this.surfaceTolerance(geometry));
+  }
+  /** A CT plane drawn in front of the surface hides it, as the volume does. */
+  private surfaceBehindPlane(event: PointerEvent, surface: Point, state: NativeReviewState) {
     const ray = this.ray(event),
-      tolerance = Math.max(1, ...[0, 1, 2].map(axis => Math.hypot(...geometry.affine_ras.slice(0, 3).map(row => row[axis]))));
-    return !!this.volumeHit(ray, source, dot(subtract(surface, ray.origin), ray.direction) - tolerance);
+      depth = dot(subtract(surface, ray.origin), ray.direction) - this.surfaceTolerance(state.geometry);
+    return this.planeDepths(ray, state).some(value => value < depth);
   }
   private capture(): ScissorsCapture {
     const { left, top, width, height } = this.viewport.canvas.getBoundingClientRect();
@@ -356,6 +379,10 @@ export class VTKReviewInput {
         if (!ras) return;
         if (this.surfaceCovered(event, hit.ras, state.geometry)) {
           this.options.onNotice?.(SURFACE_COVERED_MESSAGE);
+          return;
+        }
+        if (this.surfaceBehindPlane(event, hit.ras, state)) {
+          this.options.onNotice?.(SURFACE_PLANE_COVERED_MESSAGE);
           return;
         }
         gesture.surface = ras;

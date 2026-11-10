@@ -12,9 +12,11 @@ import {
   nativeReviewProjection,
   nativeReviewSurfacePoint,
   pickNativeReviewSurface,
+  SURFACE_PLANE_COVERED_MESSAGE,
   VOLUME_COVERED_MESSAGE,
   VTKReviewInput,
   type NativeReviewOptions,
+  type NativeReviewPlaneRect,
   type NativeReviewState,
   type NativeReviewViewport,
 } from '../src/lib/vtk-review-input';
@@ -285,6 +287,59 @@ describe('native review physical geometry', () => {
     expect(notices.at(-1)).toBe(VOLUME_COVERED_MESSAGE);
     test.input.dispose();
     front.dispose();
+  });
+  it('lets no mark pass through another CT plane drawn in front, by Surface point or Volume point', () => {
+    const target = triangle(5),
+      notices: string[] = [],
+      // All three's planes are opaque; this one lies between the camera and both the surface and the CT.
+      front: NativeReviewPlaneRect = {
+        width: 201,
+        height: 201,
+        pixel_to_ras: [
+          [1, 0, 0, -100],
+          [0, 1, 0, -100],
+          [0, 0, 1, 100],
+          [0, 0, 0, 1],
+        ],
+      },
+      volume: VolumeRaySource = { affine: geometry.affine_ras, shape: geometry.shape, sample: () => 1, opacity: () => 1, unitDistanceMM: 1 };
+    let planes: NativeReviewPlaneRect[] = [front];
+    const test = inputFor(stateFor({ mode: 'surface', tool: 'point', planeMeta: undefined, showPlane: false }), {
+      actors: () => [{ id: 'target', actor: target.actor }],
+      planes: () => planes,
+      onNotice: message => notices.push(message),
+    });
+    test.renderer.addActor(target.actor);
+    const centre = test.viewport.worldToCanvas([0, 0, 0]),
+      click = () => (pointer(test.host, 'pointerdown', ...centre), pointer(test.host, 'pointerup', ...centre));
+    click();
+    expect(test.prompts).toEqual([]);
+    expect(notices.at(-1)).toBe(SURFACE_PLANE_COVERED_MESSAGE);
+    // A near clip that cuts the plane away, as Focus can, leaves the surface showing and markable.
+    test.camera.setClippingRange(950, 2000);
+    click();
+    expect(test.prompts).toHaveLength(1);
+    test.camera.setClippingRange(0.1, 2000);
+    planes = [];
+    click();
+    expect(test.prompts).toHaveLength(2);
+    test.input.dispose();
+
+    const marking = inputFor(stateFor({ mode: 'volume', tool: 'point', planeMeta: undefined, showPlane: false }), {
+      volume: () => volume,
+      planes: () => planes,
+      onNotice: message => notices.push(message),
+    });
+    const volumeClick = () => (pointer(marking.host, 'pointerdown', ...centre), pointer(marking.host, 'pointerup', ...centre));
+    planes = [front];
+    volumeClick();
+    expect(marking.prompts).toEqual([]);
+    expect(notices.at(-1)).toBe(VOLUME_COVERED_MESSAGE);
+    planes = [];
+    volumeClick();
+    expect(marking.prompts).toHaveLength(1);
+    marking.input.dispose();
+    target.dispose();
   });
 });
 

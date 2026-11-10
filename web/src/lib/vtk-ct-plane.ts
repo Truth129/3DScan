@@ -4,6 +4,7 @@ import vtkImageMapper from '@kitware/vtk.js/Rendering/Core/ImageMapper';
 import vtkImageSlice from '@kitware/vtk.js/Rendering/Core/ImageSlice';
 import vtkImageData from '@kitware/vtk.js/Common/DataModel/ImageData';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
+import vtkPlane from '@kitware/vtk.js/Common/DataModel/Plane';
 import type { VolumeDescriptor } from './ct-reslice';
 import { validateDescriptor } from './ct-reslice';
 import { rasToLps } from './cornerstone-frame';
@@ -33,6 +34,7 @@ export class VTKCTPlane {
   private sampleReads = 0;
   private reservedBytes = 0;
   private sampleAt: (i: number, j: number, k: number) => number;
+  private clip?: ReturnType<typeof vtkPlane.newInstance>;
 
   constructor(
     imageData: ReturnType<typeof vtkImageData.newInstance> | undefined,
@@ -185,6 +187,40 @@ export class VTKCTPlane {
     this.actor.setVisibility(state.visible);
   }
 
+  /** Keep only the side of the slice the normal points to, in LPS world coordinates; nothing cuts it without one. */
+  setCut(cut?: { normal: Point; origin: Point }) {
+    if (this.disposed) return;
+    if (!cut) {
+      if (!this.clip) return;
+      this.mapper.removeAllClippingPlanes();
+      this.clip.delete();
+      this.clip = undefined;
+      return;
+    }
+    if (!this.clip) {
+      this.clip = vtkPlane.newInstance();
+      this.mapper.addClippingPlane(this.clip);
+    }
+    this.clip.setNormal(...cut.normal);
+    this.clip.setOrigin(...cut.origin);
+  }
+
+  /** The drawn slice's pixel grid in patient RAS while it shows, so review clicks cannot pass through it. */
+  shownRect() {
+    if (this.disposed || !this.state?.visible || !this.actor.getVisibility()) return;
+    const { axis, index } = this.state,
+      [u, v] = [0, 1, 2].filter(other => other !== axis),
+      affine = this.descriptor.affine_ras,
+      origin: Point = [0, 0, 0];
+    origin[axis] = index;
+    const ras = transformPoint(affine, origin);
+    return {
+      width: this.descriptor.shape[u],
+      height: this.descriptor.shape[v],
+      pixel_to_ras: [...affine.slice(0, 3).map((row, a) => [row[u], row[v], row[axis], ras[a]]), [0, 0, 0, 1]],
+    };
+  }
+
   stats() {
     return {
       visible: !this.disposed && this.actor.getVisibility(),
@@ -210,6 +246,8 @@ export class VTKCTPlane {
     this.actor.getProperty().delete();
     this.actor.delete();
     this.mapper.delete();
+    this.clip?.delete();
+    this.clip = undefined;
     this.scalars.delete();
     this.image.delete();
     this.values = new Float32Array(0);
