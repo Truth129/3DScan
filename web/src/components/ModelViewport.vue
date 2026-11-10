@@ -2214,7 +2214,7 @@ defineExpose({
 .coronary-legend {
   position: absolute;
   left: 12px;
-  bottom: 28px;
+  bottom: calc(var(--viewport-toolbar-space) + 4px);
   z-index: 4;
   display: grid;
   gap: 4px;
@@ -2358,7 +2358,8 @@ defineExpose({
 @container model-tile (min-width: 880px) {
   /* A container query styles descendants only, so the reserved space is set where it is used. */
   .model-review-controls,
-  .orientation-gizmo {
+  .orientation-gizmo,
+  .coronary-legend {
     --viewport-toolbar-space: 60px;
   }
   .camera-strip {
