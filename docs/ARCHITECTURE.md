@@ -428,6 +428,10 @@ second GPU copy of the CT.
   candidate; colouring and Cinematic heart stay off because they would follow it. While the reader
   marks on the CT plane, the crop plane on its axis moves to the slice to cut away the camera's
   side, because vtk.js volume shaders take six clipping planes.
+- **All three** planes add a plane layer for each other native axis through the same point. Each
+  is made on first use and keeps its raster and memory charge until the viewer is rebuilt, as the
+  main plane does. One refused by memory or its slice limit hides only itself. Review hides them
+  and marks on one plane.
 - **Volume point** marches the click's ray on the CPU through the shared ImageVolume
   (`volume-ray.ts`), because vtk.js cannot pick a shared GPU volume. It samples trilinearly every
   half smallest spacing and takes the first sample where opacity, accumulated as vtk.js does,

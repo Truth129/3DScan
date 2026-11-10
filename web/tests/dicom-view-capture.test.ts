@@ -13,6 +13,8 @@ const fake = vi.hoisted(() => ({
   viewer: undefined as any,
   lease: undefined as any,
   plane: undefined as any,
+  planes: [] as any[],
+  failAxis: undefined as number | undefined,
   surfaces: undefined as any,
   scene: undefined as any,
   frames: undefined as any,
@@ -77,6 +79,10 @@ vi.mock('../src/lib/vtk-ct-plane', () => ({
     stats() {}
     constructor() {
       fake.plane = this;
+      fake.planes.push(this);
+      this.setState.mockImplementation((state?: { axis: number }) => {
+        if (state && state.axis === fake.failAxis) throw new Error('Plane refused');
+      });
     }
   },
 }));
@@ -206,6 +212,8 @@ function pendingFetch() {
 }
 beforeEach(() => {
   fake.viewer = undefined;
+  fake.planes = [];
+  fake.failAxis = undefined;
   fake.firstFrame = Promise.resolve();
   fake.masks.get = async (_base: string, ids: string[]) => overlay('volume-mask-union', ids);
   fake.masks.labels = async (_base: string, ids: string[]) => overlay('volume-label-union', ids);
@@ -565,6 +573,48 @@ describe('viewport capture through Cornerstone', () => {
     await settled();
     frame.resolve('data:image/png;base64,stale');
     await expect(capture).rejects.toThrow(message);
+  });
+});
+
+describe('all three CT planes in the native view', () => {
+  it('draws the other two native planes through the same point, and only the main one in review', async () => {
+    const shown = await viewport({ localSession: session(), point: [1, 2, 3] });
+    shown.toggle('Show CT plane', true);
+    await settled();
+    expect(shown.labelled('Show all three CT planes')).toBeTruthy();
+    shown.toggle('Show all three CT planes', true);
+    await settled();
+    const shownAxes = () =>
+      fake.planes
+        .map(plane => plane.setState.mock.lastCall?.[0])
+        .filter(state => state?.visible)
+        .map(state => [state.axis, state.index])
+        .sort();
+    expect(shownAxes()).toEqual([
+      [0, 1],
+      [1, 2],
+      [2, 3],
+    ]);
+    shown.state.reviewActive = true;
+    await settled();
+    expect(shown.labelled('Show all three CT planes')).toBeFalsy();
+    expect(shownAxes()).toEqual([]);
+    shown.state.reviewActive = false;
+    await settled();
+    expect(shownAxes()).toHaveLength(3);
+  });
+  it('hides only an extra plane that fails, and keeps the main plane and export', async () => {
+    const shown = await viewport({ localSession: session(), point: [1, 2, 3] });
+    shown.toggle('Show CT plane', true);
+    await settled();
+    fake.failAxis = 0;
+    shown.toggle('Show all three CT planes', true);
+    await settled();
+    const visible = fake.planes.map(plane => plane.setState.mock.lastCall?.[0]).filter(state => state?.visible);
+    expect(visible.map(state => state.axis).sort()).toEqual([1, 2]);
+    expect(shown.text()).toContain('Other CT planes hidden: Plane refused');
+    expect(shown.text()).not.toContain('CT plane hidden:');
+    await expect(shown.capture()).resolves.toBeTruthy();
   });
 });
 

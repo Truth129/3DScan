@@ -320,7 +320,8 @@ rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and 
   segments stay solid and the **Rendering stack** says why. If the GPU cannot compile the
   see-through shader, the 3D view fails instead.
 - **CT plane** shows one native slice: choose **Native i**, **j** or **k**, move its slider, or use
-  **Face plane**.
+  **Face plane**. **All three** adds the other two native slices through the same point, which
+  follows CT review. Review, Three.js and the portable page show one plane.
 - Tilted-gantry scans, MRI and the [portable HTML](#portable-offline-html) page use Three.js instead
   of Cornerstone3D.
 - The browser memory budget is up to 3 GiB. If a view does not fit, close CT review or use **Show

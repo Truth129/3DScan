@@ -31,6 +31,8 @@ const props = defineProps<{
   volumeVisible?: boolean;
   segmentationVisible?: boolean;
   plane?: VTKCTPlaneState;
+  /** All three: the other native planes through the same point as `plane`. They never show in review. */
+  otherPlanes?: readonly VTKCTPlaneState[];
   manifestUrl?: string;
   modelUrl?: string;
   modelData?: ArrayBuffer;
@@ -76,6 +78,7 @@ const host = ref<HTMLDivElement>();
 const ready = ref(false),
   error = ref(''),
   planeError = ref(''),
+  otherPlaneError = ref(''),
   surfaceError = ref(''),
   surfaceLoading = ref(false);
 const maskLoading = ref(false),
@@ -96,6 +99,9 @@ let retainedLightPose: NativeVolumeLightPose | undefined, lightPoseSession: Rend
 let viewer: CornerstoneVolume3D | undefined, controller: AbortController | undefined, observer: ResizeObserver | undefined;
 let lease: CornerstoneSourceLease | undefined, planeLayer: VTKCTPlane | undefined, surfaces: VTKSurfaceScene | undefined;
 let featureRenderer: vtkRenderer | undefined;
+/** One layer per native axis, made on first use; a hidden one keeps its raster until disposal, as the main plane does. */
+const otherPlaneLayers = new Map<0 | 1 | 2, VTKCTPlane>();
+let createOtherPlane: ((axis: 0 | 1 | 2) => VTKCTPlane) | undefined;
 let reviewInput: VTKReviewInput | undefined, reviewPlaneLayer: VTKReviewPlane | undefined;
 let tubeLayer: VTKCoronaryTube | undefined,
   tubeError = '',
@@ -230,6 +236,13 @@ function disposeFeatures() {
     planeLayer.dispose();
     planeLayer = undefined;
   }
+  for (const layer of otherPlaneLayers.values()) {
+    featureRenderer?.removeViewProp(layer.actor);
+    layer.dispose();
+  }
+  otherPlaneLayers.clear();
+  createOtherPlane = undefined;
+  otherPlaneError.value = '';
   featureRenderer = undefined;
   publishReviewStatus();
 }
@@ -336,6 +349,9 @@ async function initialize() {
     featureRenderer = instance.nativeRenderer;
     const featureBytes = {
       plane: 0,
+      otherPlane0: 0,
+      otherPlane1: 0,
+      otherPlane2: 0,
       reviewPlane: 0,
       reviewFrames: 0,
       surfaces: 0,
@@ -364,6 +380,16 @@ async function initialize() {
       reserveFeature('plane'),
     );
     instance.nativeRenderer.addViewProp(planeLayer.actor);
+    createOtherPlane = axis => {
+      const layer = new VTKCTPlane(
+        instance.sourceImageData,
+        sourceLease.source.descriptor,
+        (i, j, k) => instance.sourceVoxelValue(i, j, k),
+        reserveFeature(`otherPlane${axis}`),
+      );
+      instance.nativeRenderer.addViewProp(layer.actor);
+      return layer;
+    };
     surfaces = new VTKSurfaceScene(instance.nativeRenderer, undefined, reserveFeature('surfaces'));
     reserveReviewFrames = reserveFeature('reviewFrames');
     reserveSurfaceLayers = reserveFeature('surfaceLayers');
@@ -617,6 +643,7 @@ function syncPresentationNow(viewer: CornerstoneVolume3D) {
     const layerCount = Math.max(1, props.reviewOverlayCount ?? 1);
     reserveReviewFrames?.(props.reviewPlaneActive ? 12 * 1024 ** 2 + framePixels * (4 + (props.reviewCompare ? 2 : 1) * layerCount) : 0);
     planeLayer?.setState(props.reviewPlaneActive ? undefined : props.plane);
+    syncOtherPlanes();
     reviewPlaneReady.value = false;
     if (props.reviewPlaneActive && props.reviewFrame && props.reviewGeometry) {
       reviewPlaneLayer?.setFrame(props.reviewFrame, props.reviewGeometry, props.reviewWindow ?? 400, props.reviewLevel ?? 40);
@@ -626,6 +653,8 @@ function syncPresentationNow(viewer: CornerstoneVolume3D) {
     planeError.value = '';
   } catch (reason) {
     planeLayer?.setState(undefined);
+    for (const layer of otherPlaneLayers.values()) layer.setState(undefined);
+    otherPlaneError.value = '';
     reviewPlaneLayer?.setVisible(false);
     reviewPlaneReady.value = false;
     planeError.value = reason instanceof Error ? reason.message : 'The CT plane could not load.';
@@ -633,6 +662,24 @@ function syncPresentationNow(viewer: CornerstoneVolume3D) {
   syncCut();
   syncSurfaces(viewer);
   syncReviewInput();
+}
+/** A plane refused here, by memory or its slice limit, hides only itself: the main plane and export stay as they were. */
+function syncOtherPlanes() {
+  const main = props.reviewPlaneActive ? undefined : props.plane,
+    wanted = main ? (props.otherPlanes ?? []).filter(state => state.axis !== main.axis) : [];
+  let failure = '';
+  for (const [axis, layer] of otherPlaneLayers) if (!wanted.some(state => state.axis === axis)) layer.setState(undefined);
+  for (const state of wanted) {
+    try {
+      let layer = otherPlaneLayers.get(state.axis);
+      if (!layer && createOtherPlane) otherPlaneLayers.set(state.axis, (layer = createOtherPlane(state.axis)));
+      layer?.setState(state);
+    } catch (reason) {
+      otherPlaneLayers.get(state.axis)?.setState(undefined);
+      failure ||= reason instanceof Error ? reason.message : 'Another CT plane could not load.';
+    }
+  }
+  otherPlaneError.value = failure;
 }
 /** The tube first, since whether it shows decides how the lumen around it is drawn. */
 function syncSurfaces(instance: CornerstoneVolume3D) {
@@ -805,6 +852,7 @@ watch(
     props.volumeVisible,
     props.segmentationVisible,
     props.plane,
+    props.otherPlanes,
     props.structures,
     props.display,
     props.selected,
@@ -940,6 +988,7 @@ defineExpose({
   diagnostics: () => ({
     ...viewer?.stats(),
     plane: planeLayer?.stats(),
+    otherPlanes: [...otherPlaneLayers.values()].map(layer => layer.stats()),
     review: reviewInput?.diagnostics(),
     reviewPlane: reviewPlaneLayer?.stats(),
     surfaces: surfaces?.stats(),
@@ -947,6 +996,7 @@ defineExpose({
     surfaceLoading: surfaceLoading.value,
     surfaceError: surfaceError.value,
     planeError: planeError.value,
+    otherPlaneError: otherPlaneError.value,
     maskLoading: maskLoading.value,
     maskError: maskError.value,
     maskReady: maskReady.value,
@@ -1001,11 +1051,12 @@ defineExpose({
       <button v-if="error && session && !session.isDisposed" class="button" @click="initialize">Retry 3D view</button>
     </div>
     <div
-      v-if="ready && (surfaceLoading || surfaceError || planeError)"
+      v-if="ready && (surfaceLoading || surfaceError || planeError || otherPlaneError)"
       class="cornerstone-surface-status"
-      :role="surfaceError || planeError ? 'alert' : 'status'"
+      :role="surfaceError || planeError || otherPlaneError ? 'alert' : 'status'"
     >
       <p v-if="planeError">CT plane hidden: {{ planeError }} <button class="text-button" @click="retryPlane">Retry plane</button></p>
+      <p v-else-if="otherPlaneError">Other CT planes hidden: {{ otherPlaneError }} Untick All three to dismiss.</p>
       <template v-if="surfaceLoading || surfaceError">
         {{ surfaceError ? `Segmentation surfaces hidden: ${surfaceError}` : 'Loading segmentation surfaces…' }}
         <button v-if="surfaceError" class="text-button" @click="loadSurfaces">Retry surfaces</button>

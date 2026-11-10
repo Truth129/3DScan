@@ -192,7 +192,8 @@ const hasModel = ref(false);
 const surfaceRevisionLoaded = ref('');
 const reviewMode = ref<'surface' | 'plane' | 'volume'>('surface'),
   reviewPlane = ref<Plane>(props.initialSnapshot?.state.plane.plane ?? 'axial'),
-  showPlane = ref(props.initialSnapshot?.layers.ct_plane ?? false);
+  showPlane = ref(props.initialSnapshot?.layers.ct_plane ?? false),
+  allPlanes = ref(false);
 const planeFrame = shallowRef<ModelReviewFrame>();
 const planeFrameFamily = ref('');
 const planeLoading = ref(false),
@@ -337,6 +338,18 @@ const vtkPlane = computed(() => {
   if (!props.geometry || !props.point || !showPlane.value) return undefined;
   const native = nativeSliceFor(props.geometry, reviewPlane.value, props.point);
   return { visible: true, axis: native.axis as 0 | 1 | 2, index: native.index, window: props.window || 400, level: props.level ?? 40 };
+});
+/** All three: the other two native planes through the same point, for display only. Review marks on one plane. */
+const allPlanesShown = computed(() => allPlanes.value && vtkSelected.value && !props.reviewActive && !!vtkPlane.value);
+const vtkOtherPlanes = computed(() => {
+  const main = vtkPlane.value;
+  if (!allPlanesShown.value || !main || !props.geometry || !props.point) return undefined;
+  return (['sagittal', 'coronal', 'axial'] as const)
+    .filter(plane => plane !== reviewPlane.value)
+    .map(plane => {
+      const native = nativeSliceFor(props.geometry!, plane, props.point!);
+      return { ...main, axis: native.axis as 0 | 1 | 2, index: native.index };
+    });
 });
 const controlsVisible = computed(() => !!props.reviewActive || planeAvailable.value || props.structures.length > 0);
 const planeLayout = computed(() => controlsVisible.value);
@@ -1747,6 +1760,7 @@ defineExpose({
     :data-volume-invert="renderVolumeSettings.signal_window.invert"
     :data-volume-memory-bytes="gpuMemoryBytes"
     :data-ct-plane-visible="vtkSelected ? showPlane : needsPlane"
+    :data-ct-plane-all="allPlanesShown"
     :data-ct-plane-quality="gpuActive ? 'full' : currentPlane?.quality || ''"
     :data-review-ready="reviewReady"
     :data-review-context="displayedContext"
@@ -1787,6 +1801,7 @@ defineExpose({
       :volume-visible="showVolume"
       :segmentation-visible="showSegmentation"
       :plane="vtkPlane"
+      :other-planes="vtkOtherPlanes"
       :manifest-url="manifestUrl"
       :model-url="modelUrl"
       :model-data="modelData"
@@ -2011,6 +2026,9 @@ defineExpose({
           @input="slidePlane"
         />
         <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
+        <label v-if="vtkSelected && showPlane && !reviewActive" title="Also show the other two native planes through the same point."
+          ><input type="checkbox" :aria-label="`Show all three ${modality} planes`" v-model="allPlanes" /> All three</label
+        >
       </div>
     </div>
     <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
