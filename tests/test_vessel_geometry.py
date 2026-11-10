@@ -3,6 +3,7 @@ reflected or sheared."""
 
 import numpy as np
 import pytest
+from scipy.spatial import cKDTree
 from synthetic_vessels import GRIDS, Phantom, Stenosis, Vessel
 
 from scan3d.vessel_geometry import centrelines, contact, lumen, measure, ostia
@@ -122,3 +123,15 @@ def test_a_gap_and_touching_vessels_are_flagged():
         assert branch.gap == (broken[0].locate(branch.points)[1].max() < 1.5)
         assert np.all(np.linalg.norm(branch.points[flags] - touch, axis=1) < 5)
     assert len({branch.root for branch, flags in zip(tree.branches, flagged) if flags.any()}) == 2
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+def test_an_obliquely_cut_ostium_grows_one_branch(grid):
+    """The aorta cuts a tube that leaves it at 50 degrees; the rim of that flat face is not a fork."""
+    tube = Vessel(2.3, 40, start=(-2.5, 0, 0), heading=50)
+    mask, aorta, affine = Phantom((tube,), aorta=((-6.0, -8.0, -8.0), (0.0, 8.0, 8.0))).masks(GRIDS[grid])
+    found = lumen(mask & ~aorta, affine)
+    wall = np.argwhere(aorta) @ affine[:3, :3].T + affine[:3, 3]
+    near = np.isfinite(cKDTree(wall).query(found.points, distance_upper_bound=1.5)[0])
+    tree = centrelines(found, ostia(found, wall), covered=near)
+    assert [branch.parent for branch in tree.branches] == [-1]

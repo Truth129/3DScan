@@ -1,5 +1,7 @@
 """The steady hyperaemic pressure solve against closed forms, and analyse on hand-built and phantom trees."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 from synthetic_vessels import GRIDS, Phantom, Stenosis, Vessel
@@ -102,9 +104,41 @@ def test_ffr_is_withheld_with_a_reason():
     result = analyse(tree, stations, Physiology(150, share=1 / 3))
     assert result.reason == [None, None, "FFR not reported: lumen gap", "tree left out of the flow split"]
     assert np.isnan(result.ffr[2]).all() and np.isnan(result.ffr[3]).all() and np.isfinite(result.ffr[0]).all()
-    assert any("lumen gap on branch 2" in flag for flag in result.flags) and "blood pressure assumed" in result.flags
+    assert any("lumen gap on branch 2" in flag for flag in result.flags)
+    # The model does not use the heart rate, so leaving it out assumes nothing.
+    assert [flag for flag in result.flags if "assumed" in flag] == ["blood pressure assumed"]
     lone = analyse(*hand_tree(), Physiology(150))
     assert lone.reason == ["one coronary tree only"] * 3 and np.isnan(lone.flow).all()
+
+
+def test_an_isolated_spur_run_at_a_throat_is_not_held():
+    """A throat's inscribed radius collapses, so its stations read spur; holding them erased a real lesion.
+    A spur run touching the ostium zone is still held."""
+    tree, stations = hand_tree()
+    s = stations[0].s
+    stations[0] = replace(stations[0], spur=(np.abs(s - 10) <= 0.5) | (s == 1.0) | (s == 1.5))
+    result = analyse(tree, stations, Physiology(150, share=1 / 3))
+    assert np.array_equal(result.held[0], (s < 2) | stations[0].junction)
+    (lesion,) = result.lesions
+    assert lesion.stenosis == pytest.approx(0.6, abs=0.05) and not lesion.held
+
+
+def test_a_branch_with_no_trusted_station_takes_its_reference_area():
+    """A 3 mm continuation is all junction and tip zone, whose mixed cells read narrow: no lesion there."""
+    tree, stations = hand_tree(onward=3)
+    stations[2] = replace(stations[2], area=np.full(len(stations[2].s), np.pi * 0.9**2))
+    result = analyse(tree, stations, Physiology(150, share=1 / 3))
+    assert result.held[2].all() and [lesion.branch for lesion in result.lesions] == [0]
+
+
+def test_runs_under_a_lesion_length_apart_are_one_lesion():
+    """The throat station reads 0.75 of the reference, splitting the narrowing's run below 0.7 in two."""
+    tree, stations = hand_tree()
+    area = stations[0].area.copy()
+    area[stations[0].s == 10] = np.pi * 1.15**2
+    stations[0] = replace(stations[0], area=area)
+    (lesion,) = analyse(tree, stations, Physiology(150, share=1 / 3)).lesions
+    assert lesion.length == pytest.approx(4.04, abs=0.2) and lesion.stenosis == pytest.approx(0.6, abs=0.05)
 
 
 def test_a_narrowed_daughter_reads_lower_ffr_end_to_end():

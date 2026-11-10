@@ -343,12 +343,23 @@ correction rebuilds only what changed.
 Research use only. A `coronary_analysis` job (`scan3d/coronary.py`) on the CPU lane:
 
 1. Loads the lumen, aorta and myocardium masks of a saved revision on its CT grid, never resampled.
-2. Finds one root per patch where the lumen meets the aorta, plus any clicked ostium points.
-3. Traces centrelines by TEASAR on the lumen's voxel graph in RAS mm (`vessel_geometry.py`).
+2. Finds one root per patch where the lumen meets the aorta, plus any clicked ostium points. A
+   clicked point more than 5 mm from the aorta, partway along lumen an aortic root already reaches,
+   fails the job: it would split that vessel. A point where a vessel starts is kept, since lumen
+   that only touches an aortic tree is in the same component.
+3. Traces centrelines by TEASAR on the lumen's voxel graph in RAS mm (`vessel_geometry.py`). Lumen
+   within 1.5 mm of the aorta never starts a trace, and a path's root end is covered like a blunt
+   tip, so the rim of the face where the aorta cuts a coronary is not traced as stub branches. The
+   trade-off: a side branch about 1 mm across leaving within about 1.5 mm of the aortic face can be
+   lost (9 of 288 synthetic cases).
 4. Measures area every 0.5 mm from the voxels each station owns, averaged over 1 mm.
 5. Fits a reference diameter, finds lesions and solves steady hyperaemic pressure in a reduced-order
-   model (`ffr_physics.py`).
-6. Applies the reading rules and writes `result.json`, then `complete.json`.
+   model (`ffr_physics.py`). Ostium, tip and junction zones are held at the nearest trusted area,
+   with spur runs that touch them; an isolated spur run is a throat and is kept. A branch with no
+   trusted station takes its reference area. Runs under 0.7 of the reference less than 1 mm apart
+   are one lesion.
+6. Applies the reading rules and writes `result.json`, then `complete.json`. Lesions whose reference
+   diameter at the throat is under 1.8 mm are not listed, but their loss stays in the solve.
 
 The folder's key covers the code, image, masks and inputs, so a revision with the same masks reuses
 it, and each read checks it again. It sits in the case folder, so backups keep it and Clear caches

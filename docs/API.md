@@ -1020,7 +1020,7 @@ to give FFR. It reads the masks on their CT grid and commits no revision.
 | `myocardium` | Structure ID or null. LV mass is its volume times 1.05 g/mL, and must be 20 to 1000 g             |
 | `lv_mass`    | g, 20 to 1000. Required without `myocardium`, refused with it                                     |
 | `sbp`, `dbp` | mmHg, both or neither: SBP 60 to 300 above DBP 20 to 200. Neither means 120/80                    |
-| `heart_rate` | bpm, 20 to 250. Recorded only                                                                     |
+| `heart_rate` | bpm, 20 to 250. Recorded only: the model does not use it, so it is never `assumed`                |
 | `share`      | More than 0 and at most 1: the share of whole-heart flow in the trees solved                      |
 | `ostia`      | Up to four RAS points, each snapped to lumen within 3 mm, and dropped within 3 mm of another root |
 
@@ -1031,8 +1031,10 @@ twice, both or neither of `myocardium` and `lv_mass`, refused blood pressures, a
 candidate alias.
 
 The job fails when the lumen is empty, an ostium point is more than 3 mm from the lumen, or no root
-is found: `The lumen does not touch the aorta; add an ostium point`. Its stages are `Loading masks`,
-`Centrelines`, `Areas`, `Pressure` and `Saving`, and its `result` is `{analysis_id, key, summary}`.
+is found: `The lumen does not touch the aorta; add an ostium point`. It also fails on an ostium
+point more than 5 mm from the aorta partway along lumen an aortic root already reaches, since that
+would split the vessel. Its stages are `Loading masks`, `Centrelines`, `Areas`, `Pressure` and `Saving`, and its
+`result` is `{analysis_id, key, summary}`.
 
 **`GET .../coronary-analysis`** returns `{analyses: [{analysis_id, state, stage, created_at,
 finished_at, error, inputs, summary}]}`, this revision's runs, newest first. `analysis_id` is the job
@@ -1062,7 +1064,13 @@ case, revision or kind, before it completes, and when its saved files fail their
   2·√(area/π) and `reference_diameter` the fitted healthy diameter.
 - `parent` is -1 at a root. `start` and `end` are mm from the ostium along the tree, and `stenosis`
   is the diameter stenosis at the throat, 0 to 1.
+- `held` stations take the nearest trusted station's area: the first 1 mm of a root branch, the last
+  1.5 mm of an end, junction zones, and spur runs that touch them. A branch with no trusted station
+  takes its reference area.
+- A lesion is a stretch under 0.7 of the reference for at least 1 mm. Stretches less than 1 mm apart
+  are one lesion, with the deepest throat.
 - `reason` says why a branch's FFR is not reported, such as one tree with no `share`, or a lumen gap.
+- `assumed` is `["blood pressure"]` when neither pressure is given, else empty.
 - `pieces` are lumen components no root reaches, not solved.
 - `flags` lists assumed values, gaps, dropped ostium points, a `share` applied to more than one tree,
   unmeasured voxels and lumen that touches lumen far along the tree.
@@ -1070,6 +1078,8 @@ case, revision or kind, before it completes, and when its saved files fail their
 Reading rules:
 
 - A station is `reported` when its FFR is solved and its reference diameter is at least 1.8 mm.
+- A lesion is listed only when its reference diameter at the throat is at least 1.8 mm, and listed
+  lesions are numbered from 0. A thinner one still adds its loss to the solve.
 - `distal` is the branch's last reported station. With none, `ffr` is null and `note` says why.
 - `beyond` reads the station 20 mm past the lesion's end along the tree, taking the daughter with the
   larger median reference over its first 3 mm at each junction. If the vessel ends first, or that

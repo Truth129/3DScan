@@ -134,7 +134,7 @@ def ostia(lumen: Lumen, aorta: np.ndarray, contact: float = 1.5) -> np.ndarray:
     return np.array(roots)
 
 
-def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5) -> Tree:
+def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: np.ndarray | None = None) -> Tree:
     """Centreline trees grown from the roots by TEASAR, split at junctions and recentred.
 
     The farthest uncovered voxel is traced back to the tree on a metric that makes the wall
@@ -143,6 +143,9 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5) -> Tree:
     moved to the centroids of its stations' cells, so it follows the lumen centre between voxel
     centres. Lumen with no root is listed as pieces; a branch that ends near a sizeable piece is
     marked `gap`, since a break in the mask hides the flow and the narrowing that caused it.
+
+    `covered`, a mask over the lumen points, is lumen no trace starts from, though paths may cross
+    it: the face where the aorta cuts an ostium, whose rim would otherwise grow stub branches.
     """
     roots = np.asarray(roots, dtype=int)
     if not len(roots):
@@ -155,7 +158,7 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5) -> Tree:
     toll = edges.data * (radius[edges.row] ** -_WALL_POWER + radius[edges.col] ** -_WALL_POWER) / 2
     reach = dijkstra(lumen.graph, directed=False, indices=roots, min_only=True)
     _, previous, _ = dijkstra(csr_array((toll, (edges.row, edges.col)), shape=(n, n)), directed=False, indices=roots, min_only=True, return_predecessors=True)
-    chains = _prune(lumen, roots, radius, _skeleton(lumen, roots, radius, reach, previous))
+    chains = _prune(lumen, roots, radius, _skeleton(lumen, roots, radius, reach, previous, covered))
 
     stations = [_resample(lumen.points[chain], spacing) for chain, _, _ in chains]
     # A root whose whole component lies within its first cover grows no branch.
@@ -233,16 +236,18 @@ def contact(lumen: Lumen, tree: Tree, apart: float = 10.0) -> list[np.ndarray]:
         common[j] = next((i for i in lineage(int(pair) % len(stations)) if i in ancestors), -1)
     meet = common[inverse]
     # Paths from the root part where the lineages part: at a station when one branch is an
-    # ancestor of the other, otherwise at the end of the last shared branch.
-    fork = np.where(meet == first, depth[a], np.where(meet == second, depth[b], (start + lengths)[meet]))
-    far = (meet < 0) | (np.abs(depth[a] + depth[b] - 2 * fork) > apart)
+    # ancestor of the other, otherwise at the end of the last shared branch, or at the root when
+    # two branches leave the same root.
+    fork = np.where(meet == first, depth[a], np.where(meet == second, depth[b], np.where(meet < 0, 0.0, (start + lengths)[meet])))
+    root = np.array([branch.root for branch in tree.branches])
+    far = ((meet < 0) & (root[first] != root[second])) | (np.abs(depth[a] + depth[b] - 2 * fork) > apart)
     flags = np.zeros(sizes.sum(), dtype=bool)
     flags[a[far]] = True
     flags[b[far]] = True
     return np.split(flags, np.cumsum(sizes)[:-1])
 
 
-def _skeleton(lumen: Lumen, roots: np.ndarray, radius: np.ndarray, reach: np.ndarray, previous: np.ndarray) -> np.ndarray:
+def _skeleton(lumen: Lumen, roots: np.ndarray, radius: np.ndarray, reach: np.ndarray, previous: np.ndarray, covered: np.ndarray | None = None) -> np.ndarray:
     """TEASAR's tree as the parent of each lumen voxel: -1 at a root, -2 off the tree.
 
     A new path covers the lumen within _COVER vessel radii of it, plus a voxel, measured through
@@ -251,12 +256,15 @@ def _skeleton(lumen: Lumen, roots: np.ndarray, radius: np.ndarray, reach: np.nda
     Towards the far end an end face is the nearest wall, so the path voxels within two radii of the
     tip cover a vessel diameter, plus a voxel, taking the radius as the largest wall distance among
     the path voxels within two of their own wall distances of the tip, plus half a voxel. Otherwise
-    the rim across a blunt end, or across where a loop is cut, is traced as a false fork.
+    the rim across a blunt end, or across where a loop is cut, is traced as a false fork. A path
+    that joins a root gets the same cover at that end, where the aorta cuts the lumen flat.
     """
     n = len(lumen.points)
     parent = np.full(n, -2)
     parent[roots] = -1
     pending = np.isfinite(reach)
+    if covered is not None:
+        pending[covered] = False  # the ostium patches: lumen the aorta cuts, never a vessel end
     # The lumen graph both ways, plus a node n with an edge to every voxel. Only the new path's
     # edges are finite, each the most cover less the voxel's own, so one search within the most
     # cover finds the voxels within some path voxel's cover.
@@ -283,6 +291,12 @@ def _skeleton(lumen: Lumen, roots: np.ndarray, radius: np.ndarray, reach: np.nda
         end = wall[s <= 2 * wall].max()
         tip = s <= 2 * end
         cover[tip] = np.maximum(cover[tip], 2 * (end + lumen.edge))
+        if parent[voxel] == -1:
+            # The aorta cuts the lumen flat at an ostium, so the root end is blunt too.
+            back = s[-1] - s + np.linalg.norm(lumen.points[new[-1]] - lumen.points[voxel])
+            end = wall[back <= 2 * wall].max(initial=radius[voxel])
+            base = back <= 2 * end
+            cover[base] = np.maximum(cover[base], 2 * (end + lumen.edge))
 
 
 def _chains(parent: np.ndarray, roots: np.ndarray) -> list[tuple[list[int], int, int]]:
@@ -386,7 +400,7 @@ def measure(lumen: Lumen, branches: list[np.ndarray], window: float = 1.0, paren
     pruned stub, so it is left out and the station marked `spur`. With `parents` (each branch's
     parent, -1 at a root), stations within that distance of a junction are marked `junction`.
     At blunt ends the rule also drops real end-cap lumen, so end stations read low; the physics
-    holds spur stations. Feed it `centrelines` output: at an eccentric narrowing off the true
+    holds spur runs that touch an end or junction. Feed it `centrelines` output: at an eccentric narrowing off the true
     axis, the spur rule would remove real lumen.
     """
     if any(len(branch) < 2 for branch in branches):

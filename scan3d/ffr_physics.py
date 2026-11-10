@@ -73,7 +73,8 @@ class Physiology:
         return dbp + (sbp - dbp) / 3
 
     def assumed(self) -> tuple[str, ...]:
-        return tuple(name for name, value in (("blood pressure", self.sbp), ("heart rate", self.heart_rate)) if value is None)
+        # Only inputs the model uses; the heart rate is recorded, never assumed.
+        return ("blood pressure",) if self.sbp is None else ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -88,7 +89,8 @@ class Network:
 
 @dataclass(frozen=True, eq=False)
 class Lesion:
-    """A reported narrowing: r_eq under 0.7 of the reference for at least 1 mm."""
+    """A reported narrowing: r_eq under 0.7 of the reference for at least 1 mm, with runs less
+    than 1 mm apart taken as one."""
 
     branch: int
     throat: int  # station with the least r_eq/r_ref
@@ -234,13 +236,27 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
     leaves = [branch for branch in range(len(parents)) if not children[branch]]
     paths = _paths(tree, stations, parents, depth, leaves)
     reference = _reference(stations, parents, children, held, depth, paths, contact)
+    for branch, untrusted in enumerate(held):
+        if untrusted.all():
+            # Nothing here can be measured: a short branch between junctions is all mixed cells,
+            # which read narrow and would put an expansion loss on a stretch too short to report.
+            area[branch] = np.pi * reference[branch] ** 2
+            radius[branch] = reference[branch].copy()
 
     lesions, loss = [], []
     for branch, st in enumerate(stations):
         ratio = radius[branch] / reference[branch]
+        spans = []
         for first, last in _runs(ratio < _LESION):
             start = _crossing(st.s, ratio, first - 1, first)
             end = _crossing(st.s, ratio, last + 1, last)
+            # Runs closer than a lesion length are one narrowing that a station or two reads
+            # just above the threshold, so they are one lesion over the whole span.
+            if spans and start - spans[-1][3] < _LESION_LENGTH:
+                spans[-1] = (spans[-1][0], last, spans[-1][2], end)
+            else:
+                spans.append((first, last, start, end))
+        for first, last, start, end in spans:
             if end - start >= _LESION_LENGTH:
                 throat = first + int(np.argmin(ratio[first : last + 1]))
                 lesions.append(
@@ -303,17 +319,25 @@ def _held(stations: list[Stations], parents: list[int], children: list[list[int]
     """Areas with untrusted stations replaced by the nearest trusted one in the same branch.
 
     Untrusted: the first mm of a root branch, the last 1.5 mm of an end, junction zones, whose
-    mixed cells read false narrowings worth 0.5-7 mmHg on a healthy Y, and spur stations, which
-    at blunt ends lose real end-cap lumen (a 2.5 mm tube's last trusted station read 0.40-0.48 of
-    its area). A branch with no trusted station takes its own median area.
+    mixed cells read false narrowings worth 0.5-7 mmHg on a healthy Y, and spur runs touching
+    those zones, which at blunt ends lose real end-cap lumen (a 2.5 mm tube's last trusted station
+    read 0.40-0.48 of its area). A branch with no trusted station takes its own median area here,
+    and `analyse` gives it its reference area once that is fitted.
     """
     area, held = [], []
     for branch, st in enumerate(stations):
-        untrusted = st.junction | st.spur
+        zone = st.junction.copy()
         if parents[branch] < 0:
-            untrusted |= st.s < _OSTIUM
+            zone |= st.s < _OSTIUM
         if not children[branch]:
-            untrusted |= st.s > st.s[-1] - _TIP
+            zone |= st.s > st.s[-1] - _TIP
+        untrusted = zone.copy()
+        # A spur run touching an ostium, tip or junction zone is lost end-cap or junction lumen and
+        # extends the zone. An isolated one is a throat: its inscribed radius, and so the spur rule's
+        # cover, collapses there, and holding it would erase a real narrowing.
+        for first, last in _runs(st.spur):
+            if zone[max(first - 1, 0) : last + 2].any():
+                untrusted[first : last + 1] = True
         trusted = np.flatnonzero(~untrusted)
         if len(trusted):
             area.append(st.area[trusted[np.abs(np.arange(len(st.s))[:, None] - trusted).argmin(1)]])

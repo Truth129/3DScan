@@ -19,6 +19,7 @@ import re
 
 import numpy as np
 import scipy
+from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import cKDTree
 
 from . import identity, imaging, review_volume
@@ -34,11 +35,14 @@ FORMAT = "scan3d-coronary-v1"
 NOTICE = "Research use only. Not for diagnostic use."
 SPACING = 0.5  # mm between stations
 WINDOW = 1.0  # mm of lumen averaged into each station's area
-REPORT_DIAMETER = 1.8  # mm; thinner stations are solved but not reported
+REPORT_DIAMETER = 1.8  # mm; thinner stations, and lesions at them, are solved but not reported
 REPORT_BEYOND = 20.0  # mm past a lesion's end where its FFR is read
 _DAUGHTER = 3.0  # mm of each daughter whose median reference diameter picks the larger one
 _SNAP = 3.0  # mm; a clicked ostium snaps to lumen this close, and is dropped this close to another root
 _CONTACT = 1.5  # mm; lumen this close to the aorta is an ostium patch, as `ostia` uses
+_OFF_AORTA = 5.0  # mm; a clicked point partway along lumen an aortic root reaches, farther than this from the aorta, is refused
+_LOCAL = 2.0  # mm of lumen around a clicked point whose widest wall distance sizes the vessel there
+_SHELL = 2.0  # mm; depth of the shell of lumen whose pieces say whether a point is partway along a vessel
 _DENSITY = 1.05  # g/mL of myocardium
 _LV_MASS = (20.0, 1000.0)  # g
 _ROLES = ("lumen", "aorta", "myocardium")
@@ -263,6 +267,11 @@ def _analyse(service, job, revision, inputs, key):
     roots = list(ostia(found, aorta, _CONTACT)) if len(aorta) else []
     sources = ["aorta"] * len(roots)
     nearest = cKDTree(found.points)
+    # A root splits the lumen it shares with another root, so a point on a vessel the aorta already
+    # roots would cut it in two: the stretch above it becomes a stub left out of the flow split, and
+    # the point's own tree starts at aortic pressure mid-vessel.
+    component = connected_components(found.graph, directed=False)[1] if roots and inputs["ostia"] else None
+    reached = set(component[roots]) if component is not None else set()
     for number, point in enumerate(inputs["ostia"], 1):
         distance, index = nearest.query(point)
         if distance > _SNAP:
@@ -270,13 +279,23 @@ def _analyse(service, job, revision, inputs, key):
         if roots and np.linalg.norm(found.points[roots] - found.points[index], axis=1).min() <= _SNAP:
             flags.append(f"ostium point {number} is within 3 mm of another root and was dropped")
             continue
+        if component is not None and component[index] in reached:
+            off = float(cKDTree(aorta).query(found.points[index])[0])
+            # Lumen that only touches an aortic tree joins its component too, so a vessel whose
+            # start lies off the aorta keeps its point: only a point partway along a vessel is refused.
+            if off > _OFF_AORTA and _partway(found, index):
+                raise ValueError(
+                    f"Ostium point {number} is {off:.0f} mm from the aorta, partway along a vessel already traced from the aorta, so it would split that vessel. Remove it."
+                )
         roots.append(int(index))
         sources.append("ostium point")
     if not roots:
         raise ValueError("The lumen does not touch the aorta; add an ostium point")
 
     service.stage(job, "Centrelines")
-    tree = centrelines(found, np.array(roots), SPACING)
+    # Lumen the aorta cuts is the ostium face, never a vessel end, so no path starts there.
+    covered = np.isfinite(cKDTree(aorta).query(found.points, distance_upper_bound=_CONTACT)[0]) if len(aorta) else None
+    tree = centrelines(found, np.array(roots), SPACING, covered)
     if not tree.branches:
         raise ValueError("The lumen is too short to trace from its ostia")
     parents = [branch.parent for branch in tree.branches]
@@ -331,7 +350,7 @@ def _analyse(service, job, revision, inputs, key):
             }
         )
     lesions = []
-    for number, lesion in enumerate(result.lesions):
+    for number, lesion in enumerate(listed(result.lesions, diameter)):
         after, after_station, note = beyond(readings, lesion.branch, lesion.end)
         prior, prior_station = before(readings, lesion.branch, lesion.start)
         drop = None
@@ -389,6 +408,23 @@ def _analyse(service, job, revision, inputs, key):
     }
 
 
+def _partway(found, index):
+    """Whether lumen leaves this voxel in two or more directions, so it is not where a vessel starts.
+
+    The shell is the lumen just over a vessel diameter away through the lumen, beyond the local
+    cross-section: one piece of it at a vessel's start, two along a vessel, three at a junction.
+    """
+    near = dijkstra(found.graph, directed=False, indices=index, limit=_LOCAL)
+    radius = found.wall.query(found.points[np.isfinite(near)])[0].max()
+    inner = 2 * radius + found.edge
+    reach = dijkstra(found.graph, directed=False, indices=index, limit=inner + _SHELL)
+    shell = np.flatnonzero(np.isfinite(reach) & (reach >= inner))
+    if not len(shell):
+        return False
+    pieces = np.bincount(connected_components(found.graph[shell][:, shell], directed=False)[1])
+    return np.count_nonzero(pieces >= 3) >= 2
+
+
 def _near(aorta, lumen_mask, affine):
     """RAS centres of the aorta voxels in the lumen's voxel bounds, widened to cover every voxel within the contact distance."""
     low, high = imaging._foreground_bounds(lumen_mask)
@@ -431,6 +467,14 @@ class Readings:
 def reported(ffr, reference_diameter):
     """Stations whose FFR is read: solved, on a vessel at least 1.8 mm across."""
     return np.isfinite(ffr) & (np.asarray(reference_diameter) >= REPORT_DIAMETER)
+
+
+def listed(lesions, reference_diameter):
+    """Lesions whose reference diameter at the throat is at least 1.8 mm, as FFR is reported.
+
+    A thinner one still has its expansion loss in the solve; it is just not listed.
+    """
+    return [lesion for lesion in lesions if reference_diameter[lesion.branch][lesion.throat] >= REPORT_DIAMETER]
 
 
 def distal(shown, reason):

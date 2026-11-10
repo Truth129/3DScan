@@ -11,7 +11,8 @@ from synthetic_vessels import GRIDS, Phantom, Stenosis, Vessel
 
 from scan3d.api import create_app
 from scan3d.config import Settings
-from scan3d.coronary import Readings, before, beyond, distal, reported
+from scan3d.coronary import Readings, before, beyond, distal, listed, reported
+from scan3d.ffr_physics import Lesion
 
 Y = Phantom(
     (Vessel(1.5, 15), Vessel(1.2, 20, start=(15, 0, 0), heading=35), Vessel(1.2, 20, start=(15, 0, 0), heading=-35)),
@@ -120,6 +121,16 @@ def test_a_run_with_no_aorta_and_no_ostium_is_refused(rig):
     assert service.store.claim("cpu") is None
 
 
+def test_an_ostium_point_down_a_vessel_the_aorta_roots_is_refused(rig):
+    """A root 10 mm down the trunk would split it and trace the stretch above it backwards."""
+    http, service, _, _, route = rig
+    point = Y.vessels[0].axis(np.array([10.0]))[0].tolist()
+    queued = http.post(route, json={**RUN, "ostia": [point]}).json()
+    service.execute(service.store.claim("cpu"))
+    job = service.store.get("jobs", queued["id"])
+    assert job["status"] == "failed" and "partway along a vessel already traced from the aorta, so it would split that vessel" in job["error"]
+
+
 def test_reading_rules_on_a_hand_built_tree():
     """A 20 mm trunk forks into a daughter 3.0 mm across that thins under 1.8 mm 4 mm on, and a 2.0 mm one past a lumen gap."""
     s = [np.arange(21.0), np.arange(11.0), np.arange(16.0)]
@@ -138,3 +149,9 @@ def test_reading_rules_on_a_hand_built_tree():
     assert beyond(wider, 0, 18.5) == (0, 20, "read 1.5 mm beyond the lesion: FFR not reported: lumen gap")
     assert before(readings, 0, 5.5) == (0, 5)
     assert before(readings, 2, 21.0) == (0, 20)
+
+
+def test_lesions_on_vessels_under_1_8_mm_are_not_listed():
+    reference = [np.full(21, 3.0), np.where(np.arange(11.0) <= 4, 3.0, 1.6)]
+    found = [Lesion(branch, throat, 0.0, 1.0, 1.0, 1.0, 0.5, False) for branch, throat in ((0, 5), (1, 8), (1, 2))]
+    assert [(lesion.branch, lesion.throat) for lesion in listed(found, reference)] == [(0, 5), (1, 2)]
