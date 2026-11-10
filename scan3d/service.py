@@ -597,6 +597,12 @@ class Service:
                 return
             elif job["kind"] == "review_accept":
                 revision = self.reviews.run_accept(job)
+            elif job["kind"] == "coronary_analysis":
+                from .coronary import run as run_coronary
+
+                # A research result beside the revision, never a new one, so it completes its own job.
+                run_coronary(self, job)
+                return
             elif job["kind"] == "refine":
                 revision = self._refine(job)
             elif job["kind"] == "correction":

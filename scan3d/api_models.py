@@ -173,6 +173,20 @@ class Activate(Input):
     expected_active_revision_id: str | None = None
 
 
+class CoronaryInput(Input):
+    """Structure IDs from the revision and the patient's numbers. Rules across fields are `coronary._prepare`'s, so they answer 400."""
+
+    lumen: str = Field(min_length=1, max_length=200)
+    aorta: str | None = Field(None, min_length=1, max_length=200)
+    myocardium: str | None = Field(None, min_length=1, max_length=200)
+    lv_mass: float | None = Field(None, ge=20, le=1000)  # g
+    sbp: float | None = Field(None, ge=60, le=300)  # mmHg
+    dbp: float | None = Field(None, ge=20, le=200)
+    heart_rate: float | None = Field(None, ge=20, le=250)  # bpm; recorded only
+    share: float | None = Field(None, gt=0, le=1)  # of whole-heart flow, into the trees solved
+    ostia: list[tuple[float, float, float]] = Field(default_factory=list, max_length=4)  # RAS mm
+
+
 class CaseRename(Input):
     label: str = Field(max_length=128)
 

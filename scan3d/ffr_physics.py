@@ -284,6 +284,9 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
         rest = (physiology.share or 1.0) * total * weight / weight.sum()
         outlets = {leaf: physiology.tcri * (aortic - physiology.venous) * MMHG / flow for leaf, flow in zip(ends, rest)}
     flags = [f"{name} assumed" for name in physiology.assumed()]
+    if physiology.share is not None and len(split) > 1:
+        # A share given for one tree and left in place scales every tree's flow, so it shows.
+        flags.append(f"flow share {physiology.share:g} applied to {len(split)} trees")
     for branch, item in enumerate(tree.branches):
         if item.gap and reason[branch] is None:
             reason[branch] = "FFR not reported: lumen gap"

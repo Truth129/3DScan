@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import __version__, api_cases, api_imports, api_people, api_reviews, api_session, api_system, api_viewer
+from . import __version__, api_cases, api_coronary, api_imports, api_people, api_reviews, api_session, api_system, api_viewer
 from .access import SessionGate, check_policy
 from .archive import api as api_archive
 from .archive.errors import ArchiveChanged, ArchiveError
@@ -234,7 +234,7 @@ def create_app(settings: Settings | None = None):
             response.headers.setdefault("Cache-Control", "private, no-store")
         return response
 
-    for module in (api_system, api_session, api_people, api_imports, api_archive, api_cases, api_reviews, api_viewer):
+    for module in (api_system, api_session, api_people, api_imports, api_archive, api_cases, api_coronary, api_reviews, api_viewer):
         module.add_routes(app, service)
 
     if service.settings.web_dir.is_dir():

@@ -55,6 +55,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/imaging.py`, `surfaces.py`, `surface_glb.py`                    | Masks, measurements, slice geometry, GLB surfaces       |
 | `scan3d/review_volume.py`, `volume_mask_union.py`                       | Volume and frame transport, display unions              |
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange        |
+| `scan3d/coronary.py`, `vessel_geometry.py`, `ffr_physics.py`            | Research CT-FFR job, centrelines and areas, pressure    |
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX ROIs      |
 | `scan3d/archive/`                                                       | DICOMweb client, imports, STOW exports, C-STORE sends   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                 |
@@ -122,6 +123,7 @@ cases/<case>/
   revisions/<id>/        revision.json, model.glb and on-demand exports
   refinements/, corrections/, reviews/, seg-imports/, dicom-exports/
   dicom-view-captures/   Retained 3D view captures, each named by its SHA-256
+  coronary/<key>/        Coronary analysis: result.json, then complete.json
   uploads/               Slicer corrections as received
   synthetic/             The demo phantom
 surface-cache/, review-cache/, analysis-cache/, agreement-cache/, cinematic-cache/
@@ -198,6 +200,7 @@ process per data directory executes jobs. [API.md](API.md#job) lists the job kin
 - GPU jobs never overlap, whichever GPU they use, which keeps TotalSegmentator's shared settings and
   first-time weight downloads safe. The lane runs even when inference uses the CPU device.
 - CPU work never waits behind a segmentation. Review jobs run before queued batch work in each lane.
+- Exports and `coronary_analysis` complete their own jobs and commit no revision.
 - A correction saved during a segmentation stays active. The segmentation fails at commit, and a
   retry from the current revision reuses its cached inference.
 
@@ -334,6 +337,22 @@ correction rebuilds only what changed.
 - **QC** flags disconnected components and masks that touch the scan boundary.
 - **Surfaces.** `surfaces.py` contours masks with VTK through the full affine into quantized GLBs
   with gzip siblings.
+
+## Coronary analysis
+
+Research use only. A `coronary_analysis` job (`scan3d/coronary.py`) on the CPU lane:
+
+1. Loads the lumen, aorta and myocardium masks of a saved revision on its CT grid, never resampled.
+2. Finds one root per patch where the lumen meets the aorta, plus any clicked ostium points.
+3. Traces centrelines by TEASAR on the lumen's voxel graph in RAS mm (`vessel_geometry.py`).
+4. Measures area every 0.5 mm from the voxels each station owns, averaged over 1 mm.
+5. Fits a reference diameter, finds lesions and solves steady hyperaemic pressure in a reduced-order
+   model (`ffr_physics.py`).
+6. Applies the reading rules and writes `result.json`, then `complete.json`.
+
+The folder's key covers the code, image, masks and inputs, so a revision with the same masks reuses
+it, and each read checks it again. It sits in the case folder, so backups keep it and Clear caches
+does not remove it. [API.md](API.md#coronary-analysis) has the routes and the result.
 
 ## Geometry rules
 

@@ -265,9 +265,11 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
   `scan3d include-all`), `review_predict`, `review_accept`, `orthanc_import`, `archive_import`
   (DICOMweb), `orthanc_export` (Orthanc SEG exports and every SEG file), `orthanc_roi_export`
   (OsiriX ROIs), `orthanc_view_export`, `view_file_export`, `archive_seg_export`,
-  `archive_view_export` (DICOMweb), `direct_seg_export`, `direct_view_export` (C-STORE) or
-  `dicom_seg_import`. [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists the lanes.
-- `revision_id`: the new revision once committed, or the exported one for an export.
+  `archive_view_export` (DICOMweb), `direct_seg_export`, `direct_view_export` (C-STORE),
+  `dicom_seg_import` or `coronary_analysis`. [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes)
+  lists the lanes.
+- `revision_id`: the new revision once committed, the exported one for an export, or the analysed
+  one for a [coronary analysis](#coronary-analysis), which commits none.
 - `delivery_started`: `true` once an export has started a send, through Orthanc or directly.
   Cancelling cannot then stop it.
 - `inference_path`: the [inference path](#inference-paths) frozen at queue time. `identity` is
@@ -347,6 +349,8 @@ Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 | `GET .../surfaces/{key}.glb`                        | One structure's surface                           | If prepared     |
 | `GET .../model.glb`                                 | Combined surface model                            | No              |
 | `GET .../agreement`                                 | Agreement with model outputs                      | No              |
+| `GET`, `POST .../coronary-analysis`                 | Coronary analysis runs and start                  | No              |
+| `GET .../coronary-analysis/{analysis_id}`           | One coronary analysis result                      | No              |
 | `GET .../cinematic-reference`                       | Cardiac HU references                             | No              |
 | `GET .../slicer.zip`                                | Slicer bundle                                     | No              |
 | `GET`, `POST .../export.html`                       | Offline HTML viewer                               | No              |
@@ -541,7 +545,8 @@ measured on each request and leaving out shared caches.
 - `disk`: `{total, free}` for the data directory's volume.
 
 **`POST /api/storage/clear-caches`** empties the caches that rebuild when next needed: every review
-volume, the analysis and agreement caches and the surface contours. Saved surfaces and cases stay.
+volume, the analysis and agreement caches and the surface contours. Saved surfaces, cases and
+their coronary analysis results stay.
 It returns `{freed, storage}`, the bytes freed and a fresh storage report, or one of these 409s:
 
 | `detail`                                                                                      | When                                                                       |
@@ -998,6 +1003,82 @@ abs_volume_change_ml_mean}`.
 A pool is `{cases, excluded, summary, tasks: [{task, ...stats, structures: [{id, name, task,
 ...stats}]}]}`. Stats are `reviewed`, `unchanged`, `unchanged_percent`, `dice_mean`, `dice_median`,
 `abs_volume_change_ml_mean` and `edit_kinds`. Synthetic cases never enter the real pool.
+
+## Coronary analysis
+
+Research use only, not for diagnostic use. A `coronary_analysis` job traces centrelines in a saved
+revision's coronary lumen mask, measures lumen area along them and solves steady hyperaemic pressure
+to give FFR. It reads the masks on their CT grid and commits no revision.
+
+**`POST .../coronary-analysis`** takes:
+
+| Field        | Rule                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| `lumen`      | Structure ID in the revision, required                                                            |
+| `aorta`      | Structure ID or null. Lumen within 1.5 mm of it gives one root per contact patch                  |
+| `myocardium` | Structure ID or null. LV mass is its volume times 1.05 g/mL, and must be 20 to 1000 g             |
+| `lv_mass`    | g, 20 to 1000. Required without `myocardium`, refused with it                                     |
+| `sbp`, `dbp` | mmHg, both or neither: SBP 60 to 300 above DBP 20 to 200. Neither means 120/80                    |
+| `heart_rate` | bpm, 20 to 250. Recorded only                                                                     |
+| `share`      | More than 0 and at most 1: the share of whole-heart flow in the trees solved                      |
+| `ostia`      | Up to four RAS points, each snapped to lumen within 3 mm, and dropped within 3 mm of another root |
+
+It returns the Job. A queued, running or complete job for the same revision and inputs is returned
+instead of a new one; a failed or cancelled one, or one being cancelled, is not. Field bounds fail
+as 422. These are 400: neither `aorta` nor `ostia`, a structure ID not in the revision or used
+twice, both or neither of `myocardium` and `lv_mass`, refused blood pressures, a non-CT image and a
+candidate alias.
+
+The job fails when the lumen is empty, an ostium point is more than 3 mm from the lumen, or no root
+is found: `The lumen does not touch the aorta; add an ostium point`. Its stages are `Loading masks`,
+`Centrelines`, `Areas`, `Pressure` and `Saving`, and its `result` is `{analysis_id, key, summary}`.
+
+**`GET .../coronary-analysis`** returns `{analyses: [{analysis_id, state, stage, created_at,
+finished_at, error, inputs, summary}]}`, this revision's runs, newest first. `analysis_id` is the job
+ID. `summary` is `{trees, branches, lesions, lowest_distal_ffr}` once complete, else null.
+
+**`GET .../coronary-analysis/{analysis_id}`** returns the result. It is 404 for a job of another
+case, revision or kind, before it completes, and when its saved files fail their check.
+
+```text
+{format: "scan3d-coronary-v1", notice, analysis_id, case_id, revision_id, key, created_at,
+ inputs: {lumen, aorta, myocardium, lv_mass, lv_mass_source: "myocardium mask" | "typed", sbp, dbp,
+          heart_rate, share, ostia},
+ constants: {perfusion, heart_factor, tcri, exponent, venous, viscosity, density, kt, spacing,
+             window, report_diameter, report_beyond},
+ aortic_pressure, assumed, flags,
+ roots: [{tree, point, source: "aorta" | "ostium point"}],
+ pieces: [{point, volume}],
+ branches: [{id, parent, tree, gap, length, flow, reason, distal: {ffr, station, note},
+             stations: {point, s, area, diameter, reference_diameter, ffr, pressure, reported, held,
+                        junction, spur, contact}}],
+ lesions: [{id, branch, throat, start, end, length, mld, stenosis, held,
+            beyond: {ffr, branch, station, note}, before: {ffr, branch, station}, delta_ffr}]}
+```
+
+- Points are RAS mm. Lengths are mm, areas mm², flow mL/min, pressure mmHg. NaN is null.
+- `stations` holds one array per field, one entry per station 0.5 mm apart. `diameter` is
+  2·√(area/π) and `reference_diameter` the fitted healthy diameter.
+- `parent` is -1 at a root. `start` and `end` are mm from the ostium along the tree, and `stenosis`
+  is the diameter stenosis at the throat, 0 to 1.
+- `reason` says why a branch's FFR is not reported, such as one tree with no `share`, or a lumen gap.
+- `pieces` are lumen components no root reaches, not solved.
+- `flags` lists assumed values, gaps, dropped ostium points, a `share` applied to more than one tree,
+  unmeasured voxels and lumen that touches lumen far along the tree.
+
+Reading rules:
+
+- A station is `reported` when its FFR is solved and its reference diameter is at least 1.8 mm.
+- `distal` is the branch's last reported station. With none, `ffr` is null and `note` says why.
+- `beyond` reads the station 20 mm past the lesion's end along the tree, taking the daughter with the
+  larger median reference over its first 3 mm at each junction. If the vessel ends first, or that
+  station is not reported, it reads the last reported station on the way, and `note` says how far
+  past the lesion that is and why.
+- `before` is the last reported station before the lesion starts, on its branch or a parent.
+- `delta_ffr` is `before.ffr` minus `beyond.ffr`.
+
+The result is saved in `cases/<case>/coronary/<key>/`, keyed by the code, image, masks and inputs.
+A later revision with the same masks reuses it.
 
 ## Exports
 
