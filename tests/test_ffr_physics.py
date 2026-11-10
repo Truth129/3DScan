@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from synthetic_vessels import GRIDS, Phantom, Stenosis, Vessel
 
-from scan3d.ffr_physics import MMHG, Network, Physiology, analyse, expansion, poiseuille, solve
+from scan3d.ffr_physics import MMHG, Network, Physiology, analyse, expansion, poiseuille, solve, stenosis
 from scan3d.vessel_geometry import Branch, Stations, Tree, centrelines, lumen, measure, ostia
 
 MU, RHO, KT = 0.0035, 1060.0, 1.52
@@ -33,17 +33,23 @@ def test_poiseuille_matches_a_uniform_tube():
 
 
 def test_a_lesion_matches_the_closed_form():
+    """A 3 mm tube narrowed to 1.2 mm over stations 1-3 (2 mm): Young–Tsai viscous on the stretch, Poiseuille either side."""
     healthy, throat = np.pi * 1.5**2, np.pi * 0.6**2
-    s, area = np.arange(5.0), np.array([healthy, healthy, throat, healthy, healthy])
+    s, area = np.arange(5.0), np.array([healthy, throat, throat, throat, healthy])
+    # Kv = 32 (0.83 Ls + 1.64 Ds)/D0 (A0/As)² with Ls 2, Ds 1.2, D0 3 mm and A0/As = 2.5², over A0 D0.
+    viscous = 32 * (0.83 * 2 + 1.64 * 1.2) / 3 * 2.5**4 * MU / (np.pi * 1.5e-3**2 * 3e-3)
+    assert stenosis(healthy, throat, 2.0, MU) == pytest.approx(viscous, rel=1e-12)
     resistance = poiseuille(s, area, MU)
+    resistance[1:3] = 0
+    resistance[1] = viscous
     loss = np.zeros(4)
-    loss[2] = expansion(healthy, throat, RHO, KT)
+    loss[1] = expansion(healthy, throat, RHO, KT)
     flow, pressure = solve(Network((-1,), (resistance,), (loss,), {0: 3e9}), INLET, VENOUS)
     linear, drop = resistance.sum() + 3e9, INLET - VENOUS
-    exact = 2 * drop / (linear + np.sqrt(linear**2 + 4 * loss[2] * drop))
+    exact = 2 * drop / (linear + np.sqrt(linear**2 + 4 * loss[1] * drop))
     assert flow[0] == pytest.approx(exact, rel=1e-9)
     assert pressure[0][-1] == pytest.approx(VENOUS + 3e9 * exact, rel=1e-9)
-    assert expansion(healthy, 1.1 * healthy, RHO, KT) == 0
+    assert expansion(healthy, 1.1 * healthy, RHO, KT) == 0 and stenosis(healthy, 1.1 * healthy, 2.0, MU) == 0
 
 
 def test_a_y_matches_the_hand_solution():

@@ -1009,7 +1009,8 @@ A pool is `{cases, excluded, summary, tasks: [{task, ...stats, structures: [{id,
 
 Research use only, not for diagnostic use. A `coronary_analysis` job traces centrelines in a saved
 revision's coronary lumen mask, measures lumen area along them and solves steady hyperaemic pressure
-to give FFR. It reads the masks on their CT grid and commits no revision.
+to give FFR: Poiseuille resistance along the vessels, and Young–Tsai viscous and expansion losses
+across each narrowing. It reads the masks on their CT grid and commits no revision.
 
 **`POST .../coronary-analysis`** takes:
 

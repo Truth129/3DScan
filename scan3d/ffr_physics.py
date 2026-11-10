@@ -1,10 +1,10 @@
 """Steady hyperaemic pressure and FFR along coronary centreline trees. Research use only.
 
-A reduced-order (0D) model. Each station interval has a Poiseuille resistance, and each narrowed
-stretch has one Young–Tsai expansion loss. Outlet resistances come from LV mass, blood pressure and
-a Murray flow split (Sharma 2012), with the hyperaemic resistance ratio taken from Danad 2014's
-rest and hyperaemic perfusion. Geometry arrives in mm and mm² from vessel_geometry; the solver
-works in SI and reports mmHg.
+A reduced-order (0D) model. Each station interval has a Poiseuille resistance, except that each
+narrowed stretch has one Young–Tsai viscous resistance instead, plus one Young–Tsai expansion loss.
+Outlet resistances come from LV mass, blood pressure and a Murray flow split (Sharma 2012), with
+the hyperaemic resistance ratio taken from Danad 2014's rest and hyperaemic perfusion. Geometry
+arrives in mm and mm² from vessel_geometry; the solver works in SI and reports mmHg.
 """
 
 from __future__ import annotations
@@ -139,6 +139,20 @@ def expansion(reference: float, throat: float, density: float, kt: float) -> flo
     return kt * density / 2 * (1 / (throat * 1e-6) - 1 / (reference * 1e-6)) ** 2
 
 
+def stenosis(reference: float, throat: float, length: float, viscosity: float) -> float:
+    """Young–Tsai viscous resistance of a narrowed stretch, Pa s/m³, for areas in mm² and length in mm.
+
+    Kv μ/(A0 D0), with Kv = 32 (0.83 Ls + 1.64 Ds)/D0 · (A0/As)² (Young and Tsai 1973). It replaces
+    the stretch's Poiseuille resistance, which on station areas leaves out the developing flow at
+    the throat's entrance and exit (the 1.64 Ds term).
+    """
+    if throat >= reference:
+        return 0.0
+    healthy, narrow = 2 * np.sqrt(reference / np.pi), 2 * np.sqrt(throat / np.pi)  # D0, Ds in mm
+    kv = 32 * (0.83 * length + 1.64 * narrow) / healthy * (reference / throat) ** 2
+    return kv * viscosity / (reference * 1e-6 * healthy * 1e-3)
+
+
 def solve(network: Network, inlet: float, venous: float) -> tuple[np.ndarray, list[np.ndarray]]:
     """Flow in each branch (m³/s) and pressure at each station (Pa), with every root at `inlet`.
 
@@ -248,7 +262,7 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
             area[branch] = np.pi * reference[branch] ** 2
             radius[branch] = reference[branch].copy()
 
-    lesions, loss = [], []
+    lesions, resistance, loss = [], [], []
     for branch, st in enumerate(stations):
         ratio = radius[branch] / reference[branch]
         spans = []
@@ -276,13 +290,20 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
                         bool(held[branch][first : last + 1].any()),
                     )
                 )
+        viscous = poiseuille(st.s, area[branch], physiology.viscosity)
         coefficient = np.zeros(len(st.s) - 1)
         for first, last in _runs(ratio < _EXTEND):
             if ratio[first : last + 1].min() > _START or (last == len(ratio) - 1 and not children[branch]):
                 continue
             throat = first + int(np.argmin(ratio[first : last + 1]))
             healthy = np.pi * reference[branch][min(last + 1, len(ratio) - 1)] ** 2
-            coefficient[min(throat, len(coefficient) - 1)] += expansion(healthy, area[branch][throat], physiology.density, physiology.kt)
+            at = min(throat, len(coefficient) - 1)
+            coefficient[at] += expansion(healthy, area[branch][throat], physiology.density, physiology.kt)
+            if area[branch][throat] < healthy:
+                # The stretch's intervals, station first to station last, take the Young–Tsai term instead.
+                viscous[first:last] = 0.0
+                viscous[at] += stenosis(healthy, area[branch][throat], st.s[last] - st.s[first], physiology.viscosity)
+        resistance.append(viscous)
         loss.append(coefficient)
 
     tree_of = [branch.root for branch in tree.branches]
@@ -313,7 +334,7 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
             reason[branch] = "FFR not reported: lumen gap"
             flags.append(f"lumen gap on branch {branch}: FFR upstream assumes normal flow into it and may read low")
 
-    network = Network(tuple(parents), tuple(poiseuille(st.s, a, physiology.viscosity) for st, a in zip(stations, area)), tuple(loss), outlets)
+    network = Network(tuple(parents), tuple(resistance), tuple(loss), outlets)
     flow, pressure = solve(network, aortic * MMHG, physiology.venous * MMHG)
     pressure = [values / MMHG for values in pressure]
     ffr = [values / aortic if text is None else np.full(len(values), np.nan) for values, text in zip(pressure, reason)]

@@ -573,7 +573,8 @@ mask it took voxels from.
 
 The **Coronary FFR** tab appears when the revision has **Coronary arteries** from ImageCAS-X
 (nnU-Net or CAS-Net) or TotalSegmentator. It traces centrelines in the lumen mask on its own grid,
-measures lumen area along them and solves steady hyperaemic pressure.
+measures lumen area along them and solves steady hyperaemic pressure: Poiseuille resistance along
+the vessels, and Young–Tsai viscous and expansion losses across each narrowing.
 
 Inputs:
 
