@@ -196,6 +196,33 @@ def test_small_pieces_go_and_corner_neighbours_count_as_one_piece():
     assert nnunet_models.MODELS["mrsegmentator"].smallest_piece == 0
 
 
+def test_cas_net_returns_bright_voxels_on_the_source_grid_through_its_tiles_mirrors_and_resampling(monkeypatch):
+    torch = pytest.importorskip("torch")
+    from scan3d import cas_net
+
+    assert cas_net.CASNet3D().eval()(torch.zeros(1, 1, 16, 16, 16)).shape == (1, 2, 16, 16, 16)
+
+    class Bright(torch.nn.Module):
+        """Class 1 wins wherever the scaled scan is above 0.5, which is 400 HU, whatever the tile or mirror."""
+
+        def forward(self, tile):
+            return torch.cat([torch.full_like(tile, 0.5), tile], dim=1)
+
+    # Small tiles, so each axis has several, and the last one is snapped to the edge.
+    monkeypatch.setattr(cas_net, "PATCH", (8, 12, 16))
+    monkeypatch.setattr(cas_net, "network", lambda *_: Bright())
+    model = nnunet_models.MODELS["imagecasx_cas_net"]
+    scan = np.zeros((1, 21, 30, 19), np.float32)  # z, y, x
+    scan[0, 4:15, 6:9, 2:13] = 800
+    steps = []
+    labels, _ = cas_net.predict(model, "folder", scan, [0.5, 0.5, 0.5], "cpu", steps.append)
+    assert labels.dtype == np.uint8 and np.array_equal(labels, scan[0] > 400)
+    assert steps == ["preparing the scan", *(f"pass {n} of 4" for n in range(1, 5)), "saving the masks"]
+    # Coarser than 0.5 mm along z and finer along y; the voxel centres here survive both resamplings.
+    labels, _ = cas_net.predict(model, "folder", scan, [1.0, 0.25, 0.5], "cpu")
+    assert np.array_equal(labels, scan[0] > 400)
+
+
 def test_download_takes_the_model_from_its_folder_in_a_larger_archive(pinned, tmp_path):
     model, _ = pinned
     archive = tmp_path / "several-models.zip"
@@ -217,6 +244,11 @@ def test_download_takes_the_model_from_its_folder_in_a_larger_archive(pinned, tm
 
 def test_every_pinned_model_lists_its_own_checkpoint_for_each_fold():
     for model in nnunet_models.MODELS.values():
+        assert model.engine in ("nnunet", "cas_net")
+        if model.engine == "cas_net":
+            assert set(model.files) == {model.checkpoint} and not model.folds and not model.skull_strip
+            assert "cas_net_sha256" in segmentation._nnunet_descriptor(model)
+            continue
         assert {f"fold_{fold}/{model.checkpoint}" for fold in model.folds} | {"dataset.json", "plans.json"} == set(model.files)
         assert not model.dataset_labels or len(model.dataset_labels) == len(model.labels)
         # The worker applies the first model's mask to the second model's input array unchanged.

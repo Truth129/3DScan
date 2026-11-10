@@ -116,6 +116,14 @@ def predict(model, model_folder, image, spacing, device, step=lambda _: None):
     ), torch.__version__
 
 
+def run(model, model_folder, image, spacing, device, step=lambda _: None):
+    if model.engine == "cas_net":
+        from . import cas_net  # Imports PyTorch, which only this child may do.
+
+        return cas_net.predict(model, model_folder, image, spacing, device, step)
+    return predict(model, model_folder, image, spacing, device, step)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", dest="image", type=Path, required=True)
@@ -142,9 +150,9 @@ def main():
         if not args.skull_strip_folder:
             raise RuntimeError(f"{model.name} needs --skull-strip-folder")
         # The registry gives both models the same voxel order, so the mask fits this array as it is.
-        brain, _ = predict(MODELS[model.skull_strip], args.skull_strip_folder, image, spacing, args.device, lambda text: step(f"removing the skull, {text}"))
+        brain, _ = run(MODELS[model.skull_strip], args.skull_strip_folder, image, spacing, args.device, lambda text: step(f"removing the skull, {text}"))
         image = skull_stripped(image, brain)
-    labels, torch_version = predict(model, args.model_folder, image, spacing, args.device, step)
+    labels, torch_version = run(model, args.model_folder, image, spacing, args.device, step)
     labels = native_labels(labels, back)
     for value, name in enumerate(model.labels, 1):
         _save_mask(without_small_pieces(labels == value, model.smallest_piece), reference, args.output / f"{name}.nii.gz")
@@ -154,7 +162,7 @@ def main():
         "fastest": False,
         "save_lowres": False,
         "torch_version": torch_version,
-        "nnunetv2_version": metadata.version("nnunetv2"),
+        "nnunetv2_version": metadata.version("nnunetv2") if model.engine == "nnunet" else None,
         "runtime_seconds": round(time.monotonic() - started, 3),
         "classes": {str(value): name for value, name in enumerate(model.labels, 1)},
     }

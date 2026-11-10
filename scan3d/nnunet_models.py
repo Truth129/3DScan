@@ -48,6 +48,9 @@ class NnunetModel:
     skull_strip: str = ""
     # The archive needs a sign-in to download, so it is installed from a file someone fetched.
     sign_in: bool = False
+    # "nnunet" runs nnU-Net's predictor; "cas_net" runs ImageCAS-X's CAS-Net (scan3d/cas_net.py),
+    # one network whose checkpoint is the only file and whose tile_step_size is its tile overlap.
+    engine: str = "nnunet"
 
 
 MODELS = {
@@ -147,6 +150,27 @@ MODELS = {
                 "fold_3/checkpoint_best.pth": "18cf22acd8332cac77eb640216e358ea43c0ab6aba91e76e2e0056e83b87f86a",
                 "fold_4/checkpoint_best.pth": "c4449840327b7d2275346531c98fa2fcc3f620df088d4a960918ed57070f29a2",
             },
+        ),
+        NnunetModel(
+            id="imagecasx_cas_net",
+            name="ImageCAS-X CAS-Net",
+            version="zenodo-23894668",
+            label="Coronary arteries — ImageCAS-X CAS-Net",
+            description="Coronary artery lumen on gated coronary CT angiography, from the ImageCAS-X benchmark's CAS-Net, which scored above its nnU-Net with fewer stray pieces. It was trained at one centre on scans without artefacts. Results stay beside other models' results, so you can compare them.",
+            license="Weights CC BY 4.0 (Zenodo record 23894668); network code MIT (ImageCAS-X's port; the original CAS-Net repository states no license)",
+            modalities=("CT",),
+            labels=("coronary_arteries",),
+            folds=(),
+            tile_step_size=0.5,
+            url="https://zenodo.org/records/23894668/files/pretrained_weights.zip",
+            archive_sha256="4e5ec4510847ab5af561f906e21faed22aec574caa4a21517f2ebbf21dcdd334",
+            archive_folder="pretrained_weights",
+            checkpoint="cas_net.pt",
+            # It read the ImageCAS files with SimpleITK, unchanged, as LAS x, y, z arrays.
+            axes="LAS",
+            smallest_piece=100,
+            engine="cas_net",
+            files={"cas_net.pt": "f3e280b74e2f3c32ac122996100694fb7d1357f3aa2e582e5e6bb7461f90d6c1"},
         ),
         NnunetModel(
             id="hdbet_brain",

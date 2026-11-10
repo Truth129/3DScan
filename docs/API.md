@@ -467,7 +467,8 @@ See [Choosing a path](#choosing-a-path).
   [ARCHITECTURE.md](ARCHITECTURE.md#store-and-revision-model). Ambiguous names and conflicting
   relationships fail before publishing.
 - A pinned nnU-Net model runs alone, with no crop or small-blob options, and needs its weights
-  installed. Its structures match only that model's.
+  installed. Its structures match only that model's. `imagecasx_cas_net` is pinned the same way,
+  though it is not an nnU-Net, and its run's source is also `nnunet_model`.
 - `operation` records `replacement_policy`, `replaced_structure_ids` and `replacement_id_map`, plus
   [`runtime`](#what-a-run-records) if the run named a path.
 

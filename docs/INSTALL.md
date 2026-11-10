@@ -257,6 +257,13 @@ pinned `nnInteractive_v1.0` model into `.runtime/nninteractive/` and checks its 
 .venv/bin/python scripts/download_segmentation_model.py imagecasx_coronary
 ```
 
+**ImageCAS-X CAS-Net** is the same benchmark's CAS-Net, a second coronary model. It downloads the
+same 1.6 GB archive and keeps 27 MB; `--archive FILE` reuses an archive you already have:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py imagecasx_cas_net
+```
+
 **FLAMeS** is an optional MS lesion model for FLAIR MRI. It also installs **HD-BET**, which removes
 the skull first. Together they download 2.5 GB and keep 1.4 GB:
 

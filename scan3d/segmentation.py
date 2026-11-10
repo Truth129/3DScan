@@ -217,7 +217,7 @@ def _nnunet_descriptor(model):
             digest = _checkpoint_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
             matches = matches and digest == expected
             files.append({"name": f"{directory.name}/{name}", "bytes": stat.st_size, "sha256": digest})
-    return {
+    descriptor = {
         "task": model.id,
         "engine": model.name,
         "version": model.version,
@@ -227,6 +227,10 @@ def _nnunet_descriptor(model):
         "files": files,
         "complete": matches,
     }
+    if model.engine == "cas_net":
+        # Its network and inference are this repository's code, not a package's.
+        descriptor["cas_net_sha256"] = _digest(Path(__file__).with_name("cas_net.py"))
+    return descriptor
 
 
 def model_fingerprint(profile: str, options: dict | None = None, *, modality: str = "CT", inference_path=None) -> dict:

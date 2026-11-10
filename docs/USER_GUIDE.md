@@ -205,6 +205,12 @@ CT angiography, from the ImageCAS-X benchmark. Install it with
 artefacts, and it works at 0.35 mm, so a large non-cardiac CT needs a lot of memory and time.
 As in the benchmark, pieces of its mask smaller than 100 voxels are removed.
 
+**Coronary arteries — ImageCAS-X CAS-Net** is the same benchmark's CAS-Net, which scored above its
+nnU-Net with fewer stray pieces. Install it with `scripts/download_segmentation_model.py
+imagecasx_cas_net`. Its segment is **Coronary arteries (ImageCAS-X CAS-Net)**. It runs as one
+network at 0.5 mm, so a large non-cardiac CT still needs a lot of memory and time, and pieces smaller
+than 100 voxels are removed in the same way. The job shows which of its four mirrored passes it is on.
+
 **MS lesions — FLAMeS** marks multiple sclerosis white-matter lesions on a FLAIR series. Install it
 with `scripts/download_segmentation_model.py flames_ms_lesions`, which also installs HD-BET. HD-BET
 removes the skull first, because FLAMeS was trained on images without one; **Brain — HD-BET** shows
@@ -566,7 +572,8 @@ them and solves steady hyperaemic pressure.
 
 Inputs:
 
-- **Lumen**, **Aorta** and **Myocardium** come from the revision's segments.
+- **Lumen**, **Aorta** and **Myocardium** come from the revision's segments. The lumen starts as
+  CAS-Net's, then the ImageCAS-X nnU-Net's, then TotalSegmentator's, whichever the revision has.
 - **LV mass** is required without a myocardium mask. With one, its volume × 1.05 g/mL is used.
 - **SBP**, **DBP** and **heart rate** are optional. Missing blood pressure is taken as 120/80 and
   marked as assumed. Heart rate is recorded only.

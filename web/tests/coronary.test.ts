@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ffrColour, NOT_REPORTED, tubeGeometry, tubeLegend, type CoronaryBranch, type CoronaryResult } from '../src/lib/coronary';
+import { ffrColour, LUMEN_IDS, NOT_REPORTED, preferred, tubeGeometry, tubeLegend, type CoronaryBranch, type CoronaryResult } from '../src/lib/coronary';
+import type { Structure } from '../src/types';
 
 const RED = [208, 59, 59],
   AMBER = [250, 178, 25],
@@ -76,5 +77,17 @@ describe('coronary tube', () => {
     expect(legend.ticks.filter(tick => tick.strong)).toEqual([{ label: '0.80', at: 50, strong: true }]);
     expect(legend.notReported).toBe(true);
     expect(tubeLegend('diameter').notReported).toBe(false);
+  });
+});
+
+describe('coronary inputs', () => {
+  it('defaults the lumen to CAS-Net, then the ImageCAS-X nnU-Net, then TotalSegmentator', () => {
+    const ids = (...names: string[]) => names.map(id => ({ id }) as Structure);
+    expect(
+      preferred(ids('coronary_arteries:coronary_arteries', 'imagecasx_coronary:coronary_arteries', 'imagecasx_cas_net:coronary_arteries'), LUMEN_IDS),
+    ).toBe('imagecasx_cas_net:coronary_arteries');
+    expect(preferred(ids('coronary_arteries:coronary_arteries', 'imagecasx_coronary:coronary_arteries'), LUMEN_IDS)).toBe(
+      'imagecasx_coronary:coronary_arteries',
+    );
   });
 });

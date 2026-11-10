@@ -48,7 +48,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/janitor.py`, `activity.py`, `disk_usage.py`                     | Delete forever, Clear caches, requests in flight, sizes |
 | `scan3d/dicom.py`, `enhanced_mr.py`, `modalities.py`, `image_assets.py` | Series validation, conversion, image identity           |
 | `scan3d/segmentation*.py`                                               | TotalSegmentator runs, task catalog, result merging     |
-| `scan3d/nnunet_models.py`, `nnunet_worker.py`                           | Pinned nnU-Net models and their worker                  |
+| `scan3d/nnunet_models.py`, `nnunet_worker.py`, `cas_net.py`             | Pinned nnU-Net models, CAS-Net and their worker         |
 | `scan3d/review.py`, `relationships.py`, `direct_edit.py`, `scissors.py` | Correction sessions and deterministic edits             |
 | `scan3d/interactive*.py`                                                | nnInteractive engine, worker, batching, prompts         |
 | `scan3d/inference_paths.py`                                             | Inference paths: discovery, binding, child environment  |

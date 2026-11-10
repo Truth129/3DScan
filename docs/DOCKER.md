@@ -52,6 +52,7 @@ TotalSegmentator downloads its weights the first time a task runs. The others ne
 docker compose exec scan3d python scripts/download_interactive_model.py
 docker compose exec scan3d python scripts/download_segmentation_model.py mrsegmentator
 docker compose exec scan3d python scripts/download_segmentation_model.py imagecasx_coronary
+docker compose exec scan3d python scripts/download_segmentation_model.py imagecasx_cas_net
 docker compose exec scan3d python scripts/download_segmentation_model.py flames_ms_lesions
 docker compose exec scan3d python scripts/download_segmentation_model.py breastdivider
 ```

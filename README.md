@@ -18,7 +18,7 @@ other service.
 - **Import:** browser upload, `scan3d import`, an optional [Orthanc](docs/ORTHANC.md), or any
   [DICOMweb archive](docs/ARCHIVES.md). Static MRI is experimental and opt-in.
 - **Segmentation:** selected TotalSegmentator tasks on a GPU or the CPU, plus optional
-  MRSegmentator and an ImageCAS-X coronary model to compare beside them, FLAMeS for MS lesions
+  MRSegmentator and two ImageCAS-X coronary models to compare beside them, FLAMeS for MS lesions
   on FLAIR MRI, BreastDivider for the left and right breast on MRI, and the MAMA-MIA model for
   breast tumours on DCE MRI. With
   [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
@@ -89,6 +89,8 @@ downloads with their own terms, which you must accept yourself:
 - **MRSegmentator:** the code is Apache-2.0. Its repository states no separate license for the
   weights.
 - **ImageCAS-X nnU-Net:** the weights are CC BY 4.0 on Zenodo, and the code is MIT.
+- **ImageCAS-X CAS-Net:** the weights are CC BY 4.0 on Zenodo. Its network code, adapted in
+  `scan3d/cas_net.py`, is MIT; the original CAS-Net repository states no license.
 - **MAMA-MIA nnU-Net:** the weights are **CC BY-NC 4.0, which is noncommercial**.
 - **BreastDivider:** the weights are **CC BY-NC-SA 4.0, which is noncommercial**, and the code is
   Apache-2.0.

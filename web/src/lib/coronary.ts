@@ -112,7 +112,7 @@ export const coronaryApi = {
 };
 
 /** The first structure in the revision from each preference list; aorta IDs from either task share one identity. */
-export const LUMEN_IDS = ['imagecasx_coronary:coronary_arteries', 'coronary_arteries:coronary_arteries'];
+export const LUMEN_IDS = ['imagecasx_cas_net:coronary_arteries', 'imagecasx_coronary:coronary_arteries', 'coronary_arteries:coronary_arteries'];
 export const AORTA_IDS = ['total:aorta', 'heartchambers_highres:aorta'];
 export const MYOCARDIUM_IDS = ['heartchambers_highres:heart_myocardium'];
 export const hasCoronaryLumen = (structures: readonly Structure[]) => structures.some(item => LUMEN_IDS.includes(item.id));
