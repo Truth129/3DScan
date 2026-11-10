@@ -183,16 +183,15 @@ def test_one_channel_export_gives_nnunets_full_export():
     assert labels.dtype == np.uint8 and np.array_equal(labels, expected.transpose(2, 0, 1))
 
 
-def test_small_pieces_go_and_corner_neighbours_count_as_one_piece():
+def test_small_pieces_go_and_only_face_neighbours_join_a_piece():
     mask = np.zeros((20, 20, 20), bool)
     mask[0:5, 0:5, 0:3] = True  # 75 voxels
-    mask[5:10, 5:10, 3:4] = True  # 25 more, touching the first only at a corner
-    mask[12:17, 12:17, 12:16] = True
-    mask[12, 12, 15] = False  # 99 voxels
+    mask[5:10, 5:10, 3:4] = True  # 25 more, touching the first only at a corner, as the benchmark counts
+    mask[12:17, 12:17, 12:16] = True  # 100 voxels
     assert np.array_equal(nnunet_worker.without_small_pieces(mask, 0), mask)
     kept = nnunet_worker.without_small_pieces(mask, 100)
-    assert kept.sum() == 100 and kept[0, 0, 0] and kept[9, 9, 3] and not kept[12:17, 12:17, 12:17].any()
-    assert nnunet_models.MODELS["imagecasx_coronary"].smallest_piece == 100
+    assert kept.sum() == 100 and kept[12:17, 12:17, 12:16].all()
+    assert nnunet_models.MODELS["imagecasx_coronary"].smallest_piece == nnunet_models.MODELS["imagecasx_cas_net"].smallest_piece == 100
     assert nnunet_models.MODELS["mrsegmentator"].smallest_piece == 0
 
 

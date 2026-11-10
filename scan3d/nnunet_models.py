@@ -41,7 +41,7 @@ class NnunetModel:
     archive_folder: str = ""
     # The names in the model's dataset.json, when 3DScan shows other names.
     dataset_labels: tuple[str, ...] = ()
-    # Pieces of a mask with fewer voxels than this, counted 26-connected, are dropped.
+    # Pieces of a mask with fewer voxels than this are dropped; only voxels sharing a face join a piece.
     smallest_piece: int = 0
     # Another pinned model whose first label keeps the voxels this model sees, for a model
     # trained on skull-stripped images. Everything outside it is set to zero first.

@@ -47,9 +47,10 @@ def skull_stripped(image, labels):
 
 
 def without_small_pieces(mask, smallest):
+    # As ImageCAS-X's cleanup, which labels with scipy's default: only voxels sharing a face join a piece.
     if not smallest:
         return mask
-    pieces, _ = ndi.label(mask, structure=np.ones((3, 3, 3)))
+    pieces, _ = ndi.label(mask)
     keep = np.bincount(pieces.ravel()) >= smallest
     keep[0] = False
     return keep[pieces]
