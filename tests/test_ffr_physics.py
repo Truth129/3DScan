@@ -211,6 +211,24 @@ def test_a_narrowed_daughter_reads_lower_ffr_end_to_end():
     assert result.ffr[a][-1] < result.ffr[b][-1] and result.ffr[b][-1] > 0.9
 
 
+def test_a_clipped_side_stub_leaves_the_vessel_its_flow():
+    """A side branch the mask clips 2.5 mm past the wall still reads near trunk width, so as an
+    outlet it took over a third of the flow (FFR 0.07-0.09 high on every grid). Pruned, the
+    narrowed trunk reads as it does alone, within the noise of a differently traced centreline."""
+    trunk = Vessel(1.5, 40, stenoses=(Stenosis(28, 6, 0.5),))
+    results = []
+    for phantom in (Phantom((trunk,)), Phantom((trunk, Vessel(1.3, 4, start=(12, 0, 0), heading=60)), joints=(((12, 0, 0), 1.3),))):
+        mask, aorta, affine = phantom.masks(GRIDS["0.35x0.35x0.5 sheared"])
+        found = lumen(mask, affine)
+        tree = centrelines(found, ostia(found, np.argwhere(aorta) @ affine[:3, :3].T + affine[:3, 3]))
+        stations, _ = measure(found, [branch.points for branch in tree.branches], parents=[branch.parent for branch in tree.branches], stubs=tree.stubs)
+        results.append((tree, analyse(tree, stations, Physiology(150, 120, 80, 60, share=1 / 3))))
+    (alone, plain), (stubbed, pruned) = results
+    assert len(alone.branches) == len(stubbed.branches) == 1 and len(stubbed.stubs) == 1
+    assert pruned.flow[0] == pytest.approx(plain.flow[0], rel=0.05)
+    assert pruned.ffr[0][-1] == pytest.approx(plain.ffr[0][-1], abs=0.02) and plain.ffr[0][-1] < 0.9
+
+
 def test_a_healthy_wide_vessel_has_no_lesion():
     """The spur rule drops real end-cap lumen at a blunt tip, so those stations are held."""
     mask, aorta, affine = Phantom((Vessel(2.5, 30),)).masks(GRIDS["0.35x0.35x0.5 rotated"])

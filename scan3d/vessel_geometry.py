@@ -23,6 +23,15 @@ _FACES = np.array([[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 
 _WALL_POWER = 2  # a traced path costs 1/(wall distance)^power per mm, so it keeps to the centre
 _COVER = 1.5  # a traced path covers the lumen within this many vessel radii of it, plus a voxel
 _SPUR = 3.0  # mm; a shorter end branch is a spur, as is one shorter than twice the radius it leaves
+# A side branch the mask clips after a few mm leaves an end branch whose width still reads near its
+# parent's, so the far-end r^3 flow split hands it a trunk-sized share and starves the real vessel.
+# Such a stub is under _STUB_LENGTH from its junction, and outside its parent's lumen it shows its
+# mouth and little more: under _STUB_WIDTHS of its own widths. A real end branch that short is thin,
+# so it runs more widths out and keeps its small share. On the Carson 2019 surfaces the stubs ran
+# 3-6 mm and pruning end branches under 12 mm started cutting real vessels. On the synthetic grids
+# stubs 1.0-1.6 widths out read 0.9-2.0, and a 1.6 mm branch 2.8 widths out read 2.5-3.2.
+_STUB_LENGTH = 8.0  # mm along the traced path from the junction
+_STUB_WIDTHS = 2.25  # own widths outside the other vessels' lumen
 _SMOOTH = 2  # stations on each side of a moving average, applied twice when recentring
 _PASSES = 2  # recentring passes
 _GAP_REACH = 5.0  # mm from a branch end to a rootless piece that makes the end a gap
@@ -58,6 +67,9 @@ class Tree:
     branches: list[Branch]  # parents before children
     pieces: np.ndarray  # (p, 3) RAS centroids of lumen components with no root
     piece_volume: np.ndarray  # (p,) mm³
+    # End branches pruned as clipped side-branch stubs: each its traced voxel path (q, 3) RAS, from
+    # the junction it left. They take no flow; their lumen still joins the vessel there.
+    stubs: tuple[np.ndarray, ...] = ()
 
 
 @dataclass(frozen=True, eq=False)
@@ -139,9 +151,11 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
 
     The farthest uncovered voxel is traced back to the tree on a metric that makes the wall
     expensive, the lumen around the new path is covered, and so on until nothing is left. End
-    branches shorter than a spur are pruned. Each branch is then resampled every `spacing` mm and
-    moved to the centroids of its stations' cells, so it follows the lumen centre between voxel
-    centres. Lumen with no root is listed as pieces; a branch that ends near a sizeable piece is
+    branches shorter than a spur are pruned, and so are stubs: end branches short for their width,
+    where the mask clips a side branch (see _STUB_LENGTH), unless they end near a rootless piece
+    of lumen, which makes them a gap. Neither a root's branch nor a junction's last branch goes.
+    Each branch is then resampled every `spacing` mm and moved to the centroids of its stations'
+    cells, so it follows the lumen centre between voxel centres. Lumen with no root is listed as pieces; a branch that ends near a sizeable piece is
     marked `gap`, since a break in the mask hides the flow and the narrowing that caused it.
 
     `covered`, a mask over the lumen points, is lumen no trace starts from, though paths may cross
@@ -158,7 +172,16 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
     toll = edges.data * (radius[edges.row] ** -_WALL_POWER + radius[edges.col] ** -_WALL_POWER) / 2
     reach = dijkstra(lumen.graph, directed=False, indices=roots, min_only=True)
     _, previous, _ = dijkstra(csr_array((toll, (edges.row, edges.col)), shape=(n, n)), directed=False, indices=roots, min_only=True, return_predecessors=True)
-    chains = _prune(lumen, roots, radius, _skeleton(lumen, roots, radius, reach, previous, covered))
+    _, component = connected_components(lumen.graph, directed=False)
+    rootless = ~np.isin(component, component[roots])
+    _, inverse, sizes = np.unique(component[rootless], return_inverse=True, return_counts=True)
+    volume = sizes * lumen.voxel_volume
+    sizeable = volume[inverse] >= _GAP_VOLUME
+    gaps = cKDTree(lumen.points[rootless][sizeable]) if sizeable.any() else None
+    near_gap = np.zeros(n, dtype=bool)
+    if gaps is not None:
+        near_gap = np.isfinite(gaps.query(lumen.points, distance_upper_bound=_GAP_REACH)[0])
+    chains, stubs = _prune(lumen, roots, radius, _skeleton(lumen, roots, radius, reach, previous, covered), near_gap)
 
     stations = [_resample(lumen.points[chain], spacing) for chain, _, _ in chains]
     # A root whose whole component lies within its first cover grows no branch.
@@ -182,19 +205,14 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
             moved.append(_resample(_smooth(_smooth(points)), spacing))
         stations = moved
 
-    _, component = connected_components(lumen.graph, directed=False)
-    rootless = ~np.isin(component, component[roots])
-    _, inverse, sizes = np.unique(component[rootless], return_inverse=True, return_counts=True)
     pieces = np.stack([np.bincount(inverse, weights=lumen.points[rootless, axis]) for axis in range(3)], 1) / sizes[:, None]
-    volume = sizes * lumen.voxel_volume
     gap = np.zeros(len(chains), dtype=bool)
     tips = [i for i in range(len(chains)) if all(up != i for _, up, _ in chains)]
-    sizeable = volume[inverse] >= _GAP_VOLUME
-    if sizeable.any() and tips:
-        distance, _ = cKDTree(lumen.points[rootless][sizeable]).query([stations[i][-1] for i in tips], distance_upper_bound=_GAP_REACH)
+    if gaps is not None and tips:
+        distance, _ = gaps.query([stations[i][-1] for i in tips], distance_upper_bound=_GAP_REACH)
         gap[tips] = np.isfinite(distance)
     branches = [Branch(points, up, k, bool(gap[i])) for i, (points, (_, up, k)) in enumerate(zip(stations, chains))]
-    return Tree(lumen.points[roots], branches, pieces.reshape(-1, 3), volume)
+    return Tree(lumen.points[roots], branches, pieces.reshape(-1, 3), volume, tuple(lumen.points[chain] for chain in stubs))
 
 
 def contact(lumen: Lumen, tree: Tree, apart: float = 10.0) -> list[np.ndarray]:
@@ -318,28 +336,59 @@ def _chains(parent: np.ndarray, roots: np.ndarray) -> list[tuple[list[int], int,
     return chains
 
 
-def _prune(lumen: Lumen, roots: np.ndarray, radius: np.ndarray, parent: np.ndarray) -> list[tuple[list[int], int, int]]:
-    """Chains once every spur is gone. Where all of a junction's branches are spurs, the longest stays."""
+def _prune(
+    lumen: Lumen, roots: np.ndarray, radius: np.ndarray, parent: np.ndarray, near_gap: np.ndarray
+) -> tuple[list[tuple[list[int], int, int]], list[list[int]]]:
+    """Chains once every spur and stub is gone, and the stubs' voxel chains.
+
+    Where all of a junction's branches would go, the longest stays, so the vessel goes on. A root's
+    branch is never a stub, and neither is an end near a rootless piece, which is a gap. Pruning
+    repeats, since a parent left with one child merges with it into a new, longer end branch.
+    """
+    root_set = {int(root) for root in roots}
+    stubs = []
     while True:
         chains = _chains(parent, roots)
         junctions = {chain[0] for chain, _, _ in chains}
-        starts: dict[int, list[tuple[float, list[int], bool]]] = {}
+        starts: dict[int, list[tuple[float, list[int], bool, bool]]] = {}
         for chain, _, _ in chains:
-            length = _arc(lumen.points[chain])[-1]
-            spur = chain[-1] not in junctions and length < max(_SPUR, 2 * radius[chain[0]])
-            starts.setdefault(chain[0], []).append((length, chain, spur))
+            s = _arc(lumen.points[chain])
+            end = chain[-1] not in junctions
+            spur = end and s[-1] < max(_SPUR, 2 * radius[chain[0]])
+            stub = end and not spur and chain[0] not in root_set and not near_gap[chain[-1]] and s[-1] < _STUB_LENGTH and _stubby(lumen, radius, chains, chain)
+            starts.setdefault(chain[0], []).append((s[-1], chain, spur, stub))
         pruned = False
         for leaving in starts.values():
             if len(leaving) < 2:
                 continue
-            spurs = sorted((item for item in leaving if item[2]), key=lambda item: item[0])
-            if len(spurs) == len(leaving):
-                spurs.pop()
-            for _, chain, _ in spurs:
+            going = sorted((item for item in leaving if item[2] or item[3]), key=lambda item: item[0])
+            if len(going) == len(leaving):
+                going.pop()
+            for _, chain, spur, _ in going:
                 parent[chain[1:]] = -2
                 pruned = True
+                if not spur:
+                    stubs.append(chain)
         if not pruned:
-            return chains
+            return chains, stubs
+
+
+def _stubby(lumen: Lumen, radius: np.ndarray, chains: list[tuple[list[int], int, int]], chain: list[int]) -> bool:
+    """Whether an end chain runs under _STUB_WIDTHS of its own widths outside the other chains' lumen.
+
+    Outside: farther from every other chain voxel than that voxel's wall distance, which also
+    leaves out a stretch that runs along inside its parent before turning off. Its width is twice
+    the median wall distance there plus a voxel, as a voxel centre reads about half a voxel short
+    of the wall.
+    """
+    others = np.concatenate([other for other, _, _ in chains if other is not chain])
+    distance, nearest = cKDTree(lumen.points[others]).query(lumen.points[chain])
+    outside = np.flatnonzero(distance > radius[others][nearest])
+    if not len(outside):
+        return True
+    s = _arc(lumen.points[chain])
+    width = 2 * float(np.median(radius[chain][outside])) + lumen.edge
+    return s[-1] - s[outside[0]] < _STUB_WIDTHS * width
 
 
 def _arc(points: np.ndarray) -> np.ndarray:
@@ -389,7 +438,9 @@ def assign(lumen: Lumen, branches: list[np.ndarray], reach: int = 4) -> np.ndarr
     return result
 
 
-def measure(lumen: Lumen, branches: list[np.ndarray], window: float = 1.0, parents: list[int] | None = None) -> tuple[list[Stations], int]:
+def measure(
+    lumen: Lumen, branches: list[np.ndarray], window: float = 1.0, parents: list[int] | None = None, stubs: tuple[np.ndarray, ...] = ()
+) -> tuple[list[Stations], int]:
     """Area and inscribed radius at each station, and the count of lumen voxels left unassigned.
 
     Each station's cell runs between the midpoints to its neighbours, so a cell's voxel volume
@@ -398,7 +449,9 @@ def measure(lumen: Lumen, branches: list[np.ndarray], window: float = 1.0, paren
     an end station's point count towards that station. A voxel farther from its station than
     the cover distance (as `centrelines` uses) is lumen the tree does not follow, such as a
     pruned stub, so it is left out and the station marked `spur`. With `parents` (each branch's
-    parent, -1 at a root), stations within that distance of a junction are marked `junction`.
+    parent, -1 at a root), stations within that distance of a junction are marked `junction`. So
+    are stations within `window` of a cell that counts lumen of one of `stubs` (Tree.stubs): voxels
+    nearer a stub's path outside the vessels than any station, which would widen the vessel there.
     At blunt ends the rule also drops real end-cap lumen, so end stations read low; the physics
     holds spur runs that touch an end or junction. Feed it `centrelines` output: at an eccentric narrowing off the true
     axis, the spur rule would remove real lumen.
@@ -432,4 +485,15 @@ def measure(lumen: Lumen, branches: list[np.ndarray], window: float = 1.0, paren
             reach = _COVER * result[parent].inscribed[-1] + lumen.edge
             result[parent].junction[result[parent].s >= result[parent].s[-1] - reach] = True
             result[child].junction[result[child].s <= reach] = True
+    if len(stubs):
+        path = np.concatenate(stubs)
+        distance, nearest = cKDTree(points).query(path)
+        path = path[distance > inscribed[nearest]]  # outside every vessel's inscribed lumen
+        counted = inside[~far]
+        mixed = cKDTree(np.concatenate([points, path])).query(lumen.points[counted])[1] >= len(points)
+        start = np.concatenate([[0], np.cumsum([len(branch) for branch in branches])])
+        for station in np.unique(owner[counted[mixed]]):
+            branch = int(np.searchsorted(start, station, side="right")) - 1
+            s = result[branch].s
+            result[branch].junction[np.abs(s - s[station - start[branch]]) <= window] = True
     return result, int((owner < 0).sum())

@@ -362,8 +362,12 @@ Research use only. A `coronary_analysis` job (`scan3d/coronary.py`) on the CPU l
    within 1.5 mm of the aorta never starts a trace, and a path's root end is covered like a blunt
    tip, so the rim of the face where the aorta cuts a coronary is not traced as stub branches. The
    trade-off: a side branch about 1 mm across leaving within about 1.5 mm of the aortic face can be
-   lost (9 of 288 synthetic cases).
-4. Measures area every 0.5 mm from the voxels each station owns, averaged over 1 mm.
+   lost (9 of 288 synthetic cases). An end branch under 8 mm that runs under 2.25 of its widths
+   out of its parent is a side branch the mask clipped, and is pruned unless it is a root's or the
+   junction's last branch or ends at a gap. Its near-trunk width would take a trunk's share of the
+   flow; pruned, the other outlets share that flow, so FFR beyond reads a little low.
+4. Measures area every 0.5 mm from the voxels each station owns, averaged over 1 mm. Stations whose
+   cells take a pruned stub's lumen are junction zones.
 5. Fits a reference diameter, finds lesions and solves steady hyperaemic pressure in a reduced-order
    model (`ffr_physics.py`). Ostium, tip and junction zones are held at the nearest trusted area,
    with spur runs that touch them; an isolated spur run is a throat and is kept. A branch with no

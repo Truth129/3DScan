@@ -108,6 +108,20 @@ def test_a_blunt_end_grows_one_branch_and_a_short_side_branch_stays(grid):
     assert len(grow(Phantom((tube, side), joints=(((20, 0, 0), 0.8),)), GRIDS[grid])[1].branches) == 3
 
 
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_clipped_side_stub_is_pruned_and_a_long_side_branch_stays(grid):
+    """A side branch the mask clips 2.5 mm past the wall, about one width out, is a stub left out
+    of the tree, recorded from its junction; one 10.5 mm out is a branch."""
+    tube = Vessel(1.5, 40)
+    stub = Vessel(1.3, 4, start=(20, 0, 0), heading=60)
+    tree = grow(Phantom((tube, stub), joints=(((20, 0, 0), 1.3),)), GRIDS[grid])[1]
+    assert len(tree.branches) == 1 and len(tree.stubs) == 1
+    assert np.linalg.norm(tree.stubs[0][0] - stub.axis(np.zeros(1))[0]) < 3
+    side = Vessel(1.2, 12, start=(20, 0, 0), heading=60)
+    tree = grow(Phantom((tube, side), joints=(((20, 0, 0), 1.2),)), GRIDS[grid])[1]
+    assert len(tree.branches) == 3 and not tree.stubs
+
+
 def test_a_gap_and_touching_vessels_are_flagged():
     """The branch ending at a break is a gap and the far piece has no root; two trees whose
     vessels touch are flagged there and nowhere else."""

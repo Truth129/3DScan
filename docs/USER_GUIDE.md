@@ -776,6 +776,8 @@ Limits:
 - Blunt or oblique distal vessel ends can still fork the centreline.
 - The ostium face is not traced as branches, so a side branch about 1 mm across within about
   1.5 mm of the aorta may be lost.
+- A side branch the mask clips within a few mm is left out as a stub, with a flag. The other
+  outlets share its flow, so FFR beyond it may read a little low.
 - Where two vessels touch, their areas can mix. Such branches carry a contact note.
 - A lumen gap withholds FFR on the branch that ends at it, since the flow beyond is unknown. FFR
   above the gap is still shown, with a flag that it may read low.

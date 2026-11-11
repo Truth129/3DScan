@@ -22,6 +22,7 @@ NARROWED = Phantom(
     (Vessel(1.5, 15), Vessel(1.2, 20, start=(15, 0, 0), heading=35, stenoses=(Stenosis(8, 6, 0.6),)), Vessel(1.2, 20, start=(15, 0, 0), heading=-35)),
     joints=(((15, 0, 0), 1.5),),
 )
+STUBBED = Phantom((Vessel(1.5, 40), Vessel(1.3, 4, start=(12, 0, 0), heading=60)), joints=(((12, 0, 0), 1.3),))
 LUMEN, AORTA, MYOCARDIUM = "imagecasx_coronary:coronary_arteries", "total:aorta", "heartchambers_highres:heart_myocardium"
 RUN = {"lumen": LUMEN, "aorta": AORTA, "lv_mass": 150, "sbp": 120, "dbp": 80, "heart_rate": 60, "share": 1 / 3}
 
@@ -112,6 +113,19 @@ def test_a_narrowed_daughter_reads_a_drop_across_its_lesion(rig):
     assert lesion["beyond"]["ffr"] is not None and lesion["delta_ffr"] > 0
     for read in (lesion["beyond"], lesion["before"]):
         assert read["low"] <= read["ffr"] <= read["high"] and read["indeterminate"] == (read["low"] <= 0.8 < read["high"])
+
+
+@pytest.mark.parametrize("rig", [STUBBED], indirect=True, ids=["clipped side stub"])
+def test_a_clipped_side_stub_is_left_out_and_flagged(rig):
+    http, service, _, _, route = rig
+    queued = http.post(route, json=RUN).json()
+    service.execute(service.store.claim("cpu"))
+    result = http.get(f"{route}/{queued['id']}").json()
+    assert len(result["branches"]) == 1
+    assert any(
+        flag.startswith("end branches under 8 mm and short for their width, left out of the tree and the flow split as clipped side branches: 1 (")
+        for flag in result["flags"]
+    )
 
 
 def test_a_run_with_no_aorta_and_no_ostium_is_refused(rig):

@@ -1091,8 +1091,8 @@ case, revision or kind, before it completes, and when its saved files fail their
 - `parent` is -1 at a root. `start` and `end` are mm from the ostium along the tree, and `stenosis`
   is the diameter stenosis at the throat, 0 to 1.
 - `held` stations take the nearest trusted station's area: the first 1 mm of a root branch, the last
-  1.5 mm of an end, junction zones, and spur runs that touch them. A branch with no trusted station
-  takes its reference area.
+  1.5 mm of an end, junction zones (including where a pruned stub's lumen joins), and spur runs
+  that touch them. A branch with no trusted station takes its reference area.
 - A lesion is a stretch under 0.7 of the reference for at least 1 mm. Stretches less than 1 mm apart
   are one lesion, with the deepest throat.
 - `reason` says why a branch's FFR is not reported, such as one tree with no `share`, or a lumen gap.
@@ -1109,10 +1109,12 @@ case, revision or kind, before it completes, and when its saved files fail their
   crosses 0.80; null with no band. Stations carry no such field; apply the same test to
   `ffr_low` and `ffr_high`.
 - `flags` lists assumed values, gaps, dropped ostium points, a `share` applied to more than one tree,
-  unmeasured voxels and lumen that touches lumen far along the tree. Plausibility flags change no
-  number and come as at most one line per kind, naming the branches: hyperaemic mean speed at a
-  solved branch's start under 0.15 or over 1.5 m/s where the reference is at least 1.8 mm, and a
-  parent's reference under 0.85 of its daughters' Murray size.
+  unmeasured voxels, lumen that touches lumen far along the tree, and how many end branches were
+  pruned as clipped side-branch stubs (under 8 mm, and under 2.25 of their widths out of the parent)
+  and left out of `branches` and the flow split. Plausibility flags change no number and come as at
+  most one line per kind, naming the branches: hyperaemic mean speed at a solved branch's start
+  under 0.15 or over 1.5 m/s where the reference is at least 1.8 mm, and a parent's reference under
+  0.85 of its daughters' Murray size.
 
 Reading rules:
 

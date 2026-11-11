@@ -28,7 +28,7 @@ from .ffr_physics import BAND_EXPONENT, BAND_FLOW, BAND_TCRI, Physiology, analys
 from .fileio import atomic_json, atomic_text
 from .identifiers import identifier
 from .store import now, safe_id
-from .vessel_geometry import centrelines, contact, lumen, measure, ostia
+from .vessel_geometry import _STUB_LENGTH, centrelines, contact, lumen, measure, ostia
 
 KIND = "coronary_analysis"
 FORMAT = "scan3d-coronary-v1"
@@ -302,7 +302,7 @@ def _analyse(service, job, revision, inputs, key):
     parents = [branch.parent for branch in tree.branches]
 
     service.stage(job, "Areas")
-    stations, unassigned = measure(found, [branch.points for branch in tree.branches], WINDOW, parents)
+    stations, unassigned = measure(found, [branch.points for branch in tree.branches], WINDOW, parents, tree.stubs)
     touching = contact(found, tree)
 
     service.stage(job, "Pressure")
@@ -392,6 +392,14 @@ def _analyse(service, job, revision, inputs, key):
         )
     if unassigned:
         flags.append(f"{unassigned} lumen voxels are not reached from any root and are not measured")
+    if tree.stubs:
+        lengths = [float(np.linalg.norm(np.diff(stub, axis=0), axis=1).sum()) for stub in tree.stubs]
+        # One line, so a tree of stubs does not flood the list. The heart's flow is the same, so the
+        # other outlets share what the clipped branches would have taken, and FFR beyond reads a little low.
+        flags.append(
+            f"end branches under {_STUB_LENGTH:g} mm and short for their width, left out of the tree and the flow split as clipped side branches: "
+            f"{len(lengths)} ({min(lengths):.1f} to {max(lengths):.1f} mm); the other outlets share their flow"
+        )
     if touched := sum(int(np.count_nonzero(marks)) for marks in touching):
         flags.append(f"lumen touches lumen more than 10 mm away along the tree at {touched} stations; areas there may mix")
     constants = {name: getattr(physiology, name) for name in ("perfusion", "heart_factor", "tcri", "exponent", "venous", "viscosity", "density", "kt")}
