@@ -1901,12 +1901,15 @@ describe('a draft another tab started', () => {
 describe('what the page shows across a Save and an Undo', () => {
   beforeEach(() => void vi.useFakeTimers());
   afterEach(() => void vi.useRealTimers());
+  /** The Run AI steps a record holds, by the mark each ended at. */
+  const runs = (...ends: number[]) => ends.map(end => ({ end, autozoom: true, full_refine: false }));
   const step = (generation: number, prompts: InteractivePrompt[], extra: Partial<InteractiveReview> = {}): InteractiveReview => ({
     ...base(),
     generation,
     status: 'ready',
     prompts,
     applied_prompt_count: prompts.length,
+    batches: runs(prompts.length),
     dirty: false,
     candidate: {
       generation,
@@ -1920,7 +1923,7 @@ describe('what the page shows across a Save and an Undo', () => {
     await controller.load();
     controller.append(point('b'));
     await controller.apply();
-    reader.interactiveReview.mockResolvedValueOnce(step(3, [point('a'), point('b')]));
+    reader.interactiveReview.mockResolvedValueOnce(step(3, [point('a'), point('b')], { batches: runs(1, 2) }));
     await vi.advanceTimersByTimeAsync(900);
     expect(controller.candidate?.revision_id).toBe('review-draft-3');
     controller.undo();
@@ -1932,10 +1935,47 @@ describe('what the page shows across a Save and an Undo', () => {
     controller.append(point('b'));
     controller.append(point('c'));
     await controller.apply();
-    reader.interactiveReview.mockResolvedValueOnce(step(3, [point('a'), point('b'), point('c')]));
+    reader.interactiveReview.mockResolvedValueOnce(step(3, [point('a'), point('b'), point('c')], { batches: runs(1, 3) }));
     await vi.advanceTimersByTimeAsync(900);
     controller.undo();
     expect([controller.prompts.length, controller.candidate], 'b alone was never applied').toEqual([2, undefined]);
+  });
+  it('removes one mark as a step Undo puts back, and shows an earlier result only for a run the server still holds', async () => {
+    const [a, b, c] = ['a', 'b', 'c'].map(point),
+      { controller, reader } = fixture(step(3, [a, b, c], { batches: runs(1, 3) })),
+      ids = () => controller.prompts.map(item => item.id);
+    await controller.load();
+    controller.remove('unknown');
+    expect(controller.canUndo).toBe(false);
+    // A mark not yet run leaves the result as it was.
+    controller.append(point('d'));
+    controller.remove('d');
+    expect([ids(), controller.candidate?.revision_id, controller.pendingMarks]).toEqual([['a', 'b', 'c'], 'review-draft-3', 0]);
+    controller.remove('b');
+    expect([ids(), controller.candidate, controller.pendingMarks, controller.resultDiscarded]).toEqual([['a', 'c'], undefined, 2, true]);
+    controller.undo();
+    expect([ids(), controller.candidate?.revision_id, controller.resultDiscarded]).toEqual([['a', 'b', 'c'], 'review-draft-3', false]);
+    controller.redo();
+    // As the server answers a list that lost a mark: the run before it is kept, with no result.
+    const save = reader.interactivePrompts.getMockImplementation()!;
+    reader.interactivePrompts.mockImplementation(async (...args) => ({
+      ...(await save(...args)),
+      candidate: undefined,
+      applied_prompt_count: 1,
+      batches: runs(1),
+    }));
+    await controller.flush();
+    expect(reader.interactivePrompts.mock.calls[0].slice(2, 4)).toEqual([3, [a, c]]);
+    // Undo brings the mark back, not the result: the run that made it is gone.
+    controller.undo();
+    await controller.flush();
+    controller.append(point('d'));
+    await controller.flush();
+    controller.undo();
+    expect([ids(), controller.candidate]).toEqual([['a', 'b', 'c'], undefined]);
+    // A record from a build that lists no runs is read as before.
+    controller.review = { ...controller.review!, batches: undefined };
+    expect(controller.candidate?.revision_id).toBe('review-draft-3');
   });
   it("keeps this page's saved result on screen, busy, until App opens the saved revision", async () => {
     const { controller, reader } = fixture(step(1, [point('a')]));

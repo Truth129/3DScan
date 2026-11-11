@@ -40,6 +40,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   point: [point: Point];
   gesture: [prompt: InteractivePrompt];
+  removeMark: [id: string];
   windowLevel: [value: [number, number]];
   volumeOwner: [owner: CornerstoneMPR | undefined];
 }>();
@@ -84,6 +85,7 @@ watch(
     :centre-request="centreRequest"
     @point="emit('point', $event)"
     @gesture="emit('gesture', $event)"
+    @remove-mark="emit('removeMark', $event)"
     @window-level="emit('windowLevel', $event)"
     @memory-unavailable="memoryError = $event"
     @volume-owner="emit('volumeOwner', $event)"
@@ -115,6 +117,7 @@ watch(
         :full-resolution="fullResolution"
         @point="emit('point', $event)"
         @gesture="emit('gesture', $event)"
+        @remove-mark="emit('removeMark', $event)"
         @window-level="emit('windowLevel', $event)"
       />
     </div>

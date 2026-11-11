@@ -126,7 +126,13 @@ async function open() {
     caseId = ref('case'),
     revisionId = ref('base'),
     selected = ref('liver'),
-    panel = ref<{ addPrompt(ras: Point): void; addGesture(prompt: InteractivePrompt): void; show(): Promise<void>; saveDrafts(): Promise<boolean> }>(),
+    panel = ref<{
+      addPrompt(ras: Point): void;
+      addGesture(prompt: InteractivePrompt): void;
+      removeMark(id: string): void;
+      show(): Promise<void>;
+      saveDrafts(): Promise<boolean>;
+    }>(),
     app = createApp({
       render: () =>
         h(InteractiveReviewPanel, {
@@ -186,6 +192,40 @@ describe('saving before a case goes', () => {
     vi.mocked(api.interactivePrompts).mockRejectedValue(new Error('No answer'));
     panel.value.addPrompt(point);
     expect(await panel.value.saveDrafts()).toBe(false);
+  });
+});
+
+describe('removing one mark', () => {
+  it('asks once before a removal discards the result on screen, and takes one mark for a double-click', async () => {
+    const [one, two, three] = ['one', 'two', 'three'].map(id => ({ ...applied, id }));
+    workstation([amd], resultOn(amd, { prompts: [one, two], applied_prompt_count: 2, batches: [{ end: 2, autozoom: true, full_refine: false }] }));
+    const { root, panel } = await openAI(),
+      clock = vi.spyOn(performance, 'now'),
+      asked = () => (root.named('review-messages')?.content ?? '').includes('This mark was already run.'),
+      marks = () => Number(/(\d+) gestures?/.exec(root.named('review-toolbar-context')!.content)?.[1]);
+    async function click(id: string, at: number) {
+      clock.mockReturnValue(at);
+      panel.value.removeMark(id);
+      await settled();
+      return [marks(), asked()];
+    }
+    panel.value.addGesture(three);
+    await vi.waitFor(() => expect(api.interactivePrompts).toHaveBeenCalledOnce(), nextPoll);
+    // A mark not yet run goes at once, and the second click of a double-click does nothing.
+    expect(await click('three', 1000)).toEqual([2, false]);
+    expect(await click('two', 1100)).toEqual([2, false]);
+    // A mark that was run is asked about, and the answer is a later click on the same mark.
+    expect(await click('two', 2000)).toEqual([2, true]);
+    // The save of the first removal answers in between, which changes neither the marks nor the result.
+    await vi.waitFor(() => expect(api.interactivePrompts).toHaveBeenCalledTimes(2), nextPoll);
+    await settled();
+    expect(asked()).toBe(true);
+    expect(await click('two', 2100)).toEqual([2, true]);
+    expect(await click('one', 3000)).toEqual([2, true]);
+    expect(await click('one', 4000)).toEqual([1, false]);
+    expect(root.named('review-messages')?.content).toContain('The result was discarded because its marks or options changed.');
+    // With no result left on screen, nothing is asked.
+    expect(await click('two', 5000)).toEqual([0, false]);
   });
 });
 

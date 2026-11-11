@@ -123,13 +123,15 @@ export class InteractiveController {
     // is on its way, as the server answers with the same result under a new name. Without this the
     // original mask showed in between. The server restores a result only for exactly its marks,
     // options and relationship, from steps it still holds, so an undo of marks it has, under
-    // options it has: nothing looser is shown.
+    // options it has, onto the end of a run it still has: nothing looser is shown. A removed mark
+    // drops every run after it, and a record from a build without the run list is read as before.
     const length = this.prompts.length;
     if (
       !this.unsaved ||
       length >= value.prompts.length ||
       signature(this.prompts) !== signature(value.prompts.slice(0, length)) ||
-      signature(this.options) !== signature(value.options ?? initialOptions())
+      signature(this.options) !== signature(value.options ?? initialOptions()) ||
+      (value.batches && !value.batches.some(batch => batch.end === length))
     )
       return undefined;
     const wanted = signature([this.prompts, this.options, this.relationship]);
@@ -155,6 +157,10 @@ export class InteractiveController {
   }
   get pendingCount() {
     return this.pendingMarks + Number(this.relationshipDirty);
+  }
+  /** Marks with no result, on a page that has shown one for this draft. Run AI then reads as lost work unless the page says why. */
+  get resultDiscarded() {
+    return this.prompts.length > 0 && this.results.length > 0 && !this.candidate;
   }
   get dirty() {
     return this.unsaved || !!this.review?.dirty || !this.candidate || this.pendingCount > 0;
@@ -286,6 +292,11 @@ export class InteractiveController {
       return;
     }
     this.edit([...this.prompts, prompt]);
+  }
+  /** A step like any other, so Undo puts the mark back where it was in the list. */
+  remove(id: string) {
+    const prompts = this.prompts.filter(item => item.id !== id);
+    if (prompts.length !== this.prompts.length) this.edit(prompts);
   }
   undo() {
     if (this.canUndo) {

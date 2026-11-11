@@ -10,7 +10,8 @@ describe('review toolbar', () => {
     const html = await renderToString(createSSRApp(InteractiveReviewPanel, props));
     expect(html).toContain('aria-label="Direct editing tools"');
     for (const label of ['Paint', 'Erase', 'Scissors']) expect(html).toContain(label);
-    for (const label of ['AI annotation tool', 'AI hint polarity', 'Hint brush', 'Lasso', 'Include', 'Exclude']) expect(html).not.toContain(label);
+    for (const label of ['AI annotation tool', 'AI hint polarity', 'Hint brush', 'Lasso', 'Remove mark', 'Include', 'Exclude'])
+      expect(html).not.toContain(label);
   });
   it('reports the 3D preview with the other messages, never inside a viewer', async () => {
     const messages = (html: string) => html.slice(html.indexOf('class="review-messages"'), html.indexOf('class="review-toolbar-rows"'));

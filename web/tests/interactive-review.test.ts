@@ -3,9 +3,11 @@ import {
   createReviewGesture,
   moveNativeSlice,
   nativeSliceFor,
+  nearestReviewMark,
   reviewCandidateRevision,
   reviewMethod,
   visibleReviewPrompts,
+  type ReviewMarkShape,
 } from '../src/lib/interactive-review';
 import { pixelToRas } from '../src/lib/geometry';
 import { allocateVolume, inverseAffine, nativeSliceMetadata, resliceVolume, transformPoint } from '../src/lib/ct-reslice';
@@ -34,6 +36,49 @@ describe('interactive CT review geometry and generations', () => {
     expect(reviewCandidateRevision({ ...review, generation: 4, dirty: true })).toBe('review-draft-3');
     expect(reviewCandidateRevision({ ...review, status: 'discarded' })).toBeUndefined();
     expect(reviewCandidateRevision({ ...review, status: 'accepted' })).toBeUndefined();
+  });
+  it('picks the mark Remove mark takes: the nearest point in reach, else the nearest drawing, the later of two', () => {
+    const point = (id: string, x: number, y: number): ReviewMarkShape => ({ id, point: true, vertices: [[x, y]], radius: 4 });
+    const shapes: ReviewMarkShape[] = [
+      point('a', 100, 100),
+      point('b', 112, 100),
+      point('c', 124, 100),
+      // A box around the points, closed, with its right edge beside c.
+      {
+        id: 'box',
+        point: false,
+        radius: 0,
+        vertices: [
+          [60, 60],
+          [130, 60],
+          [130, 140],
+          [60, 140],
+          [60, 60],
+        ],
+      },
+      // One click of the brush is stored as two equal vertices.
+      {
+        id: 'dab',
+        point: false,
+        radius: 0,
+        vertices: [
+          [200, 100],
+          [200, 100],
+        ],
+      },
+      point('under', 300, 300),
+      point('over', 300, 300),
+      { id: 'unprojected', point: true, vertices: [[NaN, NaN]], radius: 4 },
+    ];
+    const pick = (x: number, y: number) => nearestReviewMark(shapes, [x, y]);
+    expect(pick(115, 100)).toBe('b');
+    expect(pick(106, 100), 'midway, so the later').toBe('b');
+    expect(pick(128, 100), 'a point wins over an outline that is nearer').toBe('c');
+    expect(pick(63, 120)).toBe('box');
+    expect(pick(85, 122), 'inside the box, far from its outline and the points').toBeUndefined();
+    expect([pick(205, 100), pick(207, 100)]).toEqual(['dab', undefined]);
+    expect(pick(301, 300)).toBe('over');
+    expect([pick(NaN, 100), nearestReviewMark([], [100, 100])]).toEqual([undefined, undefined]);
   });
   it('projects RAS prompts with reflected, anisotropic axial and coronal pixel axes and clips other slices', () => {
     const meta: SliceMeta = {

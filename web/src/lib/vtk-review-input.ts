@@ -5,7 +5,7 @@ import type { Geometry, InteractivePrompt, InteractiveTool, Point, ScissorsOpera
 import { lpsToRas, rasToLps } from './cornerstone-frame';
 import { inverseAffine, transformPoint } from './ct-reslice';
 import { pixelToRas, rasToPixel } from './geometry';
-import { createReviewGesture } from './interactive-review';
+import { createReviewGesture, nearestReviewMark, type ReviewMarkShape } from './interactive-review';
 import { reviewInputContext } from './review-input-context';
 import { validateReviewPlaneMeta } from './review-plane-geometry';
 import { firstVisibleVolumePoint, type VolumeRayHalfSpace, type VolumeRaySource } from './volume-ray';
@@ -54,6 +54,8 @@ export interface NativeReviewOptions {
   /** The CT volume as drawn, for picks that must see it; nothing while it is hidden. */
   volume?(): VolumeRaySource | undefined;
   onGesture(prompt: InteractivePrompt): void;
+  /** Remove mark: the mark a click took. */
+  onRemove?(id: string): void;
   onPick?(id: string, ras: Point): void;
   /** A volume point that moves the linked crosshair and marks nothing. */
   onPoint?(ras: Point): void;
@@ -66,6 +68,7 @@ export const VOLUME_COVERED_MESSAGE = 'An opaque surface or a CT plane is in fro
 export const VOLUME_UNREADABLE_MESSAGE = 'The CT volume could not be read here; try again.';
 export const SURFACE_COVERED_MESSAGE = 'The CT volume covers this surface here. Use Volume point, or turn CT volume off.';
 export const SURFACE_PLANE_COVERED_MESSAGE = 'A CT plane covers this surface here. Rotate, or turn the plane off.';
+export const REMOVE_MISSED_MESSAGE = 'No mark under the pointer.';
 const svgNS = 'http://www.w3.org/2000/svg';
 const dot = (a: readonly number[], b: readonly number[]) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
 const cross = (a: readonly number[], b: readonly number[]): Point => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -191,6 +194,11 @@ export class VTKReviewInput {
   private overlayKey = '';
   private inputKey = '';
   private disposed = false;
+  /** Remove mark: the marks as drawn, where the pointer is, the mark a press began on ('' for none) and the one outlined. */
+  private shapes: ReviewMarkShape[] = [];
+  private hoverAt?: ScreenPoint;
+  private pressed?: string;
+  private outline = '';
   constructor(
     private element: HTMLElement,
     private viewport: NativeReviewViewport,
@@ -221,6 +229,7 @@ export class VTKReviewInput {
     ['pointerup', event => this.pointerUp(event as PointerEvent)],
     ['pointercancel', () => this.cancelGesture()],
     ['lostpointercapture', () => this.cancelGesture()],
+    ['pointerleave', () => this.pointerLeave()],
   ];
   setState(state?: NativeReviewState) {
     if (state?.planeMeta) validateReviewPlaneMeta(state.planeMeta, state.geometry);
@@ -247,7 +256,8 @@ export class VTKReviewInput {
   get ready() {
     const state = this.state;
     if (!state || state.disabled || !state.targetId || state.tool === 'navigate') return false;
-    if (state.tool === 'scissors') return true;
+    // Marks are drawn the same in every mode, so removing one needs no surface, volume or plane.
+    if (state.tool === 'scissors' || state.tool === 'remove') return true;
     if (state.mode === 'volume') return !!this.options.volume?.();
     if (state.mode === 'plane') return !!state.planeMeta && state.showPlane !== false;
     return (
@@ -362,6 +372,13 @@ export class VTKReviewInput {
     this.consume(event);
     this.cancelGesture();
     if (!this.ready) return;
+    if (this.state.tool === 'remove') {
+      // A touch has no hover before it, so the press picks for itself. Nothing is captured: leaving the view cancels.
+      this.hoverAt = this.canvasPoint(event);
+      this.updateOverlay();
+      this.pressed = this.outline;
+      return;
+    }
     try {
       const state = this.state,
         capture = this.capture();
@@ -405,6 +422,12 @@ export class VTKReviewInput {
   }
   private pointerMove(event: PointerEvent) {
     const gesture = this.gesture;
+    if (!gesture && this.state?.tool === 'remove') {
+      // Not consumed, so a right drag still rotates.
+      this.hoverAt = this.canvasPoint(event);
+      if (this.target() !== this.outline) this.updateOverlay();
+      return;
+    }
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     this.consume(event);
     try {
@@ -457,6 +480,18 @@ export class VTKReviewInput {
     if (event.button !== 0) return;
     if (this.state && this.state.tool !== 'navigate') {
       this.consume(event);
+      if (this.state.tool === 'remove') {
+        const mark = this.pressed;
+        this.pressed = undefined;
+        // The mark outlined at the press goes, with no second pick, and dragging away cancels.
+        if (mark !== undefined && Math.hypot(event.clientX - this.start[0], event.clientY - this.start[1]) <= 5) {
+          if (mark) this.options.onRemove?.(mark);
+          else this.options.onNotice?.(REMOVE_MISSED_MESSAGE);
+        }
+        this.hoverAt = this.canvasPoint(event);
+        this.updateOverlay();
+        return;
+      }
       const gesture = this.gesture;
       if (!gesture || gesture.pointerId !== event.pointerId) return;
       this.pointerMove(event);
@@ -498,9 +533,20 @@ export class VTKReviewInput {
     this.cancelGesture();
     this.options.onError(reason instanceof Error ? reason.message : 'The native review input failed.');
   }
+  /** The outline must not stay behind for a PNG capture, and a press that leaves the view is over. */
+  private pointerLeave() {
+    this.hoverAt = undefined;
+    this.pressed = undefined;
+    if (this.outline) this.updateOverlay();
+  }
+  /** The mark a click would take now. A press holds its own until release, so the outline shows what goes. */
+  private target() {
+    return this.pressed ?? (this.hoverAt && nearestReviewMark(this.shapes, this.hoverAt)) ?? '';
+  }
   private cancelGesture(redraw = true) {
     const pointer = this.gesture?.pointerId;
     this.gesture = undefined;
+    this.pressed = undefined;
     if (pointer !== undefined && this.element.hasPointerCapture(pointer)) this.element.releasePointerCapture(pointer);
     if (!this.disposed && redraw) this.updateOverlay();
   }
@@ -517,7 +563,8 @@ export class VTKReviewInput {
     this.overlay.append(element);
     return element;
   }
-  private drawPrompt(prompt: InteractivePrompt, geometry: Geometry, live = false) {
+  /** `outlined` marks the one Remove mark would take, in white. */
+  private drawPrompt(prompt: InteractivePrompt, geometry: Geometry, live = false, outlined = false) {
     const color = prompt.include ? '#7de3b1' : '#ff8c9b',
       points = promptPoints(prompt, geometry),
       project = (point: Point) => this.patientToCanvas(point),
@@ -529,12 +576,19 @@ export class VTKReviewInput {
         circle = document.createElementNS(svgNS, 'circle');
       circle.setAttribute('cx', String(x));
       circle.setAttribute('cy', String(y));
-      circle.setAttribute('r', '4');
+      circle.setAttribute('r', outlined ? '6' : '4');
       circle.setAttribute('fill', color);
-      circle.setAttribute('stroke', '#13202c');
+      circle.setAttribute('stroke', outlined ? '#fff' : '#13202c');
+      if (outlined) {
+        circle.setAttribute('stroke-width', '2');
+        circle.dataset.reviewRemove = 'true';
+      }
       circle.dataset.reviewPrompt = prompt.id;
       this.overlay.append(circle);
-    } else if (prompt.kind === 'scribble') {
+      return;
+    }
+    let element: SVGPathElement;
+    if (prompt.kind === 'scribble') {
       const [u, v] = [0, 1, 2].filter(axis => axis !== prompt.axis),
         a = unit(geometry.affine_ras.slice(0, 3).map(row => row[u]) as Point),
         normal = unit(
@@ -571,11 +625,23 @@ export class VTKReviewInput {
           true,
         );
       }
-      const element = this.addPath(stroke, color, color + (live ? '40' : '28'), prompt.id);
+      element = this.addPath(stroke, color, color + (live ? '40' : '28'), prompt.id);
       // Overlapping brush disks/ribbons are a union, unlike scissors holes.
       element.setAttribute('fill-rule', 'nonzero');
       element.setAttribute('stroke-width', '0.5');
-    } else this.addPath(path(points), color, 'none', prompt.id);
+    } else element = this.addPath(path(points), color, 'none', prompt.id);
+    if (outlined) {
+      element.setAttribute('stroke', '#fff');
+      element.setAttribute('stroke-width', '2');
+      element.dataset.reviewRemove = 'true';
+    }
+  }
+  /** Marks as drawPrompt places them: a point's centre, a brush's centreline, and a lasso's or box's closed outline. */
+  private markShapes(state: NativeReviewState): ReviewMarkShape[] {
+    return state.prompts.slice(0, 128).flatMap(prompt => {
+      const vertices = promptPoints(prompt, state.geometry).map(point => this.patientToCanvas(point));
+      return vertices.length ? [{ id: prompt.id, point: !('vertices' in prompt), vertices, radius: 4 }] : [];
+    });
   }
   updateOverlay() {
     if (this.disposed) return;
@@ -584,6 +650,8 @@ export class VTKReviewInput {
       this.cancelGesture(false);
       this.overlay.replaceChildren();
       this.overlayKey = '';
+      this.shapes = [];
+      this.outline = '';
       this.updateData(undefined);
       return;
     }
@@ -594,7 +662,10 @@ export class VTKReviewInput {
       }
       const projection = nativeReviewProjection(this.viewport),
         state = this.state,
-        gesture = this.gesture,
+        gesture = this.gesture;
+      this.shapes = state?.tool === 'remove' && this.ready ? this.markShapes(state) : [];
+      this.outline = this.target();
+      const outline = this.outline,
         key = JSON.stringify([
           bounds.width,
           bounds.height,
@@ -605,6 +676,7 @@ export class VTKReviewInput {
           gesture?.surface,
           state?.include,
           state?.radiusMm,
+          outline,
         ]);
       this.updateData(projection);
       if (this.overlayKey === key) return;
@@ -621,8 +693,11 @@ export class VTKReviewInput {
           element.setAttribute('stroke-dasharray', '5 4');
           element.dataset.scissorsPrompt = prompt.id;
           element.dataset.scissorsOperation = prompt.operation;
-        } else this.drawPrompt(prompt, state.geometry);
+        } else if (prompt.id !== outline) this.drawPrompt(prompt, state.geometry);
       }
+      // Last, so no neighbour covers the outline.
+      const outlined = outline && state.prompts.slice(0, 128).find(prompt => prompt.id === outline && prompt.kind !== 'scissors');
+      if (outlined) this.drawPrompt(outlined, state.geometry, false, true);
       if (gesture?.scissors) {
         const operation = gesture.state.scissorsOperation ?? 'erase_inside',
           polygon = scissorsPolygon(gesture.state.scissorsShape ?? 'freehand', gesture.pixels, gesture.viewport),
@@ -639,6 +714,8 @@ export class VTKReviewInput {
       // A temporarily zero-sized/hidden native canvas must never authorize input.
       this.cancelGesture(false);
       this.overlay.replaceChildren();
+      this.shapes = [];
+      this.outline = '';
       this.updateData(undefined);
       this.options.onError(reason instanceof Error ? reason.message : 'Native review overlay failed.');
     }

@@ -46,6 +46,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   point: [point: Point];
   gesture: [prompt: InteractivePrompt];
+  removeMark: [id: string];
   windowLevel: [value: [number, number]];
   memoryUnavailable: [reason: string];
   volumeOwner: [owner: CornerstoneMPR | undefined];
@@ -100,7 +101,7 @@ function canMark(plane: Plane) {
     !props.reviewDisabled &&
     !!metas[plane] &&
     effectiveSlab.value === 'mpr' &&
-    (props.reviewTool === 'point' || !!metas[plane]?.native)
+    (props.reviewTool === 'point' || props.reviewTool === 'remove' || !!metas[plane]?.native)
   );
 }
 function refresh(plane?: Plane) {
@@ -427,6 +428,7 @@ onBeforeUnmount(() => {
               :radius="reviewRadius || 3"
               :disabled="!canMark(plane)"
               @gesture="gesture(plane, $event)"
+              @remove-mark="canMark(plane) && emit('removeMark', $event)"
             />
           </div>
         </div>

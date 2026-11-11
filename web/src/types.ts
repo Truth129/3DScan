@@ -251,7 +251,7 @@ export interface OfflineManifest {
   created_at?: string;
   synthetic?: boolean;
 }
-export type InteractiveTool = 'navigate' | 'point' | 'scribble' | 'lasso' | 'bbox' | 'scissors';
+export type InteractiveTool = 'navigate' | 'point' | 'scribble' | 'lasso' | 'bbox' | 'scissors' | 'remove';
 export type ScissorsShape = 'freehand' | 'rectangle' | 'circle';
 export type ScissorsOperation = 'erase_inside' | 'erase_outside';
 export type InteractiveMethod = 'direct' | 'nninteractive';

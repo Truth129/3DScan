@@ -4,7 +4,7 @@ import type { Geometry, InteractiveDrawing, InteractivePrompt, InteractiveTool, 
 import { rasToPixel } from '../lib/geometry';
 import { transformPoint } from '../lib/ct-reslice';
 import CTReviewMarkers from './CTReviewMarkers.vue';
-import { createReviewGesture } from '../lib/interactive-review';
+import { createReviewGesture, nearestReviewMark, visibleReviewPrompts, type ReviewMarkShape } from '../lib/interactive-review';
 import { reviewInputContext } from '../lib/review-input-context';
 const props = defineProps<{
   meta: SliceMeta;
@@ -15,11 +15,14 @@ const props = defineProps<{
   radius: number;
   disabled: boolean;
 }>();
-const emit = defineEmits<{ gesture: [prompt: InteractivePrompt] }>();
+const emit = defineEmits<{ gesture: [prompt: InteractivePrompt]; removeMark: [id: string] }>();
 const svg = ref<SVGSVGElement>(),
   stroke = ref<[number, number][]>([]),
-  hover = ref<[number, number]>();
-let pointer = -1;
+  hover = ref<[number, number]>(),
+  /** Remove mark: the mark a press began on, or '' for none, which its release takes. */
+  pressed = ref<string>();
+let pointer = -1,
+  pressAt: [number, number] = [0, 0];
 const drawing = computed(() =>
   props.prompts.filter(
     (prompt): prompt is InteractiveDrawing =>
@@ -42,7 +45,11 @@ function down(event: PointerEvent) {
   event.preventDefault();
   pointer = event.pointerId;
   svg.value?.setPointerCapture(pointer);
-  stroke.value = [point];
+  if (props.tool === 'remove') {
+    // A touch has no hover before it, so the press picks for itself.
+    pressAt = [event.clientX, event.clientY];
+    pressed.value = pick(point) ?? '';
+  } else stroke.value = [point];
 }
 function move(event: PointerEvent) {
   const point = screen(event);
@@ -60,9 +67,14 @@ function up(event: PointerEvent) {
   move(event);
   pointer = -1;
   svg.value?.releasePointerCapture(event.pointerId);
-  const points = stroke.value;
+  const points = stroke.value,
+    mark = pressed.value;
   stroke.value = [];
-  if (!points.length || props.disabled) return;
+  pressed.value = undefined;
+  if (props.disabled) return;
+  // The mark outlined at the press goes, with no second pick, and dragging off it cancels.
+  if (mark && Math.hypot(event.clientX - pressAt[0], event.clientY - pressAt[1]) <= 5) emit('removeMark', mark);
+  if (!points.length) return;
   const prompt = createReviewGesture(props.geometry, props.meta, props.tool, props.include, points, props.radius);
   if (prompt) emit('gesture', prompt);
 }
@@ -86,15 +98,48 @@ function box(points: number[][]) {
   return { x: Math.min(a[0], b[0]), y: Math.min(a[1], b[1]), width: Math.abs(a[0] - b[0]), height: Math.abs(a[1] - b[1]) };
 }
 const mmPerPixel = computed(() => Math.hypot(...props.meta.pixel_to_ras.slice(0, 3).map(row => row[0])));
+// Marks as this pane draws them. Both viewers size a pane's metadata to its CSS box, so these are screen pixels.
+const shapes = computed<ReviewMarkShape[]>(() =>
+  props.tool === 'remove'
+    ? [
+        ...visibleReviewPrompts(props.prompts, props.meta, 0.5, props.geometry).map(mark => ({
+          id: mark.id,
+          point: true,
+          vertices: [[mark.x, mark.y] as const],
+          radius: 6,
+        })),
+        ...drawing.value.map(prompt => {
+          let vertices = pointsFor(prompt) as [number, number][];
+          if (prompt.kind === 'bbox' && vertices.length) {
+            const { x, y, width, height } = box(vertices);
+            vertices = [
+              [x, y],
+              [x + width, y],
+              [x + width, y + height],
+              [x, y + height],
+              [x, y],
+            ];
+          } else if (prompt.kind === 'lasso' && vertices.length) vertices = [...vertices, vertices[0]];
+          return { id: prompt.id, point: false, vertices, radius: 0 };
+        }),
+      ]
+    : [],
+);
+function pick(point: [number, number]) {
+  return nearestReviewMark(shapes.value, [point[0] + 0.5, point[1] + 0.5]);
+}
+/** The mark a click would take now, held through a press so the outline shows what its release removes. */
+const target = computed(() => pressed.value ?? (hover.value && !props.disabled ? pick(hover.value) : undefined));
 // A render can replace metadata without changing the physical drawing grid.
 watch([() => reviewInputContext(props.geometry, props.meta), () => props.tool, () => props.disabled], () => {
   stroke.value = [];
+  pressed.value = undefined;
   pointer = -1;
 });
 </script>
 
 <template>
-  <CTReviewMarkers :meta="meta" :prompts="prompts" :geometry="geometry" :tolerance="0.5" />
+  <CTReviewMarkers :meta="meta" :prompts="prompts" :geometry="geometry" :tolerance="0.5" :highlight="target" />
   <svg
     ref="svg"
     class="ct-gesture-layer"
@@ -107,11 +152,12 @@ watch([() => reviewInputContext(props.geometry, props.meta), () => props.tool, (
     @pointerup="up"
     @pointercancel="
       stroke = [];
+      pressed = undefined;
       pointer = -1;
     "
     @pointerleave="hover = undefined"
   >
-    <g v-for="prompt in drawing" :key="prompt.id" :class="prompt.include ? 'include' : 'exclude'">
+    <g v-for="prompt in drawing" :key="prompt.id" :class="[prompt.include ? 'include' : 'exclude', { removing: prompt.id === target }]">
       <rect v-if="prompt.kind === 'bbox'" v-bind="box(pointsFor(prompt))" class="gesture-box" vector-effect="non-scaling-stroke" />
       <path
         v-else
@@ -161,6 +207,9 @@ watch([() => reviewInputContext(props.geometry, props.meta), () => props.tool, (
   cursor: crosshair;
   touch-action: none;
 }
+.ct-gesture-layer.active[data-tool='remove']:not(.blocked) {
+  cursor: pointer;
+}
 .ct-gesture-layer.blocked {
   cursor: wait;
 }
@@ -171,6 +220,9 @@ watch([() => reviewInputContext(props.geometry, props.meta), () => props.tool, (
 .exclude {
   stroke: #ff8c9b;
   fill: #ff8c9b12;
+}
+.removing {
+  stroke: #fff;
 }
 path {
   fill: none;

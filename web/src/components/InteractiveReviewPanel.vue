@@ -417,10 +417,30 @@ function chooseDirect(includeStroke: boolean) {
 }
 function chooseTool(value: InteractiveTool) {
   tool.value = value;
-  if (!['point', 'navigate', 'scissors'].includes(value)) native.value = true;
+  if (!['point', 'navigate', 'scissors', 'remove'].includes(value)) native.value = true;
 }
 function addGesture(prompt: InteractivePrompt) {
   if (!disabled.value) current.value?.append(prompt);
+}
+// A double-click must take one mark, and must not both ask about a mark and answer for it.
+const REMOVE_PAUSE_MS = 350;
+let removeClick = -Infinity;
+/** The mark whose removal would discard the result on screen, after one click on it. */
+const armed = ref('');
+function removeMark(id: string) {
+  const value = current.value,
+    index = value?.prompts.findIndex(item => item.id === id) ?? -1,
+    now = performance.now();
+  if (!value || index < 0 || disabled.value || method.value !== 'nninteractive' || now - removeClick < REMOVE_PAUSE_MS) return;
+  removeClick = now;
+  // Undo brings a mark back but not a result made with it, so that one click is asked about. It is
+  // asked once: the removal leaves no result for the next one to discard.
+  if (value.candidate && index < value.appliedCount && armed.value !== id) {
+    armed.value = id;
+    return;
+  }
+  armed.value = '';
+  value.remove(id);
 }
 async function run(full: boolean, choice?: InteractiveRunChoice) {
   const value = current.value,
@@ -478,8 +498,27 @@ function previewAffected() {
 function changeNative(value: boolean) {
   if (method.value === 'direct') return;
   native.value = value;
-  if (!value && !['point', 'navigate'].includes(tool.value)) chooseTool('point');
+  if (!value && !['point', 'navigate', 'remove'].includes(tool.value)) chooseTool('point');
 }
+// The question is about one mark and one result, so it ends when either changes, or the tool or
+// draft does. A result changes with the marks or through a run, which blocks editing; its name
+// alone can change with any save.
+watch(
+  [
+    tool,
+    // The ref itself, being shallow, would end the question on every notify, such as a save's answer.
+    () => controller.value,
+    disabled,
+    () => {
+      void tick.value;
+      return controller.value?.prompts;
+    },
+    () => !!candidate.value,
+  ],
+  () => {
+    armed.value = '';
+  },
+);
 watch(
   () => [props.caseId, props.revisionId, props.selected, props.active, method.value],
   () => {
@@ -553,9 +592,11 @@ watch([runFailed, controller], ([failed, value], [, before]) => {
   if (failed && value === before && value?.caseId === props.caseId && value.revisionId === props.revisionId) recheckCards();
 });
 // Errors lead the message list; one that arrives while it is scrolled must not stay out of view.
-watch([() => current.value?.error, createError, methodError, () => runPath.value.block, () => props.surfaceError], () => messages.value?.scrollTo({ top: 0 }), {
-  flush: 'post',
-});
+watch(
+  [() => current.value?.error, createError, methodError, () => runPath.value.block, () => props.surfaceError, armed],
+  () => messages.value?.scrollTo({ top: 0 }),
+  { flush: 'post' },
+);
 watch(tool, value => emit('tool', value), { immediate: true });
 watch(include, value => emit('polarity', value), { immediate: true });
 watch(
@@ -591,6 +632,7 @@ onBeforeUnmount(() => {
 });
 defineExpose({
   addGesture,
+  removeMark,
   addPrompt(ras: Point) {
     if (method.value !== 'direct') addGesture(newReviewPrompt(ras, include.value));
   },
@@ -633,6 +675,10 @@ defineExpose({
     <div class="review-workspace-tabs">
       <slot name="navigation" />
       <div ref="messages" class="review-messages" role="group" aria-label="Review messages" tabindex="0">
+        <p v-if="armed" class="review-alert" role="status">
+          This mark was already run. Removing it discards the result on screen; Run AI then makes a new one from the marks that remain. Click the mark again to
+          remove it.
+        </p>
         <p v-if="current?.error" class="review-alert" role="alert">
           {{ current.error }} <button v-if="current.conflict" class="text-button" @click="current.reload()">Reload saved work</button>
         </p>
@@ -671,6 +717,9 @@ defineExpose({
           ><span v-else-if="current?.dirty">{{ staleHint() }}</span
           ><span v-else>Inspect the result, then save a new revision.</span>
         </div>
+        <p v-else-if="method === 'nninteractive' && current?.resultDiscarded && !current.working" class="review-progress" role="status">
+          The result was discarded because its marks or options changed. Run AI makes a new one from the marks that remain.
+        </p>
         <p v-for="warning in candidate?.warnings || []" :key="warning" class="review-alert" role="status">{{ warning }}</p>
       </div>
       <slot name="exit" />
@@ -760,6 +809,7 @@ defineExpose({
                   ['scribble', 'Hint brush'],
                   ['lasso', 'Lasso'],
                   ['bbox', 'Box'],
+                  ['remove', 'Remove mark'],
                 ] as const"
                 :key="item[0]"
                 :class="{ active: tool === item[0] }"
@@ -815,13 +865,15 @@ defineExpose({
           {{ scissorsShape === 'circle' ? 'Drag from centre to edge.' : 'Draw on the 3D view.' }} Apply edits to preview.</span
         ><span v-else-if="method === 'direct'">Exact paint/erase on one native slice · no AI. Add strokes, then Apply edits.</span
         ><span v-else-if="tool !== 'navigate'">{{
-          tool === 'point'
-            ? 'Click to mark an AI hint.'
-            : tool === 'bbox'
-              ? 'Drag an AI box hint on one native slice.'
-              : tool === 'lasso'
-                ? 'Draw an AI lasso hint on one native slice.'
-                : 'Brush hints guide a 3D AI prediction.'
+          tool === 'remove'
+            ? 'Click a mark to remove it; the outlined one goes. ↶ Undo puts it back.'
+            : tool === 'point'
+              ? 'Click to mark an AI hint.'
+              : tool === 'bbox'
+                ? 'Drag an AI box hint on one native slice.'
+                : tool === 'lasso'
+                  ? 'Draw an AI lasso hint on one native slice.'
+                  : 'Brush hints guide a 3D AI prediction.'
         }}</span>
         <span v-if="view?.new_structure" class="review-new-target-note">New segment · starts empty</span>
         <span v-if="policyOpen && policyLoading">Loading saved relationship…</span>
@@ -1046,7 +1098,7 @@ defineExpose({
 }
 /* The basis holds the widest tool set, so choosing a tool can never rewrap the row. */
 .review-tools {
-  flex: 1 1 564px;
+  flex: 1 1 654px;
   min-width: 0;
 }
 .review-messages {
@@ -1360,7 +1412,7 @@ defineExpose({
 .review-floating-panels > :last-child {
   margin-bottom: 8px;
 }
-@container review-toolbar (max-width: 1423px) {
+@container review-toolbar (max-width: 1513px) {
   .review-tools {
     order: 1;
     flex-basis: 100%;

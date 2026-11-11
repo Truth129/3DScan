@@ -66,6 +66,7 @@ const emit = defineEmits<{
   maskStatus: [status: VolumeMaskStatus];
   colorStatus: [status: VolumeMaskStatus];
   gesture: [prompt: InteractivePrompt];
+  removeMark: [id: string];
   pick: [id: string, point: Point];
   point: [point: Point];
   notice: [message: string];
@@ -175,13 +176,15 @@ function syncReviewInput() {
           ...props.review,
           // A review plane hidden by its error must not stop clicks it no longer covers.
           showPlane: props.review.showPlane !== false && !planeError.value,
+          // Remove mark picks among the marks, so a plane or surface that is not ready does not stop it.
           disabled:
             props.review.disabled ||
-            (props.review.mode === 'plane' && (!reviewPlaneReady.value || !!planeError.value)) ||
-            (props.review.mode === 'surface' &&
-              (!!surfaceError.value ||
-                surfaceLoading.value ||
-                (props.segmentationVisible !== false && surfacePresentedRevision.value !== props.modelRevisionId))),
+            (props.review.tool !== 'remove' &&
+              ((props.review.mode === 'plane' && (!reviewPlaneReady.value || !!planeError.value)) ||
+                (props.review.mode === 'surface' &&
+                  (!!surfaceError.value ||
+                    surfaceLoading.value ||
+                    (props.segmentationVisible !== false && surfacePresentedRevision.value !== props.modelRevisionId))))),
         }
       : undefined,
   );
@@ -409,6 +412,7 @@ async function initialize() {
       planes: () => [...otherPlaneLayers.values()].flatMap(layer => layer.shownRect() ?? []),
       volume: () => (viewer === instance && props.volumeVisible !== false ? instance.rayVolume() : undefined),
       onGesture: prompt => emit('gesture', prompt),
+      onRemove: id => emit('removeMark', id),
       onPick: (id, ras) => emit('pick', id, ras),
       onPoint: ras => emit('point', ras),
       onNotice: message => emit('notice', message),

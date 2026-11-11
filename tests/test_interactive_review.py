@@ -918,6 +918,24 @@ def test_a_run_names_the_stored_result_of_its_longest_run_of_applied_steps(examp
     assert sent(example)[1]["stored"]["batches"] == 3
 
 
+def test_a_list_that_loses_a_middle_mark_keeps_the_runs_before_it_and_the_next_run_continues_from_them(example):
+    service, case, _, _ = example
+    service.interactive_runtime = OutputRuntime()
+    draft = ran(example, marked(example))
+    add_mark(example, draft)
+    ran(example, draft)
+    add_mark(example, draft, "point-3")
+    later = ran(example, draft)
+    kept = [later["prompts"][0], later["prompts"][2]]
+    removed = service.reviews.update(case["id"], draft["id"], later["generation"], kept)
+    assert removed["batches"] == draft["batches"] and removed["candidate"] is None
+    job = queue(example, draft)
+    assert [step["end"] for step in job["payload"]["batches"]] == [1, 2]
+    assert execute_next(service, job)["status"] == "completed"
+    prompts, engine = sent(example)
+    assert prompts == kept and engine["stored"]["mask_path"] == draft["candidate"]["mask_file"]
+
+
 def test_a_stored_result_is_offered_only_for_the_same_marks_options_and_sources():
     from scan3d.review import _stored_result
 

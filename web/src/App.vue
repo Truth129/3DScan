@@ -1888,6 +1888,7 @@ onBeforeUnmount(() => {
                 @pick="picked"
                 @point="setPoint"
                 @gesture="interactivePanel?.addGesture($event)"
+                @remove-mark="interactivePanel?.removeMark($event)"
                 @opacity="allSegmentOpacity"
                 @retry-volume-view="CornerstoneVolumeView = createVolumeView()"
               />
@@ -2072,6 +2073,7 @@ onBeforeUnmount(() => {
                   :centre-request="centreRequest"
                   @point="setPoint"
                   @gesture="interactivePanel?.addGesture($event)"
+                  @remove-mark="interactivePanel?.removeMark($event)"
                   @window-level="cornerstoneWindowLevel"
                 />
               </div>

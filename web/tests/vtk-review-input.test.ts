@@ -12,6 +12,7 @@ import {
   nativeReviewProjection,
   nativeReviewSurfacePoint,
   pickNativeReviewSurface,
+  REMOVE_MISSED_MESSAGE,
   SURFACE_PLANE_COVERED_MESSAGE,
   VOLUME_COVERED_MESSAGE,
   VTKReviewInput,
@@ -426,6 +427,37 @@ describe('native review input safety', () => {
     Observer.latest.callback();
     expect(test.host.dataset.reviewReady).toBe('true');
     expect(test.prompts).toEqual([]);
+    test.input.dispose();
+  });
+  it('outlines the mark Remove mark would take, removes it on a click and never draws a gesture', () => {
+    const marks: InteractivePrompt[] = [0, 5, 10].map((x, index) => ({ id: `mark-${index}`, include: true, ras: [x, 0, 0] })),
+      removed: string[] = [],
+      notices: string[] = [];
+    // Surface point with no surface: no other tool but Navigate is ready here.
+    const test = inputFor(stateFor({ tool: 'remove', mode: 'surface', prompts: marks }), {
+        onRemove: id => removed.push(id),
+        onNotice: message => notices.push(message),
+      }),
+      [x, y] = test.input.patientToCanvas([5, 0, 0]),
+      drawn = () => test.host.children[0].children,
+      outlined = () => drawn().filter(child => child.dataset.reviewRemove);
+    expect(Math.abs(test.input.patientToCanvas([0, 0, 0])[0] - x)).toBeCloseTo(12.5, 6);
+    expect([drawn().length, outlined()]).toEqual([3, []]);
+    pointer(test.host, 'pointermove', x + 2, y);
+    expect(outlined().map(child => child.dataset.reviewPrompt)).toEqual(['mark-1']);
+    expect(drawn().at(-1), 'drawn last, so no neighbour covers it').toBe(outlined()[0]);
+    expect(pointer(test.host, 'pointerdown', x + 2, y).defaultPrevented).toBe(true);
+    pointer(test.host, 'pointerup', x + 4, y);
+    expect([removed, test.prompts, test.host.dataset.reviewGestureActive]).toEqual([['mark-1'], [], 'false']);
+    // A press dragged off the mark is given up, and a click on no mark says so.
+    pointer(test.host, 'pointerdown', x + 2, y);
+    pointer(test.host, 'pointerup', x + 22, y);
+    pointer(test.host, 'pointerdown', x, y + 60);
+    pointer(test.host, 'pointerup', x, y + 60);
+    expect([removed, notices.at(-1)]).toEqual([['mark-1'], REMOVE_MISSED_MESSAGE]);
+    pointer(test.host, 'pointermove', x, y);
+    pointer(test.host, 'pointerleave', x, y);
+    expect([outlined(), test.errors]).toEqual([[], []]);
     test.input.dispose();
   });
   it('captures a valid immutable through-depth scissors polygon and only projects it in its matching camera', () => {

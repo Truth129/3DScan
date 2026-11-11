@@ -32,6 +32,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   point: [point: Point];
   gesture: [prompt: InteractivePrompt];
+  removeMark: [id: string];
   windowLevel: [value: [number, number]];
 }>();
 const CornerstoneCTView = shallowRef<Component>(),
@@ -84,6 +85,7 @@ onBeforeUnmount(() => {
     :full-resolution="fullResolution"
     @point="emit('point', $event)"
     @gesture="emit('gesture', $event)"
+    @remove-mark="emit('removeMark', $event)"
     @window-level="emit('windowLevel', $event)"
   />
   <section v-else class="ct-slice ct-viewer-loading" data-viewer="cornerstone">

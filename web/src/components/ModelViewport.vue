@@ -122,6 +122,7 @@ const emit = defineEmits<{
   /** `centre` marks a navigate click, which may also centre the slice panes. */
   point: [point: Point, centre?: boolean];
   gesture: [prompt: InteractivePrompt];
+  removeMark: [id: string];
   opacity: [value: number];
   retryVolumeView: [];
   exportView: [];
@@ -465,28 +466,31 @@ const reviewReady = computed(
     props.viewportActive !== false &&
     !!target.value &&
     !props.reviewDisabled &&
-    (props.reviewTool === 'scissors'
-      ? vtkSelected.value
-        ? vtkReady.value && !nativeReviewStatus.value.surfaceLoading && !nativeReviewStatus.value.surfaceError
-        : !loading.value && !error.value
-      : reviewMode.value === 'volume'
-        ? volumeMarkAvailable.value && vtkReady.value
-        : reviewMode.value === 'plane'
-          ? showPlane.value &&
-            exactPlaneReady.value &&
-            targetOverlayAvailable.value &&
-            (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady && !nativeReviewStatus.value.planeError))
-          : showSegmentation.value &&
-            selectedSegmentationOpacity.value > 0.02 &&
-            hasTargetSurface.value &&
-            (vtkSelected.value
-              ? vtkReady.value &&
-                nativeReviewStatus.value.targetReady &&
-                nativeReviewStatus.value.surfaceRevision === props.modelRevisionId &&
-                !nativeReviewStatus.value.surfaceLoading &&
-                !nativeReviewStatus.value.surfaceError
-              : hasModel.value && !loading.value) &&
-            props.reviewTool === 'point'),
+    // Marks are drawn the same in every mode, and only the native view can remove one.
+    (props.reviewTool === 'remove'
+      ? vtkSelected.value && vtkReady.value
+      : props.reviewTool === 'scissors'
+        ? vtkSelected.value
+          ? vtkReady.value && !nativeReviewStatus.value.surfaceLoading && !nativeReviewStatus.value.surfaceError
+          : !loading.value && !error.value
+        : reviewMode.value === 'volume'
+          ? volumeMarkAvailable.value && vtkReady.value
+          : reviewMode.value === 'plane'
+            ? showPlane.value &&
+              exactPlaneReady.value &&
+              targetOverlayAvailable.value &&
+              (!vtkSelected.value || (vtkReady.value && nativeReviewStatus.value.planeReady && !nativeReviewStatus.value.planeError))
+            : showSegmentation.value &&
+              selectedSegmentationOpacity.value > 0.02 &&
+              hasTargetSurface.value &&
+              (vtkSelected.value
+                ? vtkReady.value &&
+                  nativeReviewStatus.value.targetReady &&
+                  nativeReviewStatus.value.surfaceRevision === props.modelRevisionId &&
+                  !nativeReviewStatus.value.surfaceLoading &&
+                  !nativeReviewStatus.value.surfaceError
+                : hasModel.value && !loading.value) &&
+              props.reviewTool === 'point'),
 );
 const reviewContext = computed(() =>
   JSON.stringify([
@@ -530,6 +534,12 @@ const reviewHint = computed(() => {
     if (nativeReviewStatus.value.planeError) return nativeReviewStatus.value.planeError;
     if (reviewMode.value === 'surface' && nativeReviewStatus.value.surfaceLoading) return 'Preparing the target surface…';
   }
+  if (props.reviewActive && props.reviewTool === 'remove')
+    return !vtkSelected.value
+      ? 'Remove mark works on the slices for this scan. Drag to rotate.'
+      : props.reviewDisabled
+        ? 'Editing paused while the current operation finishes.'
+        : 'Click a mark to remove it; the outlined one goes. Right drag rotates.';
   if (props.reviewActive && props.reviewTool === 'scissors')
     return error.value
       ? 'The 3D surface preview is unavailable. Reload the model to continue cutting.'
@@ -676,7 +686,8 @@ function syncReview() {
     showPlane: showPlane.value,
     targetId: target.value.id,
     geometry: props.geometry,
-    tool: props.reviewTool || 'navigate',
+    // Remove mark is not built for this view, which rotates as in Navigate while it is on.
+    tool: props.reviewTool === 'remove' ? 'navigate' : props.reviewTool || 'navigate',
     include: props.reviewInclude !== false,
     radiusMm: props.reviewRadius || 3,
     scissorsShape: props.reviewScissorsShape ?? 'freehand',
@@ -1095,6 +1106,9 @@ function reviewGesture(prompt: InteractivePrompt) {
   }
   emit('gesture', prompt);
   if ('ras' in prompt) emit('point', [...prompt.ras]);
+}
+function removeReviewMark(id: string) {
+  if (reviewReady.value && props.reviewActive && !disposed) emit('removeMark', id);
 }
 async function load() {
   if (!scene) return;
@@ -1517,6 +1531,8 @@ watch(
       reviewMode.value = 'surface';
       return;
     }
+    // Remove mark works in every mode, so choosing it leaves Mark on, the plane and the camera alone.
+    if (props.reviewTool === 'remove') return;
     const pointTool = !props.reviewTool || ['navigate', 'point'].includes(props.reviewTool);
     if ((!hasTargetSurface.value && reviewMode.value !== 'volume') || !pointTool) {
       // Opening review keeps the main page's camera; Face plane is there to turn it.
@@ -1533,7 +1549,7 @@ watch(
   () => [props.reviewActive, volumeMarkAvailable.value],
   () => {
     if (!props.reviewActive || volumeMarkAvailable.value || reviewMode.value !== 'volume') return;
-    if (hasTargetSurface.value && (!props.reviewTool || ['navigate', 'point'].includes(props.reviewTool))) reviewMode.value = 'surface';
+    if (hasTargetSurface.value && (!props.reviewTool || ['navigate', 'point', 'remove'].includes(props.reviewTool))) reviewMode.value = 'surface';
     else {
       reviewMode.value = 'plane';
       showPlane.value = true;
@@ -1827,6 +1843,7 @@ defineExpose({
       @review-status="nativeReviewStatus = $event"
       @retry-plane="queueReviewPlane"
       @gesture="reviewGesture"
+      @remove-mark="removeReviewMark"
       @pick="(id: string, ras: Point) => emit('pick', id, ras)"
       @point="(ras: Point) => props.reviewActive && emit('point', ras, true)"
       @notice="reviewNotice = $event"
@@ -2088,7 +2105,11 @@ defineExpose({
       </button>
     </div>
     <div class="viewport-hint">
-      {{ reviewActive && reviewTool !== 'navigate' ? 'Right drag to rotate · Scroll to zoom' : 'Drag to rotate · Right drag to pan · Scroll to zoom' }}
+      {{
+        reviewActive && reviewTool !== 'navigate' && (vtkSelected || reviewTool !== 'remove')
+          ? 'Right drag to rotate · Scroll to zoom'
+          : 'Drag to rotate · Right drag to pan · Scroll to zoom'
+      }}
     </div>
   </div>
 </template>

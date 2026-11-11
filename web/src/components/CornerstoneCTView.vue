@@ -42,6 +42,7 @@ const modalityLabel = computed(() => props.modality ?? 'CT');
 const emit = defineEmits<{
   point: [point: Point];
   gesture: [prompt: InteractivePrompt];
+  removeMark: [id: string];
   error: [reason: string];
   windowLevel: [value: [number, number]];
 }>();
@@ -448,6 +449,7 @@ onBeforeUnmount(() => {
             :radius="reviewRadius || 3"
             :disabled="!canMark"
             @gesture="gesture"
+            @remove-mark="canMark && emit('removeMark', $event)"
           />
         </div>
       </div>

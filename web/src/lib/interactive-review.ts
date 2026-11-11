@@ -103,6 +103,42 @@ export function visibleReviewPrompts(prompts: readonly InteractivePrompt[], meta
     );
 }
 
+/** A mark as a view draws it, in that view's pixels: a point's centre, or a drawing's centreline or outline. */
+export interface ReviewMarkShape {
+  id: string;
+  point: boolean;
+  /** A lasso or box repeats its first vertex to close. */
+  vertices: readonly (readonly [number, number])[];
+  /** A point's drawn radius. A brush's width is ignored, or a wide stroke would take every click inside it. */
+  radius: number;
+}
+export const REMOVE_REACH_PX = 6;
+
+/**
+ * The mark Remove mark takes at a pointer position. A point wins over a drawing, so one inside a
+ * box or lasso can be reached, then the nearest wins, and of two at the same place the later one.
+ */
+export function nearestReviewMark(shapes: readonly ReviewMarkShape[], at: readonly [number, number], reach = REMOVE_REACH_PX): string | undefined {
+  let found: { id: string; point: boolean; distance: number } | undefined;
+  for (const shape of shapes) {
+    let distance = Infinity;
+    shape.vertices.forEach((a, index) => {
+      // The last vertex, and a one-click brush mark's two equal ones, make a segment of no length: a point.
+      const b = shape.vertices[index + 1] ?? a,
+        [dx, dy] = [b[0] - a[0], b[1] - a[1]],
+        length = dx * dx + dy * dy,
+        along = length > 0 ? Math.max(0, Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / length)) : 0,
+        value = Math.hypot(at[0] - a[0] - along * dx, at[1] - a[1] - along * dy);
+      if (value < distance) distance = value;
+    });
+    // A mark that could not be projected has no finite distance, and fails this test.
+    if (!(distance <= reach + (shape.point ? shape.radius : 0))) continue;
+    if (!found || (shape.point && !found.point) || (shape.point === found.point && distance <= found.distance))
+      found = { id: shape.id, point: shape.point, distance };
+  }
+  return found?.id;
+}
+
 export function nativeSliceFor(geometry: Geometry, plane: SliceMeta['plane'], point: Point) {
   const axis = ({ axial: 2, coronal: 1, sagittal: 0 } as const)[plane];
   const voxel = transformPoint(inverseAffine(geometry.affine_ras), point);
@@ -152,7 +188,7 @@ export function createReviewGesture(
   radius = 3,
   id: string = crypto.randomUUID(),
 ): InteractivePrompt | undefined {
-  if (!pixels.length || tool === 'navigate' || tool === 'scissors') return;
+  if (!pixels.length || tool === 'navigate' || tool === 'scissors' || tool === 'remove') return;
   if (tool === 'point') return { id, kind: 'point', include, ras: pixelToRas(meta.pixel_to_ras, ...pixels[0]) };
   if (!meta.native) throw new Error('Drawings require a native CT slice');
   if (

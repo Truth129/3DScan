@@ -416,6 +416,13 @@ segment or loops of a folded tube, and an Exclude on a large leak can remove muc
   corners and neighbouring organs.
 - A mark after **↶ Undo** continues from the last whole **Run AI** before it, and reruns marks of a
   run the Undo went inside, which can move voxels you already checked.
+- **Remove mark** takes out one mark. Point at it in the 3D view or on a slice: the mark outlined in
+  white goes when you click, and **↶ Undo** puts the mark back.
+- Removing a mark that was already run discards the result on screen, and **↶ Undo** brings back the
+  mark but not that result. So the first click asks, and a second click on the same mark removes
+  it; with no result on screen a mark goes at once. **Run AI** then makes a new result from the
+  marks that remain. The marks after the removed one run together, so the mask can differ a little:
+  check it again.
 
 A warning beside **Exit review** says when a result removes 5% or more of the mask's interior, the
 part over 2 mm inside, more than 40 mm from every mark. The volume line can hide such a loss, so
@@ -444,7 +451,8 @@ in use. Neither appears with one GPU or in **Direct edit**.
 The first AI result holds the draft on its GPU, named by **AI result from** beside **Exit review**
 and, once you save, in **Revision history**. These free the draft and drop the current result:
 
-- **↶ Undo** past the first result, unless it came from **Refine whole mask** with no marks
+- **↶ Undo** past the first result, or **Remove mark** on a mark its run used, unless that result
+  came from **Refine whole mask** with no marks
 - changing **Automatically focus inference** or **Start from an empty mask**
 
 A held draft shows **Re-run draft on** instead of **Run on**. To move it, choose a GPU there, then
@@ -482,6 +490,9 @@ you can confirm it. **Face plane** faces the CT plane at any time.
 With **All three**, the other two planes stay on while you mark on the CT plane, but keep only
 their side beyond it, so nothing covers the slice you draw on. **Surface point** refuses a surface
 that a CT plane covers.
+
+**Remove mark** works with any **Mark on** setting, and reaches marks behind the volume or a
+surface. For MRI and tilted-gantry CT, remove marks on the slices.
 
 With **CT volume** on in review:
 
