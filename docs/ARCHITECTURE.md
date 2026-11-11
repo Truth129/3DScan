@@ -120,9 +120,10 @@ cases/<case>/
   dicom/                 Originals from uploads and local imports
   sources/<job>/         Originals from Orthanc or DICOMweb, with source-import.json
   converted/<sha256>/    Reference NIfTI and conversion log
-  inference/<key>/       TotalSegmentator runs and their manifests
+  inference/<key>/       Model runs and their manifests; a CAS-Net run also keeps
+                         <task>-probability.nii.gz, uint8 round(p * 255) on the scan grid
   revisions/<id>/        revision.json, model.glb and on-demand exports
-  refinements/, corrections/, reviews/, seg-imports/, dicom-exports/
+  refinements/, corrections/, reviews/, seg-imports/, dicom-exports/, grow-branch/
   dicom-view-captures/   Retained 3D view captures, each named by its SHA-256
   coronary/<key>/        Coronary analysis: result.json, then complete.json
   uploads/               Slicer corrections as received

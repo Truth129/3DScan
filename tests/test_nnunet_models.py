@@ -124,6 +124,37 @@ def test_run_starts_the_worker_and_records_the_model_as_its_engine(pinned, tmp_p
     assert manifest["model_fingerprint"]["weights_complete"] is True
 
 
+def test_a_cas_net_run_keeps_its_probability_beside_the_masks_for_grow_branch(pinned, tmp_path, monkeypatch):
+    model, archive = pinned
+    model = replace(model, engine="cas_net")
+    monkeypatch.setitem(nnunet_models.MODELS, model.id, model)
+    install(model, archive)
+    image = tmp_path / "image.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((4, 5, 6), np.int16), np.eye(4)), image)
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "cpu", "torch": "test"})
+    commands = []
+
+    class Worker:
+        pid, returncode = None, 0
+
+        def __init__(self, command, **_):
+            commands.append(command)
+            nib.save(nib.Nifti1Image(np.ones((4, 5, 6), np.uint8), np.eye(4)), Path(command[command.index("-o") + 1]) / "liver.nii.gz")
+            Path(command[command.index("--report") + 1]).write_text(json.dumps({"device": "cpu", "classes": {"1": "liver"}}))
+            if "--probability" in command:
+                nib.save(nib.Nifti1Image(np.full((4, 5, 6), 200, np.uint8), np.eye(4)), command[command.index("--probability") + 1])
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(segmentation.subprocess, "Popen", Worker)
+    structures = segmentation.segment(image, tmp_path / "output", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
+    stored = Path(commands[0][commands[0].index("--probability") + 1])
+    # Outside the task's folder, so it is never read as a mask.
+    assert stored.parent == Path(structures[0]["mask_file"]).parent.parent and structures[0]["probability_file"] == str(stored)
+    assert [item["id"] for item in structures] == [f"{model.id}:liver"]
+
+
 def test_changed_weights_stop_a_run_before_any_child_can_load_them(pinned, tmp_path, monkeypatch):
     model, archive = pinned
     target = install(model, archive)
@@ -245,11 +276,16 @@ def test_cas_net_returns_bright_voxels_on_the_source_grid_through_its_tiles_mirr
     scan = np.zeros((1, 21, 30, 19), np.float32)  # z, y, x
     scan[0, 4:15, 6:9, 2:13] = 800
     steps = []
-    labels, _ = cas_net.predict(model, "folder", scan, [0.5, 0.5, 0.5], "cpu", steps.append)
+    labels, _, probability = cas_net.predict(model, "folder", scan, [0.5, 0.5, 0.5], "cpu", steps.append)
     assert labels.dtype == np.uint8 and np.array_equal(labels, scan[0] > 400)
+    # p = (1 + sigmoid(lumen) - sigmoid(background)) / 2 as round(p * 255), on the same grid as the mask.
+    # Away from the bright voxels the far corners of the scan stitch from tiny tile weights, so only the side of 0.5 is checked there.
+    sigmoid = lambda value: 1 / (1 + np.exp(-value))  # noqa: E731
+    assert probability.dtype == np.uint8 and np.array_equal(probability > 127, labels == 1)
+    assert set(np.unique(probability[labels == 1])) == {round((1 + sigmoid(1000 / 1200) - sigmoid(0.5)) / 2 * 255)}
     assert steps == ["preparing the scan", *(f"pass {n} of 4" for n in range(1, 5)), "saving the masks"]
     # Coarser than 0.5 mm along z and finer along y; the voxel centres here survive both resamplings.
-    labels, _ = cas_net.predict(model, "folder", scan, [1.0, 0.25, 0.5], "cpu")
+    labels, _, _ = cas_net.predict(model, "folder", scan, [1.0, 0.25, 0.5], "cpu")
     assert np.array_equal(labels, scan[0] > 400)
 
 

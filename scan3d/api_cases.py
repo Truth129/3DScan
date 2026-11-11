@@ -1,5 +1,6 @@
 """Case, job and revision records, and the actions that create new revisions."""
 
+from contextlib import suppress
 import uuid
 
 from fastapi import File, Form, HTTPException, Request, UploadFile
@@ -9,10 +10,10 @@ from starlette.concurrency import run_in_threadpool
 from . import identity
 from .access import ARCHIVE_REFUSED
 from .accounts import TooManyAttempts, WrongPassword
-from .api_models import Activate, CaseRename, DicomSegExport, Process, Purge, Refine, Review, Segment
+from .api_models import Activate, CaseRename, DicomSegExport, GrowBranch, Process, Purge, Refine, Review, Segment
 from .api_session import secure_enough
 from .disk_usage import case_sizes, storage_report
-from .errors import NotFound
+from .errors import Conflict, NotFound
 from .store import public_case, public_job, public_revision
 
 
@@ -283,6 +284,31 @@ def add_routes(app, service):
         if body.structure_id not in {s["id"] for s in parent["structures"]}:
             raise ValueError("Structure does not belong to the selected revision")
         return public_job(service.store.enqueue(case_id, "refine", body.model_dump()))
+
+    @app.post("/api/cases/{case_id}/grow-branch")
+    def grow_branch(case_id: str, body: GrowBranch):
+        """Grow here, in the request, so a refusal answers the click; the job only saves the revision."""
+        from pathlib import Path
+
+        from .grow_branch import grow_mask
+
+        parent = service.store.revision(case_id, body.revision_id)
+        if service.store.get("cases", case_id).get("active_revision_id") != parent["id"]:
+            raise Conflict("Grow a branch from the active revision")
+        selected = next((s for s in parent["structures"] if s["id"] == body.structure_id), None)
+        if selected is None:
+            raise ValueError("Structure does not belong to the selected revision")
+        output = service.store.case_dir(case_id) / "grow-branch" / uuid.uuid4().hex / "mask.nii.gz"
+        output.parent.mkdir(parents=True)
+        try:
+            grown = grow_mask(Path(parent["ct_file"]), Path(selected["mask_file"]), selected.get("probability_file"), body.point_ras, body.threshold, output)
+        except BaseException:
+            # A refusal writes no mask, so the folder is normally empty; a failed write may leave it.
+            with suppress(OSError):
+                output.parent.rmdir()
+            raise
+        payload = {**body.model_dump(), "mask_file": str(output), **grown}
+        return public_job(service.store.enqueue(case_id, "grow_branch", payload))
 
     @app.post("/api/cases/{case_id}/activate")
     def activate(case_id: str, body: Activate):

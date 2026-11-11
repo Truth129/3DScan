@@ -205,11 +205,12 @@ def predict(model, model_folder, image, spacing, device, step=lambda _: None):
 
 
 def run(model, model_folder, image, spacing, device, step=lambda _: None):
+    """Labels, the PyTorch version, and CAS-Net's uint8 probability (None for other engines)."""
     if model.engine == "cas_net":
         from . import cas_net  # Imports PyTorch, which only this child may do.
 
         return cas_net.predict(model, model_folder, image, spacing, device, step)
-    return predict(model, model_folder, image, spacing, device, step)
+    return *predict(model, model_folder, image, spacing, device, step), None
 
 
 def main():
@@ -223,6 +224,7 @@ def main():
     parser.add_argument("--device", required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--progress", type=Path, help="A file that always holds the current step, for the parent to show")
+    parser.add_argument("--probability", type=Path, help="Where CAS-Net saves its uint8 lumen probability on the reference grid")
     args = parser.parse_args()
     model = MODELS[args.task]
     started = time.monotonic()
@@ -261,14 +263,20 @@ def main():
         if not args.skull_strip_folder:
             raise RuntimeError(f"{model.name} needs --skull-strip-folder")
         # The registry gives both models the same voxel order, so the mask fits this array as it is.
-        brain, _ = run(MODELS[model.skull_strip], args.skull_strip_folder, image, spacing, args.device, lambda text: step(f"removing the skull, {text}"))
+        brain, _, _ = run(MODELS[model.skull_strip], args.skull_strip_folder, image, spacing, args.device, lambda text: step(f"removing the skull, {text}"))
         image = skull_stripped(image, brain)
-    labels, torch_version = run(model, args.model_folder, image, spacing, args.device, step)
+    labels, torch_version, probability = run(model, args.model_folder, image, spacing, args.device, step)
     labels = native_labels(labels, back)
     if box:
         full = np.zeros(reference.shape, dtype=np.uint8)
         full[box] = labels
         labels = full
+    if args.probability and probability is not None:
+        # Saved like a mask, on the reference grid; Grow branch reads it, and nothing else does.
+        full = np.zeros(reference.shape, dtype=np.uint8)
+        full[box] = native_labels(probability, back)
+        _save_mask(full, reference, args.probability)
+        del full, probability
     for value, name in enumerate(model.labels, 1):
         mask = largest_piece(labels == value, model.keep_largest)
         _save_mask(without_small_pieces(mask, model.smallest_piece), reference, args.output / f"{name}.nii.gz")

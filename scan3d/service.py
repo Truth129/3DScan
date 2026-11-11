@@ -605,6 +605,8 @@ class Service:
                 return
             elif job["kind"] == "refine":
                 revision = self._refine(job)
+            elif job["kind"] == "grow_branch":
+                revision = self._grow_branch(job)
             elif job["kind"] == "correction":
                 revision = self._correct(job)
             elif job["kind"] == "dicom_seg_import":
@@ -620,7 +622,7 @@ class Service:
             # So is a prepare from a page that named one; only a prepare job carries it, beside its payload.
             expected = (
                 job["payload"]["revision_id"]
-                if job["kind"] in ("segment", "include_all", "review_accept", "dicom_seg_import", "refine", "correction")
+                if job["kind"] in ("segment", "include_all", "review_accept", "dicom_seg_import", "refine", "grow_branch", "correction")
                 else job.get("expected_active_revision_id")
             )
             review_guard = {key: job["payload"][key] for key in ("session_id", "generation")} if job["kind"] == "review_accept" else None
@@ -819,7 +821,7 @@ class Service:
                 structures = cache_record["structures"]
                 if (
                     not structures
-                    or not all(Path(s["mask_file"]).is_file() for s in structures)
+                    or not all(Path(s["mask_file"]).is_file() and Path(s.get("probability_file", s["mask_file"])).is_file() for s in structures)
                     or not fingerprint["weights_complete"]
                     or cache_record["model_fingerprint"]["digest"] != fingerprint["digest"]
                 ):
@@ -976,7 +978,7 @@ class Service:
                     measurement_timings[entry["id"]] = elapsed
                     if job:
                         self.stage(job, f"Checked {completed_count}/{len(structures)} structures ({entry['name']}); preparing display surfaces")
-                        measurements = [{k: v for k, v in s.items() if k != "mask_file"} for s in reviewed_structures if s]
+                        measurements = [{k: v for k, v in s.items() if k not in ("mask_file", "probability_file")} for s in reviewed_structures if s]
                         self.store.update_job(
                             job["id"], measurements=measurements, progress={"phase": "measurements", "completed": completed_count, "total": len(structures)}
                         )
@@ -1140,6 +1142,46 @@ class Service:
             Path(parent["ct_file"]),
             structures,
             source="refinement",
+            parent=parent["id"],
+            operation=operation,
+            acquisition=parent.get("acquisition"),
+            job=job,
+            extra_qc=self._inherited_qc(parent),
+            inference_manifest=parent.get("inference_manifest"),
+        )
+
+    def _grow_branch(self, job):
+        """Save the mask the request grew as a new revision; the request already applied the rule and its limits."""
+        payload = job["payload"]
+        parent = self.store.revision(job["case_id"], payload["revision_id"])
+        selected = next((s for s in parent["structures"] if s["id"] == payload["structure_id"]), None)
+        if not selected:
+            raise ValueError("Unknown structure")
+        self.stage(job, "Saving the grown branch")
+        structures = []
+        for entry in parent["structures"]:
+            copy = dict(entry)
+            if entry["id"] == selected["id"]:
+                copy = {k: v for k, v in copy.items() if k not in ("volume_ml", "voxel_count", "bounds_ras", "centroid_ras", "qc")}
+                copy["mask_file"] = payload["mask_file"]
+            structures.append(copy)
+        operation = dict(
+            type="grow_branch",
+            structure_id=selected["id"],
+            point_ras=payload["point_ras"],
+            seed_voxel=payload["seed_voxel"],
+            threshold=payload["threshold"],
+            provenance=f"Grow branch, CAS-Net probability ≥ {payload['threshold']:g}",
+            added_voxels=payload["added_voxels"],
+            added_ml=payload["added_ml"],
+            code_version=__version__,
+            code_sha256=code_fingerprint(),
+        )
+        return self.build_revision(
+            job["case_id"],
+            Path(parent["ct_file"]),
+            structures,
+            source="grow_branch",
             parent=parent["id"],
             operation=operation,
             acquisition=parent.get("acquisition"),

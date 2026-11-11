@@ -266,7 +266,11 @@ def stitched(model, volume, step_size, device):
 
 
 def predict(model, model_folder, image, spacing, device, step=lambda _: None):
-    """The lumen on the model-axis grid of `image` (1, z, y, x), as 0 and 1. `spacing` is z, y, x."""
+    """The lumen on the model-axis grid of `image` (1, z, y, x), as 0 and 1, and its probability. `spacing` is z, y, x.
+
+    The probability is p = (1 + sigmoid(lumen) - sigmoid(background)) / 2 as uint8 round(p * 255).
+    The mask is exactly p > 0.5, taken before rounding, so it is the benchmark's mask unchanged.
+    """
     selected = torch.device("cpu") if device == "cpu" else torch.device("cuda", int(device.partition(":")[2] or 0))
     step("preparing the scan")
     source = image[0]
@@ -292,4 +296,11 @@ def predict(model, model_folder, image, spacing, device, step=lambda _: None):
     # Linear resampling commutes with the difference, so its sign is the benchmark's argmax of two resampled channels.
     lumen_ahead = (probabilities[1] - probabilities[0]).numpy().transpose(2, 1, 0)
     del mean, probabilities
-    return (resampled(lumen_ahead, [SPACING] * 3, spacing_xyz, size_xyz) > 0).astype(np.uint8), torch.__version__
+    ahead = resampled(lumen_ahead, [SPACING] * 3, spacing_xyz, size_xyz)
+    labels = (ahead > 0).astype(np.uint8)
+    # In place, because a large scan's float grid is hundreds of megabytes.
+    ahead += 1.0
+    ahead *= 127.5
+    np.clip(ahead, 0.0, 255.0, out=ahead)
+    np.rint(ahead, out=ahead)
+    return labels, torch.__version__, ahead.astype(np.uint8)

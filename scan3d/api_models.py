@@ -168,6 +168,13 @@ class Refine(Input):
     operation: Operation
 
 
+class GrowBranch(Input):
+    revision_id: str
+    structure_id: str
+    point_ras: tuple[float, float, float]
+    threshold: Literal[0.1, 0.05] = 0.1
+
+
 class Activate(Input):
     revision_id: str
     expected_active_revision_id: str | None = None

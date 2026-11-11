@@ -1085,7 +1085,7 @@ def public_revision(record):
         result["image_asset"] = public_image_asset(asset)
     result.setdefault("kind", "segmentation" if record["structures"] else "ct")
     result["structures"] = [
-        {k: v for k, v in s.items() if k != "mask_file"}
+        {k: v for k, v in s.items() if k not in ("mask_file", "probability_file")} | ({"growable": True} if s.get("probability_file") else {})
         for s in (bind_structures(record["structures"], asset["id"]) if asset is not None else record["structures"])
     ]
     manifest = record.get("inference_manifest")

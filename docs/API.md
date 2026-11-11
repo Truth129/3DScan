@@ -237,15 +237,19 @@ An immutable source image.
 - `review_status`: `unreviewed`, `reviewed` or `corrected`.
 - `source`: `dicom`, `totalsegmentator`, `nnunet_model`, `refinement`, `slicer_correction`,
   `include_all_outputs`, `dicom_seg_import`, `synthetic_demo`, `direct_edit_correction`,
-  `direct_edit_new_structure`, `nninteractive_correction` or `nninteractive_new_structure`.
+  `direct_edit_new_structure`, `nninteractive_correction`, `nninteractive_new_structure` or
+  `grow_branch`.
 - `acquisition`: `{series_uid, profile, phase, cardiac_phase?, rr_percent?}`.
 
 ### Structure
 
 ```text
 {id, name, task, group, color, volume_ml, voxel_count, centroid_ras, bounds_ras, qc: string[],
- reference_image_id, relationship?}
+ reference_image_id, relationship?, growable?}
 ```
+
+`growable` is true when the segment's CAS-Net run stored its probability, so
+[Grow branch](#preparation-and-segmentation) can use it. Later edits of the segment keep it.
 
 Volumes are `nonzero voxels × |det(affine[:3,:3])| / 1000` mL. `centroid_ras` and `bounds_ras` are
 null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance object.
@@ -480,6 +484,19 @@ empties the mask is refused. If `revision_id` is no longer active when the job s
 - `keep_component` and `remove_component` need a seed inside the mask. Components are six-connected.
 - `keep_region` and `erase_region` need bounds with positive extent, and select voxel centres inside
   world-axis-aligned bounds.
+
+**`POST /api/cases/{id}/grow-branch`** takes `{revision_id, structure_id, point_ras, threshold}`,
+with `threshold` 0.1 (default) or 0.05, and returns a `grow_branch` job that saves the grown mask as
+a revision with source `grow_branch`. The request grows at once, so a refusal answers it:
+
+- The rule: voxels farther than 1 mm from the current mask, in millimetres through the full affine;
+  the 26-connected piece of CAS-Net probability ≥ `threshold` there holding the clicked voxel; if
+  it misses, the allowed voxel with the highest probability within 1.5 mm seeds it.
+- Refusals: 400 `This segment has no stored CAS-Net probability...` for any other segment or a
+  CAS-Net run from before this; 400 `CAS-Net saw nothing here; use nnInteractive or Direct edit.`;
+  400 `Grow branch would add N mL, over its 0.5 mL limit...`; 409 unless `revision_id` is active.
+- `operation` records `point_ras`, `seed_voxel`, `threshold`, `added_voxels`, `added_ml` and
+  `provenance`, such as `Grow branch, CAS-Net probability ≥ 0.1`.
 
 **`POST /api/cases/{id}/activate`** takes `{revision_id, expected_active_revision_id?}` and returns
 the Case. This is undo and redo: masks, volumes and relationships return exactly. Reset to scan is

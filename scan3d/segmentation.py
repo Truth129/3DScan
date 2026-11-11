@@ -602,6 +602,10 @@ def segment(
                     command += ["--skull-strip-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.skull_strip]))]
                 if model.crop:
                     command += ["--crop-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.crop]))]
+            # Beside the task's folder, whose every NIfTI is read as a mask.
+            probability_path = run_dir / f"{task}-probability.nii.gz" if model and model.engine == "cas_net" else None
+            if probability_path:
+                command += ["--probability", str(probability_path)]
             for option in ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling"):
                 if options[option]:
                     command.append("--" + option)
@@ -695,6 +699,8 @@ def segment(
                 raise RuntimeError(
                     "This lung_vessels model does not provide the required split artery/vein/airway outputs; verify the pinned TotalSegmentator version"
                 )
+            if probability_path and not probability_path.is_file():
+                raise RuntimeError(f"{engine} did not save its probability for Grow branch; verify the worker version")
             record["labels"] = sorted(masks)
             record["status"] = "completed"
             progress(f"Checking {task} mask geometry and labels")
@@ -712,6 +718,9 @@ def segment(
                 structures.append(
                     {"id": f"{task}:{name}", "name": _structure_name(name, task), "task": task, "group": group, "color": color, "mask_file": str(path)}
                 )
+                if probability_path:
+                    # Later edits of this segment keep it, so Grow branch reads the run's own probability.
+                    structures[-1]["probability_file"] = str(probability_path)
             record["mask_validation_seconds"] = round(time.monotonic() - validation_started, 3)
             save_manifest()
         if not structures:
