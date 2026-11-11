@@ -293,7 +293,8 @@ filtered. A section's eye hides it, and its arrow collapses it.
 
 Three linked planes share one position, with its patient RAS coordinates and HU value below.
 
-- **Navigate:** click to move, scroll or the slider to change slice, left or right drag for
+- **Navigate:** click to move there and centre all three planes on it at their zoom, scroll or
+  the slider to change slice, left or right drag for
   window/level, middle drag to pan, Ctrl or ⌘ scroll (or pinch) to zoom. Scrolling down moves
   one slice towards the feet, back or patient's left. While drawing, left drag draws and right
   drag still sets window/level. **Reset planes** restores them.

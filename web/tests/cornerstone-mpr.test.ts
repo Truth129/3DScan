@@ -328,6 +328,19 @@ describe('shared native Cornerstone MPR ownership', () => {
     expect(viewport.camera.focalPoint.slice(0, 2)).toEqual([12, -7]);
   });
 
+  it('centres every pane on a clicked point within its own plane, keeping zoom and slice depth', async () => {
+    const owner = await create(),
+      engine = fake.engines[0];
+    const cameras = {
+      axial: { viewPlaneNormal: [0, 0, 1], focalPoint: [4, 4, 5], position: [4, 4, 105], parallelScale: 25 },
+      coronal: { viewPlaneNormal: [0, -1, 0], focalPoint: [4, 3, 4], position: [4, -97, 4], parallelScale: 12 },
+    };
+    for (const [plane, camera] of Object.entries(cameras)) engine.getViewport(owner.viewportId(plane as any)).camera = camera;
+    owner.centreOn([10, 20, 30]); // RAS, so LPS [-10, -20, 30]
+    expect(engine.getViewport(owner.viewportId('axial')).camera).toMatchObject({ focalPoint: [-10, -20, 5], position: [-10, -20, 105], parallelScale: 25 });
+    expect(engine.getViewport(owner.viewportId('coronal')).camera).toMatchObject({ focalPoint: [-10, 3, 30], position: [-10, -97, 30], parallelScale: 12 });
+  });
+
   it('uploads one reflected native volume once for all three viewports and releases every owned image', async () => {
     const input = source(),
       owner = await create(input);

@@ -293,7 +293,10 @@ function click(plane: Plane, event: MouseEvent) {
   if (pointerStart && Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 4) return;
   const rect = elements[plane]!.getBoundingClientRect();
   const ras = viewer.canvasToRas(plane, [event.clientX - rect.left, event.clientY - rect.top]);
-  if (insideSource(ras)) emit('point', ras);
+  if (!insideSource(ras)) return;
+  emit('point', ras);
+  // Centring pans within each plane only, so it does not race the slice move the new point makes.
+  viewer.centreOn(ras);
 }
 function gesture(plane: Plane, prompt: InteractivePrompt) {
   if (!canMark(plane)) return;

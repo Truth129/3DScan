@@ -568,6 +568,35 @@ export class CornerstoneMPR {
       position: position.map((value, axis) => value + shift[axis]) as Point,
     });
   }
+  /**
+   * Pan every pane within its own plane so the point sits in the middle. Zoom and slice depth stay,
+   * so a reader zoomed in can click to follow a structure without the other panes losing it.
+   */
+  centreOn(point: Point) {
+    if (this.disposed || !this.sourceVolume || !this.mprAttached || !point.every(Number.isFinite)) return;
+    const target = rasToLps(point);
+    this.applying = true;
+    try {
+      for (const plane of planes) {
+        const viewport = this.viewport(plane),
+          { focalPoint, position, viewPlaneNormal } = viewport.getCamera();
+        const normal = viewPlaneNormal!,
+          offset = target.map((value, axis) => value - focalPoint![axis]);
+        const depth = normal.reduce((sum, value, axis) => sum + value * offset[axis], 0) / normal.reduce((sum, value) => sum + value * value, 0);
+        const shift = offset.map((value, axis) => value - normal[axis] * depth);
+        viewport.setCamera({
+          focalPoint: focalPoint!.map((value, axis) => value + shift[axis]) as Point,
+          position: position!.map((value, axis) => value + shift[axis]) as Point,
+        });
+      }
+      // Masks attaching put back the cameras kept before they started, which would undo the pan.
+      if (this.kept) this.kept.cameras = this.cameras();
+      this.engine!.render();
+    } finally {
+      this.applying = false;
+    }
+    for (const plane of planes) this.callbacks.camera?.(plane);
+  }
   /** Changing orientation refits the slice. Put back the reader's zoom and centre; setPointRAS then settles the depth. */
   private keepSliceView(viewport: ReturnType<CornerstoneMPR['viewport']>, centre: Point, parallelScale: number) {
     const { focalPoint, position, viewPlaneNormal } = viewport.getCamera();
