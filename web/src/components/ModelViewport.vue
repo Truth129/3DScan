@@ -2295,7 +2295,7 @@ defineExpose({
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   box-shadow:
-    0 0 0 100vmax #07090de6,
+    0 0 0 100vmax #090b0ae6,
     0 15px 80px #0009;
 }
 /*
@@ -2533,7 +2533,7 @@ defineExpose({
 }
 .view-rail > button.active {
   border-color: var(--accent);
-  background: #303d53;
+  background: #3c4742;
   color: var(--white);
 }
 .view-rail > button:disabled {
@@ -2620,7 +2620,7 @@ defineExpose({
   padding: 7px 10px 6px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: #0b0c10d9;
+  background: #070808d9;
   font: 11px var(--mono);
   color: var(--text-secondary);
   pointer-events: none;

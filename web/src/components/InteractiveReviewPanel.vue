@@ -1183,15 +1183,15 @@ defineExpose({
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
-  background: #171c24;
-  color: #c8d1df;
+  background: #1c1f1e;
+  color: #d0d7d4;
 }
 .review-panel-header {
   display: grid;
   flex: none;
   gap: 8px;
   padding: 9px 12px 10px;
-  border-bottom: 1px solid #2b3647;
+  border-bottom: 1px solid var(--line);
 }
 .review-panel-title {
   display: flex;
@@ -1203,7 +1203,7 @@ defineExpose({
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  color: #d8e2f2;
+  color: #e1e9e5;
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
@@ -1224,7 +1224,7 @@ defineExpose({
   gap: 3px;
   min-width: 0;
   font-size: 9px;
-  color: #a9b6c9;
+  color: #b4beb9;
 }
 .review-target select {
   width: 100%;
@@ -1246,7 +1246,7 @@ defineExpose({
   padding: 7px 12px;
   overflow-y: auto;
   overflow-anchor: none;
-  border-bottom: 1px solid #2b3647;
+  border-bottom: 1px solid var(--line);
   line-height: 15px;
   scrollbar-width: thin;
   scrollbar-color: var(--control-border) transparent;
@@ -1278,14 +1278,14 @@ defineExpose({
 }
 .review-toolset {
   display: flex;
-  border: 1px solid #424e60;
+  border: 1px solid var(--line-strong);
   border-radius: 5px;
   overflow: hidden;
 }
 .review-toolset button {
   border: 0;
   background: transparent;
-  color: #b7c3d5;
+  color: #c2cbc6;
   padding: 6px 9px;
   font-size: 11px;
   cursor: pointer;
@@ -1295,7 +1295,7 @@ defineExpose({
   text-overflow: ellipsis;
 }
 .review-toolset button.active {
-  background: #39465b;
+  background: #454f4a;
   color: #fff;
 }
 .review-toolset button:disabled {
@@ -1313,12 +1313,16 @@ defineExpose({
 .review-tools > .polarity {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+/* Include keeps its own green fill and text, unlike the graphite fill and white text of other
+   selected tools; Exclude takes a pink edge rather than the green selection one. */
 .polarity button:first-child.active {
   background: #25463d;
   color: #9ae4c2;
 }
 .polarity button:last-child.active {
+  border-color: #ffb9c3;
   background: #51333d;
+  box-shadow: inset 0 0 0 1px #ffb9c326;
   color: #ffb9c3;
 }
 .review-tools {
@@ -1351,20 +1355,20 @@ defineExpose({
   gap: 5px 8px;
   font-size: 10px;
   line-height: 1.45;
-  color: #9dadc4;
+  color: #abb6b1;
 }
 .review-toolbar-context > span {
   flex: 1 1 100%;
   min-width: 0;
 }
 .review-toolbar-context > span:first-child {
-  color: #c1cadd;
+  color: #cbd3cf;
 }
 .review-toolbar-context > .review-ai-path {
   flex: 0 1 auto;
   overflow: hidden;
   padding: 1px 7px;
-  border: 1px solid #424e60;
+  border: 1px solid var(--line-strong);
   border-radius: 9px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1404,7 +1408,7 @@ defineExpose({
   flex-wrap: wrap;
   gap: 0 12px;
   font-size: 10px;
-  color: #c1cfe4;
+  color: #cdd8d3;
 }
 .review-working {
   display: flex;
@@ -1419,7 +1423,7 @@ defineExpose({
 .review-progress {
   margin: 0;
   font-size: 10px;
-  color: #c1cfe4;
+  color: #cdd8d3;
 }
 .review-alert {
   margin: 0;
@@ -1449,9 +1453,9 @@ defineExpose({
 .review-add-form,
 .review-advanced,
 .review-impact {
-  border: 1px solid #3b485e;
+  border: 1px solid var(--line-strong);
   border-radius: 5px;
-  background: #11161d;
+  background: #151917;
   font-size: 10px;
 }
 .review-add-form {
@@ -1462,7 +1466,7 @@ defineExpose({
 .review-add-form label {
   display: grid;
   gap: 4px;
-  color: #acbdd4;
+  color: #bac6c0;
 }
 .review-add-form input {
   width: 100%;
@@ -1481,7 +1485,7 @@ defineExpose({
   padding: 2px;
 }
 .review-add-form > span {
-  color: #92a5c0;
+  color: #a2b0a9;
 }
 /* The form is taller than a short column, so its buttons stick to the bottom of the tools, over their 12 px padding. */
 .review-add-actions {
@@ -1491,7 +1495,7 @@ defineExpose({
   flex-wrap: wrap;
   gap: 6px;
   padding-block: 6px;
-  background: #11161d;
+  background: #151917;
 }
 .review-advanced {
   display: grid;
@@ -1506,7 +1510,7 @@ defineExpose({
 }
 .review-advanced small {
   flex-basis: 100%;
-  color: #8696ad;
+  color: #949f9a;
 }
 .review-advanced input {
   margin: 0;
@@ -1526,19 +1530,19 @@ defineExpose({
 }
 .review-advanced p {
   margin: 0;
-  color: #91a2ba;
+  color: #9faca6;
   line-height: 1.5;
 }
 .review-impact {
   padding: 3px 10px 6px;
-  color: #acbdd4;
+  color: #bac6c0;
 }
 .review-impact-heading {
   display: grid;
   justify-items: start;
   gap: 6px;
   padding: 7px 0;
-  color: #93a7c3;
+  color: #a4b2ab;
 }
 .review-impact .text-button {
   font-size: 10px;
@@ -1556,7 +1560,7 @@ defineExpose({
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 2px 6px;
   padding: 5px 0;
-  border-bottom: 1px solid #2b3647;
+  border-bottom: 1px solid var(--line);
 }
 .review-impact :is(th, td) {
   padding: 0;
@@ -1568,11 +1572,11 @@ defineExpose({
   text-align: left;
 }
 .review-impact th {
-  color: #879bb7;
+  color: #98a69f;
   font-weight: 400;
 }
 .review-impact td small {
-  color: #8297b5;
+  color: #94a39c;
   padding-left: 5px;
 }
 .review-overlaps {
@@ -1580,7 +1584,7 @@ defineExpose({
   flex-wrap: wrap;
   gap: 6px 12px;
   padding: 8px 0;
-  color: #a6b9d3;
+  color: #b6c3bd;
 }
 .review-impact[data-stale='true'],
 .review-impact-toggle[data-stale='true'] {
@@ -1593,8 +1597,8 @@ defineExpose({
   flex-wrap: wrap;
   gap: 6px;
   padding: 8px 12px;
-  border-top: 1px solid #354052;
-  background: #141921;
+  border-top: 1px solid var(--line);
+  background: #191c1b;
 }
 .review-history,
 .review-primary-actions {
@@ -1612,7 +1616,7 @@ defineExpose({
 }
 .review-save {
   min-width: 124px;
-  background: #cfddf2;
+  background: #dbe6e1;
 }
 .review-discard {
   margin-left: auto;

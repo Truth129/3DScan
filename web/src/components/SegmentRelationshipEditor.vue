@@ -99,11 +99,11 @@ onBeforeUnmount(() => emit('validity', true));
 <style scoped>
 .segment-relationship-editor {
   min-width: 0;
-  border: 1px solid #39465b;
+  border: 1px solid var(--line-strong);
   border-radius: 5px;
   padding: 9px;
-  background: #121923;
-  color: #b9c9de;
+  background: #181d1b;
+  color: #c6d1cc;
   font-size: 10px;
 }
 /* It opens inside review's column, so each field takes the full width. */
@@ -125,7 +125,7 @@ onBeforeUnmount(() => emit('validity', true));
 .relationship-fields p {
   margin: 0;
   line-height: 1.5;
-  color: #9fb0c9;
+  color: #aebab4;
 }
 .relationship-siblings {
   display: flex;
@@ -133,13 +133,13 @@ onBeforeUnmount(() => emit('validity', true));
   gap: 7px 13px;
   margin-top: 9px;
   padding-top: 8px;
-  border-top: 1px solid #303c4f;
+  border-top: 1px solid var(--line);
   max-height: 108px;
   overflow: auto;
 }
 .relationship-siblings > span {
   flex-basis: 100%;
-  color: #c7d5e7;
+  color: #d2dcd7;
 }
 .relationship-siblings label {
   display: flex;
@@ -150,7 +150,7 @@ onBeforeUnmount(() => emit('validity', true));
   font-size: 10px;
 }
 .relationship-siblings input {
-  accent-color: #86a6eb;
+  accent-color: var(--accent);
   margin: 0;
 }
 .relationship-siblings .protected {
@@ -165,14 +165,14 @@ onBeforeUnmount(() => emit('validity', true));
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
-  color: #9eb1cb;
+  color: #aebbb5;
 }
 .relationship-suggestions .text-button {
   font-size: 10px;
 }
 .relationship-suggestions small {
   font-size: 9px;
-  color: #8498b6;
+  color: #96a59e;
 }
 .relationship-error {
   margin: 7px 0 0;

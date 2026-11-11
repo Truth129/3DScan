@@ -12,21 +12,21 @@
   font-weight: 400;
   font-size: 13px;
   --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
-  --bg: #0b0c10;
-  --panel: #121419;
-  --surface: #191c23;
-  --surface-hover: #22262f;
-  --surface-active: #252c39;
-  --line: #2c313c;
-  --line-strong: #424b5c;
-  --muted: #929dab;
-  --accent: #a5bbef;
-  --accent-dark: #252c39;
-  --white: #e8ecf2;
-  --text-secondary: #b9c1ce;
-  --primary: #e1e7f1;
-  --primary-hover: #f5f7fb;
-  --ink: #11141b;
+  --bg: #070808;
+  --panel: #0e1010;
+  --surface: #181c1b;
+  --surface-hover: #212a26;
+  --surface-active: #1f3a2b;
+  --line: #2a3b33;
+  --line-strong: #40684f;
+  --muted: #a5b0aa;
+  --accent: #86e6b0;
+  --accent-dark: #1d3a29;
+  --white: #f2f6f4;
+  --text-secondary: #cfd8d3;
+  --primary: #e9f2ed;
+  --primary-hover: #f8fcfa;
+  --ink: #0a0f0c;
   --warning: #f2ba9c;
 }
 * {
@@ -1046,7 +1046,7 @@ h3 {
 .viewport-state {
   position: absolute;
   inset: 0;
-  background: #191c23d9;
+  background: #181c1bd9;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1414,7 +1414,7 @@ h3 {
   justify-content: center;
   flex-direction: column;
   gap: 6px;
-  background: #191c23d9;
+  background: #181c1bd9;
   font-size: 10px;
   padding: 12px;
   text-align: center;
@@ -1637,7 +1637,7 @@ h3 {
 }
 /* --bg spelled out: a backdrop inherits no variables in older browsers. */
 .sign-in::backdrop {
-  background: #0b0c10;
+  background: #070808;
 }
 /* Hidden as well as covered, so a dialog that opens late shows nothing either. */
 .session-covered {
@@ -1696,7 +1696,7 @@ h3 {
   position: fixed;
   z-index: 500;
   inset: 0;
-  background: #0b0c10bf;
+  background: #070808bf;
   backdrop-filter: blur(5px);
   display: flex;
   align-items: center;
@@ -2623,7 +2623,7 @@ h3 {
   position: fixed;
   inset: 0;
   z-index: 70;
-  background: #0b0c10bf;
+  background: #070808bf;
   backdrop-filter: blur(3px);
 }
 .ct-expanded {
@@ -2733,7 +2733,7 @@ h3 {
   gap: 5px;
   border: 1px solid var(--line);
   border-radius: 5px;
-  background: #191c23f2;
+  background: #181c1bf2;
   pointer-events: none;
 }
 .viewport-state.surface-update strong {
@@ -2912,7 +2912,7 @@ h3 {
   gap: 8px;
   min-width: 0;
   overflow: hidden;
-  color: #bdcadf;
+  color: #c9d3ce;
   font-size: 10px;
   line-height: 1.5;
 }

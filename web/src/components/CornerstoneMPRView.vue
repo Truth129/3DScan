@@ -481,7 +481,7 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   z-index: 2;
-  background: #050608;
+  background: #060707;
 }
 .ct-still :deep(canvas) {
   width: 100%;

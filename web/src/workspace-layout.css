@@ -347,7 +347,7 @@
 .top-bar .segment-action[aria-expanded='true'],
 .top-bar .review-action.active {
   border-color: var(--accent);
-  background: #283247;
+  background: #333c38;
   color: var(--white);
 }
 /* View and Review read as one switch; the pressed side shows the mode. */
@@ -365,7 +365,7 @@
   border-bottom-left-radius: 0;
 }
 .top-bar .mode-switch > .view-action[aria-pressed='true'] {
-  background: var(--surface-active);
+  background: #333c38;
   color: var(--white);
 }
 /* Segment CT… and its ▾ read as one split button. */
@@ -534,7 +534,7 @@
   padding: 0 4px 0 9px;
   border: 1px solid var(--line-strong);
   border-radius: 16px;
-  background: #191d26;
+  background: #1e2120;
 }
 .job-banner.failed {
   background: #382b25;

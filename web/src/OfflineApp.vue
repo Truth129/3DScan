@@ -222,10 +222,10 @@ onBeforeUnmount(() => session.value?.dispose());
   flex-wrap: wrap;
   gap: 10px;
   padding: 7px 18px;
-  background: #171c24;
-  border-bottom: 1px solid #354052;
+  background: #1c1f1e;
+  border-bottom: 1px solid var(--line);
   font-size: 10px;
-  color: #aebbd0;
+  color: #bac4bf;
 }
 .offline-ct-controls > label {
   display: flex;
@@ -246,7 +246,7 @@ onBeforeUnmount(() => session.value?.dispose());
 }
 .offline-overlays summary {
   cursor: pointer;
-  border: 1px solid #485469;
+  border: 1px solid var(--control-border);
   border-radius: 4px;
   padding: 6px 8px;
 }
@@ -259,8 +259,8 @@ onBeforeUnmount(() => session.value?.dispose());
   max-height: 230px;
   overflow: auto;
   padding: 8px;
-  background: #171c24;
-  border: 1px solid #485469;
+  background: #1c1f1e;
+  border: 1px solid var(--line-strong);
   border-radius: 5px;
   box-shadow: 0 10px 30px #0008;
 }

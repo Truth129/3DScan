@@ -176,7 +176,7 @@ onBeforeUnmount(() => {
   font-size: 9px;
 }
 .license-status.configured {
-  color: #b9cadf;
+  color: #c6d2cc;
 }
 .license-content {
   padding-top: 4px;
@@ -217,14 +217,14 @@ onBeforeUnmount(() => {
   padding: 5px 8px;
 }
 .license-validation-status {
-  color: #b9cadf;
+  color: #c6d2cc;
 }
 .license-privacy,
 .license-terms {
   color: var(--muted);
 }
 .license-content a {
-  color: #b9cadf;
+  color: #c6d2cc;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -232,6 +232,6 @@ onBeforeUnmount(() => {
   color: #e1c792;
 }
 .license-notice {
-  color: #c4d1e1;
+  color: #ced7d3;
 }
 </style>

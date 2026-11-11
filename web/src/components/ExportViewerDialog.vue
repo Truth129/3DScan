@@ -207,7 +207,7 @@ onBeforeUnmount(() => {
   box-shadow: 0 22px 80px #0009;
 }
 .export-viewer-dialog::backdrop {
-  background: #080b12bb;
+  background: #0c0f0dbb;
   backdrop-filter: blur(4px);
 }
 header,
@@ -305,7 +305,7 @@ fieldset small {
 }
 .export-success {
   font-size: 11px;
-  color: #c4d6ee;
+  color: #d3dfd9;
   margin: 12px 0;
 }
 footer {

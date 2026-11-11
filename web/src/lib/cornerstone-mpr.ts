@@ -307,7 +307,7 @@ export class CornerstoneMPR {
         viewportId: this.viewportId(plane),
         type: core.Enums.ViewportType.ORTHOGRAPHIC,
         element: this.elements[plane],
-        defaultOptions: { orientation: this.patientOrientation(plane), background: [0.025, 0.03, 0.04] },
+        defaultOptions: { orientation: this.patientOrientation(plane), background: [0.024, 0.027, 0.027] },
       });
     this.group = tools.ToolGroupManager.createToolGroup(this.mprGroupId)!;
     for (const tool of [tools.WindowLevelTool, tools.PanTool, tools.ZoomTool]) this.group.addTool(tool.toolName);

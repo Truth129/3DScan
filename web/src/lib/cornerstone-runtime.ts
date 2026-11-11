@@ -127,7 +127,7 @@ export class CornerstoneFrameViewport {
     const libs = this.libs;
     const { core, tools } = libs;
     this.engine = new core.RenderingEngine(this.id);
-    this.engine.enableElement({ viewportId: this.id, type: core.Enums.ViewportType.STACK, element, defaultOptions: { background: [0.025, 0.03, 0.04] } });
+    this.engine.enableElement({ viewportId: this.id, type: core.Enums.ViewportType.STACK, element, defaultOptions: { background: [0.024, 0.027, 0.027] } });
     this.viewport = this.engine.getViewport(this.id) as Core.StackViewport;
     this.group = tools.ToolGroupManager.createToolGroup(this.id)!;
     for (const tool of [tools.WindowLevelTool, tools.PanTool, tools.ZoomTool]) this.group.addTool(tool.toolName);

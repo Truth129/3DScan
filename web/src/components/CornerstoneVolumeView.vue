@@ -1112,7 +1112,7 @@ defineExpose({
   position: absolute;
   inset: 35% 20px auto;
   text-align: center;
-  color: #bac7d9;
+  color: #c5ceca;
   font-size: 12px;
 }
 .cornerstone-surface-status {
@@ -1120,7 +1120,7 @@ defineExpose({
   bottom: 8px;
   left: 12px;
   right: 12px;
-  color: #bac7d9;
+  color: #c5ceca;
   font-size: 11px;
 }
 </style>

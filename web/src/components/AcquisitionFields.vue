@@ -130,7 +130,7 @@ function rr(event: Event) {
 }
 .field select:focus-visible,
 .field input:focus-visible {
-  outline: 2px solid var(--accent, #8aabff);
+  outline: 2px solid var(--accent, #86e6b0);
   outline-offset: 2px;
 }
 .field input[aria-invalid='true'] {

@@ -1,8 +1,8 @@
 /* Shared neutral workspace treatment for the app and portable viewer. */
 :root {
-  --control-border: #68758a;
-  --control-border-hover: #9baac1;
-  --control-focus: #b3cbff;
+  --control-border: #4f9269;
+  --control-border-hover: #8fd8ab;
+  --control-focus: #a8f2c6;
 }
 
 /* Actions have their own outline; panel dividers stay quieter. */
@@ -53,10 +53,10 @@
 }
 :root :is(.comparison-toggle, .review-toolset) > button.active {
   border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px #a5bbef26;
+  box-shadow: inset 0 0 0 1px #86e6b026;
 }
 :root .comparison-toggle > button.active {
-  background: #303d53;
+  background: #3c4742;
   color: var(--white);
 }
 :root .inspector-tabs {
@@ -76,7 +76,7 @@
   border-color: var(--control-border-hover);
 }
 :root .inspector-tabs > button.active {
-  background: #283247;
+  background: #333c38;
   border-color: var(--accent);
   color: var(--white);
 }
@@ -85,7 +85,7 @@
 :root :is(.visibility-button, .solo-button, .group-visibility-button) {
   border: 1px solid var(--control-border);
   border-radius: 4px;
-  background: #191c2380;
+  background: #181c1b80;
 }
 :root .solo-button {
   opacity: 0.7;
@@ -140,7 +140,7 @@
   display: none;
 }
 .brand svg {
-  stroke: #d4dbe7;
+  stroke: #dbe0de;
 }
 .brand > span > span {
   color: var(--text-secondary);
@@ -163,15 +163,15 @@
 
 input,
 select {
-  background: #0e1015;
+  background: #101312;
   border-color: var(--line);
   color: var(--white);
 }
 input::placeholder {
-  color: #949eaf;
+  color: #9da6a2;
 }
 input[type='range'] {
-  background: #343b49;
+  background: #3b423f;
 }
 .button,
 .library-action {
@@ -218,7 +218,7 @@ input[type='range'] {
   background: var(--panel);
 }
 .structure-search {
-  background: #0e1015;
+  background: #101312;
   border-color: var(--line);
 }
 .structure-search input {
@@ -235,11 +235,11 @@ input[type='range'] {
   color: var(--muted);
 }
 .structure-row:hover {
-  background: #1b1f27;
+  background: #1f2321;
 }
 .structure-row.selected,
 .structure-details {
-  background: #232a36;
+  background: #2a2f2d;
   border-left-color: var(--accent);
 }
 .group-visibility-button:hover {
@@ -250,17 +250,17 @@ input[type='range'] {
   border-color: var(--line-strong);
 }
 .library-selected-action {
-  background: #1d232e;
+  background: #232826;
 }
 .selection-source {
   color: var(--muted);
 }
 
 .central-workspace {
-  background: #0c0e12;
+  background: #0e100f;
 }
 .model-viewport {
-  background: radial-gradient(ellipse at 50% 40%, var(--surface) 0%, #111318 55%, #0c0e12 100%);
+  background: radial-gradient(ellipse at 50% 40%, var(--surface) 0%, #131615 55%, #0e100f 100%);
 }
 .orientation-gizmo > circle {
   fill: #11131888;
@@ -277,7 +277,7 @@ input[type='range'] {
 }
 .viewport-state,
 .viewport-state.surface-update {
-  background: #12151df2;
+  background: #161918f2;
   color: var(--text-secondary);
 }
 .comparison-toggle button {
@@ -285,12 +285,12 @@ input[type='range'] {
   color: var(--muted);
 }
 .comparison-toggle button.active {
-  background: #303848;
+  background: #38403c;
   color: var(--white);
 }
 
 .ct-image {
-  background: #050608;
+  background: #060707;
   border-color: var(--line-strong);
 }
 .ct-image.is-loading {
@@ -321,7 +321,7 @@ input[type='range'] {
   display: grid;
   place-items: center;
   color: var(--muted);
-  background: #050608;
+  background: #060707;
   font-size: 11px;
 }
 /* Bottom right: the corner label and ⟲ hold the top corners. */
@@ -330,8 +330,8 @@ input[type='range'] {
   display: block;
   padding: 4px 7px;
   border-radius: 3px;
-  background: #111823df;
-  color: #bac8dc;
+  background: #171d1adf;
+  color: #c6d0cb;
   font-size: 11px;
   pointer-events: none;
 }
@@ -342,7 +342,7 @@ input[type='range'] {
   margin: 6px 0;
 }
 .slice-direction {
-  color: #c1cbdc;
+  color: #cad3cf;
 }
 .inspector-tabs button.active {
   color: var(--white);
@@ -364,7 +364,7 @@ input[type='range'] {
   color: var(--muted);
 }
 .mobile-navigation button.active {
-  background: #202632;
+  background: #262c29;
   color: var(--white);
   border-top-color: var(--accent);
 }

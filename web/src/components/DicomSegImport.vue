@@ -122,7 +122,7 @@ defineExpose({ open });
   box-shadow: 0 22px 80px #0009;
 }
 .dicom-seg-import-dialog::backdrop {
-  background: #080b12bb;
+  background: #0c0f0dbb;
   backdrop-filter: blur(4px);
 }
 header,

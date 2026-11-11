@@ -45,7 +45,7 @@
   margin: 0;
   padding: 2px 5px;
   border-radius: 3px;
-  background: #050608b3;
+  background: #060707b3;
   font: 9px var(--mono);
   letter-spacing: 0;
   color: var(--text-secondary);
@@ -58,7 +58,7 @@
   white-space: nowrap;
 }
 .ct-corner-label > span:first-child {
-  color: #c1cbdc;
+  color: #cad3cf;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -75,7 +75,7 @@
   padding: 0;
   border: 1px solid var(--control-border);
   border-radius: 4px;
-  background: #10131cd9;
+  background: #141816d9;
   color: var(--text-secondary);
   font-size: 14px;
   line-height: 1;

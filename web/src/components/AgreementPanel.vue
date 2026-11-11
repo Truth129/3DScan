@@ -554,7 +554,7 @@ tr.unchanged td {
   box-shadow: 0 22px 80px #0009;
 }
 .agreement-dialog::backdrop {
-  background: #080b12bb;
+  background: #0c0f0dbb;
   backdrop-filter: blur(4px);
 }
 .agreement-dialog header {

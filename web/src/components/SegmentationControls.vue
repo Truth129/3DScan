@@ -228,7 +228,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
   min-height: 0;
   padding: 12px 14px;
   overflow: auto;
-  background: #171c25;
+  background: #1c201e;
   scrollbar-width: thin;
 }
 .segmentation-panel > header {
