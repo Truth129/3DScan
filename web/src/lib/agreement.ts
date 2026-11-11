@@ -195,6 +195,7 @@ const SOURCES: Record<string, string> = {
   nninteractive_new_structure: 'new segment (AI assist)',
   direct_edit_correction: 'direct edit',
   direct_edit_new_structure: 'new segment (direct edit)',
+  grow_branch: 'Grow branch',
   slicer_correction: 'Slicer import',
 };
 

@@ -1,6 +1,7 @@
 import type {
   CacheClearResult,
   Case,
+  GrowThreshold,
   Job,
   JobMeasurements,
   Revision,
@@ -14,6 +15,7 @@ import type {
   InteractiveStructureInput,
   OneTimeLink,
   Person,
+  Point,
   SegmentRelationship,
   SegmentationCatalog,
   SegmentationSettings,
@@ -198,6 +200,8 @@ export const api = {
     presentRevision(await request<Revision>(revisionUrl(id, rid), json('PATCH', { review_status: status }))),
   refine: (id: string, rid: string, structure: string, operation: Operation) =>
     request<Job>(`${caseUrl(id)}/refinements`, json('POST', { revision_id: rid, structure_id: structure, operation })),
+  growBranch: (id: string, rid: string, structure: string, point_ras: Point, threshold: GrowThreshold) =>
+    request<Job>(`${caseUrl(id)}/grow-branch`, json('POST', { revision_id: rid, structure_id: structure, point_ras, threshold })),
   async correction(id: string, rid: string, file: File) {
     const data = new FormData();
     data.append('revision_id', rid);

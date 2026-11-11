@@ -18,8 +18,10 @@ import {
 } from '../lib/inference-path';
 import SegmentRelationshipEditor from './SegmentRelationshipEditor.vue';
 import type {
+  GrowThreshold,
   InteractiveMethod,
   InteractiveOptions,
+  InteractivePoint,
   InteractivePrompt,
   InteractiveReview,
   InteractiveRunChoice,
@@ -64,8 +66,10 @@ const emit = defineEmits<{
   'retry-surface': [];
   alert: [shown: boolean];
 }>();
+// Grow branch is a Direct edit tool that saves on one click, so the viewers see it as a point.
+type PanelTool = InteractiveTool | 'grow';
 const runtime = ref<InteractiveStatus>(),
-  tool = ref<InteractiveTool>('navigate'),
+  tool = ref<PanelTool>('navigate'),
   include = ref(true),
   radius = ref(3),
   native = ref(true),
@@ -94,6 +98,12 @@ function setOnlyAdds(value: boolean) {
     // Without storage the choice lasts for this page.
   }
 }
+const growThreshold = ref<GrowThreshold>(0.1),
+  growing = ref(false),
+  growError = ref('');
+const selectedStructure = computed(() => props.structures.find(item => item.id === props.selected));
+// Offered on CAS-Net's segment, and enabled only when its run stored the probability.
+const growOffered = computed(() => !!selectedStructure.value?.growable || selectedStructure.value?.task === 'imagecasx_cas_net');
 const scissorsShape = ref<ScissorsShape>('freehand'),
   scissorsOperation = ref<ScissorsOperation>('erase_inside');
 const controller = shallowRef<InteractiveController>(),
@@ -135,6 +145,7 @@ const disabled = computed(
   () =>
     creating.value ||
     discarding.value ||
+    growing.value ||
     props.busy ||
     !!current.value?.working ||
     !current.value?.loaded ||
@@ -145,6 +156,7 @@ const methodDisabled = computed(
   () =>
     creating.value ||
     discarding.value ||
+    growing.value ||
     props.busy ||
     !!current.value?.working ||
     !!current.value?.saving ||
@@ -417,12 +429,38 @@ function chooseDirect(includeStroke: boolean) {
   include.value = includeStroke;
   chooseTool('scribble');
 }
-function chooseTool(value: InteractiveTool) {
+function chooseTool(value: PanelTool) {
   tool.value = value;
+  growError.value = '';
   if (!['point', 'navigate', 'scissors', 'remove'].includes(value)) native.value = true;
 }
 function addGesture(prompt: InteractivePrompt) {
-  if (!disabled.value) current.value?.append(prompt);
+  if (disabled.value) return;
+  if (tool.value === 'grow') {
+    if ((prompt.kind ?? 'point') === 'point') void growAt((prompt as InteractivePoint).ras);
+    return;
+  }
+  current.value?.append(prompt);
+}
+/** One click grows from CAS-Net's stored probability and saves a revision; a refusal answers the click here. */
+async function growAt(ras: Point) {
+  const structure = selectedStructure.value;
+  if (!structure?.growable || growing.value) return;
+  if (current.value?.hasDraftChanges) {
+    growError.value = 'Save or discard this draft before growing a branch.';
+    return;
+  }
+  const identity = identityVersion;
+  growing.value = true;
+  growError.value = '';
+  try {
+    const job = await api.growBranch(props.caseId, props.revisionId, structure.id, ras, growThreshold.value);
+    if (!disposed && identity === identityVersion) emit('accept', job);
+  } catch (reason) {
+    if (!disposed && identity === identityVersion) growError.value = reason instanceof Error ? reason.message : String(reason);
+  } finally {
+    if (!disposed) growing.value = false;
+  }
 }
 // A double-click must take one mark, and must not both ask about a mark and answer for it.
 const REMOVE_PAUSE_MS = 350;
@@ -582,6 +620,8 @@ watch(
 watch(
   () => props.selected,
   () => {
+    growError.value = '';
+    if (tool.value === 'grow' && !selectedStructure.value?.growable) chooseTool(method.value === 'direct' ? 'scribble' : 'point');
     policyOpen.value = false;
     impactOpen.value = false;
     policyLoading.value = false;
@@ -621,7 +661,7 @@ watch([runFailed, controller], ([failed, value], [, before]) => {
 });
 // Errors lead the message list; one that arrives while it is scrolled must not stay out of view.
 watch(
-  [() => current.value?.error, createError, methodError, () => runPath.value.block, () => props.surfaceError, armed],
+  [() => current.value?.error, createError, methodError, growError, () => runPath.value.block, () => props.surfaceError, armed],
   () => messages.value?.scrollTo({ top: 0 }),
   { flush: 'post' },
 );
@@ -630,6 +670,7 @@ const alerting = computed(
   () =>
     !!(
       armed.value ||
+      growError.value ||
       current.value?.error ||
       createError.value ||
       props.surfaceError ||
@@ -640,7 +681,7 @@ const alerting = computed(
     ),
 );
 watch(alerting, value => emit('alert', value), { immediate: true });
-watch(tool, value => emit('tool', value), { immediate: true });
+watch(tool, value => emit('tool', value === 'grow' ? 'point' : value), { immediate: true });
 watch(include, value => emit('polarity', value), { immediate: true });
 watch(
   radius,
@@ -754,6 +795,10 @@ defineExpose({
         {{ current.error }} <button v-if="current.conflict" class="text-button" @click="current.reload()">Reload saved work</button>
       </p>
       <p v-if="createError" class="review-alert" role="alert">{{ createError }}</p>
+      <p v-if="growError" class="review-alert grow-error" role="alert">{{ growError }}</p>
+      <p v-if="method === 'direct' && growOffered && !selectedStructure?.growable" class="review-progress" role="status">
+        Grow branch needs CAS-Net's stored probability, which this segment's run predates. Run CAS-Net on this scan again to use it.
+      </p>
       <p v-if="surfaceError" class="review-alert" role="alert">
         {{ surfaceError }} <button class="text-button" @click="emit('retry-surface')">Retry preview</button>
       </p>
@@ -879,9 +924,29 @@ defineExpose({
           >
             Erase</button
           ><button :class="{ active: tool === 'scissors' }" :aria-pressed="tool === 'scissors'" :disabled="disabled" @click="chooseTool('scissors')">
-            Scissors
+            Scissors</button
+          ><button
+            v-if="growOffered"
+            class="grow-branch"
+            :class="{ active: tool === 'grow' }"
+            :aria-pressed="tool === 'grow'"
+            :disabled="disabled || !selectedStructure?.growable"
+            @click="chooseTool('grow')"
+          >
+            Grow branch
           </button>
         </div>
+        <label v-if="method === 'direct' && tool === 'grow'" class="review-scissors"
+          >Probability<select
+            :value="growThreshold"
+            aria-label="Grow branch probability"
+            :disabled="disabled"
+            @change="growThreshold = Number(($event.target as HTMLSelectElement).value) === 0.05 ? 0.05 : 0.1"
+          >
+            <option value="0.1">10% or more</option>
+            <option value="0.05">5% or more</option>
+          </select></label
+        >
         <template v-if="method === 'direct' && tool === 'scissors'"
           ><label class="review-scissors"
             >Shape<select v-model="scissorsShape" aria-label="Scissors shape" :disabled="disabled">
@@ -947,6 +1012,9 @@ defineExpose({
         <span v-if="method === 'direct' && tool === 'scissors'"
           >3D cut · {{ scissorsOperation === 'erase_inside' ? 'erase inside' : 'erase outside' }} through the full depth of the selected segment.
           {{ scissorsShape === 'circle' ? 'Drag from centre to edge.' : 'Draw on the 3D view.' }} Apply edits to preview.</span
+        ><span v-else-if="method === 'direct' && tool === 'grow'"
+          >{{ growing ? 'Growing the branch…' : 'Click a missed branch on a slice.' }} Adds CAS-Net's probability ≥ {{ growThreshold * 100 }}% more than 1 mm
+          from the mask, up to 0.5 mL, and saves a revision.</span
         ><span v-else-if="method === 'direct'">Exact paint/erase on one native slice · no AI. Add strokes, then Apply edits.</span
         ><span v-else-if="tool !== 'navigate'">{{
           tool === 'remove'

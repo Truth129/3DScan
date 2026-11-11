@@ -25,6 +25,8 @@ export interface Structure {
   qc: string[];
   relationship?: SegmentRelationship;
   reference_image_id?: string;
+  /** The segment's CAS-Net run stored its probability, so Grow branch can use it. */
+  growable?: boolean;
 }
 export interface Series {
   sequence_name?: string | null;
@@ -263,6 +265,8 @@ export type InteractiveTool = 'navigate' | 'point' | 'scribble' | 'lasso' | 'bbo
 export type ScissorsShape = 'freehand' | 'rectangle' | 'circle';
 export type ScissorsOperation = 'erase_inside' | 'erase_outside';
 export type InteractiveMethod = 'direct' | 'nninteractive';
+/** CAS-Net probability, 10 % or 5 %, at or above which Grow branch adds voxels. */
+export type GrowThreshold = 0.1 | 0.05;
 export interface InteractivePoint {
   id: string;
   kind?: 'point';

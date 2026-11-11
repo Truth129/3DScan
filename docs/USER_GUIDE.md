@@ -475,6 +475,13 @@ restores the main page's choice. MRI and tilted-gantry CT keep it off.
 
 Then choose **Apply edits · N**.
 
+**Grow branch** appears on the CAS-Net coronary segment. Click a branch CAS-Net missed, on a slice
+or the 3D view, and it adds the connected voxels where CAS-Net's own probability is at least
+**10%** (or **5%**, under **Probability**), more than 1 mm from the current mask, then saves a
+revision at once; **↶ Undo to parent** in **Revision history** reverts it. It refuses an addition
+over 0.5 mL, and says when CAS-Net saw nothing there. On a scan segmented before this tool, run
+CAS-Net again to use it.
+
 ### AI assist
 
 **AI assist** uses nnInteractive for larger corrections. It needs the
