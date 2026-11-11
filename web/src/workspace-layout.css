@@ -62,18 +62,6 @@
   margin-bottom: -26px;
   z-index: 1;
 }
-.review-rail > .panel-heading {
-  gap: 7px;
-}
-.review-rail > .panel-heading > div {
-  min-width: 0;
-}
-.review-rail > .panel-heading > .pill {
-  margin-left: auto;
-}
-.review-rail > .panel-heading > .ct-expand-button {
-  margin-left: 0;
-}
 /*
  * One top bar holds the case and everything done to it, in the order the work goes: the case and its
  * status, then Segment, Review and Export, then the layout, any job and the account. App.vue sets the
@@ -316,6 +304,10 @@
   background: var(--panel);
   box-shadow: 0 12px 32px #0008;
   color: var(--white);
+}
+/* A kept panel stays in the page while closed. */
+.top-bar-popover:not(.open) {
+  display: none;
 }
 .top-bar-popover.align-end {
   right: 0;
@@ -911,9 +903,8 @@ header.top-bar.fold-compact > .segmentation-panel {
     min-height: 0;
   }
 
-  /* Slice tile: header and toolbar rows, then slices fill the rest of the tile. */
+  /* Slice tile: one header row, the slices, then the probe strip. */
   .workspace-stage > .review-rail:not(.ct-expanded) {
-    container: slice-tile / inline-size;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -924,160 +915,24 @@ header.top-bar.fold-compact > .segmentation-panel {
   .workspace-stage > .review-rail:not(.ct-expanded) > * {
     flex-shrink: 0;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) > .panel-heading {
-    min-height: 36px;
-    padding: 4px 8px 4px 14px;
-    border-bottom: 1px solid var(--line);
-  }
-  .workspace-stage > .review-rail:not(.ct-expanded) > .panel-heading .eyebrow {
-    display: none;
-  }
-  .workspace-stage > .review-rail:not(.ct-expanded) > .panel-heading h2 {
-    margin: 0;
-    font-size: 12px;
-  }
-  .review-rail > .panel-heading > .ct-controls-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-  }
-  .review-rail > .panel-heading > .ct-controls-toggle > span {
-    font-size: 8px;
-    color: var(--text-secondary);
-  }
-  .review-rail.ct-expanded > .panel-heading > .ct-controls-toggle {
-    display: none;
-  }
-  /* Folded controls leave the slices the whole tile; delivery errors stay visible. */
-  .workspace-stage > .review-rail.ct-controls-folded:not(.ct-expanded) > .ct-tile-toolbar:not(:has(.ct-detail-error)),
-  .workspace-stage > .review-rail.ct-controls-folded:not(.ct-expanded) > .ct-tile-toolbar > :not(.ct-delivery),
-  .workspace-stage > .review-rail.ct-controls-folded:not(.ct-expanded) .ct-mpr-controls {
-    display: none;
-  }
-  .workspace-stage > .review-rail:not(.ct-expanded) > .ct-tile-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 14px;
-    padding: 6px 12px;
-    border-bottom: 1px solid var(--line);
-  }
-  .ct-tile-toolbar > .window-controls,
-  .ct-tile-toolbar > .ct-overlay-opacity,
-  .ct-tile-toolbar > .ct-overlay-picker,
-  .ct-tile-toolbar > .ct-delivery {
-    padding: 0;
-    border: 0;
-  }
-  .ct-tile-toolbar > .window-controls {
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px 8px;
-  }
-  .ct-tile-toolbar > .window-controls label {
-    flex-direction: row;
-    align-items: center;
-    gap: 5px;
-  }
-  .ct-tile-toolbar > .window-controls label:first-child {
-    flex: 0 1 auto;
-  }
-  .ct-tile-toolbar > .window-controls select {
-    width: auto;
-    min-width: 108px;
-  }
-  .ct-tile-toolbar > .window-controls input {
-    width: 58px;
-  }
-  .ct-tile-toolbar > .signal-window-controls {
-    display: flex;
-  }
-  .ct-tile-toolbar > .signal-window-controls > .text-button {
-    grid-column: auto;
-  }
-  .ct-tile-toolbar > .ct-overlay-opacity input {
-    width: 84px;
-    flex: 0 1 84px;
-  }
-  .ct-tile-toolbar > .ct-overlay-picker {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-  .ct-tile-toolbar > .ct-overlay-picker summary {
-    gap: 8px;
-    min-height: 26px;
-    padding: 0 9px;
-    border: 1px solid var(--control-border);
-    border-radius: 5px;
-    background: var(--surface);
-  }
-  .ct-tile-toolbar > .ct-overlay-picker details[open] > summary {
-    border-color: var(--control-border-hover);
-    background: var(--surface-hover);
-    color: var(--white);
-  }
-  /* Overlay choices open as a menu over the slices rather than pushing them down. */
-  .ct-tile-toolbar > .ct-overlay-picker .ct-overlay-options {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 30;
-    width: 290px;
-    max-width: calc(100cqw - 24px);
-    padding: 4px 10px 8px;
-    border: 1px solid var(--control-border);
-    border-radius: 7px;
-    background: var(--panel);
-    box-shadow: 0 12px 32px #0008;
-  }
-  .ct-tile-toolbar > .ct-overlay-picker .ct-overlay-legend {
-    flex-wrap: nowrap;
-    min-width: 0;
-    max-height: none;
-    margin: 0;
-    overflow: hidden;
-  }
-  .ct-tile-toolbar > .ct-overlay-picker .ct-overlay-legend > span {
-    flex-shrink: 0;
-  }
-  .ct-tile-toolbar > .ct-delivery {
-    flex: 1 1 auto;
-    justify-content: flex-end;
-    min-width: 0;
-    font-size: 9px;
-    text-align: right;
-  }
-  .ct-tile-toolbar > .ct-delivery p {
-    text-align: left;
-  }
-  .workspace-stage > .review-rail:not(.ct-expanded) .ct-mpr-controls {
-    flex-shrink: 0;
-    gap: 6px 12px;
-    padding: 6px 12px 0;
-    font-size: 10px;
-  }
   .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice-stage > .ct-detail-error {
     flex-shrink: 0;
     margin: 6px 12px 0;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) > .probe-readout {
-    margin-top: 0;
-    padding: 6px 14px;
-    border-bottom: 0;
-  }
 
   /* Slices adapt to the space they get: axial over coronal and sagittal, a row, or a column. */
-  .workspace-stage > .review-rail:not(.ct-expanded) > .ct-slice-stage {
+  /*
+   * The tile and the expanded view share it. A column of three only beats axial over coronal and
+   * sagittal in a stage more than twice as tall as it is wide.
+   */
+  .review-rail > .ct-slice-stage {
     container: slice-stage / size;
     display: flex;
     flex-direction: column;
     flex: 1 1 0;
-    min-height: 250px;
+    min-height: 0;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slices {
+  .review-rail .ct-slices {
     display: grid;
     flex: 1 1 0;
     min-height: 0;
@@ -1086,45 +941,47 @@ header.top-bar.fold-compact > .segmentation-panel {
     gap: 8px 10px;
     padding: 8px 12px;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice {
+  .review-rail .ct-slice {
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
     margin: 0;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice:first-child {
+  .review-rail .ct-slice:first-child {
     grid-column: 1 / -1;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice > header {
-    padding: 0 2px 4px;
-  }
-  .workspace-stage > .review-rail:not(.ct-expanded) .ct-image {
+  .review-rail .ct-image {
     flex: 1 1 0;
     height: auto;
     min-height: 0;
     max-height: none;
   }
-  .workspace-stage > .review-rail:not(.ct-expanded) .ct-image canvas {
+  .review-rail .ct-image canvas {
     max-height: none;
   }
   @container slice-stage (aspect-ratio > 1.35) {
-    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slices {
+    .review-rail .ct-slices {
       grid-template-columns: repeat(3, minmax(0, 1fr));
       grid-template-rows: minmax(0, 1fr);
     }
-    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice:first-child {
+    .review-rail .ct-slice:first-child {
       grid-column: auto;
     }
   }
-  @container slice-stage (aspect-ratio < 0.67) {
-    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slices {
+  @container slice-stage (aspect-ratio < 0.5) {
+    .review-rail .ct-slices {
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: repeat(3, minmax(0, 1fr));
     }
-    .workspace-stage > .review-rail:not(.ct-expanded) .ct-slice:first-child {
+    .review-rail .ct-slice:first-child {
       grid-column: auto;
     }
+  }
+  .review-rail.ct-expanded {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 }
 
@@ -1143,17 +1000,14 @@ header.top-bar.fold-compact > .segmentation-panel {
   .workspace.modular-workspace:not(.mobile-anatomy) > .workspace-sidebar,
   .workspace.modular-workspace.mobile-anatomy > .workspace-stage,
   .workspace.modular-workspace .workspace-splitter,
-  .review-rail > .panel-heading > .ct-controls-toggle,
-  .model-header > .panel-hide {
+  .model-header > .panel-hide,
+  .ct-header > .ct-expand-button,
+  .ct-header > .panel-hide {
     display: none;
   }
   .review-workspace-tabs,
-  .review-rail > .panel-heading {
+  .ct-header {
     flex-wrap: wrap;
-  }
-  .ct-review-active {
-    order: 1;
-    flex-basis: 100%;
   }
   .workspace.modular-workspace.mobile-anatomy > .workspace-sidebar {
     display: flex;
@@ -1182,11 +1036,393 @@ header.top-bar.fold-compact > .segmentation-panel {
   }
 }
 
+/*
+ * The CT tile: one header, the slices and a probe strip. Narrow tiles fold W and L under W/L ▾, then
+ * drop the words a control already shows. The tile is a size container so its popovers can cap their
+ * height to it and scroll inside, and opening one never scrolls the tile or moves a slice.
+ */
+.review-rail {
+  container: ct-tile / inline-size;
+}
+@media (min-width: 1001px) {
+  .workspace-stage > .review-rail,
+  .review-rail.ct-expanded {
+    container-type: size;
+  }
+  .review-rail > .probe-readout {
+    height: 22px;
+    margin: 0;
+    padding: 0 14px;
+    border-bottom: 0;
+  }
+}
+.review-rail > .ct-header,
+.review-rail > .probe-readout {
+  flex-shrink: 0;
+}
+/* One row in every common layout. Should a row ever overflow, it wraps rather than hide × off the edge. */
+.ct-header {
+  position: relative;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 3px 6px 3px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.ct-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--white);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* It takes what the row leaves and never wraps it, so a draft that starts never moves the slices. */
+.ct-header .ct-review-active {
+  container: review-chip / inline-size;
+  flex: 1 1 0;
+  gap: 4px;
+  min-width: 0;
+  font-size: 10px;
+}
+/* The note goes first, then the name gives way, so which mask the slices show stays readable. */
+.ct-review-active > :is(.ct-header-label, .ct-review-shown) {
+  flex: none;
+}
+.ct-review-active > strong {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-review-active > .ct-review-note {
+  flex: 0 10000 auto;
+}
+.ct-review-active > :is(.ct-review-shown, .ct-review-note)::before {
+  content: '· ';
+}
+@container review-chip (max-width: 199px) {
+  .ct-review-active > .ct-review-note {
+    display: none;
+  }
+}
+/* Too narrow for both, the name goes: review's own panel names the structure, and the tooltip says it all. */
+@container review-chip (max-width: 79px) {
+  .ct-review-active > strong {
+    display: none;
+  }
+  .ct-review-active > .ct-review-shown {
+    flex-shrink: 1;
+  }
+  .ct-review-active > .ct-review-shown::before {
+    content: none;
+  }
+}
+.ct-header :is(select, input[type='number']) {
+  min-width: 0;
+  height: 24px;
+  padding: 2px 5px;
+  border: 1px solid #414b5d;
+  border-radius: 4px;
+  background: #252e3d;
+  font-size: 10px;
+  color: #e2eaf6;
+}
+.ct-header input[type='number'] {
+  font-family: var(--mono);
+}
+.ct-header .text-button,
+.ct-popover .top-bar-menu-item {
+  flex: none;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.ct-window,
+.ct-projection,
+.ct-slab,
+.ct-window-values .top-bar-popover > label {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.ct-window select {
+  max-width: 92px;
+}
+.ct-window-values .top-bar-popover > label {
+  font: 9px var(--mono);
+  color: var(--muted);
+}
+.ct-window-values input {
+  width: 58px;
+}
+/* MR signal values carry decimals, so their fields stay wide. */
+.signal-window-controls .ct-window-values input {
+  width: 90px;
+}
+.ct-slab input,
+.ct-popover-check input[type='number'] {
+  width: 52px;
+}
+.ct-popover-check input[type='number'] {
+  margin-left: auto;
+}
+/*
+ * Slab mm and the download actions come and go with the projection and the download, so they sit in
+ * the row only where the whole row fits with them, and under Slices ▾ elsewhere. The row never wraps.
+ */
+@container ct-tile (min-width: 1020px) {
+  .ct-popover .ct-folded {
+    display: none;
+  }
+}
+@container ct-tile (max-width: 1019px) {
+  .ct-header > .ct-slab,
+  .ct-header .ct-delivery > .text-button {
+    display: none;
+  }
+}
+.ct-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ct-menu-toggle > span[aria-hidden='true'] {
+  font-size: 9px;
+}
+.ct-menu-toggle[aria-expanded='true'] {
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+  color: var(--white);
+}
+.ct-menu-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--surface-active);
+  font: 9px var(--mono);
+  text-align: center;
+  color: var(--white);
+}
+.ct-header .ct-delivery {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.ct-delivery-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d5bc88;
+}
+.ct-delivery[data-mode='full'] .ct-delivery-dot {
+  background: #7fbf9a;
+}
+.ct-delivery[data-mode='unavailable'] .ct-delivery-dot {
+  background: var(--warning);
+}
+.ct-delivery-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ct-header > .panel-hide {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+}
+.ct-header .ct-expand-button.icon-only {
+  min-width: 26px;
+  padding: 0 6px;
+  font-size: 14px;
+  line-height: 1;
+}
+/* Wide tiles show W and L in the row; the panel that holds them only floats in narrow ones. */
+.ct-header .ct-window-values > .ct-menu-toggle {
+  display: none;
+}
+.ct-header .ct-window-values > .top-bar-popover.top-bar-popover {
+  position: static;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+.ct-popover {
+  z-index: 8;
+  gap: 6px;
+  max-height: calc(100cqh - 44px);
+  overflow: auto;
+  padding: 8px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.ct-overlays-popover {
+  width: 290px;
+}
+.ct-overlays-popover > .compare-check,
+.ct-popover-check,
+.ct-overlay-style > label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px;
+}
+.ct-overlay-style {
+  display: flex;
+  gap: 4px;
+}
+.ct-overlays-popover > .compare-check > span {
+  white-space: normal;
+}
+/* Inside the popover the segment list lies in place instead of floating again. */
+.ct-popover .ct-overlay-picker {
+  padding: 6px 9px 2px;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+.ct-popover .ct-overlay-list {
+  max-height: 180px;
+}
+/*
+ * The row needs about 760 px without a slab or a download, or 830 px with MR's wider fields. Below
+ * that W and L fold under W/L ▾ and the words go, then the title shortens, then it goes and the
+ * controls tighten.
+ */
+@container ct-tile (max-width: 759px) {
+  .ct-header .ct-window:not(.signal-window-controls) .ct-window-values > .ct-menu-toggle {
+    display: inline-flex;
+  }
+  .ct-header .ct-window:not(.signal-window-controls) .ct-window-values > .top-bar-popover.top-bar-popover:not(.open) {
+    display: none;
+  }
+  .ct-header .ct-window:not(.signal-window-controls) .ct-window-values > .top-bar-popover.top-bar-popover.open {
+    position: absolute;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px;
+    border: 1px solid var(--control-border);
+    background: var(--panel);
+    box-shadow: 0 12px 32px #0008;
+  }
+  .ct-header-label,
+  .ct-delivery-text {
+    display: none;
+  }
+}
+@container ct-tile (max-width: 829px) {
+  .ct-header .signal-window-controls .ct-window-values > .ct-menu-toggle {
+    display: inline-flex;
+  }
+  .ct-header .signal-window-controls .ct-window-values > .top-bar-popover.top-bar-popover:not(.open) {
+    display: none;
+  }
+  .ct-header .signal-window-controls .ct-window-values > .top-bar-popover.top-bar-popover.open {
+    position: absolute;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px;
+    border: 1px solid var(--control-border);
+    background: var(--panel);
+    box-shadow: 0 12px 32px #0008;
+  }
+  .signal-window-controls .ct-header-label {
+    display: none;
+  }
+}
+@container ct-tile (max-width: 499px) {
+  .ct-title-rest {
+    display: none;
+  }
+}
+@container ct-tile (max-width: 479px) {
+  .ct-title {
+    display: none;
+  }
+}
+@container ct-tile (max-width: 449px) {
+  .ct-header {
+    column-gap: 4px;
+    padding-left: 8px;
+  }
+  .ct-header .text-button:not(.icon-only),
+  .ct-popover .top-bar-menu-item {
+    padding-inline: 5px;
+  }
+  .ct-header :is(.ct-window, .ct-projection) select {
+    padding-inline: 3px;
+  }
+  .ct-window select {
+    max-width: 76px;
+  }
+}
+/* In review the chip names what is being reviewed, which says more than the title. */
+@container ct-tile (max-width: 599px) {
+  .ct-header:has(.ct-review-active) .ct-title {
+    display: none;
+  }
+}
+@media (min-width: 1001px) and (max-height: 760px) {
+  .ct-header {
+    min-height: 28px;
+    padding-block: 2px;
+  }
+  .ct-header :is(select, input[type='number']),
+  .ct-header .text-button {
+    height: 22px;
+    min-height: 22px;
+    padding-block: 1px;
+  }
+  .ct-header > .panel-hide {
+    width: 22px;
+    min-width: 22px;
+    height: 22px;
+  }
+}
+@media (max-width: 1000px) {
+  .ct-header {
+    min-height: 40px;
+    padding-block: 6px;
+    row-gap: 6px;
+  }
+  /* A phone's tile is too narrow to share: the chip takes a row of its own once a draft starts. */
+  .ct-header .ct-review-active {
+    order: 1;
+    flex-basis: 100%;
+  }
+}
 .ct-overlay-opacity {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 9px 15px;
+  padding: 4px 9px 8px;
   font-size: 10px;
   color: var(--text-secondary);
   border-bottom: 1px solid var(--line);

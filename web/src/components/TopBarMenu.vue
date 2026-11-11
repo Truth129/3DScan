@@ -11,8 +11,10 @@ withDefaults(
     panelClass?: string;
     panelLabel?: string;
     align?: 'start' | 'end';
+    /** Keeps the panel in the page while closed, so its controls keep their state and a layout can show them in place. */
+    kept?: boolean;
   }>(),
-  { label: undefined, title: undefined, triggerClass: 'button secondary compact', panelClass: '', panelLabel: undefined, align: 'start' },
+  { label: undefined, title: undefined, triggerClass: 'button secondary compact', panelClass: '', panelLabel: undefined, align: 'start', kept: false },
 );
 const root = ref<HTMLElement>(),
   trigger = ref<HTMLButtonElement>(),
@@ -26,7 +28,15 @@ const { open, close, toggle } = usePopover(root, trigger, panel);
     <button ref="trigger" type="button" :class="triggerClass" :aria-label="label" :title="title" :aria-expanded="open" :aria-controls="panelId" @click="toggle">
       <slot name="trigger" :open="open" /></button
     ><!-- The panel follows its button, so Tab reaches it next. -->
-    <div v-if="open" :id="panelId" ref="panel" class="top-bar-popover" :class="[`align-${align}`, panelClass]" role="group" :aria-label="panelLabel ?? label">
+    <div
+      v-if="open || kept"
+      :id="panelId"
+      ref="panel"
+      class="top-bar-popover"
+      :class="[`align-${align}`, panelClass, { open }]"
+      role="group"
+      :aria-label="panelLabel ?? label"
+    >
       <slot :close="close" />
     </div>
   </div>

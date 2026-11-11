@@ -12,6 +12,7 @@ import type { CTFrame } from '../lib/ct-renderer';
 import { cornerstoneOverlayPixels } from '../lib/cornerstone-frame';
 import { CornerstoneFrameViewport } from '../lib/cornerstone-runtime';
 import { orthogonalizeCornerstoneFrame } from '../lib/cornerstone-stack-frame';
+import { usePressedPane } from '../lib/use-pressed-pane';
 
 const props = withDefaults(
   defineProps<{
@@ -48,6 +49,8 @@ const emit = defineEmits<{
 }>();
 const element = ref<HTMLDivElement>(),
   overlay = ref<HTMLCanvasElement>();
+// The last pane pressed keeps its ⟲ shown, so a pane zoomed by touch can be reset.
+const pressed = usePressedPane(() => ({ pane: element.value?.parentElement }));
 const displayMeta = shallowRef<SliceMeta>();
 const quality = ref<'preview' | 'full'>('preview'),
   loading = ref(true),
@@ -419,16 +422,7 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="ct-slice cornerstone-slice" data-viewer="cornerstone">
-    <header>
-      <h3>{{ displayMeta?.native ? `Native ${['i', 'j', 'k'][displayMeta.native.axis]}` : plane }}</h3>
-      <span v-if="!error">{{
-        displayMeta?.native
-          ? `Slice ${displayMeta.native.index + 1} / ${geometry.shape[displayMeta.native.axis]}`
-          : `${(displayedPosition ?? position).toFixed(1)} mm`
-      }}</span>
-      <span v-if="!error" class="ct-quality" :class="quality">{{ quality === 'full' ? 'Full' : 'Preview' }}</span>
-    </header>
-    <div class="ct-image cornerstone-image" :class="{ 'is-loading': loading, 'ct-marking': marking && canMark }">
+    <div class="ct-image cornerstone-image" :class="{ 'is-loading': loading, 'ct-marking': marking && canMark, 'ct-pressed': pressed === 'pane' }">
       <div
         ref="element"
         class="cornerstone-viewport"
@@ -457,6 +451,16 @@ onBeforeUnmount(() => {
       <span class="slice-direction left">{{ (displayMeta?.native ? nativeEdgeLabels(displayMeta) : labels[plane])[1] }}</span>
       <span class="slice-direction right">{{ (displayMeta?.native ? nativeEdgeLabels(displayMeta) : labels[plane])[2] }}</span>
       <span class="slice-direction bottom">{{ (displayMeta?.native ? nativeEdgeLabels(displayMeta) : labels[plane])[3] }}</span>
+      <h3 class="ct-corner-label">
+        <span>{{ displayMeta?.native ? `Native ${['i', 'j', 'k'][displayMeta.native.axis]}` : plane }}</span
+        ><span v-if="!error"
+          >{{
+            displayMeta?.native
+              ? `Slice ${displayMeta.native.index + 1} / ${geometry.shape[displayMeta.native.axis]}`
+              : `${(displayedPosition ?? position).toFixed(1)} mm`
+          }}<i class="ct-quality" :class="quality" role="img" :aria-label="quality === 'full' ? 'Full resolution' : 'Preview resolution'"></i
+        ></span>
+      </h3>
       <div v-if="error" class="slice-error" role="alert">{{ error }} <button class="text-button" @click="initialize">Retry</button></div>
       <span v-if="loading" class="ct-local-loading" :class="{ 'ct-updating': !!displayMeta }">{{
         displayMeta ? 'Updating overlay…' : 'Preparing Cornerstone…'
@@ -464,7 +468,9 @@ onBeforeUnmount(() => {
       <span v-else-if="!error && marking && !canMark" class="ct-local-loading ct-updating">{{
         reviewDisabled ? 'Editing paused' : !overlaysAvailable ? 'Editing paused: selected overlays are unavailable' : 'Waiting for full-resolution detail'
       }}</span>
-      <button v-if="!error" class="cornerstone-reset text-button" title="Reset Cornerstone pan and zoom" @click="viewer?.reset()">Reset view</button>
+      <button v-if="!error" type="button" class="cornerstone-reset" aria-label="Reset pan and zoom" title="Reset pan and zoom" @click="viewer?.reset()">
+        ⟲
+      </button>
     </div>
     <p v-if="detailError" class="ct-detail-error" role="status">{{ detailError }}</p>
     <label class="slice-slider"

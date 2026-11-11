@@ -308,6 +308,8 @@ any job and your name. The worker shows at the bottom left.
 - While such a chip shows below 1500 px, only the layout **▾** stays; it has every arrangement.
 - Disabled buttons give their reason on hover, and in a menu under the item.
 - **Esc** or a click elsewhere closes a top bar menu. **Esc** also closes the segmentation settings.
+- A click on an image that closes a menu does only that: it never moves the crosshair or starts a
+  mark.
 
 The sidebar holds the anatomy list and the **Selected structure**, **Refinement**, **Revision
 history** and **3D view** tabs, with **Coronary FFR** last when the revision has a coronary lumen.
@@ -317,8 +319,7 @@ The stage tiles the 3D view and **CT review**.
   **▾** chooses side by side or stacked, shows or hides each area or the **Side panels**, and has
   **Reset layout**. **\\** also hides or shows the side panels.
 - Drag a divider to resize, and double-click it to reset.
-- **Layers** in the 3D header folds the 3D view's layer card, and **Display** the CT controls.
-  Neither resizes a view.
+- **Layers** in the 3D header folds the 3D view's layer card without resizing the view.
 
 **Show all**, **Hide all** and **Show selected only** apply to the whole case even when the list is
 filtered. A section's eye hides it, and its arrow collapses it.
@@ -327,21 +328,36 @@ filtered. A section's eye hides it, and its arrow collapses it.
 
 ### CT review
 
-Three linked planes share one position, with its patient RAS coordinates and HU value below.
+Three linked planes share one position, with its patient RAS coordinates and HU value in the strip
+below them. Hover the header for what links them to the 3D view.
+
+The header holds the title, the window preset with **W** and **L**, **Projection**, **Overlays ▾**,
+**Slices ▾**, a download dot, **⤢** and **×**. In a narrow tile **W** and **L** fold under
+**W/L ▾**, **Slab mm**, **Cache** and **Cancel** under **Slices ▾**, then the words and the title go.
 
 - **Navigate:** click to move there, scroll or the slider to change slice, left or right drag for
   window/level, middle drag to pan, Ctrl or ⌘ scroll (or pinch) to zoom. Scrolling down moves
   one slice towards the feet, back or patient's left. While drawing, left drag draws and right
-  drag still sets window/level. **Reset planes** restores them.
-- **Centre on click:** on by default, and your browser keeps the choice. A click on a slice, a
-  navigate click in 3D or a Coronary **Show** button also centres all three planes on that point
-  at their zoom. Tilted scans do not centre.
+  drag still sets window/level.
+- **Centre on click** under **Slices ▾:** on by default, and your browser keeps the choice. A click
+  on a slice, a navigate click in 3D or a Coronary **Show** button also centres all three planes on
+  that point at their zoom. Tilted scans do not centre.
+- **Panes:** the top left corner names the plane, then **MPR**, **MIP** or **MinIP**, the native
+  slice number, or the position in mm. A green dot means full resolution, and an amber ring a
+  preview. **⟲** at the top right resets that pane's pan and zoom. It shows on hover, stays on the
+  pane you pressed last, and always shows on a touch screen.
 - **Window:** **Soft tissue**, **Lung**, **Bone** or **Vessels**, or type **W** and **L**.
 - **Projection:** **MPR**, **MIP** or **MinIP**, with **Slab mm**. A slab shows overlays on its
-  centre slice and pauses drawing. **Rotatable crosshairs** adds crosshairs you can drag and
-  rotate by their lines.
-- **Overlays:** **Segments** chooses what shows, **Use selected segment** follows the selection and
-  **Clear overlays** shows CT alone. **Fill**, **Outline** and **2D overlay opacity** set the style.
+  centre slice and pauses drawing. Review hides it while its planes stay on the source slices.
+- **Slices ▾:** **Rotatable crosshairs** adds crosshairs you can drag and rotate by their lines.
+  **Reset planes** restores the planes.
+- **Overlays ▾:** **2D overlay opacity**, **Fill** and **Outline** set the style. **Segments**
+  chooses what shows, **Use selected segment** follows the selection and **Clear overlays** shows
+  CT alone. The button counts the overlays shown.
+- **Download:** the dot is amber until the full CT is cached, then green. Hover it for the detail.
+  **Cancel** stops the full download, and **Cache** starts it again.
+- **⤢** fills the screen, and **Restore ↙** or **Escape** returns. In review, **⤢** gives the
+  stage to CT review, and **CT + 3D** shares it again.
 - **Colors:** bones are yellow. Change any color under **Selected structure**; your browser keeps
   it.
 
@@ -560,7 +576,8 @@ mark cannot start underneath an open panel, so choose the button again to fold i
 
 Applying creates a candidate and does not change accepted masks.
 
-1. Use **Original** and **Candidate** to compare the CT mask and the 3D surface.
+1. Use **Original** and **Candidate** to compare the CT mask and the 3D surface, or
+   **Compare candidate with original masks** under **Overlays ▾** to see both on the slices.
 2. Read the voxels changed and volume before and after, beside **Exit review**.
 3. If other segments are affected, open **Impact preview** and choose **Show affected in CT**.
 4. Add marks and apply again as needed. Saving waits until pending marks are applied.
@@ -583,7 +600,8 @@ existing segment empty at 0 mL, but empty new segments and empty AI candidates c
 
 In **Revision history**, **↶ Undo to parent** restores the previous revision exactly, and
 **Activate** switches to any other. Nothing is deleted. **Current** and **Before** in the 3D header
-compare surfaces with the parent, and **Compare CT overlay with parent** does so on the slices.
+compare surfaces with the parent, and **Compare CT overlay with parent** under **Overlays ▾** does
+so on the slices.
 
 Once a segmentation is active, **Reset to scan** activates the image-only revision, with no
 segmentation. Nothing is deleted, an open draft stays with its version, and the case leaves pooled

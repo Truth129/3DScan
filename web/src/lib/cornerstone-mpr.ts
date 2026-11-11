@@ -394,7 +394,13 @@ export class CornerstoneMPR {
         })
       )
         return;
+      // Cornerstone keeps each camera's height in mm through a resize, so a pane that turned taller
+      // than wide cut off the slice's sides. Keep each reader's zoom against the new fit instead.
+      const zooms = planes.map(plane => this.viewport(plane).getZoom());
       this.engine!.resize(true, true);
+      planes.forEach((plane, index) => {
+        if (Math.abs(this.viewport(plane).getZoom() - zooms[index]) > 1e-6) this.viewport(plane).setZoom(zooms[index]);
+      });
       this.engine!.render();
       for (const plane of planes) this.callbacks.camera?.(plane);
     });

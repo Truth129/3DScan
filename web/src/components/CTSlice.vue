@@ -88,10 +88,8 @@ onBeforeUnmount(() => {
     @remove-mark="emit('removeMark', $event)"
     @window-level="emit('windowLevel', $event)"
   />
+  <!-- No header row, as the viewer that replaces it has none: the panes keep their place. -->
   <section v-else class="ct-slice ct-viewer-loading" data-viewer="cornerstone">
-    <header>
-      <h3>{{ plane }}</h3>
-    </header>
     <div class="ct-image">
       <div v-if="loadError" class="slice-error" role="alert">
         Cornerstone could not load: {{ loadError }} <button class="text-button" @click="loadViewer">Retry</button>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
 import AnatomyPanel from './components/AnatomyPanel.vue';
 import CaseLibrary from './components/CaseLibrary.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
@@ -33,6 +33,7 @@ import RefinementPanel from './components/RefinementPanel.vue';
 import AgreementPanel from './components/AgreementPanel.vue';
 import CoronaryPanel from './components/CoronaryPanel.vue';
 import { hasCoronaryLumen, type CoronaryTube } from './lib/coronary';
+import { centreOnClick } from './lib/centre-on-click';
 import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
 import SegmentationControls from './components/SegmentationControls.vue';
 import ExportViewerDialog from './components/ExportViewerDialog.vue';
@@ -87,11 +88,12 @@ import { useDicomViewJobs } from './lib/use-dicom-view-jobs';
 import { reviewCandidateRevision, reviewDisplayRevision } from './lib/interactive-review';
 import { restoreSegmentationSettings } from './lib/segmentation-settings';
 import { canUseArchive, forgetCase, setCaseCheck, startDownload } from './lib/session';
-import { useFoldingControls } from './lib/use-folding-controls';
+import { hasCornerstoneShear } from './lib/cornerstone-volume';
 import { topBarPlace, useTopBarFold, type TopBarAction } from './lib/top-bar';
 import type { PortableRenderSnapshot } from './lib/portable-viewer';
 import type {
   Case,
+  CTMPRSettings,
   InteractivePrompt,
   InteractiveReview,
   InteractiveTool,
@@ -335,9 +337,44 @@ const {
 const segmentationPaths = computed(() => segmentationCatalog.value?.inference_paths ?? []);
 const chosenSegmentationPath = computed({ get: () => segmentationPath.value, set: chooseSegmentationPath });
 const model = ref<InstanceType<typeof ModelViewport>>(),
-  correctionInput = ref<HTMLInputElement>();
-// Window, overlay and MPR controls can fold away so narrow slice tiles keep their images.
-const { open: ctControlsOpen, setOpen: setCTControlsOpen } = useFoldingControls('scan3d-ct-controls-open-v1', () => true);
+  correctionInput = ref<HTMLInputElement>(),
+  ctRail = ref<InstanceType<typeof CTReviewRail>>();
+// The CT header holds the volume MPR's settings and the panes draw with them. A new image starts on the defaults.
+const defaultMPR = (): CTMPRSettings => ({ crosshairs: true, slabMode: 'mpr', slabMM: 10, fill: true, outline: true });
+const ctMPR = reactive(defaultMPR());
+// They apply once the volume MPR has taken over from the preview panes.
+const ctVolumeMPR = ref(false);
+const ctNativeReview = computed(() => workspaceMode.value === 'review' && interactiveNative.value);
+const ctMarking = computed(() => workspaceMode.value === 'review' && !['navigate', 'scissors'].includes(interactiveTool.value));
+const ctMPRUnavailable = computed(() =>
+  revision.value && hasCornerstoneShear(revision.value.geometry.affine_ras)
+    ? 'A tilted scan is resliced exactly, without projections or rotatable crosshairs'
+    : ctVolumeMPR.value
+      ? ''
+      : `Available once the full ${sourceLabel.value} has loaded`,
+);
+// What the panes draw: plain slices while the volume MPR is away, whatever Projection last chose.
+const ctSlab = computed(() => (ctNativeReview.value || ctMPRUnavailable.value ? 'mpr' : ctMPR.slabMode));
+// The header shows a word; its tooltip says it all.
+const ctDeliveryWord = computed(() =>
+  ctDeliveryMode.value === 'loading'
+    ? 'Loading'
+    : ctDeliveryMode.value === 'full'
+      ? 'Cached'
+      : ctDeliveryMode.value === 'progressive'
+        ? ctCaching.value
+          ? 'Preloading'
+          : 'Local'
+        : 'Unavailable',
+);
+const ctDeliveryText = computed(() => {
+  const label = sourceLabel.value;
+  if (ctDeliveryMode.value === 'loading') return `Loading fast ${label} navigation${ctProgress.value ? ` · ${ctPercent.value}%` : ''}`;
+  if (ctDeliveryMode.value === 'full') return `${label} cached · local review`;
+  if (ctDeliveryMode.value === 'progressive')
+    return ctCaching.value ? `Local navigation ready · preloading full ${label}` : 'Local navigation · full detail after movement';
+  return 'Source images unavailable';
+});
 // The top bar folds secondary case actions into menus as the window narrows. Folded dialogs stay
 // mounted, so a menu opens the same dialog its button would.
 const fold = useTopBarFold(() => chipShown.value);
@@ -414,6 +451,12 @@ const busy = computed(() => busyJob.value || actionBusy.value || segImportBusy.v
 const base = computed(() => (activeCase.value && revision.value ? revisionUrl(activeCase.value.id, revision.value.id) : ''));
 const ctRevisionId = computed(() => reviewDisplayRevision(interactiveReview.value, interactiveCandidate.value) || revision.value?.id || '');
 const showingCandidate = computed(() => !!interactiveCandidate.value && !!reviewCandidateRevision(interactiveReview.value));
+// The CT header's review chip: what is being reviewed, and which mask the slices show.
+const ctReviewName = computed(() => {
+  const id = interactiveReview.value?.structure_id ?? '';
+  return prettyName(reviewStructures.value.find(item => item.id === id)?.name || id);
+});
+const ctReviewShown = computed(() => (showingCandidate.value ? 'candidate' : interactiveReview.value?.new_structure ? 'empty starting mask' : 'original mask'));
 const scissorsSurfacePending = computed(
   () =>
     showingCandidate.value &&
@@ -669,6 +712,7 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   if (changedImage) {
     windowWidth.value = imageDisplay.value.default_window;
     level.value = imageDisplay.value.default_level;
+    Object.assign(ctMPR, defaultMPR());
   }
   acquisition.value = acquisitionSelection(next.acquisition, activeCase.value?.phase);
   segmentationSettings.value = restoreSegmentationSettings(segmentationCatalog.value, next.segmentation_settings);
@@ -1378,7 +1422,8 @@ function keyboard(event: KeyboardEvent) {
     panels.value = toggleWorkspaceSidebar(panels.value);
     return;
   }
-  if (event.key === 'Escape' && ctExpanded.value) {
+  // This listener runs before the CT header's menus hear the key, so one Escape closes an open menu alone.
+  if (event.key === 'Escape' && ctExpanded.value && !document.querySelector('.ct-header .top-bar-popover.open')) {
     ctExpanded.value = false;
     document.querySelector<HTMLButtonElement>('.ct-expand-button')?.focus();
   }
@@ -2280,39 +2325,237 @@ onBeforeUnmount(() => {
               id="workspace-review-panel"
               v-show="reviewPanelVisible"
               class="review-rail"
-              :class="{ 'ct-expanded': ctExpanded, 'interactive-review-open': interactiveOpen, 'ct-controls-folded': !ctControlsOpen }"
+              :class="{ 'ct-expanded': ctExpanded, 'interactive-review-open': interactiveOpen }"
               :role="ctExpanded ? 'dialog' : undefined"
               :aria-modal="ctExpanded ? true : undefined"
               :aria-label="`Linked ${sourceLabel} review`"
             >
-              <div class="panel-heading">
-                <div>
-                  <span class="eyebrow">SOURCE IMAGES</span>
-                  <h2>{{ sourceLabel }} review</h2>
-                </div>
-                <div v-if="interactiveReview" class="ct-review-active" :data-review-candidate-visible="showingCandidate">
-                  <span
-                    >Reviewing
-                    <strong>{{
-                      prettyName(reviewStructures.find(item => item.id === interactiveReview?.structure_id)?.name || interactiveReview.structure_id)
-                    }}</strong>
-                    · {{ showingCandidate ? 'candidate' : interactiveReview.new_structure ? 'empty starting mask' : 'original mask' }} · not accepted</span
-                  ><button class="text-button" @click="openInteractiveReview">Review controls ↗</button>
-                </div>
-                <span class="pill">LINKED</span
-                ><button
-                  type="button"
-                  class="text-button ct-controls-toggle"
-                  :aria-expanded="ctControlsOpen"
-                  aria-controls="ct-tile-controls"
-                  :title="ctControlsOpen ? 'Fold the window and overlay controls away to enlarge the slices' : 'Show window, overlay and MPR controls'"
-                  @click="setCTControlsOpen(!ctControlsOpen)"
+              <!-- One row of controls, so the slices keep the rest of the tile. Narrow tiles fold W and L, Slab mm and the download actions, then the labels. -->
+              <header class="ct-header" title="Linked with the 3D view: both follow one crosshair point">
+                <h2 class="ct-title">{{ sourceLabel }}<span class="ct-title-rest"> review</span></h2>
+                <!-- The name gives way first, so what the slices show stays readable. -->
+                <div
+                  v-if="interactiveReview"
+                  class="ct-review-active"
+                  :data-review-candidate-visible="showingCandidate"
+                  :title="`Reviewing ${ctReviewName} · ${ctReviewShown} · not accepted`"
                 >
-                  Display<span aria-hidden="true">{{ ctControlsOpen ? '▴' : '▾' }}</span></button
-                ><button class="text-button ct-expand-button" :aria-expanded="ctExpanded" @click="toggleCT">
-                  {{
-                    workspaceMode === 'review' ? (reviewFocus === 'ct' ? `${sourceLabel} + 3D` : `Focus ${sourceLabel}`) : ctExpanded ? 'Close ×' : 'Expand ↗'
-                  }}</button
+                  <span class="ct-header-label">Reviewing</span><strong>{{ ctReviewName }}</strong
+                  ><span class="ct-review-shown">{{ ctReviewShown }}</span
+                  ><span class="ct-review-note">not accepted</span>
+                </div>
+                <div class="ct-window" :class="{ 'signal-window-controls': activeModality !== 'CT' }">
+                  <select v-if="activeModality === 'CT'" aria-label="CT window preset" title="Window preset" @change="preset">
+                    <option value="400,40">Soft tissue</option>
+                    <option value="1500,-600">Lung</option>
+                    <option value="1800,400">Bone</option>
+                    <option value="700,100">Vessels</option>
+                  </select>
+                  <button
+                    v-else
+                    type="button"
+                    class="text-button"
+                    aria-label="Reset signal window"
+                    title="Reset signal window"
+                    @click="
+                      windowWidth = imageDisplay.default_window;
+                      level = imageDisplay.default_level;
+                    "
+                  >
+                    Reset<span class="ct-header-label"> signal window</span>
+                  </button>
+                  <TopBarMenu
+                    kept
+                    class="ct-window-values"
+                    label="Window width and level"
+                    title="Window width and level"
+                    trigger-class="text-button ct-menu-toggle"
+                    panel-class="ct-popover"
+                  >
+                    <template #trigger>W/L<span aria-hidden="true">▾</span></template>
+                    <label
+                      >W<input
+                        v-model.number="windowWidth"
+                        :aria-label="`${sourceLabel} window width`"
+                        type="number"
+                        :min="activeModality === 'CT' ? 1 : undefined"
+                        :max="activeModality === 'CT' ? 6000 : undefined"
+                        step="any" /></label
+                    ><label
+                      >L<input
+                        v-model.number="level"
+                        :aria-label="`${sourceLabel} window level`"
+                        type="number"
+                        :min="activeModality === 'CT' ? -2000 : undefined"
+                        :max="activeModality === 'CT' ? 4000 : undefined"
+                        step="any"
+                    /></label>
+                  </TopBarMenu>
+                </div>
+                <!-- Native review locks the planes to source slices, which leaves Projection nothing to choose. -->
+                <label v-if="!ctNativeReview" class="ct-projection" :title="ctMPRUnavailable || 'Projection'"
+                  ><span class="ct-header-label">Projection</span
+                  ><select
+                    :value="ctSlab"
+                    aria-label="MPR projection"
+                    :disabled="!!ctMPRUnavailable"
+                    @change="ctMPR.slabMode = ($event.target as HTMLSelectElement).value as CTMPRSettings['slabMode']"
+                  >
+                    <option value="mpr">MPR</option>
+                    <option value="mip">MIP</option>
+                    <option value="minip">MinIP</option>
+                  </select></label
+                >
+                <label v-if="ctSlab !== 'mpr'" class="ct-slab" title="Overlays show the centre slice, and drawing pauses"
+                  >Slab mm<input v-model.number="ctMPR.slabMM" aria-label="MPR slab thickness" type="number" min="1" max="200" step="0.5"
+                /></label>
+                <TopBarMenu
+                  kept
+                  class="ct-overlays"
+                  title="Which segments show on the slices, and how"
+                  trigger-class="text-button ct-menu-toggle"
+                  panel-class="ct-popover ct-overlays-popover"
+                  panel-label="Overlays"
+                >
+                  <template #trigger
+                    >Overlays<span v-if="ctOverlayIds.length" class="ct-menu-count">{{ ctOverlayIds.length }}</span
+                    ><span aria-hidden="true">▾</span></template
+                  >
+                  <label class="ct-overlay-opacity"
+                    >2D overlay opacity
+                    <input v-model.number="overlayOpacity" type="range" min="0" max="1" step="0.05" aria-label="2D overlay opacity" /><output
+                      >{{ Math.round(overlayOpacity * 100) }}%</output
+                    ></label
+                  >
+                  <div class="ct-overlay-style" :title="ctMPRUnavailable || undefined">
+                    <label><input v-model="ctMPR.fill" type="checkbox" :disabled="!!ctMPRUnavailable" /> Fill</label
+                    ><label><input v-model="ctMPR.outline" type="checkbox" :disabled="!!ctMPRUnavailable" /> Outline</label>
+                  </div>
+                  <label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
+                    ><input v-model="compare" type="checkbox" /><span>{{
+                      showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent`
+                    }}</span></label
+                  >
+                  <CTOverlayPicker
+                    v-if="ctStructures.length"
+                    :modality="sourceLabel"
+                    :structures="ctStructures"
+                    :ids="ctOverlayIds"
+                    :selected="selected"
+                    :following="ctFollowing"
+                    @change="setCTOverlays"
+                    @follow="followCTSelection"
+                  />
+                </TopBarMenu>
+                <TopBarMenu
+                  kept
+                  class="ct-slices-menu"
+                  title="Crosshairs and planes"
+                  trigger-class="text-button ct-menu-toggle"
+                  panel-class="ct-popover"
+                  panel-label="Slices"
+                >
+                  <template #trigger>Slices<span aria-hidden="true">▾</span></template>
+                  <template #default="{ close }">
+                    <label class="ct-popover-check"
+                      ><input v-model="ctMPR.crosshairs" type="checkbox" :disabled="!!ctMPRUnavailable || ctNativeReview || ctMarking" /> Rotatable
+                      crosshairs</label
+                    >
+                    <label class="ct-popover-check" title="Navigate clicks also centre all three planes on their point, at their zoom"
+                      ><input v-model="centreOnClick" type="checkbox" :disabled="!!ctMPRUnavailable" /> Centre on click</label
+                    >
+                    <!-- A narrow tile's row has no room for these, so they wait here and the row never wraps. -->
+                    <label v-if="ctSlab !== 'mpr'" class="ct-popover-check ct-folded"
+                      >Slab mm<input v-model.number="ctMPR.slabMM" aria-label="MPR slab thickness" type="number" min="1" max="200" step="0.5"
+                    /></label>
+                    <button
+                      type="button"
+                      class="top-bar-menu-item"
+                      :disabled="!!ctMPRUnavailable"
+                      @click="
+                        close();
+                        ctRail?.resetPlanes();
+                      "
+                    >
+                      Reset planes
+                    </button>
+                    <span v-if="ctMPRUnavailable || ctNativeReview || ctSlab !== 'mpr'" class="top-bar-menu-note">{{
+                      ctMPRUnavailable ||
+                      (ctNativeReview ? 'Native review · planes locked to source slices' : 'Overlays show the centre slice · drawing paused')
+                    }}</span>
+                    <button
+                      v-if="localCTReady && !localCTFull && !ctCaching"
+                      type="button"
+                      class="top-bar-menu-item ct-folded"
+                      @click="
+                        close();
+                        cacheFullCT();
+                      "
+                    >
+                      Cache full {{ sourceLabel }}
+                    </button>
+                    <button
+                      v-if="ctCaching"
+                      type="button"
+                      class="top-bar-menu-item ct-folded"
+                      @click="
+                        close();
+                        cancelFullCT();
+                      "
+                    >
+                      Cancel {{ sourceLabel }} download<span v-if="fullCTProgress">
+                        · <span class="ct-percent">{{ fullCTPercent }}%</span></span
+                      >
+                    </button>
+                  </template>
+                </TopBarMenu>
+                <div class="ct-delivery" :data-mode="ctDeliveryMode" role="status" :title="ctDeliveryText">
+                  <!-- Narrow tiles hide the word, so the sentence for screen readers sits beside it. -->
+                  <i class="ct-delivery-dot" aria-hidden="true"></i><span class="sr-only">{{ ctDeliveryText }}</span
+                  ><span class="ct-delivery-text" aria-hidden="true"
+                    >{{ ctDeliveryWord }}<span v-if="ctDeliveryMode === 'loading' && ctProgress" class="ct-percent"> {{ ctPercent }}%</span></span
+                  >
+                  <button
+                    v-if="localCTReady && !localCTFull && !ctCaching"
+                    type="button"
+                    class="text-button"
+                    :title="`Download the full-resolution ${sourceLabel} to this tab for fully local scrolling and ${imageDisplay.units} inspection. Uses more bandwidth and memory.`"
+                    @click="cacheFullCT"
+                  >
+                    Cache full {{ sourceLabel }}
+                  </button>
+                  <button v-if="ctCaching" type="button" class="text-button" :title="`Cancel the full ${sourceLabel} download`" @click="cancelFullCT">
+                    Cancel<span v-if="fullCTProgress">
+                      · <span class="ct-percent">{{ fullCTPercent }}%</span></span
+                    >
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  class="text-button ct-expand-button"
+                  :class="{ 'icon-only': !ctExpanded && !(workspaceMode === 'review' && reviewFocus === 'ct') }"
+                  :aria-expanded="workspaceMode === 'review' ? undefined : ctExpanded"
+                  :aria-label="
+                    workspaceMode === 'review'
+                      ? reviewFocus === 'ct'
+                        ? `Show ${sourceLabel} and 3D views`
+                        : `Focus ${sourceLabel} review`
+                      : ctExpanded
+                        ? `Restore ${sourceLabel} review`
+                        : `Expand ${sourceLabel} review`
+                  "
+                  :title="
+                    workspaceMode === 'review'
+                      ? reviewFocus === 'ct'
+                        ? `Show the ${sourceLabel} and 3D views together`
+                        : `Focus the ${sourceLabel} review`
+                      : ctExpanded
+                        ? `Restore ${sourceLabel} review (Esc)`
+                        : `Expand ${sourceLabel} review`
+                  "
+                  @click="toggleCT"
+                >
+                  {{ workspaceMode === 'review' ? (reviewFocus === 'ct' ? `${sourceLabel} + 3D` : '⤢') : ctExpanded ? 'Restore ↙' : '⤢' }}</button
                 ><button
                   type="button"
                   class="panel-hide"
@@ -2323,95 +2566,19 @@ onBeforeUnmount(() => {
                 >
                   ×
                 </button>
-              </div>
-              <div id="ct-tile-controls" class="ct-tile-toolbar">
-                <div class="window-controls" :class="{ 'signal-window-controls': activeModality !== 'CT' }">
-                  <label v-if="activeModality === 'CT'"
-                    >Window<select aria-label="CT window preset" @change="preset">
-                      <option value="400,40">Soft tissue</option>
-                      <option value="1500,-600">Lung</option>
-                      <option value="1800,400">Bone</option>
-                      <option value="700,100">Vessels</option>
-                    </select></label
-                  ><button
-                    v-else
-                    class="text-button"
-                    @click="
-                      windowWidth = imageDisplay.default_window;
-                      level = imageDisplay.default_level;
-                    "
-                  >
-                    Reset signal window</button
-                  ><label
-                    >W<input
-                      v-model.number="windowWidth"
-                      :aria-label="`${sourceLabel} window width`"
-                      type="number"
-                      :min="activeModality === 'CT' ? 1 : undefined"
-                      :max="activeModality === 'CT' ? 6000 : undefined"
-                      step="any" /></label
-                  ><label
-                    >L<input
-                      v-model.number="level"
-                      :aria-label="`${sourceLabel} window level`"
-                      type="number"
-                      :min="activeModality === 'CT' ? -2000 : undefined"
-                      :max="activeModality === 'CT' ? 4000 : undefined"
-                      step="any"
-                  /></label>
-                </div>
-                <label class="ct-overlay-opacity"
-                  >2D overlay opacity <input v-model.number="overlayOpacity" type="range" min="0" max="1" step="0.05" aria-label="2D overlay opacity" /><output
-                    >{{ Math.round(overlayOpacity * 100) }}%</output
-                  ></label
-                >
-                <CTOverlayPicker
-                  v-if="ctStructures.length"
-                  :modality="sourceLabel"
-                  :structures="ctStructures"
-                  :ids="ctOverlayIds"
-                  :selected="selected"
-                  :following="ctFollowing"
-                  @change="setCTOverlays"
-                  @follow="followCTSelection"
-                />
-                <div class="ct-delivery" :data-mode="ctDeliveryMode" role="status">
-                  <span v-if="ctDeliveryMode === 'loading'"
-                    >Loading fast {{ sourceLabel }} navigation<span v-if="ctProgress">
-                      · <span class="ct-percent">{{ ctPercent }}%</span></span
-                    >…</span
-                  >
-                  <span v-else-if="ctDeliveryMode === 'full'">{{ sourceLabel }} cached · local review</span>
-                  <span v-else-if="ctDeliveryMode === 'progressive'">{{
-                    ctCaching ? `Local navigation ready · preloading full ${sourceLabel}` : 'Local navigation · full detail after movement'
-                  }}</span>
-                  <span v-else>Source images unavailable</span>
-                  <button
-                    v-if="localCTReady && !localCTFull && !ctCaching"
-                    class="text-button"
-                    :title="`Download the full-resolution ${sourceLabel} to this tab for fully local scrolling and ${imageDisplay.units} inspection. Uses more bandwidth and memory.`"
-                    @click="cacheFullCT"
-                  >
-                    Cache full {{ sourceLabel }}
-                  </button>
-                  <button v-if="ctCaching" class="text-button" @click="cancelFullCT">
-                    Cancel {{ sourceLabel }} download<span v-if="fullCTProgress">
-                      · <span class="ct-percent">{{ fullCTPercent }}%</span></span
-                    >
-                  </button>
-                  <p v-if="ctLocalError" class="ct-detail-error">
-                    {{ ctLocalError }} <button v-if="!localCTReady" class="text-button" @click="prepareLocalCT(ctBase)">Retry</button>
-                  </p>
-                  <p v-if="ctOverlayError && localCTReady" class="ct-detail-error" role="status">
-                    {{ ctOverlayError }}
-                    <button class="text-button" :disabled="ctOverlayRetrying" @click="retryCTOverlays">
-                      {{ ctOverlayRetrying ? 'Retrying overlays…' : 'Retry overlays' }}
-                    </button>
-                  </p>
-                </div>
-              </div>
+              </header>
               <div class="ct-slice-stage">
+                <p v-if="ctLocalError" class="ct-detail-error">
+                  {{ ctLocalError }} <button v-if="!localCTReady" class="text-button" @click="prepareLocalCT(ctBase)">Retry</button>
+                </p>
+                <p v-if="ctOverlayError && localCTReady" class="ct-detail-error" role="status">
+                  {{ ctOverlayError }}
+                  <button class="text-button" :disabled="ctOverlayRetrying" @click="retryCTOverlays">
+                    {{ ctOverlayRetrying ? 'Retrying overlays…' : 'Retry overlays' }}
+                  </button>
+                </p>
                 <CTReviewRail
+                  ref="ctRail"
                   :overlay-opacity="overlayOpacity"
                   :modality="sourceLabel"
                   :case-id="activeCase.id"
@@ -2434,18 +2601,16 @@ onBeforeUnmount(() => {
                   :review-radius="interactiveRadius"
                   :native-review="workspaceMode === 'review' && interactiveNative"
                   :centre-request="centreRequest"
+                  :mpr="ctMPR"
                   @point="setPoint"
                   @gesture="interactivePanel?.addGesture($event)"
                   @remove-mark="interactivePanel?.removeMark($event)"
                   @window-level="cornerstoneWindowLevel"
+                  @volume-owner="ctVolumeMPR = !!$event"
                 />
               </div>
               <div class="probe-readout">
                 <span>R {{ point[0].toFixed(1) }} <i>·</i> A {{ point[1].toFixed(1) }} <i>·</i> S {{ point[2].toFixed(1) }}</span
-                ><label v-if="canCompareSurfaces || showingCandidate" class="compare-check"
-                  ><input v-model="compare" type="checkbox" /><span>{{
-                    showingCandidate ? 'Compare candidate with original masks' : `Compare ${sourceLabel} overlay with parent`
-                  }}</span></label
                 ><strong
                   >{{ formatImageValue(hu, imageDisplay.units) }} <small>{{ imageDisplay.units }}</small></strong
                 >
@@ -2560,21 +2725,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.signal-window-controls {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(90px, 1fr));
-  gap: 8px;
-}
-.signal-window-controls > .text-button {
-  grid-column: 1/-1;
-  justify-self: start;
-}
-.signal-window-controls input {
-  width: 100%;
-  min-width: 90px;
-  font-size: 11px;
-  padding: 7px;
-}
 .source-image-picker label {
   display: flex;
   align-items: center;

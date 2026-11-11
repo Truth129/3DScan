@@ -31,14 +31,75 @@
 .cornerstone-annotations :deep(.ct-gesture-layer.active) {
   pointer-events: auto;
 }
+/* Top left, kept within the left half so it never covers the top letter. Presses pass through it. */
+.ct-corner-label {
+  position: absolute;
+  top: 5px;
+  left: 6px;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1px 6px;
+  max-width: calc(50% - 14px);
+  margin: 0;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: #050608b3;
+  font: 9px var(--mono);
+  letter-spacing: 0;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+.ct-corner-label > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.ct-corner-label > span:first-child {
+  color: #c1cbdc;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+/* Top right, on hover or focus, and on the pane pressed last, as touch screens have no hover. */
 .cornerstone-reset {
   position: absolute;
-  right: 7px;
-  bottom: 5px;
+  top: 5px;
+  right: 6px;
   z-index: 4;
-  font-size: 9px;
-  background: #10131cb3;
-  padding: 2px 5px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--control-border);
+  border-radius: 4px;
+  background: #10131cd9;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.ct-image:hover > .cornerstone-reset,
+.ct-image.ct-pressed > .cornerstone-reset,
+.cornerstone-reset:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.cornerstone-reset:hover {
+  border-color: var(--control-border-hover);
+  color: var(--white);
+}
+/* Where the main pointer cannot hover, a press to show it would move the crosshair or mark, so it stays. */
+@media (hover: none) {
+  .cornerstone-reset {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .slice-direction,
 .ct-local-loading {

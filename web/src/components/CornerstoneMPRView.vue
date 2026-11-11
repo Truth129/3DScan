@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point, SliceMeta } from '../types';
+import type { CTMPRSettings, Geometry, InteractivePrompt, InteractiveTool, Plane, Point, SliceMeta } from '../types';
 import type { LocalCTSession } from '../lib/ct-volume';
 import type { GPUVolumeSource } from '../lib/gpu-volume-data';
 import type { CTOverlaySelection } from '../lib/ct-overlays';
@@ -13,8 +13,8 @@ import { createSliceWheel, stepSlice } from '../lib/slice-wheel';
 import { revisionUrl } from '../lib/api';
 import { sharedVolumeMemoryBudget, VolumeMemoryBudgetError } from '../lib/volume-memory-budget';
 import { centreOnClick } from '../lib/centre-on-click';
+import { usePressedPane } from '../lib/use-pressed-pane';
 import CTReviewInput from './CTReviewInput.vue';
-import CTMPRControls from './CTMPRControls.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +36,8 @@ const props = withDefaults(
     reviewInclude?: boolean;
     reviewRadius?: number;
     nativeReview?: boolean;
+    /** Projection, slab, crosshairs and how overlays draw, which the CT header sets. */
+    mpr: CTMPRSettings;
     /** What the preview panes last showed, kept on screen until this view has drawn its masks. */
     stills?: Partial<Record<Plane, HTMLCanvasElement>>;
     /** A navigate click elsewhere, such as in 3D, asking the panes to centre on its point. */
@@ -60,12 +62,7 @@ const loading = ref(true),
   overlayLoading = ref(false),
   error = ref(''),
   overlayError = ref('');
-const crosshairs = ref(true),
-  fill = ref(true),
-  outline = ref(true);
-const slabMode = ref<'mpr' | 'mip' | 'minip'>('mpr'),
-  slabMM = ref(10);
-const effectiveSlab = computed(() => (props.nativeReview ? 'mpr' : slabMode.value));
+const effectiveSlab = computed(() => (props.nativeReview ? 'mpr' : props.mpr.slabMode));
 const overlayIds = computed(() => props.overlays?.map(item => item.id) ?? (props.structure ? [props.structure] : []));
 const selections = computed(() => props.overlays ?? overlayIds.value.map(id => ({ id, color: '#38bdf8' })));
 const overlayKey = computed(() => JSON.stringify([props.revisionId, overlayIds.value, props.compare]));
@@ -179,14 +176,14 @@ function configure() {
   if (!viewer) return;
   viewer.setNativeReview(!!props.nativeReview);
   viewer.setEditing(marking.value);
-  viewer.setCrosshairs(crosshairs.value && !props.nativeReview && !marking.value);
-  viewer.setSlab(effectiveSlab.value, effectiveSlab.value === 'mpr' ? 0 : Math.max(1, Math.min(200, Number(slabMM.value) || 10)));
+  viewer.setCrosshairs(props.mpr.crosshairs && !props.nativeReview && !marking.value);
+  viewer.setSlab(effectiveSlab.value, effectiveSlab.value === 'mpr' ? 0 : Math.max(1, Math.min(200, Number(props.mpr.slabMM) || 10)));
   viewer.setPointRAS(props.point);
   viewer.setWindow(props.window, props.level);
   refresh();
 }
 function presentation() {
-  viewer?.setOverlayPresentation(selections.value, props.overlayOpacity, { fill: fill.value, outline: outline.value });
+  viewer?.setOverlayPresentation(selections.value, props.overlayOpacity, { fill: props.mpr.fill, outline: props.mpr.outline });
 }
 async function loadOverlays() {
   if (!viewer || !source || disposed) return;
@@ -308,6 +305,15 @@ function gesture(plane: Plane, prompt: InteractivePrompt) {
   if ((!prompt.kind || prompt.kind === 'point') && !insideSource(prompt.ras)) return;
   emit('gesture', prompt);
 }
+// The last pane pressed keeps its ⟲ shown, so a pane zoomed by touch can be reset.
+const pressed = usePressedPane(() => Object.fromEntries(planes.map(plane => [plane, elements[plane]?.parentElement])));
+defineExpose({
+  /** Reset planes in the CT header: every pane back to its plane, centred on the crosshair point. */
+  resetPlanes() {
+    viewer?.reset();
+    configure();
+  },
+});
 function position(plane: Plane) {
   return props.nativeReview ? nativeSliceFor(props.geometry, plane, props.point).index : props.point[planeAxis(plane)];
 }
@@ -352,9 +358,9 @@ watch(
   () => [props.window, props.level],
   () => viewer?.setWindow(props.window, props.level),
 );
-watch(() => [props.nativeReview, marking.value, crosshairs.value, effectiveSlab.value, slabMM.value], configure);
+watch(() => [props.nativeReview, marking.value, props.mpr.crosshairs, effectiveSlab.value, props.mpr.slabMM], configure);
 watch(overlayKey, () => void loadOverlays());
-watch(() => [props.overlays, props.overlayOpacity, fill.value, outline.value], presentation, { deep: true });
+watch(() => [props.overlays, props.overlayOpacity, props.mpr.fill, props.mpr.outline], presentation, { deep: true });
 watch(
   () => props.session,
   () => {
@@ -376,35 +382,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <CTMPRControls
-    v-model:crosshairs="crosshairs"
-    v-model:slab-mode="slabMode"
-    v-model:slab-mm="slabMM"
-    v-model:fill="fill"
-    v-model:outline="outline"
-    :effective-slab="effectiveSlab"
-    :native-review="nativeReview"
-    :marking="marking"
-    @reset="
-      viewer?.reset();
-      configure();
-    "
-  />
   <p v-if="overlayError" class="ct-detail-error" role="alert">{{ overlayError }} <button class="text-button" @click="loadOverlays">Retry overlays</button></p>
   <div class="ct-slices" data-mpr-mode="volume" :data-volume-memory-bytes="budget.usedBytes">
     <section v-for="plane in planes" :key="plane" class="ct-slice cornerstone-slice" data-viewer="cornerstone-volume">
-      <header>
-        <h3>{{ metas[plane]?.native ? 'Native ' + ['i', 'j', 'k'][metas[plane]!.native!.axis] : plane }}</h3>
-        <span v-if="!error">{{
-          metas[plane]?.native
-            ? 'Slice ' + (metas[plane]!.native!.index + 1) + ' / ' + geometry.shape[metas[plane]!.native!.axis]
-            : effectiveSlab === 'minip'
-              ? 'MinIP'
-              : effectiveSlab.toUpperCase()
-        }}</span>
-        <span v-if="!error && !loading" class="ct-quality full">Full</span>
-      </header>
-      <div class="ct-image cornerstone-image" :class="{ 'is-loading': loading || overlayLoading, 'ct-marking': marking && canMark(plane) }">
+      <div
+        class="ct-image cornerstone-image"
+        :class="{ 'is-loading': loading || overlayLoading, 'ct-marking': marking && canMark(plane), 'ct-pressed': pressed === plane }"
+      >
         <div
           :ref="
             value => {
@@ -437,6 +421,18 @@ onBeforeUnmount(() => {
             nativeEdgeLabels(metas[plane]!)[index]
           }}</span>
         </template>
+        <h3 class="ct-corner-label">
+          <span>{{ metas[plane]?.native ? 'Native ' + ['i', 'j', 'k'][metas[plane]!.native!.axis] : plane }}</span
+          ><span v-if="!error"
+            >{{
+              metas[plane]?.native
+                ? 'Slice ' + (metas[plane]!.native!.index + 1) + ' / ' + geometry.shape[metas[plane]!.native!.axis]
+                : effectiveSlab === 'minip'
+                  ? 'MinIP'
+                  : effectiveSlab.toUpperCase()
+            }}<i v-if="!loading" class="ct-quality full" role="img" aria-label="Full resolution"></i
+          ></span>
+        </h3>
         <div
           v-if="held && stills?.[plane]"
           :ref="value => (value as HTMLDivElement | null)?.replaceChildren(stills![plane]!)"
@@ -452,14 +448,16 @@ onBeforeUnmount(() => {
         }}</span>
         <button
           v-if="!error"
-          class="cornerstone-reset text-button"
-          title="Reset Cornerstone pan and zoom"
+          type="button"
+          class="cornerstone-reset"
+          aria-label="Reset pan and zoom"
+          title="Reset pan and zoom"
           @click="
             viewer?.reset(plane);
             configure();
           "
         >
-          Reset view
+          ⟲
         </button>
       </div>
       <label class="slice-slider"

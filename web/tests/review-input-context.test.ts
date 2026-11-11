@@ -36,6 +36,13 @@ it('keeps the drawing context across newly delivered metadata for the same grid'
   expect(reviewInputContext(structuredClone(geometry), structuredClone(meta))).toBe(reviewInputContext(geometry, meta));
 });
 
+it('keeps a stroke through a redraw that only changes the camera noise in the last digits', () => {
+  const redrawn = structuredClone(meta);
+  redrawn.pixel_to_ras[1][1] += 6e-14;
+  redrawn.pixel_to_ras[1][3] -= 8e-14;
+  expect(reviewInputContext(geometry, redrawn)).toBe(reviewInputContext(geometry, meta));
+});
+
 it('invalidates gestures when the native slice, pixel mapping, viewport or reference CT transform changes', () => {
   const shifted = structuredClone(meta),
     reflected = structuredClone(geometry);

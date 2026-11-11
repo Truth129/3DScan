@@ -295,43 +295,24 @@ input[type='range'] {
 .ct-image.is-loading {
   opacity: 1;
 }
-/* A fixed width, so a changing percentage cannot reflow the toolbar and move the slices. */
+/* A fixed width, so a changing percentage cannot move the header's buttons. */
 .ct-percent {
   display: inline-block;
   min-width: 4ch;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.ct-delivery {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 9px 16px;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-.ct-delivery .text-button {
-  font-size: 10px;
-  padding: 0;
-}
-.ct-delivery p {
-  flex-basis: 100%;
-  margin: 0;
-}
+/* A filled dot for full resolution, a hollow amber one for the preview. */
 .ct-quality {
-  font-size: 8px;
-  padding: 2px 4px;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  color: var(--muted);
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #7fbf9a;
 }
 .ct-quality.preview {
-  color: #d5bc88;
-  border-color: #51462f;
+  border: 1px solid #d5bc88;
+  background: transparent;
 }
 .ct-local-loading {
   position: absolute;
@@ -342,9 +323,9 @@ input[type='range'] {
   background: #050608;
   font-size: 11px;
 }
-/* Top right: Reset view holds the bottom right corner. */
+/* Bottom right: the corner label and ⟲ hold the top corners. */
 .ct-local-loading.ct-updating {
-  inset: 6px 6px auto auto;
+  inset: auto 6px 6px auto;
   display: block;
   padding: 4px 7px;
   border-radius: 3px;
@@ -424,14 +405,6 @@ input[type='range'] {
   }
   .selection-source {
     font-size: 10px;
-  }
-  .window-controls label,
-  .ct-slice > header,
-  .ct-slice h3 {
-    font-size: 9px;
-  }
-  .window-controls select {
-    font-size: 11px;
   }
 }
 .render-notice {

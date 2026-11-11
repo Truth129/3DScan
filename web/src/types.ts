@@ -235,6 +235,14 @@ export interface SliceMeta {
   extent_mm: number[];
   native?: { axis: 0 | 1 | 2; index: number };
 }
+/** The volume MPR's settings: the CT header holds them and the panes draw with them. */
+export interface CTMPRSettings {
+  crosshairs: boolean;
+  slabMode: 'mpr' | 'mip' | 'minip';
+  slabMM: number;
+  fill: boolean;
+  outline: boolean;
+}
 export interface DisplayState {
   visible: boolean;
   opacity: number;

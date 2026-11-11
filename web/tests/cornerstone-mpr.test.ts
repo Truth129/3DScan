@@ -58,12 +58,20 @@ const fake = vi.hoisted(() => {
           element: entry.element,
           canvas: {},
           orientation: entry.defaultOptions.orientation,
-          camera: { viewPlaneNormal: [0, 0, 1], focalPoint: [0, 0, 0], position: [0, 0, 100] },
+          camera: { viewPlaneNormal: [0, 0, 1], focalPoint: [0, 0, 0], position: [0, 0, 100], parallelScale: 80 },
+          // The parallel scale that fits the slice to the pane, as Cornerstone's zoom compares against.
+          fit: 80,
           getCamera() {
             return this.camera;
           },
           setCamera(camera: any) {
             this.camera = { ...this.camera, ...camera };
+          },
+          getZoom() {
+            return this.fit / this.camera.parallelScale;
+          },
+          setZoom(zoom: number) {
+            this.camera = { ...this.camera, parallelScale: this.fit / zoom };
           },
           setVolumes: vi.fn(async () => {
             await actorDelay;
@@ -339,6 +347,31 @@ describe('shared native Cornerstone MPR ownership', () => {
     owner.centreOn([10, 20, 30]); // RAS, so LPS [-10, -20, 30]
     expect(engine.getViewport(owner.viewportId('axial')).camera).toMatchObject({ focalPoint: [-10, -20, 5], position: [-10, -20, 105], parallelScale: 25 });
     expect(engine.getViewport(owner.viewportId('coronal')).camera).toMatchObject({ focalPoint: [-10, 3, 30], position: [-10, -97, 30], parallelScale: 12 });
+  });
+
+  it("keeps each reader's zoom against the fit when the panes change shape", async () => {
+    let resized = () => {};
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          resized = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const owner = await create(),
+      engine = fake.engines[0],
+      [axial, coronal] = (['axial', 'coronal'] as const).map(plane => engine.getViewport(owner.viewportId(plane)));
+    coronal.camera.parallelScale = 40;
+    // Like Cornerstone, a resize refits each pane, then puts back its old camera and so its height in mm.
+    engine.resize.mockImplementation(() => {
+      for (const viewport of engine.viewports.values()) viewport.fit = 120;
+    });
+    resized();
+    expect(axial.camera.parallelScale).toBe(120);
+    expect(coronal.camera.parallelScale).toBe(60);
   });
 
   it('uploads one reflected native volume once for all three viewports and releases every owned image', async () => {
