@@ -12,6 +12,7 @@ import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/intera
 import { createSliceWheel, stepSlice } from '../lib/slice-wheel';
 import { revisionUrl } from '../lib/api';
 import { sharedVolumeMemoryBudget, VolumeMemoryBudgetError } from '../lib/volume-memory-budget';
+import { centreOnClick } from '../lib/centre-on-click';
 import CTReviewInput from './CTReviewInput.vue';
 import CTMPRControls from './CTMPRControls.vue';
 
@@ -37,6 +38,8 @@ const props = withDefaults(
     nativeReview?: boolean;
     /** What the preview panes last showed, kept on screen until this view has drawn its masks. */
     stills?: Partial<Record<Plane, HTMLCanvasElement>>;
+    /** A navigate click elsewhere, such as in 3D, asking the panes to centre on its point. */
+    centreRequest?: { point: Point; serial: number };
   }>(),
   { overlayOpacity: 0.4 },
 );
@@ -297,7 +300,7 @@ function click(plane: Plane, event: MouseEvent) {
   if (!insideSource(ras)) return;
   emit('point', ras);
   // Centring pans within each plane only, so it does not race the slice move the new point makes.
-  viewer.centreOn(ras);
+  if (centreOnClick.value) viewer.centreOn(ras);
 }
 function gesture(plane: Plane, prompt: InteractivePrompt) {
   if (!canMark(plane)) return;
@@ -337,6 +340,12 @@ watch(
     refresh();
   },
   { deep: true },
+);
+watch(
+  () => props.centreRequest,
+  request => {
+    if (request && centreOnClick.value) viewer?.centreOn(request.point);
+  },
 );
 watch(
   () => [props.window, props.level],

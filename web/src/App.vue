@@ -134,7 +134,8 @@ const newerVersion = ref(false);
 const libraryShown = computed(() => libraryOpen.value || (!activeCase.value && !loading.value));
 const selected = ref(''),
   display = ref<StructureDisplay>({}),
-  point = ref<Point>([0, 0, 0]);
+  point = ref<Point>([0, 0, 0]),
+  centreRequest = ref<{ point: Point; serial: number }>();
 const colorScope = computed(() =>
   activeCase.value && revision.value
     ? JSON.stringify([activeCase.value.id, revision.value.reference_image_id ?? revision.value.image_asset?.id ?? revision.value.id])
@@ -1146,11 +1147,13 @@ async function openInteractiveReview() {
 }
 function picked(id: string, next: Point) {
   selected.value = id;
-  setPoint(next);
+  setPoint(next, true);
 }
-function setPoint(next: Point) {
+/** A navigate click in 3D sets `centre`, so the slice panes can centre on the point as for a click on a slice. */
+function setPoint(next: Point, centre = false) {
   const geometry = revision.value?.geometry;
   point.value = geometry ? (next.map((v, i) => Math.max(geometry.bounds_ras[0][i], Math.min(geometry.bounds_ras[1][i], v))) as Point) : next;
+  if (centre) centreRequest.value = { point: [...point.value], serial: (centreRequest.value?.serial ?? 0) + 1 };
   probe();
 }
 watch(ctRevisionId, () => {
@@ -2066,6 +2069,7 @@ onBeforeUnmount(() => {
                   :review-include="interactiveInclude"
                   :review-radius="interactiveRadius"
                   :native-review="workspaceMode === 'review' && interactiveNative"
+                  :centre-request="centreRequest"
                   @point="setPoint"
                   @gesture="interactivePanel?.addGesture($event)"
                   @window-level="cornerstoneWindowLevel"

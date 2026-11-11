@@ -293,11 +293,13 @@ filtered. A section's eye hides it, and its arrow collapses it.
 
 Three linked planes share one position, with its patient RAS coordinates and HU value below.
 
-- **Navigate:** click to move there and centre all three planes on it at their zoom, scroll or
-  the slider to change slice, left or right drag for
+- **Navigate:** click to move there, scroll or the slider to change slice, left or right drag for
   window/level, middle drag to pan, Ctrl or ⌘ scroll (or pinch) to zoom. Scrolling down moves
   one slice towards the feet, back or patient's left. While drawing, left drag draws and right
   drag still sets window/level. **Reset planes** restores them.
+- **Centre on click:** on by default, and your browser keeps the choice. A click on a slice, or
+  a navigate click in 3D, also centres all three planes on that point at their zoom. Tilted scans
+  do not centre.
 - **Window:** **Soft tissue**, **Lung**, **Bone** or **Vessels**, or type **W** and **L**.
 - **Projection:** **MPR**, **MIP** or **MinIP**, with **Slab mm**. A slab shows overlays on its
   centre slice and pauses drawing. **Rotatable crosshairs** adds crosshairs you can drag and

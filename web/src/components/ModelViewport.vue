@@ -119,7 +119,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   unreadRefusal: [message: string];
   pick: [id: string, point: Point];
-  point: [point: Point];
+  /** `centre` marks a navigate click, which may also centre the slice panes. */
+  point: [point: Point, centre?: boolean];
   gesture: [prompt: InteractivePrompt];
   opacity: [value: number];
   retryVolumeView: [];
@@ -1827,7 +1828,7 @@ defineExpose({
       @retry-plane="queueReviewPlane"
       @gesture="reviewGesture"
       @pick="(id: string, ras: Point) => emit('pick', id, ras)"
-      @point="(ras: Point) => props.reviewActive && emit('point', ras)"
+      @point="(ras: Point) => props.reviewActive && emit('point', ras, true)"
       @notice="reviewNotice = $event"
       @ready="nativeReady"
       @error="vtkError = $event"

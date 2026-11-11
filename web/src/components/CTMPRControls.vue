@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { centreOnClick } from '../lib/centre-on-click';
+
 // The volume MPR's controls. The preview panes show the same row, disabled, so the panes do not
 // move down when the volume MPR takes over.
 const crosshairs = defineModel<boolean>('crosshairs', { required: true });
@@ -13,6 +15,9 @@ const emit = defineEmits<{ reset: [] }>();
 <template>
   <div class="ct-mpr-controls" :title="disabled ? 'Available once the full CT has loaded' : undefined">
     <label><input v-model="crosshairs" type="checkbox" :disabled="disabled || nativeReview || marking" /> Rotatable crosshairs</label>
+    <label title="A navigate click here or in 3D also centres all three planes on its point, at their zoom"
+      ><input v-model="centreOnClick" type="checkbox" :disabled="disabled" /> Centre on click</label
+    >
     <label
       >Projection
       <select v-model="slabMode" aria-label="MPR projection" :disabled="disabled || nativeReview">

@@ -33,6 +33,7 @@ const props = withDefaults(
     reviewInclude?: boolean;
     reviewRadius?: number;
     nativeReview?: boolean;
+    centreRequest?: { point: Point; serial: number };
   }>(),
   { active: true, overlayOpacity: 0.4 },
 );
@@ -46,7 +47,7 @@ const memoryError = ref('');
 const sheared = computed(() => hasCornerstoneShear(props.geometry.affine_ras));
 const nativeVolume = computed(() => props.active && props.localReady && props.fullResolution && props.localSession && !sheared.value && !memoryError.value);
 const core = computed(() => {
-  const { localSession, localReady, fullResolution, active, ...rest } = props;
+  const { localSession, localReady, fullResolution, active, centreRequest, ...rest } = props;
   return rest;
 });
 watch(
@@ -80,6 +81,7 @@ watch(
     v-bind="core"
     :session="localSession"
     :stills="stills"
+    :centre-request="centreRequest"
     @point="emit('point', $event)"
     @gesture="emit('gesture', $event)"
     @window-level="emit('windowLevel', $event)"
