@@ -2905,39 +2905,3 @@ h3 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* Accepted 3D anatomy and native CT annotation share a desktop editing toolbar. */
-.review-workspace-toolbar {
-  min-width: 0;
-  background: var(--panel);
-}
-.review-workspace-tabs {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 12px;
-  background: #141820;
-  border-bottom: 1px solid var(--line);
-  font-size: 10px;
-}
-.review-workspace-tabs strong {
-  margin-right: 12px;
-  color: #d8e2f2;
-  font-size: 12px;
-}
-.review-workspace-tabs > button {
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: #9eadc3;
-  padding: 6px 10px;
-  font-size: 10px;
-  cursor: pointer;
-}
-.review-workspace-tabs > button.active {
-  background: #354157;
-  color: #fff;
-}
-.review-workspace-tabs > .text-button {
-  margin-left: auto;
-}

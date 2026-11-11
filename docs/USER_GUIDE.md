@@ -171,7 +171,7 @@ the series list, adds another series of that study. Each series keeps its own se
 
 ## Run TotalSegmentator
 
-1. Choose **Segment CT…**.
+1. Choose **Segment CT…**. Its settings open at the top of the side panel.
 2. Pick a **Task**. **Find a task or structure** searches tasks and anatomy, and **Included
    structures** lists the outputs.
 3. Set any options the task supports: **Robust crop** (`-rc`), **Body crop** (`-bs`), **Remove
@@ -296,15 +296,15 @@ it.
 ## Arrange the workspace
 
 The top bar reads in the order of the work: the case and its review status, **Series…** and
-**+ Import scan**, then **Segment CT…**, **Review segmentation ↗** and the exports, then the layout,
-any job and your name. The worker shows at the bottom left.
+**+ Import scan**, then **Segment CT…**, the **View** | **Review segmentation ↗** switch and the
+exports, then the layout, any job and your name. The worker shows at the bottom left.
 
 - Below 1400 px wide, **Import DICOM SEG…** moves under the **▾** beside **Segment CT…** when that
   is offered, and **Export SEG…** and **Export viewer ↗** under **Export ▾**. Below 1200 px, or
   below 1400 px while a job or newer-version chip shows, **Series…**, **Source image** and
   **+ Import scan** move under **⋯**.
-- At 1000 px and narrower, every case action but review moves under **⋯**; the job chip and your
-  name stay. The layout control is hidden, and **☷ Anatomy** shows the side panel.
+- At 1000 px and narrower, every case action but **View** and review moves under **⋯**; the job
+  chip and your name stay. The layout control is hidden, and **☷ Anatomy** shows the side panel.
 - While such a chip shows below 1500 px, only the layout **▾** stays; it has every arrangement.
 - Disabled buttons give their reason on hover, and in a menu under the item.
 - **Esc** or a click elsewhere closes a top bar menu. **Esc** also closes the segmentation settings.
@@ -316,11 +316,15 @@ The side panel on the left shows one tab at a time: **Segments**, **3D**, **Refi
 panel spells them out, such as **Revision history**, unless **FFR** shows. Your browser remembers
 the tab. The stage tiles the 3D view and **CT review**.
 
+Review's tools and the segmentation settings open at the top of the side panel, above the tabs, and
+change the viewers' size only to show a hidden side panel. They take at most about 60% of the
+panel, and leave the Segments list room for a few rows.
+
 - **‹** at the end of the tabs hides the side panel, and **›** on the left edge brings it back.
   **\\** does both.
-- The layout icons at the top right show both views, the 3D view alone or CT review alone. Their
-  **▾** chooses side by side or stacked, shows or hides each view or the **Side panel**, and has
-  **Reset layout**.
+- The layout icons at the top right show both views, the 3D view alone or CT review alone. In
+  review they read **CT + 3D**, **Focus 3D** and **Focus CT**. Their **▾** chooses side by side or
+  stacked, shows or hides each view or the **Side panel**, and has **Reset layout**.
 - Drag a divider to resize, and double-click it to reset.
 - **Layers** in the 3D header folds the 3D view's layer card without resizing the view.
 
@@ -436,11 +440,13 @@ your browser remembers which are open. **ⓘ** gives help on hover, or when you 
 
 Select anatomy in the list or on the model, inspect its overlay in all three planes and check any
 QC messages in its row under **Segments** against the CT. Then choose **Review segmentation ↗** and
-pick the target under **Structure**.
+pick the target under **Structure**. The review panel opens at the top of the side panel, which
+shows first if it was hidden. **View** in the top bar or **Exit review** leaves review; your draft
+stays saved.
 
-Review opens on your main-page views, and slab projection and rotatable crosshairs pause until
-**Exit review**. **CT volume** starts as you last left it in review, off at first, and **Exit
-review** restores the main page's choice. MRI and tilted-gantry CT keep it off.
+Review opens on your main-page views, and slab projection and rotatable crosshairs pause until you
+leave it. **CT volume** starts as you last left it in review, off at first, and leaving review
+restores the main page's choice. MRI and tilted-gantry CT keep it off.
 
 - Planes lock to the native source slices, shown the same way up as on the main page.
 - Marks autosave into a draft that survives reloads and restarts. Accepted masks change only when
@@ -490,7 +496,7 @@ segment or loops of a folded tube, and an Exclude on a large leak can remove muc
   marks that remain. The marks after the removed one run together, so the mask can differ a little:
   check it again.
 
-A warning beside **Exit review** says when a result removes 5% or more of the mask's interior, the
+A warning in the review panel's messages says when a result removes 5% or more of the mask's interior, the
 part over 2 mm inside, more than 40 mm from every mark. The volume line can hide such a loss, so
 check the whole structure on the CT and in 3D before saving.
 
@@ -511,11 +517,11 @@ Save or discard your draft before switching between **Direct edit** and **AI ass
 ### Choose a GPU for AI assist
 
 With [a second GPU set up](INSTALL.md#add-a-second-gpu), **Options +** adds **Run on**, with the
-same [status lines and **Check again**](#choose-a-gpu), and the toolbar shows **AI ·** and the GPU
-in use. Neither appears with one GPU or in **Direct edit**.
+same [status lines and **Check again**](#choose-a-gpu), and the review panel shows **AI ·** and the
+GPU in use. Neither appears with one GPU or in **Direct edit**.
 
-The first AI result holds the draft on its GPU, named by **AI result from** beside **Exit review**
-and, once you save, in **Revision history**. These free the draft and drop the current result:
+The first AI result holds the draft on its GPU, named by **AI result from** in the review panel's
+messages and, once you save, in **Revision history**. These free the draft and drop the current result:
 
 - **↶ Undo** past the first result, or **Remove mark** on a mark its run used, unless that result
   came from **Refine whole mask** with no marks
@@ -525,11 +531,11 @@ A held draft shows **Re-run draft on** instead of **Run on**. To move it, choose
 **Re-run on this GPU**. A re-run repeats every Apply step from the original mask, with any pending
 marks last, and replaces the current result only when it finishes.
 
-A re-run can change regions you did not mark: a warning beside **Exit review** counts any voxels of
+A re-run can change regions you did not mark: a warning in the messages counts any voxels of
 the result you saw that moved. If it fails or is cancelled, the old result stays visible but cannot
 be saved; re-run again or choose **Discard draft**. Your marks are never lost.
 
-**If a GPU cannot be used**, a message beside **Exit review** says why, with **Check again**, and
+**If a GPU cannot be used**, a message in the review panel says why, with **Check again**, and
 **Run AI** and **Refine whole mask** stop. Choose another GPU, or re-run or discard a draft that has
 a result. Work that needs no GPU continues.
 
@@ -571,18 +577,27 @@ With **CT volume** on in review:
 - **Limit to segments** masks by the saved segmentation, not your draft, so your edits do not
   change it until you save. **Volume point** sees only the CT the mask shows.
 - **Color segments** and **Cinematic heart** stay off. A Cinematic heart volume shows the default
-  preset, and returns on **Exit review** unless you choose another.
+  preset, and returns when you leave review unless you choose another.
 
 **Layers** starts folded in review. A mark cannot start underneath it, so fold it to reach that
 part of the view.
 
-### Toolbar messages and panels
+### The review panel
 
-Errors, warnings, results and 3D preview progress appear beside **Exit review**, errors first, in an
-area that scrolls past two lines. Some errors carry a button, such as **Retry preview**.
+The panel reads down: **Exit review**, **Structure** and **+ Add segment**, the messages,
+**Relationship**, **Direct edit** or **AI assist**, the tools and their settings, the draft's
+status, **Impact preview** and **Options +**. **Original** and **Candidate**, **↶ Undo**, **↷ Redo**,
+**Apply edits**, **Save correction** and **Discard draft** stay at the bottom.
 
-**+ Add segment**, **Relationship**, **Impact preview** and **Options +** open over the viewers. A
-mark cannot start underneath an open panel, so choose the button again to fold it.
+- Errors, warnings, results and 3D preview progress appear under the header, errors first, in an
+  area that scrolls past four lines. Some errors carry a button, such as **Retry preview**.
+- **+ Add segment**, **Relationship**, **Impact preview** and **Options +** open in the panel, so
+  nothing covers a viewer. A short panel scrolls its tools; the bottom buttons always show, and so
+  does **Create empty segment**.
+- While the side panel is hidden, a dot on its edge means review has a message. **›** or
+  **Review segmentation ↗** brings the panel back.
+- At 1000 px and narrower, the panel sits under the 3D view or CT review, and scrolls on a short
+  screen.
 
 ### Compare and save
 
@@ -590,7 +605,7 @@ Applying creates a candidate and does not change accepted masks.
 
 1. Use **Original** and **Candidate** to compare the CT mask and the 3D surface, or
    **Compare candidate with original masks** under **Overlays ▾** to see both on the slices.
-2. Read the voxels changed and volume before and after, beside **Exit review**.
+2. Read the voxels changed and volume before and after in the panel's messages.
 3. If other segments are affected, open **Impact preview** and choose **Show affected in CT**.
 4. Add marks and apply again as needed. Saving waits until pending marks are applied.
 5. Choose **Save correction** only after inspecting the result.

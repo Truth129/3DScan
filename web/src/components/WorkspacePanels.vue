@@ -15,7 +15,8 @@ import {
 } from '../lib/workspace-panels';
 import { usePopover } from '../lib/use-popover';
 
-const props = withDefaults(defineProps<{ modelValue: WorkspacePanelsState; layout?: WorkspaceLayoutState; reviewLabel?: string }>(), {
+/** `focus` names the slice view's modality in review, where the icons focus a tile. */
+const props = withDefaults(defineProps<{ modelValue: WorkspacePanelsState; layout?: WorkspaceLayoutState; reviewLabel?: string; focus?: string }>(), {
   layout: defaultWorkspaceLayout,
   reviewLabel: 'CT review',
 });
@@ -30,12 +31,16 @@ const options = computed(() => [
   { id: 'model' as const, label: '3D view' },
   { id: 'review' as const, label: props.reviewLabel },
 ]);
-const labels = computed<Record<WorkspacePreset, string>>(() => ({
-  columns: `3D and ${props.reviewLabel} side by side`,
-  rows: `3D above ${props.reviewLabel}`,
-  model: '3D view only',
-  review: `${props.reviewLabel} only`,
-}));
+const labels = computed<Record<WorkspacePreset, string>>(() =>
+  props.focus
+    ? { columns: `${props.focus} + 3D`, rows: `${props.focus} + 3D`, model: 'Focus 3D', review: `Focus ${props.focus}` }
+    : {
+        columns: `3D and ${props.reviewLabel} side by side`,
+        rows: `3D above ${props.reviewLabel}`,
+        model: '3D view only',
+        review: `${props.reviewLabel} only`,
+      },
+);
 const preset = computed(() => workspacePreset(props.modelValue, props.layout));
 // The first icon shows both views in the arrangement they last had; the menu switches between the two.
 const quick = computed(() => [props.layout.arrangement, 'model' as const, 'review' as const]);

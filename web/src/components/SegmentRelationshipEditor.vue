@@ -98,7 +98,6 @@ onBeforeUnmount(() => emit('validity', true));
 
 <style scoped>
 .segment-relationship-editor {
-  flex-basis: 100%;
   min-width: 0;
   border: 1px solid #39465b;
   border-radius: 5px;
@@ -107,27 +106,23 @@ onBeforeUnmount(() => emit('validity', true));
   color: #b9c9de;
   font-size: 10px;
 }
+/* It opens inside review's column, so each field takes the full width. */
 .relationship-fields {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 8px;
 }
 .relationship-fields > label {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 4px;
-  min-width: 150px;
   font-size: 10px;
 }
 .relationship-fields select {
+  width: 100%;
+  min-width: 0;
   padding: 6px;
   font-size: 11px;
-  max-width: 240px;
 }
 .relationship-fields p {
-  flex: 1;
-  min-width: 180px;
   margin: 0;
   line-height: 1.5;
   color: #9fb0c9;
@@ -150,7 +145,8 @@ onBeforeUnmount(() => emit('validity', true));
   display: flex;
   align-items: center;
   gap: 4px;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 10px;
 }
 .relationship-siblings input {

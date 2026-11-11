@@ -221,13 +221,14 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
 </template>
 
 <style scoped>
+/* It docks in the side panel, above the tabs, so everything stacks in one column and scrolls there. */
 .segmentation-panel {
-  flex-shrink: 0;
-  padding: 12px 24px;
-  background: #171c25;
-  border-bottom: 1px solid var(--line-strong);
-  max-height: 45vh;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 14px;
   overflow: auto;
+  background: #171c25;
+  scrollbar-width: thin;
 }
 .segmentation-panel > header {
   display: flex;
@@ -257,30 +258,26 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
   height: 27px;
   font-size: 20px;
 }
-.segmentation-panel form {
-  display: flex;
-  align-items: flex-end;
-  gap: 14px;
-  flex-wrap: wrap;
+.segmentation-panel form,
+.segmentation-search-row {
+  display: grid;
+  gap: 10px;
 }
 .segmentation-search-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px 18px;
-  flex-wrap: wrap;
   margin-bottom: 10px;
 }
-.segmentation-task-search {
+.segmentation-task-search,
+.segmentation-task {
   display: grid;
   gap: 5px;
-  min-width: 230px;
-  max-width: 390px;
-  flex: 1;
+  min-width: 0;
   font-size: 10px;
   color: var(--text-secondary);
 }
-.segmentation-task-search input {
+.segmentation-task-search input,
+.segmentation-task select {
   width: 100%;
+  min-width: 0;
   padding: 8px 9px;
   font-size: 11px;
 }
@@ -288,7 +285,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
   font-size: 9px;
   line-height: 1.5;
   color: var(--muted);
-  margin: 0 0 7px;
+  margin: 0;
 }
 .segmentation-search-status {
   font-size: 10px;
@@ -301,38 +298,21 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
   padding: 3px 6px;
   margin-left: 4px;
 }
-.segmentation-task {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  font-size: 10px;
-  min-width: 230px;
-  flex: 1;
-  max-width: 390px;
-  color: var(--text-secondary);
-}
-.segmentation-task select {
-  font-size: 11px;
-  padding: 8px 9px;
-  width: 100%;
-}
 .segmentation-panel fieldset {
-  display: flex;
-  align-items: center;
-  gap: 8px 17px;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 8px;
   margin: 0;
-  padding: 0 0 7px;
+  padding: 0;
   border: 0;
   min-width: 0;
-  flex: 2;
 }
 .segmentation-panel fieldset label {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
+  min-width: 0;
   font-size: 10px;
-  white-space: nowrap;
   color: var(--white);
 }
 .segmentation-panel input[type='checkbox'] {
@@ -355,10 +335,9 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
 .segmentation-panel form > .button {
   min-height: 34px;
   font-size: 11px;
-  white-space: nowrap;
 }
 .segmentation-panel form > .text-button {
-  min-height: 34px;
+  justify-self: start;
   font-size: 10px;
 }
 .segmentation-description {
@@ -372,7 +351,6 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
   margin-top: 7px;
   color: var(--text-secondary);
   font-size: 10px;
-  max-width: 950px;
 }
 .segmentation-outputs > summary {
   cursor: pointer;
@@ -381,7 +359,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
 }
 .segmentation-outputs > ul {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: 5px 14px;
   max-height: 150px;
   overflow: auto;
@@ -409,22 +387,8 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
   font-size: 10px;
   margin-left: 5px;
 }
-/* The option labels never wrap, so beside a second select they would leave the panel. */
-@media (min-width: 1001px) {
-  .segmentation-panel form:has(> label + label) fieldset {
-    flex: 1 1 auto;
-  }
-}
-@media (max-width: 1000px) {
-  .segmentation-panel {
-    padding: 12px 16px;
-  }
-  .segmentation-panel fieldset {
-    flex: 1 1 100%;
-    padding: 0;
-  }
-  .segmentation-panel form > .button {
-    margin-left: auto;
-  }
+/* The license key field would otherwise keep a width the narrowest column lacks. */
+.segmentation-panel :deep(.license-content label) {
+  min-width: 0;
 }
 </style>

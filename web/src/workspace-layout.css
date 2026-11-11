@@ -100,6 +100,42 @@
   min-height: 200px;
   height: auto;
 }
+/*
+ * The task slot above the tabs holds review's tools or the segmentation settings. It takes at most 60%
+ * of the column; the panel inside scrolls, never the column.
+ */
+.workspace-sidebar > .workspace-task {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 60%;
+  border-bottom: 1px solid var(--line-strong);
+}
+/*
+ * The tabs keep the Segments list at least 160 px under its 134 px of tabs, buttons and search,
+ * unless that would leave the task under 320 px, enough for review's header and bottom buttons.
+ */
+.workspace-sidebar > .workspace-task + .inspector {
+  min-height: clamp(198px, calc(100% - 320px), 300px);
+}
+/* While a task is docked, the Segments tab drops its heading, which repeats the tab's name, and its footnote, so the list keeps its rows. */
+.workspace-sidebar.task-open .anatomy-panel > :is(.panel-heading, .library-footer) {
+  display: none;
+}
+/* A message for review shows on the edge of a hidden side panel. */
+.sidebar-edge-tab {
+  position: relative;
+}
+.sidebar-edge-tab > .tab-alert {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warning);
+}
 /* The selected row opens to its colour, opacity and checks. */
 .structure-details > .structure-opacity {
   display: grid;
@@ -315,6 +351,24 @@
   background: #283247;
   color: var(--white);
 }
+/* View and Review read as one switch; the pressed side shows the mode. */
+.mode-switch {
+  display: flex;
+  flex-shrink: 0;
+}
+.top-bar .mode-switch > .view-action {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.top-bar .mode-switch > .review-action {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.top-bar .mode-switch > .view-action[aria-pressed='true'] {
+  background: var(--surface-active);
+  color: var(--white);
+}
 /* Segment CT… and its ▾ read as one split button. */
 .top-bar-group:has(> .segment-menu) > .segment-action {
   border-top-right-radius: 0;
@@ -339,8 +393,7 @@
   content: '';
   margin-left: auto;
 }
-.top-bar.library-open :is(.case-toolbar, .case-actions, .workspace-panels),
-.top-bar.library-open > .segmentation-panel {
+.top-bar.library-open :is(.case-toolbar, .case-actions, .workspace-panels) {
   visibility: hidden;
 }
 /* The case's chip and Series… leave no gap before + Import scan over the Library. */
@@ -586,25 +639,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Segmentation settings hang under Segment CT…, over the stage, instead of pushing the viewers down. */
-header.top-bar > .segmentation-panel {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 12px;
-  z-index: 62;
-  width: min(680px, calc(100% - 24px));
-  max-height: calc(100dvh - var(--top-bar-height) - 48px);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  box-shadow: 0 16px 48px #000a;
-}
-header.top-bar.fold-compact > .segmentation-panel {
-  top: 100%;
-  left: 0;
-  width: 100%;
-  border-radius: 0 0 8px 8px;
-}
-
 /* The status bar: the worker on the left, the case in the middle, and the safety note, never cut, on the right. */
 .app-footer.status-bar {
   gap: 16px;
@@ -732,17 +766,13 @@ header.top-bar.fold-compact > .segmentation-panel {
     position: relative;
     display: grid;
     grid-template-columns: minmax(0, min(var(--sidebar-width, 280px), 34%)) auto minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-    grid-template-areas:
-      'sidebar sidebar-splitter toolbar'
-      'sidebar sidebar-splitter stage';
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: 'sidebar sidebar-splitter stage';
     gap: 0;
   }
   .workspace.modular-workspace.panel-sidebar-hidden {
     grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas:
-      'edge toolbar'
-      'edge stage';
+    grid-template-areas: 'edge stage';
   }
   .workspace.modular-workspace > .sidebar-edge {
     grid-area: edge;
@@ -762,17 +792,6 @@ header.top-bar.fold-compact > .segmentation-panel {
   }
   .workspace.modular-workspace > .sidebar-splitter {
     grid-area: sidebar-splitter;
-  }
-  /* Its panels lie over the tiles, whose own menus stop at z-index 40. */
-  .workspace.modular-workspace > .review-workspace-toolbar {
-    grid-area: toolbar;
-    position: relative;
-    z-index: 50;
-    min-width: 0;
-  }
-  .review-workspace-toolbar .review-workspace-tabs {
-    height: 34px;
-    padding-block: 2px;
   }
   .workspace.modular-workspace > .workspace-stage {
     grid-area: stage;
@@ -1019,7 +1038,6 @@ header.top-bar.fold-compact > .segmentation-panel {
   .ct-header > .panel-hide {
     display: none;
   }
-  .review-workspace-tabs,
   .ct-header {
     flex-wrap: wrap;
   }
@@ -1027,6 +1045,24 @@ header.top-bar.fold-compact > .segmentation-panel {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+  /* In review the tools are a sheet under the area shown, so they never cover the image being marked. */
+  .workspace.modular-workspace.review-workspace:not(.mobile-anatomy) > .workspace-sidebar {
+    display: flex;
+    flex: 0 1 auto;
+    flex-direction: column;
+    order: 1;
+    max-height: 50%;
+    overflow-y: auto;
+    border-top: 1px solid var(--line-strong);
+  }
+  .workspace.review-workspace:not(.mobile-anatomy) > .workspace-sidebar > .inspector {
+    display: none;
+  }
+  .workspace.review-workspace:not(.mobile-anatomy) > .workspace-sidebar > .workspace-task {
+    flex: 1 1 auto;
+    max-height: none;
+    border-bottom: 0;
   }
   /* The bottom navigation brings the panel back, so it has no chevron here. */
   .workspace-sidebar .inspector-tabs > .panel-collapse-button {

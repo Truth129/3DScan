@@ -62,6 +62,7 @@ const emit = defineEmits<{
   'remove-target': [id: string];
   'preview-overlaps': [ids: string[]];
   'retry-surface': [];
+  alert: [shown: boolean];
 }>();
 const runtime = ref<InteractiveStatus>(),
   tool = ref<InteractiveTool>('navigate'),
@@ -71,7 +72,8 @@ const runtime = ref<InteractiveStatus>(),
   showCandidate = ref(true),
   advanced = ref(false),
   impactOpen = ref(false),
-  messages = ref<HTMLElement>();
+  messages = ref<HTMLElement>(),
+  body = ref<HTMLElement>();
 const method = ref<InteractiveMethod>('direct'),
   methodError = ref('');
 // Include only adds starts off, and this browser remembers the reader's choice.
@@ -492,6 +494,32 @@ async function togglePolicy() {
     if (!disposed && identity === identityVersion && current.value === value && props.selected === selected) policyLoading.value = false;
   }
 }
+function toggleAdd() {
+  addOpen.value = !addOpen.value;
+  policyOpen.value = false;
+  // The form opens at the top of the tools, which may have scrolled past it.
+  if (addOpen.value) body.value?.scrollTo({ top: 0 });
+}
+// Impact and Options open under their buttons near the end of the tools, often below a short
+// column's fold, so the tools scroll until the part shows, keeping its button in view.
+async function reveal(button: string, selector: string) {
+  await nextTick();
+  const box = body.value,
+    toggle = box?.querySelector(button),
+    part = box?.querySelector(selector);
+  if (!box || !toggle || !part) return;
+  const view = box.getBoundingClientRect(),
+    below = part.getBoundingClientRect().bottom - view.bottom;
+  if (below > 0) box.scrollTop += Math.min(below, toggle.getBoundingClientRect().top - view.top);
+}
+function toggleImpact() {
+  impactOpen.value = !impactOpen.value;
+  if (impactOpen.value) void reveal('.review-impact-toggle', '.review-impact');
+}
+function toggleAdvanced() {
+  advanced.value = !advanced.value;
+  if (advanced.value) void reveal('.review-more', '.review-advanced');
+}
 function previewAffected() {
   if (candidate.value) emit('preview-overlaps', candidate.value.affected_structures?.map(item => item.id) ?? [props.selected]);
 }
@@ -597,6 +625,21 @@ watch(
   () => messages.value?.scrollTo({ top: 0 }),
   { flush: 'post' },
 );
+// The page marks the hidden side panel's edge while an error, warning or question waits here.
+const alerting = computed(
+  () =>
+    !!(
+      armed.value ||
+      current.value?.error ||
+      createError.value ||
+      props.surfaceError ||
+      methodError.value ||
+      runPath.value.block ||
+      (method.value === 'nninteractive' && runtime.value && !runtime.value.available) ||
+      candidate.value?.warnings?.length
+    ),
+);
+watch(alerting, value => emit('alert', value), { immediate: true });
 watch(tool, value => emit('tool', value), { immediate: true });
 watch(include, value => emit('polarity', value), { immediate: true });
 watch(
@@ -672,72 +715,12 @@ defineExpose({
     :data-affected-count="candidate?.affected_structures?.length || 0"
     :data-inference-path="runPath.id || undefined"
   >
-    <div class="review-workspace-tabs">
-      <slot name="navigation" />
-      <div ref="messages" class="review-messages" role="group" aria-label="Review messages" tabindex="0">
-        <p v-if="armed" class="review-alert" role="status">
-          This mark was already run. Removing it discards the result on screen; Run AI then makes a new one from the marks that remain. Click the mark again to
-          remove it.
-        </p>
-        <p v-if="current?.error" class="review-alert" role="alert">
-          {{ current.error }} <button v-if="current.conflict" class="text-button" @click="current.reload()">Reload saved work</button>
-        </p>
-        <p v-if="createError" class="review-alert" role="alert">{{ createError }}</p>
-        <p v-if="surfaceError" class="review-alert" role="alert">
-          {{ surfaceError }} <button class="text-button" @click="emit('retry-surface')">Retry preview</button>
-        </p>
-        <p v-else-if="surfaceLoading" class="review-progress" role="status">Preparing the 3D candidate preview… Previous surfaces remain visible.</p>
-        <p v-if="methodError" class="review-alert" role="status">{{ methodError }}</p>
-        <p v-if="method === 'nninteractive' && runtime && !runtime.available" class="review-alert" role="status">
-          {{ runtime.reason || 'nnInteractive is unavailable on the workstation.' }} Direct paint and erase remain available.
-          <button class="text-button" @click="checkRuntime">Check again</button>
-        </p>
-        <p v-if="runPath.block" class="review-alert" role="status">
-          {{ runPath.block }}
-          <button class="text-button" @click="checkRuntime">Check again</button>
-        </p>
-        <p v-else-if="runPath.id && reviewPathNotice" class="review-progress" role="status">{{ reviewPathNotice }}</p>
-        <div v-if="candidate" class="review-result-summary">
-          <span v-if="candidate.relationship_changed && (candidate.total_changed_voxels ?? candidate.summary.changed_voxels) === 0"
-            >Relationships updated · masks unchanged</span
-          ><span v-else
-            >{{ (candidate.total_changed_voxels ?? candidate.summary.changed_voxels).toLocaleString() }} voxels changed<template
-              v-if="(candidate.affected_structures?.length || 0) > 1"
-            >
-              across affected masks</template
-            ></span
-          ><span>Target +{{ candidate.summary.added_voxels.toLocaleString() }} / −{{ candidate.summary.removed_voxels.toLocaleString() }}</span
-          ><span>{{ candidate.summary.before_volume_ml.toFixed(1) }} → {{ candidate.summary.after_volume_ml.toFixed(1) }} mL</span
-          ><span v-if="candidate.gpu_name">AI result from {{ candidate.gpu_name }}</span
-          ><span v-if="candidate.summary.after_voxels === 0">{{
-            method === 'direct' && !view?.new_structure
-              ? 'This segment will be empty when saved.'
-              : 'The candidate is empty. Paint or add include hints before saving.'
-          }}</span
-          ><span v-else-if="current?.dirty">{{ staleHint() }}</span
-          ><span v-else>Inspect the result, then save a new revision.</span>
-        </div>
-        <p v-else-if="method === 'nninteractive' && current?.resultDiscarded && !current.working" class="review-progress" role="status">
-          The result was discarded because its marks or options changed. Run AI makes a new one from the marks that remain.
-        </p>
-        <p v-for="warning in candidate?.warnings || []" :key="warning" class="review-alert" role="status">{{ warning }}</p>
+    <header class="review-panel-header">
+      <div class="review-panel-title">
+        <h2>Review segmentation</h2>
+        <slot name="exit" />
       </div>
-      <slot name="exit" />
-    </div>
-    <div class="review-toolbar-rows">
-      <div class="review-toolbar-main">
-        <div class="review-toolset review-methods" role="group" aria-label="Editing method">
-          <button :class="{ active: method === 'direct' }" :aria-pressed="method === 'direct'" :disabled="methodDisabled" @click="chooseMethod('direct')">
-            Direct edit</button
-          ><button
-            :class="{ active: method === 'nninteractive' }"
-            :aria-pressed="method === 'nninteractive'"
-            :disabled="methodDisabled"
-            @click="chooseMethod('nninteractive')"
-          >
-            AI assist
-          </button>
-        </div>
+      <div class="review-target-row">
         <label class="review-target"
           >Structure<select
             :value="selected"
@@ -752,94 +735,195 @@ defineExpose({
               {{ prettyName(item.name) }}{{ draftTargets.some(target => target.id === item.id) ? ' · draft' : '' }}
             </option>
           </select></label
-        >
-        <button
+        ><button
           class="button secondary compact review-add-target"
           :disabled="creating || discarding || busy || !!current?.working"
           :aria-expanded="addOpen"
-          @click="
-            addOpen = !addOpen;
-            policyOpen = false;
-          "
+          @click="toggleAdd"
         >
           + Add segment
         </button>
-        <div class="review-tools">
-          <div v-if="method === 'direct'" class="review-toolset direct-tools" role="group" aria-label="Direct editing tools">
-            <button :class="{ active: tool === 'navigate' }" :aria-pressed="tool === 'navigate'" :disabled="disabled" @click="chooseTool('navigate')">
-              Navigate</button
-            ><button
-              :class="{ active: tool === 'scribble' && include }"
-              :aria-pressed="tool === 'scribble' && include"
-              :disabled="disabled"
-              @click="chooseDirect(true)"
-            >
-              Paint</button
-            ><button
-              :class="{ active: tool === 'scribble' && !include }"
-              :aria-pressed="tool === 'scribble' && !include"
-              :disabled="disabled"
-              @click="chooseDirect(false)"
-            >
-              Erase</button
-            ><button :class="{ active: tool === 'scissors' }" :aria-pressed="tool === 'scissors'" :disabled="disabled" @click="chooseTool('scissors')">
-              Scissors
-            </button>
-          </div>
-          <template v-if="method === 'direct' && tool === 'scissors'"
-            ><label class="review-scissors"
-              >Shape<select v-model="scissorsShape" aria-label="Scissors shape" :disabled="disabled">
-                <option value="freehand">Freehand</option>
-                <option value="rectangle">Rectangle</option>
-                <option value="circle">Circle</option>
-              </select></label
-            ><label class="review-scissors"
-              >Cut<select v-model="scissorsOperation" aria-label="Scissors operation" :disabled="disabled">
-                <option value="erase_inside">Erase inside</option>
-                <option value="erase_outside">Erase outside</option>
-              </select></label
-            ></template
+      </div>
+    </header>
+    <div ref="messages" class="review-messages" role="group" aria-label="Review messages" tabindex="0">
+      <p v-if="armed" class="review-alert" role="status">
+        This mark was already run. Removing it discards the result on screen; Run AI then makes a new one from the marks that remain. Click the mark again to
+        remove it.
+      </p>
+      <p v-if="current?.error" class="review-alert" role="alert">
+        {{ current.error }} <button v-if="current.conflict" class="text-button" @click="current.reload()">Reload saved work</button>
+      </p>
+      <p v-if="createError" class="review-alert" role="alert">{{ createError }}</p>
+      <p v-if="surfaceError" class="review-alert" role="alert">
+        {{ surfaceError }} <button class="text-button" @click="emit('retry-surface')">Retry preview</button>
+      </p>
+      <p v-else-if="surfaceLoading" class="review-progress" role="status">Preparing the 3D candidate preview… Previous surfaces remain visible.</p>
+      <p v-if="methodError" class="review-alert" role="status">{{ methodError }}</p>
+      <p v-if="method === 'nninteractive' && runtime && !runtime.available" class="review-alert" role="status">
+        {{ runtime.reason || 'nnInteractive is unavailable on the workstation.' }} Direct paint and erase remain available.
+        <button class="text-button" @click="checkRuntime">Check again</button>
+      </p>
+      <p v-if="runPath.block" class="review-alert" role="status">
+        {{ runPath.block }}
+        <button class="text-button" @click="checkRuntime">Check again</button>
+      </p>
+      <p v-else-if="runPath.id && reviewPathNotice" class="review-progress" role="status">{{ reviewPathNotice }}</p>
+      <div v-if="candidate" class="review-result-summary">
+        <span v-if="candidate.relationship_changed && (candidate.total_changed_voxels ?? candidate.summary.changed_voxels) === 0"
+          >Relationships updated · masks unchanged</span
+        ><span v-else
+          >{{ (candidate.total_changed_voxels ?? candidate.summary.changed_voxels).toLocaleString() }} voxels changed<template
+            v-if="(candidate.affected_structures?.length || 0) > 1"
           >
-          <template v-else-if="method === 'nninteractive'">
-            <div class="review-toolset" role="group" aria-label="AI annotation tool">
-              <button
-                v-for="item in [
-                  ['navigate', 'Navigate'],
-                  ['point', 'Point'],
-                  ['scribble', 'Hint brush'],
-                  ['lasso', 'Lasso'],
-                  ['bbox', 'Box'],
-                  ['remove', 'Remove mark'],
-                ] as const"
-                :key="item[0]"
-                :class="{ active: tool === item[0] }"
-                :aria-pressed="tool === item[0]"
-                :disabled="disabled"
-                @click="chooseTool(item[0])"
-              >
-                {{ item[1] }}
-              </button>
-            </div>
-            <div class="review-toolset polarity" role="group" aria-label="AI hint polarity">
-              <button :class="{ active: include }" :aria-pressed="include" :disabled="disabled" @click="include = true">+ Include</button
-              ><button :class="{ active: !include }" :aria-pressed="!include" :disabled="disabled" @click="include = false">− Exclude</button>
-            </div>
-          </template>
-          <label v-if="tool === 'scribble'" class="review-brush"
-            >Radius<input v-model.number="radius" type="number" aria-label="Brush radius in millimetres" min=".5" max="30" step=".5" />mm</label
+            across affected masks</template
+          ></span
+        ><span>Target +{{ candidate.summary.added_voxels.toLocaleString() }} / −{{ candidate.summary.removed_voxels.toLocaleString() }}</span
+        ><span>{{ candidate.summary.before_volume_ml.toFixed(1) }} → {{ candidate.summary.after_volume_ml.toFixed(1) }} mL</span
+        ><span v-if="candidate.gpu_name">AI result from {{ candidate.gpu_name }}</span
+        ><span v-if="candidate.summary.after_voxels === 0">{{
+          method === 'direct' && !view?.new_structure
+            ? 'This segment will be empty when saved.'
+            : 'The candidate is empty. Paint or add include hints before saving.'
+        }}</span
+        ><span v-else-if="current?.dirty">{{ staleHint() }}</span
+        ><span v-else>Inspect the result, then save a new revision.</span>
+      </div>
+      <p v-else-if="method === 'nninteractive' && current?.resultDiscarded && !current.working" class="review-progress" role="status">
+        The result was discarded because its marks or options changed. Run AI makes a new one from the marks that remain.
+      </p>
+      <p v-for="warning in candidate?.warnings || []" :key="warning" class="review-alert" role="status">{{ warning }}</p>
+    </div>
+    <!-- The tools scroll between the header and the footer, so Apply and Save always show. Each part opens in place. -->
+    <div ref="body" class="review-toolbar-rows">
+      <form v-if="addOpen" class="review-add-form" @submit.prevent="createTarget">
+        <label
+          >Name<input
+            v-model="newName"
+            aria-label="New segment name"
+            maxlength="80"
+            placeholder="e.g. Additional vessel"
+            :disabled="creating || discarding"
+            required
+            autofocus /></label
+        ><label
+          >Group<input
+            v-model="newGroup"
+            aria-label="New segment group"
+            maxlength="60"
+            list="review-segment-groups"
+            :disabled="creating || discarding" /><datalist id="review-segment-groups">
+            <option v-for="group in groups" :key="group" :value="group" /></datalist></label
+        ><label class="review-add-color">Color<input v-model="newColor" aria-label="New segment color" type="color" :disabled="creating || discarding" /></label
+        ><SegmentRelationshipEditor
+          v-model="newRelationship"
+          :structures="savedStructures"
+          target-id=""
+          :disabled="creating || discarding"
+          @validity="newPolicyValid = $event"
+        /><span>Draw the new anatomy on {{ modalityLabel }}, then Apply and save.</span>
+        <div class="review-add-actions">
+          <button class="button primary compact" type="submit" :disabled="creating || discarding || !newName.trim() || !newPolicyValid">
+            {{ creating ? 'Creating…' : 'Create empty segment' }}</button
+          ><button class="text-button" type="button" :disabled="creating || discarding" @click="addOpen = false">Cancel</button>
+        </div>
+      </form>
+      <div v-else class="review-relationship">
+        <button
+          class="text-button relationship-toggle"
+          aria-label="Edit segment relationship"
+          :aria-expanded="policyOpen"
+          :disabled="!current?.loaded || discarding"
+          @click="togglePolicy"
+        >
+          Relationship · {{ relationshipName }}
+        </button>
+        <SegmentRelationshipEditor
+          v-if="policyOpen && current?.loaded"
+          :model-value="relationship"
+          :structures="savedStructures"
+          :target-id="selected"
+          :disabled="disabled || policyLoading"
+          :suggestions="view?.relationship_suggestions"
+          @update:model-value="setRelationship"
+          @validity="policyValid = $event"
+        />
+      </div>
+      <div class="review-toolset review-methods" role="group" aria-label="Editing method">
+        <button :class="{ active: method === 'direct' }" :aria-pressed="method === 'direct'" :disabled="methodDisabled" @click="chooseMethod('direct')">
+          Direct edit</button
+        ><button
+          :class="{ active: method === 'nninteractive' }"
+          :aria-pressed="method === 'nninteractive'"
+          :disabled="methodDisabled"
+          @click="chooseMethod('nninteractive')"
+        >
+          AI assist
+        </button>
+      </div>
+      <div class="review-tools">
+        <div v-if="method === 'direct'" class="review-toolset direct-tools" role="group" aria-label="Direct editing tools">
+          <button :class="{ active: tool === 'navigate' }" :aria-pressed="tool === 'navigate'" :disabled="disabled" @click="chooseTool('navigate')">
+            Navigate</button
+          ><button
+            :class="{ active: tool === 'scribble' && include }"
+            :aria-pressed="tool === 'scribble' && include"
+            :disabled="disabled"
+            @click="chooseDirect(true)"
           >
-        </div>
-        <div class="review-history">
-          <button class="button secondary compact" :disabled="discarding || !current?.canUndo" @click="current?.undo()">↶ Undo</button
-          ><button class="button secondary compact" :disabled="discarding || !current?.canRedo" @click="current?.redo()">↷ Redo</button>
-        </div>
-        <div class="review-primary-actions">
-          <button class="button primary compact review-apply" :disabled="disabled || !pending || !policyValid || pathStopsRun(false)" @click="apply()">
-            {{ method === 'direct' ? 'Apply edits' : 'Run AI' }}<template v-if="pending"> · {{ pending }}</template></button
-          ><button class="button primary compact review-save" :disabled="!saveEnabled" @click="accept">
-            {{ view?.new_structure ? 'Save new segment' : 'Save correction' }}
+            Paint</button
+          ><button
+            :class="{ active: tool === 'scribble' && !include }"
+            :aria-pressed="tool === 'scribble' && !include"
+            :disabled="disabled"
+            @click="chooseDirect(false)"
+          >
+            Erase</button
+          ><button :class="{ active: tool === 'scissors' }" :aria-pressed="tool === 'scissors'" :disabled="disabled" @click="chooseTool('scissors')">
+            Scissors
           </button>
         </div>
+        <template v-if="method === 'direct' && tool === 'scissors'"
+          ><label class="review-scissors"
+            >Shape<select v-model="scissorsShape" aria-label="Scissors shape" :disabled="disabled">
+              <option value="freehand">Freehand</option>
+              <option value="rectangle">Rectangle</option>
+              <option value="circle">Circle</option>
+            </select></label
+          ><label class="review-scissors"
+            >Cut<select v-model="scissorsOperation" aria-label="Scissors operation" :disabled="disabled">
+              <option value="erase_inside">Erase inside</option>
+              <option value="erase_outside">Erase outside</option>
+            </select></label
+          ></template
+        >
+        <template v-else-if="method === 'nninteractive'">
+          <div class="review-toolset" role="group" aria-label="AI annotation tool">
+            <button
+              v-for="item in [
+                ['navigate', 'Navigate'],
+                ['point', 'Point'],
+                ['scribble', 'Hint brush'],
+                ['lasso', 'Lasso'],
+                ['bbox', 'Box'],
+                ['remove', 'Remove mark'],
+              ] as const"
+              :key="item[0]"
+              :class="{ active: tool === item[0] }"
+              :aria-pressed="tool === item[0]"
+              :disabled="disabled"
+              @click="chooseTool(item[0])"
+            >
+              {{ item[1] }}
+            </button>
+          </div>
+          <div class="review-toolset polarity" role="group" aria-label="AI hint polarity">
+            <button :class="{ active: include }" :aria-pressed="include" :disabled="disabled" @click="include = true">+ Include</button
+            ><button :class="{ active: !include }" :aria-pressed="!include" :disabled="disabled" @click="include = false">− Exclude</button>
+          </div>
+        </template>
+        <label v-if="tool === 'scribble'" class="review-brush"
+          >Radius<span><input v-model.number="radius" type="number" aria-label="Brush radius in millimetres" min=".5" max="30" step=".5" /> mm</span></label
+        >
       </div>
       <div class="review-toolbar-context">
         <span v-if="discarding">Closing draft…</span><span v-else-if="!current">Add a segment to start.</span
@@ -879,81 +963,11 @@ defineExpose({
         <span v-if="policyOpen && policyLoading">Loading saved relationship…</span>
         <span v-if="pathLabel" class="review-ai-path" :title="pathLabel">AI · {{ pathLabel }}</span>
         <div class="review-context-actions">
-          <button
-            v-if="!addOpen"
-            class="text-button relationship-toggle"
-            aria-label="Edit segment relationship"
-            :aria-expanded="policyOpen"
-            :disabled="!current?.loaded || discarding"
-            @click="togglePolicy"
-          >
-            Relationship · {{ relationshipName }}
-          </button>
-          <button
-            v-if="hasImpact"
-            class="text-button review-impact-toggle"
-            :aria-expanded="impactOpen"
-            :data-stale="!!current?.dirty"
-            @click="impactOpen = !impactOpen"
-          >
+          <button v-if="hasImpact" class="text-button review-impact-toggle" :aria-expanded="impactOpen" :data-stale="!!current?.dirty" @click="toggleImpact">
             Impact preview · {{ candidate?.affected_structures?.length || 1 }} {{ candidate?.affected_structures?.length === 1 ? 'mask' : 'masks' }}
           </button>
-          <div v-if="candidate" class="review-toolset candidate-switch" role="group" aria-label="Candidate display">
-            <button :class="{ active: !showCandidate }" :aria-pressed="!showCandidate" @click="showCandidate = false">
-              {{ view?.new_structure ? 'Empty baseline' : 'Original' }}</button
-            ><button :class="{ active: showCandidate }" :aria-pressed="showCandidate" @click="showCandidate = true">
-              Candidate<template v-if="current?.dirty"> · previous result</template>
-            </button>
-          </div>
-          <button v-if="current?.hasDraftChanges" class="text-button review-discard" :disabled="current.working || discarding || busy" @click="discardCurrent">
-            {{ view?.started_by ? `Discard ${view.started_by}'s draft` : 'Discard draft' }}
-          </button>
-          <button class="text-button review-more" :aria-expanded="advanced" @click="advanced = !advanced">Options {{ advanced ? '−' : '+' }}</button>
         </div>
       </div>
-    </div>
-    <div class="review-floating-panels">
-      <form v-if="addOpen" class="review-add-form" @submit.prevent="createTarget">
-        <label
-          >Name<input
-            v-model="newName"
-            aria-label="New segment name"
-            maxlength="80"
-            placeholder="e.g. Additional vessel"
-            :disabled="creating || discarding"
-            required
-            autofocus /></label
-        ><label
-          >Group<input
-            v-model="newGroup"
-            aria-label="New segment group"
-            maxlength="60"
-            list="review-segment-groups"
-            :disabled="creating || discarding" /><datalist id="review-segment-groups">
-            <option v-for="group in groups" :key="group" :value="group" /></datalist></label
-        ><label class="review-add-color">Color<input v-model="newColor" aria-label="New segment color" type="color" :disabled="creating || discarding" /></label
-        ><button class="button primary compact" type="submit" :disabled="creating || discarding || !newName.trim() || !newPolicyValid">
-          {{ creating ? 'Creating…' : 'Create empty segment' }}</button
-        ><button class="text-button" type="button" :disabled="creating || discarding" @click="addOpen = false">Cancel</button
-        ><span>Draw the new anatomy on {{ modalityLabel }}, then Apply and save.</span
-        ><SegmentRelationshipEditor
-          v-model="newRelationship"
-          :structures="savedStructures"
-          target-id=""
-          :disabled="creating || discarding"
-          @validity="newPolicyValid = $event"
-        />
-      </form>
-      <SegmentRelationshipEditor
-        v-if="policyOpen && !addOpen && current?.loaded"
-        :model-value="relationship"
-        :structures="savedStructures"
-        :target-id="selected"
-        :disabled="disabled || policyLoading"
-        :suggestions="view?.relationship_suggestions"
-        @update:model-value="setRelationship"
-        @validity="policyValid = $event"
-      />
       <div v-if="hasImpact" v-show="impactOpen" class="review-impact" :data-stale="!!current?.dirty">
         <div class="review-impact-heading">
           <span
@@ -990,6 +1004,7 @@ defineExpose({
           >
         </div>
       </div>
+      <button class="text-button review-more" :aria-expanded="advanced" @click="toggleAdvanced">Options {{ advanced ? '−' : '+' }}</button>
       <div v-if="advanced && current" class="review-advanced">
         <label
           ><input type="checkbox" :checked="native" :disabled="method === 'direct'" @change="changeNative(($event.target as HTMLInputElement).checked)" />
@@ -1031,7 +1046,7 @@ defineExpose({
           Refine whole mask
         </button>
         <template v-if="runPath.id">
-          <label
+          <label class="review-run-on"
             >{{ runPath.locked ? 'Re-run draft on' : 'Run on'
             }}<select :value="reviewPath" :disabled="current.working || discarding" @change="chooseReviewPath(($event.target as HTMLSelectElement).value)">
               <option v-for="row in runPath.paths" :key="row.id" :value="row.id" :disabled="!row.available">{{ pathOptionText(row) }}</option>
@@ -1060,75 +1075,138 @@ defineExpose({
         </p>
       </div>
     </div>
+    <footer class="review-footer">
+      <!-- Comparing the result is the step before Save, so it stays with the buttons below the scrolling tools. -->
+      <div v-if="candidate || current?.hasDraftChanges" class="review-compare">
+        <div v-if="candidate" class="review-toolset candidate-switch" role="group" aria-label="Candidate display">
+          <button :class="{ active: !showCandidate }" :aria-pressed="!showCandidate" @click="showCandidate = false">
+            {{ view?.new_structure ? 'Empty baseline' : 'Original' }}</button
+          ><button :class="{ active: showCandidate }" :aria-pressed="showCandidate" @click="showCandidate = true">
+            Candidate<template v-if="current?.dirty"> · previous result</template>
+          </button>
+        </div>
+        <button v-if="current?.hasDraftChanges" class="text-button review-discard" :disabled="current.working || discarding || busy" @click="discardCurrent">
+          {{ view?.started_by ? `Discard ${view.started_by}'s draft` : 'Discard draft' }}
+        </button>
+      </div>
+      <div class="review-history">
+        <button class="button secondary compact" :disabled="discarding || !current?.canUndo" @click="current?.undo()">↶ Undo</button
+        ><button class="button secondary compact" :disabled="discarding || !current?.canRedo" @click="current?.redo()">↷ Redo</button>
+      </div>
+      <div class="review-primary-actions">
+        <button class="button secondary compact review-apply" :disabled="disabled || !pending || !policyValid || pathStopsRun(false)" @click="apply()">
+          {{ method === 'direct' ? 'Apply edits' : 'Run AI' }}<template v-if="pending"> · {{ pending }}</template></button
+        ><button class="button primary compact review-save" :disabled="!saveEnabled" @click="accept">
+          {{ view?.new_structure ? 'Save new segment' : 'Save correction' }}
+        </button>
+      </div>
+    </footer>
   </section>
 </template>
 
 <style scoped>
 /*
- * The editing toolbar sits above both viewers, so its height decides theirs. No tool,
- * message or panel changes it: tools share a reserved slot, messages scroll in the
- * navigation row and panels lie over the viewers until they are folded.
+ * Review's tools dock in the side panel, so no tool, message or open part ever covers or resizes a
+ * viewer. The header, the messages and the footer stay put; the tools between them scroll when the
+ * column is short, so Apply and Save always show.
  */
 .review-toolbar {
-  container: review-toolbar / inline-size;
-  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  background: #171c24;
   color: #c8d1df;
 }
-/* An auto track would size to its nowrap spans, leaving them nothing to shrink against. */
-.review-toolbar-rows {
-  background: #171c24;
-  border-block: 1px solid #354052;
-  padding: 8px 12px;
+.review-panel-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
+  flex: none;
+  gap: 8px;
+  padding: 9px 12px 10px;
+  border-bottom: 1px solid #2b3647;
 }
-.review-toolbar-main,
-.review-tools,
-.review-context-actions,
-.review-result-summary {
+.review-panel-title {
   display: flex;
   align-items: center;
-  gap: 7px 9px;
+  gap: 8px;
 }
-.review-toolbar-main,
-.review-tools,
-.review-result-summary {
-  flex-wrap: wrap;
-}
-/* The basis holds the widest tool set, so choosing a tool can never rewrap the row. */
-.review-tools {
-  flex: 1 1 654px;
+.review-panel-title h2 {
+  flex: 1 1 auto;
   min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #d8e2f2;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.review-messages {
+.review-panel-title .text-button {
+  flex: none;
+  font-size: 10px;
+}
+.review-target-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.review-target {
+  display: grid;
   flex: 1 1 0;
+  gap: 3px;
   min-width: 0;
-  margin-inline: 7px;
+  font-size: 9px;
+  color: #a9b6c9;
+}
+.review-target select {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+/*
+ * About four lines show; more scroll in place, and an error scrolls them back to the top. The tools
+ * below take only the room left over, so in a very short panel the messages give way before the
+ * bottom buttons do.
+ */
+.review-messages {
+  display: grid;
+  flex: 0 1 auto;
+  min-height: 0;
+  gap: 4px;
+  max-height: 78px;
+  padding: 7px 12px;
+  overflow-y: auto;
   overflow-anchor: none;
+  border-bottom: 1px solid #2b3647;
+  line-height: 15px;
   scrollbar-width: thin;
   scrollbar-color: var(--control-border) transparent;
 }
 .review-messages:focus-visible {
   outline: 2px solid var(--control-focus);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 .review-messages:empty {
   display: none;
 }
-.review-target {
-  display: flex;
-  flex: 0 0 200px;
-  align-items: center;
-  gap: 6px;
-  font-size: 9px;
-  color: #a9b6c9;
+/* A zero minimum keeps a long GPU name from widening the column; the chip shortens instead. */
+.review-toolbar-rows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1 1 0%;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  padding: 10px 12px 12px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--control-border) transparent;
 }
-.review-target select {
-  flex: 1 1 0;
-  font-size: 11px;
-  padding: 5px 7px;
-  min-width: 0;
+.review-relationship {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
 }
 .review-toolset {
   display: flex;
@@ -1143,7 +1221,10 @@ defineExpose({
   padding: 6px 9px;
   font-size: 11px;
   cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .review-toolset button.active {
   background: #39465b;
@@ -1153,6 +1234,17 @@ defineExpose({
   opacity: 0.4;
   cursor: default;
 }
+/* Tools fill a grid of equal cells, as many to a row as the column holds. The minimum fits the
+   longest label, Remove mark, whole. */
+.review-methods,
+.review-tools > .review-toolset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+}
+.review-methods,
+.review-tools > .polarity {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .polarity button:first-child.active {
   background: #25463d;
   color: #9ae4c2;
@@ -1161,89 +1253,96 @@ defineExpose({
   background: #51333d;
   color: #ffb9c3;
 }
-.review-history,
-.review-primary-actions {
-  display: flex;
-  gap: 5px;
+.review-tools {
+  display: grid;
+  gap: 7px;
 }
-.review-history {
-  margin-left: auto;
-}
-.review-toolbar .button {
-  font-size: 11px;
-  padding: 6px 10px;
-  min-height: 29px;
-}
-/* Labels change with the draft, so the buttons keep room for the longest one. */
-.review-apply {
-  min-width: 104px;
-}
-.review-save {
-  min-width: 124px;
-  background: #cfddf2;
-}
-.review-toolbar-context {
-  display: flex;
-  align-items: center;
-  gap: 7px 9px;
-  height: 27px;
-  font-size: 10px;
-  color: #9dadc4;
-}
-.review-toolbar-context > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.review-toolbar-context > span:first-child {
-  flex: none;
-}
-.review-toolbar-context > span:nth-child(2) {
-  color: #c1cadd;
-}
-.review-context-actions {
-  flex: none;
-  margin-left: auto;
-}
-.review-context-actions .candidate-switch {
-  padding: 1px;
-}
-.candidate-switch button {
-  padding: 2px 9px;
-  font-size: 10px;
-}
-.review-result-summary {
-  font-size: 10px;
-  color: #c1cfe4;
-  gap: 0 15px;
-}
-.review-brush {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-}
-.review-brush input {
-  width: 55px;
-  font-size: 11px;
-  padding: 6px;
-}
+.review-brush,
 .review-scissors {
   display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 10px;
 }
-.review-scissors select {
+.review-brush input {
+  width: 58px;
+  padding: 5px 6px;
   font-size: 11px;
-  padding: 6px;
-  max-width: 132px;
+}
+.review-scissors select {
+  flex: 0 1 140px;
+  min-width: 0;
+  padding: 5px 6px;
+  font-size: 11px;
+}
+.review-toolbar-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: #9dadc4;
+}
+.review-toolbar-context > span {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.review-toolbar-context > span:first-child {
+  color: #c1cadd;
+}
+.review-toolbar-context > .review-ai-path {
+  flex: 0 1 auto;
+  overflow: hidden;
+  padding: 1px 7px;
+  border: 1px solid #424e60;
+  border-radius: 9px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.review-context-actions {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.review-context-actions:empty {
+  display: none;
+}
+/* Original | Candidate and Discard draft share the first line, apart from Undo and Redo. */
+.review-compare {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.review-compare > .candidate-switch {
+  display: grid;
+  flex: 1 1 150px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 1px;
+}
+.candidate-switch button {
+  padding: 3px 7px;
+  font-size: 10px;
+  white-space: normal;
+}
+.review-result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  font-size: 10px;
+  color: #c1cfe4;
 }
 .review-working {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
 }
 .review-working .spinner {
   width: 12px;
@@ -1255,112 +1354,121 @@ defineExpose({
   color: #c1cfe4;
 }
 .review-alert {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin: 0;
   font-size: 11px;
   color: #e1b6b6;
 }
-/* An action stays beside its message, so a wrapped line cannot push it out of view. */
+/* An action follows the end of its message, so the column's full width carries the text. */
 .review-alert .text-button {
-  flex: none;
+  margin-left: 4px;
   padding: 1px 7px;
   font-size: 10px;
 }
-.review-advanced {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 10px;
-  background: #11161d;
-  border: 1px solid #3b485e;
-  border-radius: 5px;
-  font-size: 10px;
-}
-.review-advanced label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.review-advanced input {
-  margin: 0;
-}
-.review-advanced select {
-  min-width: 0;
-  max-width: 280px;
+.review-toolbar .button {
+  min-height: 29px;
+  padding: 6px 10px;
   font-size: 11px;
-  padding: 5px 7px;
 }
-.review-advanced small {
-  color: #8696ad;
-}
-.review-advanced .text-button {
+.relationship-toggle,
+.review-impact-toggle,
+.review-more {
+  justify-self: start;
   font-size: 10px;
-}
-.review-advanced p {
-  flex-basis: 100%;
-  margin: 0;
-  color: #91a2ba;
-  line-height: 1.5;
-}
-.review-add-form {
-  display: flex;
-  align-items: flex-end;
-  gap: 9px;
-  flex-wrap: wrap;
-  padding: 10px;
-  background: #10161f;
-  border: 1px solid #3b485e;
-  border-radius: 5px;
-}
-.review-add-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 10px;
-  color: #acbdd4;
-}
-.review-add-form input {
-  font-size: 12px;
-  padding: 7px;
-  min-width: 140px;
-}
-.review-add-form label:first-child input {
-  min-width: 220px;
-}
-.review-add-form .review-add-color input {
-  width: 42px;
-  min-width: 42px;
-  height: 32px;
-  padding: 2px;
-}
-.review-add-form > span {
-  align-self: center;
-  font-size: 10px;
-  color: #92a5c0;
 }
 .review-new-target-note {
   color: #d4b4ff;
 }
-.relationship-toggle,
-.review-impact-toggle {
+.review-add-form,
+.review-advanced,
+.review-impact {
+  border: 1px solid #3b485e;
+  border-radius: 5px;
+  background: #11161d;
   font-size: 10px;
+}
+.review-add-form {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+}
+.review-add-form label {
+  display: grid;
+  gap: 4px;
+  color: #acbdd4;
+}
+.review-add-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px;
+  font-size: 12px;
+}
+.review-add-form .review-add-color {
+  grid-template-columns: auto 42px;
+  justify-content: start;
+  align-items: center;
+  gap: 10px;
+}
+.review-add-form .review-add-color input {
+  height: 30px;
+  padding: 2px;
+}
+.review-add-form > span {
+  color: #92a5c0;
+}
+/* The form is taller than a short column, so its buttons stick to the bottom of the tools, over their 12 px padding. */
+.review-add-actions {
+  position: sticky;
+  bottom: -12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-block: 6px;
+  background: #11161d;
+}
+.review-advanced {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+.review-advanced label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.review-advanced small {
+  flex-basis: 100%;
+  color: #8696ad;
+}
+.review-advanced input {
+  margin: 0;
+}
+.review-advanced .review-run-on {
+  display: grid;
+}
+.review-advanced select {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+.review-advanced > :is(.button, .text-button) {
+  justify-self: start;
+  font-size: 10px;
+}
+.review-advanced p {
+  margin: 0;
+  color: #91a2ba;
+  line-height: 1.5;
 }
 .review-impact {
   padding: 3px 10px 6px;
-  background: #11161d;
-  border: 1px solid #3b485e;
-  border-radius: 5px;
-  font-size: 10px;
   color: #acbdd4;
 }
 .review-impact-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
   padding: 7px 0;
   color: #93a7c3;
 }
@@ -1368,19 +1476,27 @@ defineExpose({
   font-size: 10px;
   white-space: nowrap;
 }
-.review-impact table {
+/* Each segment takes a line of its own, with its three numbers under it, so the table fits the column. */
+.review-impact table,
+.review-impact :is(thead, tbody) {
+  display: grid;
   width: 100%;
-  border-collapse: collapse;
   font-size: 10px;
 }
-.review-impact th,
-.review-impact td {
-  padding: 5px 8px;
-  text-align: right;
+.review-impact tr {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px 6px;
+  padding: 5px 0;
   border-bottom: 1px solid #2b3647;
 }
-.review-impact th:first-child,
-.review-impact td:first-child {
+.review-impact :is(th, td) {
+  padding: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.review-impact :is(th, td):first-child {
+  grid-column: 1 / -1;
   text-align: left;
 }
 .review-impact th {
@@ -1395,75 +1511,43 @@ defineExpose({
   display: flex;
   flex-wrap: wrap;
   gap: 6px 12px;
-  padding: 8px;
+  padding: 8px 0;
   color: #a6b9d3;
 }
 .review-impact[data-stale='true'],
 .review-impact-toggle[data-stale='true'] {
   border-color: #6b573c;
 }
-.review-floating-panels {
-  display: grid;
-  padding-inline: 12px;
+/* Undo and Redo, then Apply and Save, share a line when the column has room and stack when it has not. */
+.review-footer {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid #354052;
+  background: #141921;
 }
-.review-floating-panels > * {
-  margin-block: 8px 0;
+.review-history,
+.review-primary-actions {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
 }
-.review-floating-panels > :last-child {
-  margin-bottom: 8px;
+.review-footer .button {
+  flex: 1 1 auto;
 }
-@container review-toolbar (max-width: 1513px) {
-  .review-tools {
-    order: 1;
-    flex-basis: 100%;
-  }
+/* Labels change with the draft, so the buttons keep room for the longest one. */
+.review-apply {
+  min-width: 104px;
 }
-/* A narrow toolbar keeps a second context line whether or not the draft fills it. */
-@container review-toolbar (max-width: 900px) {
-  .review-toolbar-context {
-    flex-wrap: wrap;
-    align-content: center;
-    height: 60px;
-  }
-  .review-context-actions {
-    flex-basis: 100%;
-    justify-content: flex-end;
-  }
+.review-save {
+  min-width: 124px;
+  background: #cfddf2;
 }
-@media (min-width: 1001px) {
-  /* Two lines of messages fit the navigation row; the rest scroll in place. */
-  .review-messages {
-    max-height: 30px;
-    overflow-y: auto;
-    line-height: 15px;
-  }
-  /* Panels open on request and fold the same way, so they lie over the viewers. */
-  .review-floating-panels {
-    position: absolute;
-    top: 100%;
-    inset-inline: 0;
-    justify-items: end;
-    gap: 6px;
-    max-height: calc(100dvh - 280px);
-    padding-block: 6px;
-    overflow: auto;
-    pointer-events: none;
-  }
-  .review-floating-panels > * {
-    width: min(640px, 100%);
-    margin: 0;
-    box-shadow: 0 12px 32px #0008;
-    pointer-events: auto;
-  }
-  .review-floating-panels > .review-add-form {
-    justify-self: start;
-    width: min(800px, 100%);
-  }
-}
-@media (max-width: 1000px) {
-  .review-messages {
-    order: 1;
-    flex-basis: 100%;
-  }
+.review-discard {
+  margin-left: auto;
+  font-size: 10px;
 }
 </style>

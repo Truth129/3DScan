@@ -179,13 +179,16 @@ const interactiveDraft = ref<InteractiveReview>(),
   interactiveCandidate = ref(true),
   interactiveDisabled = ref(false);
 const interactiveScissors = ref<{ shape: ScissorsShape; operation: ScissorsOperation }>({ shape: 'freehand', operation: 'erase_inside' });
-const interactiveOpen = ref(false),
+const reviewAlert = ref(false),
+  interactiveOpen = ref(false),
   interactivePrompts = ref<InteractivePrompt[]>([]),
   interactiveInclude = ref(true),
   interactiveRadius = ref(3),
   interactiveNative = ref(true);
 const workspaceMode = ref<'model' | 'review'>('model'),
   reviewFocus = ref<'both' | 'ct' | 'model'>('both');
+// The hidden side panel's edge says so while a review message waits, in its name as well as its dot.
+const edgeAlert = computed(() => workspaceMode.value === 'review' && reviewAlert.value);
 const pendingStructures = ref<Structure[]>([]);
 const reviewStructures = computed(() =>
   displayStructures(
@@ -418,7 +421,6 @@ const topBar = ref<HTMLElement>(),
   segmentButton = ref<HTMLButtonElement>(),
   segImport = ref<InstanceType<typeof DicomSegImport>>(),
   segExport = ref<InstanceType<typeof DicomSegExport>>();
-const segmentationLeft = ref<number>();
 function createVolumeView() {
   return defineAsyncComponent(() => import('./components/CornerstoneVolumeView.vue'));
 }
@@ -1151,29 +1153,21 @@ async function loadSegmentationOptions(preserveCurrent = false) {
     if (alive && ticket.current()) segmentationLoading.value = false;
   }
 }
+/** The settings dock in the side panel's task slot, as review's tools do, so a hidden panel opens first. */
 function openSegmentation() {
   if (!revision.value || synthetic.value || busy.value || !canSegment.value) return;
   ctExpanded.value = false;
   prepareOpen.value = false;
-  workspaceMode.value = 'model';
+  exitReview();
+  showTaskSlot();
   segmentationOpen.value = true;
   void loadSegmentationOptions(!!segmentationCatalog.value);
-  void nextTick(placeSegmentation);
 }
-/** The panel hangs under Segment CT…, moved left only as far as the window needs. A narrow window shows it full width. */
-function placeSegmentation() {
-  const button = segmentButton.value,
-    bar = topBar.value;
-  if (!segmentationOpen.value || place('segment') !== 'bar' || !(button instanceof HTMLElement) || !(bar instanceof HTMLElement)) {
-    segmentationLeft.value = undefined;
-    return;
-  }
-  const width = Math.min(680, bar.clientWidth - 24),
-    left = button.getBoundingClientRect().left - bar.getBoundingClientRect().left;
-  segmentationLeft.value = Math.max(12, Math.min(left, bar.clientWidth - width - 12));
+/** The side panel holds the task slot. A narrow window shows it through ☷ Anatomy. */
+function showTaskSlot() {
+  if (!panels.value.sidebar) setPanel('sidebar', true);
+  if (fold.value === 'compact') mobilePanel.value = 'anatomy';
 }
-// A job or newer-version chip, its text or its progress bar moves the Segment button, so the panel follows it.
-watch([fold, chipShown, jobStatus, () => !!job.value?.progress?.total], () => void nextTick(placeSegmentation));
 function closeSegmentation() {
   segmentationOpen.value = false;
   // Its close button leaves with it, so focus goes back to the button that opens it: Segment CT… or ⋯.
@@ -1286,14 +1280,33 @@ function cornerstoneWindowLevel(value: [number, number]) {
 }
 // Review opens on the views the main page was left with. The starting tool is
 // chosen first so that it reaches the 3D view with review itself, not as a later
-// tool change that would turn the camera to face the CT plane.
+// tool change that would turn the camera to face the CT plane. The tools dock in
+// the side panel, which opens first if hidden, so the viewers resize once, before
+// any mark. Pressing the switch again while reviewing only brings back a hidden
+// side panel, since showing review again would reset the tool.
 async function openInteractiveReview() {
+  if (workspaceMode.value === 'review') {
+    if (!panels.value.sidebar) setPanel('sidebar', true);
+    return;
+  }
   ctExpanded.value = false;
+  segmentationOpen.value = false;
+  if (!panels.value.sidebar) setPanel('sidebar', true);
   const shown = interactivePanel.value?.show();
   await nextTick();
   reviewFocus.value = reviewFocusFor(panels.value);
   workspaceMode.value = 'review';
   await shown;
+}
+/**
+ * View and Exit review leave the same way. Marks keep saving to the draft on the server, so nothing is
+ * asked or lost. Exit review leaves with its panel, so focus goes to the switch that brings it back.
+ */
+function exitReview() {
+  if (workspaceMode.value !== 'review') return;
+  const fromPanel = document.activeElement instanceof HTMLElement && !!document.activeElement.closest('.workspace-task');
+  workspaceMode.value = 'model';
+  if (fromPanel) void nextTick(() => document.querySelector<HTMLButtonElement>('.mode-switch .review-action')?.focus({ preventScroll: true }));
 }
 function picked(id: string, next: Point) {
   selected.value = id;
@@ -1480,7 +1493,6 @@ function keyboard(event: KeyboardEvent) {
 }
 onMounted(async () => {
   document.addEventListener('keydown', keyboard);
-  window.addEventListener('resize', placeSegmentation);
   setCaseCheck(checkOpenCase);
   const results = await Promise.allSettled([api.cases(), api.health()]);
   if (results[0].status === 'fulfilled') {
@@ -1505,7 +1517,6 @@ onBeforeUnmount(() => {
   clearTimeout(noticeTimer);
   clearTimeout(trashOfferTimer);
   document.removeEventListener('keydown', keyboard);
-  window.removeEventListener('resize', placeSegmentation);
   setCaseCheck(undefined);
 });
 </script>
@@ -1655,23 +1666,20 @@ onBeforeUnmount(() => {
           </TopBarMenu>
         </div>
         <span v-if="!ctOnly || canSegment" class="top-bar-divider" aria-hidden="true"></span
-        ><button
-          v-if="!ctOnly"
-          class="button secondary compact review-action"
-          :class="{ active: workspaceMode === 'review' }"
-          :aria-current="workspaceMode === 'review' ? 'true' : undefined"
-          @click="openInteractiveReview"
-        >
-          <span>Review<span class="review-long"> segmentation</span> ↗</span></button
-        ><button
-          v-else-if="canSegment"
-          class="button secondary compact review-action"
-          :class="{ active: workspaceMode === 'review' }"
-          :aria-current="workspaceMode === 'review' ? 'true' : undefined"
-          @click="openInteractiveReview"
-        >
-          + Add segment ↗</button
-        ><span class="top-bar-divider" aria-hidden="true"></span>
+        ><!-- Review is a mode: its tools take the side panel's top, and View leaves it as Exit review does. -->
+        <div v-if="!ctOnly || canSegment" class="mode-switch" role="group" aria-label="Mode">
+          <button type="button" class="button secondary compact view-action" :aria-pressed="workspaceMode !== 'review'" @click="exitReview">View</button
+          ><button
+            type="button"
+            class="button secondary compact review-action"
+            :class="{ active: workspaceMode === 'review' }"
+            :aria-pressed="workspaceMode === 'review'"
+            @click="openInteractiveReview"
+          >
+            <span v-if="!ctOnly">Review<span class="review-long"> segmentation</span> ↗</span><template v-else>+ Add segment ↗</template>
+          </button>
+        </div>
+        <span class="top-bar-divider" aria-hidden="true"></span>
         <div class="top-bar-group">
           <DicomSegExport
             v-if="!ctOnly"
@@ -1818,6 +1826,7 @@ onBeforeUnmount(() => {
           v-model="panels"
           v-model:layout="layout"
           :review-label="`${sourceLabel} review`"
+          :focus="workspaceMode === 'review' ? sourceLabel : undefined"
         />
         <div v-if="activeCase && job && (busyJob || job.status === 'failed')" class="job-banner" :class="{ failed: job.status === 'failed' }" role="status">
           <span v-if="busyJob" class="spinner"></span
@@ -1885,22 +1894,6 @@ onBeforeUnmount(() => {
         <span>⚠ {{ error }}</span
         ><button aria-label="Dismiss error" @click="error = ''">×</button>
       </div>
-      <SegmentationControls
-        v-if="segmentationOpen && !prepareOpen && caseOpen && revision"
-        v-model="segmentationSettings"
-        v-model:inference-path="chosenSegmentationPath"
-        :style="segmentationLeft === undefined ? undefined : { left: `${segmentationLeft}px` }"
-        :path-notice="segmentationPathNotice"
-        :catalog="segmentationCatalog"
-        :busy="busy"
-        :loading="segmentationLoading"
-        :error="segmentationError"
-        @run="segment"
-        @close="closeSegmentation"
-        @retry="loadSegmentationOptions(segmentationPaths.length > 1)"
-        @recheck="loadSegmentationOptions(true)"
-        @license-changed="loadSegmentationOptions(true)"
-      />
     </header>
 
     <div v-if="notice" class="toast" role="status">{{ notice }}</div>
@@ -2006,46 +1999,64 @@ onBeforeUnmount(() => {
           ]"
           :style="workspaceStyle"
         >
-          <div v-show="workspaceMode === 'review'" class="review-workspace-toolbar">
-            <InteractiveReviewPanel
-              ref="interactivePanel"
-              :modality="sourceLabel"
-              :case-id="activeCase.id"
-              :revision-id="revision.id"
-              :selected="selected"
-              :structures="reviewStructures"
-              :busy="busy"
-              :active="workspaceMode === 'review'"
-              :surface-error="showingCandidate ? candidateSurfaceError : ''"
-              :surface-loading="showingCandidate && candidateSurfaceLoading"
-              @retry-surface="loadCandidateSurface"
-              @state="setInteractiveReview"
-              @targets="pendingStructures = $event"
-              @create-target="createTarget"
-              @remove-target="removeTarget"
-              @prompts="interactivePrompts = $event"
-              @select="select"
-              @tool="interactiveTool = $event"
-              @polarity="interactiveInclude = $event"
-              @radius="interactiveRadius = $event"
-              @scissors="interactiveScissors = $event"
-              @native="interactiveNative = $event"
-              @candidate="interactiveCandidate = $event"
-              @preview-overlaps="previewOverlaps"
-              @disabled="interactiveDisabled = $event"
-              @opened="interactiveOpen = $event"
-              @accept="track"
-            >
-              <template #navigation>
-                <strong>Review segmentation</strong
-                ><button :class="{ active: reviewFocus === 'both' }" @click="setReviewFocus('both')">{{ sourceLabel }} + 3D</button
-                ><button :class="{ active: reviewFocus === 'ct' }" @click="setReviewFocus('ct')">Focus {{ sourceLabel }}</button
-                ><button :class="{ active: reviewFocus === 'model' }" @click="setReviewFocus('model')">Focus 3D</button>
-              </template>
-              <template #exit><button class="text-button" @click="workspaceMode = 'model'">Exit review</button></template>
-            </InteractiveReviewPanel>
-          </div>
-          <div id="workspace-sidebar" v-show="panels.sidebar" class="workspace-sidebar">
+          <!-- A narrow window shows one area at a time, and its own rules decide when this one shows. -->
+          <div
+            id="workspace-sidebar"
+            v-show="panels.sidebar || fold === 'compact'"
+            class="workspace-sidebar"
+            :class="{ 'task-open': workspaceMode === 'review' || segmentationOpen }"
+          >
+            <!-- The task slot: review's tools or the segmentation settings, above the tabs. Opening either changes only this column. -->
+            <div v-show="workspaceMode === 'review' || segmentationOpen" class="workspace-task">
+              <InteractiveReviewPanel
+                v-show="workspaceMode === 'review'"
+                ref="interactivePanel"
+                :modality="sourceLabel"
+                :case-id="activeCase.id"
+                :revision-id="revision.id"
+                :selected="selected"
+                :structures="reviewStructures"
+                :busy="busy"
+                :active="workspaceMode === 'review'"
+                :surface-error="showingCandidate ? candidateSurfaceError : ''"
+                :surface-loading="showingCandidate && candidateSurfaceLoading"
+                @retry-surface="loadCandidateSurface"
+                @state="setInteractiveReview"
+                @targets="pendingStructures = $event"
+                @create-target="createTarget"
+                @remove-target="removeTarget"
+                @prompts="interactivePrompts = $event"
+                @select="select"
+                @tool="interactiveTool = $event"
+                @polarity="interactiveInclude = $event"
+                @radius="interactiveRadius = $event"
+                @scissors="interactiveScissors = $event"
+                @native="interactiveNative = $event"
+                @candidate="interactiveCandidate = $event"
+                @preview-overlaps="previewOverlaps"
+                @disabled="interactiveDisabled = $event"
+                @opened="interactiveOpen = $event"
+                @alert="reviewAlert = $event"
+                @accept="track"
+              >
+                <template #exit><button class="text-button" @click="exitReview">Exit review</button></template>
+              </InteractiveReviewPanel>
+              <SegmentationControls
+                v-if="segmentationOpen"
+                v-model="segmentationSettings"
+                v-model:inference-path="chosenSegmentationPath"
+                :path-notice="segmentationPathNotice"
+                :catalog="segmentationCatalog"
+                :busy="busy"
+                :loading="segmentationLoading"
+                :error="segmentationError"
+                @run="segment"
+                @close="closeSegmentation"
+                @retry="loadSegmentationOptions(segmentationPaths.length > 1)"
+                @recheck="loadSegmentationOptions(true)"
+                @license-changed="loadSegmentationOptions(true)"
+              />
+            </div>
             <section id="workspace-inspector-panel" class="inspector" aria-label="Side panel">
               <!-- The long names stay in the DOM: narrow panels show the short ones. -->
               <header class="inspector-tabs">
@@ -2222,14 +2233,15 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="sidebar-edge-tab"
-              aria-label="Show side panel"
-              title="Show side panel (\)"
+              :aria-label="edgeAlert ? 'Show side panel · review has a message' : 'Show side panel'"
+              :title="edgeAlert ? 'Show side panel (\\) · review has a message' : 'Show side panel (\\)'"
               aria-controls="workspace-sidebar"
               aria-expanded="false"
               aria-keyshortcuts="\"
               @click="setPanel('sidebar', true)"
             >
-              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m8 5 5 5-5 5" /></svg>
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m8 5 5 5-5 5" /></svg
+              ><span v-if="edgeAlert" class="tab-alert" aria-hidden="true"></span>
             </button>
           </div>
           <WorkspaceSplitter

@@ -500,6 +500,35 @@ describe('the side panel', () => {
     expect(empty.content).toContain('4 × 4 × 4 voxels');
     expect(empty.button('+ Add segment by hand')).toBeDefined();
   });
+  it("docks the segmentation settings and review's tools above the tabs, and View leaves review", async () => {
+    workstation([amd]);
+    vi.spyOn(api, 'interactiveReviews').mockImplementation(async () => []);
+    const root = await start();
+    await press(root.button('Segment CT…'));
+    expect(root.named('workspace-task')!.named('segmentation-panel')).toBeDefined();
+    await press(root.button('+ Add segment ↗'));
+    expect(root.named('review-workspace')).toBeDefined();
+    expect(root.named('segmentation-panel'), 'one task at a time').toBeUndefined();
+    expect(root.named('workspace-task')!.named('review-add-form')).toBeDefined();
+    expect(
+      root.all.some(node => node.props['aria-label'] === 'Focus 3D'),
+      'the layout icons focus a tile',
+    ).toBe(true);
+    await press(root.button('View'));
+    expect(root.named('review-workspace')).toBeUndefined();
+  });
+  it('brings a hidden side panel back when the pressed review switch is pressed again', async () => {
+    workstation([amd]);
+    vi.spyOn(api, 'interactiveReviews').mockImplementation(async () => []);
+    const root = await start();
+    await press(root.button('+ Add segment ↗'));
+    const sidebar = root.all.find(node => node.props.id === 'workspace-sidebar')!;
+    await press(root.all.find(node => node.props['aria-label'] === 'Hide side panel')!);
+    expect(sidebar.style).toMatchObject({ display: 'none' });
+    await press(root.button('+ Add segment ↗'));
+    expect(sidebar.style).not.toMatchObject({ display: 'none' });
+    expect(root.named('review-workspace')).toBeDefined();
+  });
 });
 
 describe('a case that has gone', () => {

@@ -24,4 +24,12 @@ describe('review toolbar', () => {
     expect(loading).toContain('Preparing the 3D candidate preview');
     expect(loading).not.toContain('role="alert"');
   });
+  it('reads down one column, with Apply and Save in the footer under the tools and nothing over a viewer', async () => {
+    const html = await renderToString(createSSRApp(InteractiveReviewPanel, props));
+    const order = ['review-panel-header', 'review-messages', 'review-toolbar-rows', 'review-footer'].map(name => html.indexOf(`class="${name}"`));
+    expect(order.every((at, index) => at >= 0 && (!index || at > order[index - 1]))).toBe(true);
+    const footer = html.slice(html.indexOf('class="review-footer"'));
+    for (const label of ['↶ Undo', '↷ Redo', 'Apply edits', 'Save correction']) expect(footer).toContain(label);
+    expect(html).not.toContain('review-floating-panels');
+  });
 });
