@@ -289,7 +289,8 @@ async function initialize() {
   }
 }
 function click(plane: Plane, event: MouseEvent) {
-  if (!viewer || loading.value || error.value || marking.value || event.button !== 0) return;
+  // The first click of a double click has already centred the panes, so the same pixel now shows another point.
+  if (!viewer || loading.value || error.value || marking.value || event.button !== 0 || event.detail > 1) return;
   if (pointerStart && Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 4) return;
   const rect = elements[plane]!.getBoundingClientRect();
   const ras = viewer.canvasToRas(plane, [event.clientX - rect.left, event.clientY - rect.top]);
