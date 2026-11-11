@@ -15,7 +15,7 @@ const emit = defineEmits<{ reset: [] }>();
 <template>
   <div class="ct-mpr-controls" :title="disabled ? 'Available once the full CT has loaded' : undefined">
     <label><input v-model="crosshairs" type="checkbox" :disabled="disabled || nativeReview || marking" /> Rotatable crosshairs</label>
-    <label title="A navigate click here or in 3D also centres all three planes on its point, at their zoom"
+    <label title="Navigate clicks also centre all three planes on their point, at their zoom"
       ><input v-model="centreOnClick" type="checkbox" :disabled="disabled" /> Centre on click</label
     >
     <label
