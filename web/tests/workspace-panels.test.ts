@@ -28,21 +28,42 @@ afterEach(() => {
 
 describe('workspace panel preferences', () => {
   it('retains valid choices across storage, ignores unrelated or inherited fields, and repairs a layout hiding both viewers', () => {
-    const inherited = Object.assign(Object.create({ anatomy: false }), { model: false, review: true, inspector: false, unrelated: true });
-    expect(restoreWorkspacePanels(inherited)).toEqual({ anatomy: true, model: false, review: true, inspector: false });
-    expect(restoreWorkspacePanels('{"anatomy":false,"review":false,"inspector":false}')).toEqual({
-      anatomy: false,
+    const inherited = Object.assign(Object.create({ sidebar: false, tab: 'history' }), { model: false, review: true, unrelated: true });
+    expect(restoreWorkspacePanels(inherited)).toEqual({ sidebar: true, model: false, review: true, tab: 'segments' });
+    expect(restoreWorkspacePanels('{"sidebar":false,"review":false,"tab":"coronary"}')).toEqual({
+      sidebar: false,
       model: true,
       review: false,
-      inspector: false,
+      tab: 'coronary',
     });
-    expect(restoreWorkspacePanels({ model: 'false', review: 0, inspector: null })).toEqual(defaultWorkspacePanels());
-    expect(restoreWorkspacePanels({ anatomy: false, model: false, review: false, inspector: false })).toEqual({
-      anatomy: false,
-      model: true,
-      review: false,
-      inspector: false,
-    });
+    expect(restoreWorkspacePanels({ model: 'false', review: 0, sidebar: null, tab: 'selection' })).toEqual(defaultWorkspacePanels());
+  });
+
+  // Before the side panel had tabs, records kept the anatomy list and its details apart.
+  it.each([
+    [
+      { anatomy: true, model: true, review: true, inspector: true },
+      { sidebar: true, model: true, review: true },
+    ],
+    [
+      { anatomy: true, model: true, review: false, inspector: false },
+      { sidebar: true, model: true, review: false },
+    ],
+    [
+      { anatomy: false, model: false, review: true, inspector: true },
+      { sidebar: true, model: false, review: true },
+    ],
+    [
+      { anatomy: false, model: true, review: true, inspector: false },
+      { sidebar: false, model: true, review: true },
+    ],
+    [
+      { anatomy: false, model: false, review: false, inspector: false },
+      { sidebar: false, model: true, review: false },
+    ],
+    [{ anatomy: false }, { sidebar: true, model: true, review: true }],
+  ])('restores an old record %o', (stored, panels) => {
+    expect(restoreWorkspacePanels(JSON.stringify(stored))).toEqual({ ...panels, tab: 'segments' });
   });
 
   it.each([null, 'not JSON', '[]', 0])('falls back safely for invalid storage %s', value => {
@@ -59,14 +80,13 @@ describe('workspace panel preferences', () => {
     const modelOnly = setWorkspacePanel(original, 'review', false);
     expect(canHideWorkspacePanel(modelOnly, 'model')).toBe(false);
     expect(setWorkspacePanel(modelOnly, 'model', false)).toEqual(modelOnly);
-    expect(setWorkspacePanel(ctOnly, 'anatomy', false).anatomy).toBe(false);
-    expect(setWorkspacePanel(ctOnly, 'inspector', false).inspector).toBe(false);
+    expect(setWorkspacePanel(ctOnly, 'sidebar', false).sidebar).toBe(false);
   });
 
   it('persists panels and a normalized layout, and reads them back', () => {
     const stored = new Map<string, string>();
     vi.stubGlobal('localStorage', { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => stored.set(key, value) });
-    const state = { anatomy: false, model: false, review: true, inspector: false };
+    const state = { sidebar: false, model: false, review: true, tab: 'history' } as const;
     saveWorkspacePanels(state);
     expect(stored.get(WORKSPACE_PANELS_STORAGE_KEY)).toBe(JSON.stringify(state));
     expect(readWorkspacePanels()).toEqual(state);
@@ -113,9 +133,9 @@ describe('workspace tiling preferences', () => {
   });
 
   it.each([
-    [{ anatomy: true, model: true, review: true, inspector: true }, 'both'],
-    [{ anatomy: true, model: false, review: true, inspector: true }, 'ct'],
-    [{ anatomy: true, model: true, review: false, inspector: true }, 'model'],
+    [{ ...defaultWorkspacePanels(), model: true, review: true }, 'both'],
+    [{ ...defaultWorkspacePanels(), model: false, review: true }, 'ct'],
+    [{ ...defaultWorkspacePanels(), model: true, review: false }, 'model'],
   ] as const)('opens review on the viewers the panels show: %o', (panels, focus) => {
     expect(reviewFocusFor(panels)).toBe(focus);
   });
@@ -134,7 +154,7 @@ describe('workspace tiling preferences', () => {
   });
 
   it('describes and applies stage presets without touching the sidebar or tile sizes', () => {
-    const panels = { ...defaultWorkspacePanels(), anatomy: false },
+    const panels = { ...defaultWorkspacePanels(), sidebar: false },
       layout = { ...defaultWorkspaceLayout(), modelShare: 0.7, sidebarWidth: 320 };
     expect(workspacePreset(panels, layout)).toBe('columns');
     const rows = applyWorkspacePreset(panels, layout, 'rows');
@@ -153,10 +173,9 @@ describe('workspace tiling preferences', () => {
     expect(layout.arrangement).toBe('columns');
   });
 
-  it('hides both sidebar sections together and restores both when neither is shown', () => {
-    const hidden = toggleWorkspaceSidebar(defaultWorkspacePanels());
-    expect(hidden).toEqual({ ...defaultWorkspacePanels(), anatomy: false, inspector: false });
-    expect(toggleWorkspaceSidebar({ ...hidden, inspector: true })).toEqual(hidden);
-    expect(toggleWorkspaceSidebar(hidden)).toEqual(defaultWorkspacePanels());
+  it('hides and shows the side panel and keeps its tab', () => {
+    const hidden = toggleWorkspaceSidebar({ ...defaultWorkspacePanels(), tab: 'history' });
+    expect(hidden).toEqual({ ...defaultWorkspacePanels(), sidebar: false, tab: 'history' });
+    expect(toggleWorkspaceSidebar(hidden)).toEqual({ ...defaultWorkspacePanels(), tab: 'history' });
   });
 });

@@ -237,7 +237,8 @@ input[type='range'] {
 .structure-row:hover {
   background: #1b1f27;
 }
-.structure-row.selected {
+.structure-row.selected,
+.structure-details {
   background: #232a36;
   border-left-color: var(--accent);
 }

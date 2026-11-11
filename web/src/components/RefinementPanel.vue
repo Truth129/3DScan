@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import type { Bounds, Geometry, Operation, Point } from '../types';
-const props = defineProps<{ point: Point; geometry: Geometry; selected: string; busy: boolean }>();
+// The name and colour say which structure a click on a surface has made the target.
+const props = defineProps<{ point: Point; geometry: Geometry; selected: string; name: string; color: string; busy: boolean }>();
 const emit = defineEmits<{ apply: [operation: Operation] }>();
 const type = ref<Operation['type']>('keep_component');
 const seed = ref<Point>([...props.point]);
@@ -31,7 +32,10 @@ function apply() {
       <h3>Refine segmentation</h3>
       <span class="pill">REVISIONED</span>
     </div>
-    <p class="help">Changes affect the selected structure. Every operation preserves its input revision.</p>
+    <p class="help">
+      Changes affect <i class="refine-target" :style="{ background: color }"></i><strong>{{ name }}</strong
+      >. Every operation preserves its input revision.
+    </p>
     <label class="field"
       >Operation<select v-model="type" :disabled="busy">
         <option value="keep_component">Keep component at seed</option>
@@ -60,3 +64,16 @@ function apply() {
     <button class="button primary full" :disabled="!selected || busy || !valid" @click="apply">Create refinement revision →</button>
   </section>
 </template>
+
+<style scoped>
+.refine-target {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+.help > strong {
+  color: var(--white);
+}
+</style>

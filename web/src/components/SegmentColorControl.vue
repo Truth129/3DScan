@@ -25,7 +25,7 @@ const id = useId();
   align-items: center;
   gap: 7px;
   min-height: 30px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 .segment-color-control > label {
@@ -46,12 +46,12 @@ const id = useId();
   outline-offset: 2px;
 }
 .segment-color-control > output {
-  font: 9px var(--mono);
+  font: 10px var(--mono);
   min-width: 56px;
   color: var(--white);
 }
 .segment-color-control > button {
-  font-size: 9px;
+  font-size: 10px;
   border: 1px solid var(--line-strong);
   padding: 4px 6px;
   border-radius: 4px;

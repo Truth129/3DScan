@@ -1,13 +1,17 @@
+/** The side panel shows one tab at a time. The 3D, Refine and FFR tabs show only when they apply. */
+export type SidebarTab = 'segments' | 'volume' | 'refine' | 'history' | 'coronary';
+const SIDEBAR_TABS: readonly SidebarTab[] = ['segments', 'volume', 'refine', 'history', 'coronary'];
+
 export interface WorkspacePanelsState {
-  anatomy: boolean;
+  sidebar: boolean;
   model: boolean;
   review: boolean;
-  inspector: boolean;
+  /** The side panel's last tab, kept while the panel is hidden. */
+  tab: SidebarTab;
 }
 
-export type WorkspacePanelId = keyof WorkspacePanelsState;
+export type WorkspacePanelId = 'sidebar' | 'model' | 'review';
 export const WORKSPACE_PANELS_STORAGE_KEY = 'scan3d-workspace-panels-v1';
-const PANEL_IDS: readonly WorkspacePanelId[] = ['anatomy', 'model', 'review', 'inspector'];
 
 /** How the 3D and slice tiles share the stage when both are shown. */
 export type WorkspaceArrangement = 'columns' | 'rows';
@@ -27,25 +31,32 @@ export const MODEL_SHARE_RANGE = [0.2, 0.8] as const;
 export const SIDEBAR_WIDTH_RANGE = [220, 480] as const;
 
 export function defaultWorkspacePanels(): WorkspacePanelsState {
-  return { anatomy: true, model: true, review: true, inspector: true };
+  return { sidebar: true, model: true, review: true, tab: 'segments' };
 }
 
 export function defaultWorkspaceLayout(): WorkspaceLayoutState {
   return { arrangement: 'columns', modelShare: 0.6, sidebarWidth: 280 };
 }
 
-/** Stored layout is a preference only; an invalid record cannot hide the app. */
+/**
+ * Stored layout is a preference only; an invalid record cannot hide the app. Records from before the side
+ * panel had tabs kept the anatomy list and its details apart, each shown unless stored as false; the side
+ * panel shows if either did.
+ */
 export function restoreWorkspacePanels(value: unknown): WorkspacePanelsState {
   const state = defaultWorkspacePanels();
   try {
     const source: unknown = typeof value === 'string' ? JSON.parse(value) : value;
     if (!source || typeof source !== 'object' || Array.isArray(source)) return state;
-    for (const id of PANEL_IDS) {
-      if (Object.hasOwn(source, id)) {
-        const visible: unknown = (source as Record<string, unknown>)[id];
-        if (typeof visible === 'boolean') state[id] = visible;
-      }
+    const own = (key: string): unknown => (Object.hasOwn(source, key) ? (source as Record<string, unknown>)[key] : undefined);
+    for (const id of ['model', 'review'] as const) {
+      const visible = own(id);
+      if (typeof visible === 'boolean') state[id] = visible;
     }
+    const sidebar = own('sidebar');
+    state.sidebar = typeof sidebar === 'boolean' ? sidebar : own('anatomy') !== false || own('inspector') !== false;
+    const tab = own('tab');
+    if (SIDEBAR_TABS.includes(tab as SidebarTab)) state.tab = tab as SidebarTab;
     if (!state.model && !state.review) state.model = true;
     return state;
   } catch {
@@ -66,11 +77,9 @@ export function setWorkspacePanel(state: WorkspacePanelsState, id: WorkspacePane
   return { ...next, [id]: visible };
 }
 
-/** The sidebar holds anatomy and details; one toggle hides both, or shows both again. */
 export function toggleWorkspaceSidebar(state: WorkspacePanelsState): WorkspacePanelsState {
-  const next = restoreWorkspacePanels(state),
-    visible = !next.anatomy && !next.inspector;
-  return { ...next, anatomy: visible, inspector: visible };
+  const next = restoreWorkspacePanels(state);
+  return { ...next, sidebar: !next.sidebar };
 }
 
 function clamp(value: unknown, [min, max]: readonly [number, number], fallback: number): number {

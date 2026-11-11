@@ -27,10 +27,8 @@ const panelId = useId(),
   helpId = useId();
 const { open, close, toggle } = usePopover(root, trigger, popover);
 const options = computed(() => [
-  { id: 'anatomy' as const, label: 'Anatomy' },
   { id: 'model' as const, label: '3D view' },
   { id: 'review' as const, label: props.reviewLabel },
-  { id: 'inspector' as const, label: 'Selection & history' },
 ]);
 const labels = computed<Record<WorkspacePreset, string>>(() => ({
   columns: `3D and ${props.reviewLabel} side by side`,
@@ -42,7 +40,6 @@ const preset = computed(() => workspacePreset(props.modelValue, props.layout));
 // The first icon shows both views in the arrangement they last had; the menu switches between the two.
 const quick = computed(() => [props.layout.arrangement, 'model' as const, 'review' as const]);
 const arrangements = ['columns', 'rows', 'model', 'review'] as const;
-const sidebarShown = computed(() => props.modelValue.anatomy || props.modelValue.inspector);
 
 function disabled(id: WorkspacePanelId): boolean {
   return props.modelValue[id] && !canHideWorkspacePanel(props.modelValue, id);
@@ -55,8 +52,9 @@ function choose(id: WorkspacePreset) {
   emit('update:modelValue', next.panels);
   emit('update:layout', next.layout);
 }
+// The side panel's tab is where the reader was, not part of the layout.
 function reset() {
-  emit('update:modelValue', defaultWorkspacePanels());
+  emit('update:modelValue', { ...defaultWorkspacePanels(), tab: props.modelValue.tab });
   emit('update:layout', defaultWorkspaceLayout());
 }
 </script>
@@ -116,12 +114,12 @@ function reset() {
       <label class="panel-option side-panels-option">
         <input
           type="checkbox"
-          :checked="sidebarShown"
+          :checked="modelValue.sidebar"
           aria-controls="workspace-sidebar"
           aria-keyshortcuts="\"
           @change="emit('update:modelValue', toggleWorkspaceSidebar(modelValue))"
         />
-        <span>Side panels<small>Or press \</small></span>
+        <span>Side panel<small>Or press \</small></span>
       </label>
       <label v-for="option in options" :key="option.id" class="panel-option" :class="{ disabled: disabled(option.id) }">
         <input
@@ -132,7 +130,7 @@ function reset() {
           :aria-controls="`workspace-${option.id}-panel`"
           @change="change(option.id, $event)"
         />
-        <span>{{ option.label }}<small v-if="option.id === 'inspector'">Below the anatomy list</small></span>
+        <span>{{ option.label }}</span>
       </label>
       <button type="button" class="panel-reset" @click="reset">Reset layout</button>
     </section>

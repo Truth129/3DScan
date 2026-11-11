@@ -11,7 +11,6 @@ import {
   saveWorkspacePanels,
   setWorkspacePanel,
   canHideWorkspacePanel,
-  toggleWorkspaceSidebar,
   readWorkspaceLayout,
   saveWorkspaceLayout,
   defaultWorkspaceLayout,
@@ -20,6 +19,7 @@ import {
   reviewFocusFor,
   MODEL_SHARE_RANGE,
   SIDEBAR_WIDTH_RANGE,
+  type SidebarTab,
   type WorkspacePanelId,
 } from './lib/workspace-panels';
 import ModelViewport from './components/ModelViewport.vue';
@@ -254,29 +254,41 @@ const acquisitionTags = computed(() =>
         sequenceSummary(activeCase.value?.series.find(item => item.uid === revision.value?.image_asset?.source.series_uid)),
       ].filter(Boolean),
 );
-const mobilePanel = ref<'model' | 'anatomy' | 'review'>('model'),
-  inspectorTab = ref<'selection' | 'refine' | 'history' | 'volume' | 'coronary'>('selection');
+const mobilePanel = ref<'model' | 'anatomy' | 'review'>('model');
+const panels = ref(readWorkspacePanels()),
+  layout = ref(readWorkspaceLayout());
+// The side panel shows one tab, which this browser remembers with the panels.
+const sidebarTab = computed<SidebarTab>({
+  get: () => panels.value.tab,
+  set: tab => {
+    panels.value = { ...panels.value, tab };
+  },
+});
 // The 3D view docks its volume settings in the 3D tab. It reports whether it has any, and errors.
 const volumeSettings = ref({ shown: false, error: false });
 // Research CT-FFR: the tab shows for a revision with a coronary lumen, and the panel owns the 3D tube.
 const coronaryAvailable = computed(() => !!revision.value && hasCoronaryLumen(revision.value.structures)),
   coronaryTube = shallowRef<CoronaryTube>(),
   nativeView = ref(false);
-watch(coronaryAvailable, available => {
-  if (!available && inspectorTab.value === 'coronary') inspectorTab.value = 'selection';
-});
-// The volume settings live in the 3D tab, so opening it from FFR keeps the panel, its tube and its
-// inputs while the volume is tuned around the tube. Any other tab closes the panel.
+// The volume settings and the segment list have their own tabs, so opening either from FFR keeps the
+// panel, its tube and its inputs while the view is tuned around the tube. Any other tab closes the
+// panel. A remembered FFR tab counts as opened.
 const coronaryKept = ref(false);
-watch(inspectorTab, tab => {
-  if (tab !== 'volume') coronaryKept.value = tab === 'coronary';
+watch(
+  sidebarTab,
+  tab => {
+    if (tab !== 'volume' && tab !== 'segments') coronaryKept.value = tab === 'coronary';
+  },
+  { immediate: true },
+);
+watch(coronaryAvailable, available => {
+  if (available) return;
+  coronaryKept.value = false;
+  if (sidebarTab.value === 'coronary') sidebarTab.value = 'segments';
 });
-const panels = ref(readWorkspacePanels()),
-  layout = ref(readWorkspaceLayout());
 if (!panels.value.model) mobilePanel.value = 'review';
 const modelPanelVisible = computed(() => panels.value.model && (workspaceMode.value !== 'review' || reviewFocus.value !== 'ct'));
 const reviewPanelVisible = computed(() => panels.value.review && (workspaceMode.value !== 'review' || reviewFocus.value !== 'model'));
-const sidebarVisible = computed(() => panels.value.anatomy || panels.value.inspector);
 const modelShare = computed(() => layout.value.modelShare);
 const workspaceStyle = computed(() => ({
   '--sidebar-width': `${layout.value.sidebarWidth}px`,
@@ -291,18 +303,23 @@ function setSidebarWidth(value: number) {
 }
 watch(layout, saveWorkspaceLayout, { deep: true });
 function setPanel(id: WorkspacePanelId, visible: boolean) {
-  const returnFocus =
-    !visible &&
-    document.activeElement instanceof HTMLElement &&
-    (document.activeElement.classList.contains('panel-hide') || document.activeElement.classList.contains('panel-collapse-button'));
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : undefined,
+    fromButton =
+      !!active &&
+      (id !== 'sidebar'
+        ? active.classList.contains('panel-hide')
+        : active.classList.contains('sidebar-edge-tab') || (!visible && !!active.closest('#workspace-sidebar')));
   panels.value = setWorkspacePanel(panels.value, id, visible);
-  // A narrow window hides the layout control, so focus goes to the bottom navigation instead.
-  if (returnFocus)
-    void nextTick(() =>
-      [...document.querySelectorAll<HTMLButtonElement>('.panels-trigger, .mobile-navigation button.active')]
-        .find(button => button.getClientRects().length)
-        ?.focus({ preventScroll: true }),
-    );
+  // The button pressed goes away, so focus moves to the one that undoes it: the side panel's chevron and
+  // edge tab swap, as does focus anywhere in a panel hidden by \, and a hidden tile comes back from the
+  // layout control. A narrow window hides that control, so focus goes to the bottom navigation instead.
+  if (!fromButton || (visible && id !== 'sidebar')) return;
+  const target = id !== 'sidebar' ? '.panels-trigger' : visible ? '.workspace-sidebar .panel-collapse-button' : '.sidebar-edge-tab';
+  void nextTick(() =>
+    [...document.querySelectorAll<HTMLButtonElement>(`${target}, .mobile-navigation button.active`)]
+      .find(button => button.getClientRects().length)
+      ?.focus({ preventScroll: true }),
+  );
 }
 function setReviewFocus(focus: 'both' | 'ct' | 'model') {
   panels.value = { ...panels.value, model: focus !== 'ct', review: focus !== 'model' };
@@ -314,7 +331,7 @@ watch(
     saveWorkspacePanels(value);
     if (!value.review) ctExpanded.value = false;
     if (workspaceMode.value === 'review') reviewFocus.value = reviewFocusFor(value);
-    if (!value[mobilePanel.value === 'anatomy' ? 'anatomy' : mobilePanel.value === 'model' ? 'model' : 'review'])
+    if (!value[mobilePanel.value === 'anatomy' ? 'sidebar' : mobilePanel.value === 'model' ? 'model' : 'review'])
       mobilePanel.value = value.model ? 'model' : 'review';
   },
   { deep: true },
@@ -381,11 +398,19 @@ const fold = useTopBarFold(() => chipShown.value);
 const place = (action: TopBarAction) => topBarPlace(fold.value, action);
 // A narrow window shows one area at a time, so the settings stay in the 3D view's own Layers card.
 const volumeTabShown = computed(() => volumeSettings.value.shown && fold.value !== 'compact');
-/** The 3D tab stays chosen while it is away, as during a case switch, and shows again when it returns. */
-const shownInspectorTab = computed(() => (inspectorTab.value === 'volume' && !volumeTabShown.value ? 'selection' : inspectorTab.value));
+/**
+ * A tab stays chosen while it is away, as the 3D tab is during a case switch, and shows again when it
+ * returns. Meanwhile Segments shows.
+ */
+const shownSidebarTab = computed<SidebarTab>(() => {
+  const tab = sidebarTab.value;
+  return (tab === 'volume' && !volumeTabShown.value) || (tab === 'refine' && ctOnly.value) || (tab === 'coronary' && !coronaryAvailable.value)
+    ? 'segments'
+    : tab;
+});
 function showVolumeSettings() {
-  setPanel('inspector', true);
-  inspectorTab.value = 'volume';
+  setPanel('sidebar', true);
+  sidebarTab.value = 'volume';
   // The tab sits before the view in reading order, so focus follows the reader there, not to a control.
   void nextTick(() => document.querySelector<HTMLButtonElement>('.inspector-volume-tab')?.focus({ preventScroll: true }));
 }
@@ -420,6 +445,16 @@ const structure = computed(
     (workspaceMode.value === 'review' ? displayStructures(pendingStructures.value, colorOverrides.value).find(s => s.id === selected.value) : undefined),
 );
 const pendingSelection = computed(() => pendingStructures.value.some(s => s.id === selected.value));
+// Refine changes a saved structure only, and a click on a surface can change which.
+const anatomy = ref<InstanceType<typeof AnatomyPanel>>();
+// The list keeps its place while another tab shows, so a structure picked meanwhile comes into view on return.
+watch(
+  () => panels.value.sidebar && shownSidebarTab.value === 'segments',
+  shown => {
+    if (shown) void nextTick(() => anatomy.value?.reveal());
+  },
+);
+const refineTarget = computed(() => (revision.value?.structures.some(s => s.id === selected.value) ? structure.value : undefined));
 const parentRevision = computed(() => revisions.value.find(r => r.id === revision.value?.parent_id));
 const scanRevision = computed(() => scanRevisionOf(revisions.value, revision.value));
 const shownRevision = computed(() =>
@@ -720,7 +755,7 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   if (changedRevision && (next.kind === 'ct' || !next.structures.length)) {
     workspaceMode.value = 'model';
     // A scan alone has no Refine tab; the 3D tab still applies.
-    if (inspectorTab.value !== 'volume') inspectorTab.value = 'selection';
+    if (sidebarTab.value !== 'volume') sidebarTab.value = 'segments';
     ctExpanded.value = false;
   }
   const previous = display.value;
@@ -1419,7 +1454,7 @@ function keyboard(event: KeyboardEvent) {
     !document.querySelector('dialog[open], .viewport-expanded')
   ) {
     event.preventDefault();
-    panels.value = toggleWorkspaceSidebar(panels.value);
+    setPanel('sidebar', !panels.value.sidebar);
     return;
   }
   // This listener runs before the CT header's menus hear the key, so one Escape closes an open menu alone.
@@ -1961,11 +1996,9 @@ onBeforeUnmount(() => {
             `mobile-${mobilePanel}`,
             `stage-${layout.arrangement}`,
             {
-              'panel-anatomy-hidden': !panels.anatomy,
               'panel-model-hidden': !modelPanelVisible,
               'panel-review-hidden': !reviewPanelVisible,
-              'panel-inspector-hidden': !panels.inspector,
-              'panel-sidebar-hidden': !sidebarVisible,
+              'panel-sidebar-hidden': !panels.sidebar,
               'review-workspace': workspaceMode === 'review',
               'review-focus-ct': workspaceMode === 'review' && reviewFocus === 'ct',
               'review-focus-model': workspaceMode === 'review' && reviewFocus === 'model',
@@ -2012,88 +2045,167 @@ onBeforeUnmount(() => {
               <template #exit><button class="text-button" @click="workspaceMode = 'model'">Exit review</button></template>
             </InteractiveReviewPanel>
           </div>
-          <div id="workspace-sidebar" v-show="sidebarVisible" class="workspace-sidebar">
-            <aside id="workspace-anatomy-panel" v-show="panels.anatomy" class="anatomy-rail" aria-label="Anatomy panel">
-              <div v-if="ctOnly" class="ct-only-anatomy">
-                <button type="button" class="panel-hide" aria-label="Hide anatomy panel" title="Hide anatomy panel" @click="setPanel('anatomy', false)">
-                  ×</button
-                ><span class="eyebrow">SOURCE {{ sourceLabel }}</span>
-                <h2>{{ sourceLabel }} ready</h2>
-                <p>Explore the scan in 3D and the linked source views. Anatomical segments will appear here after segmentation.</p>
-                <button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Choose segmentation task</button>
-                <button v-if="canSegment && workspaceMode !== 'review'" class="button secondary compact" @click="openInteractiveReview">
-                  + Add segment by hand
-                </button>
-                <p class="help">Opening the image does not start TotalSegmentator, and a segment added by hand needs no AI model.</p>
-              </div>
-              <AnatomyPanel
-                v-else
-                collapsible
-                @collapse="setPanel('anatomy', false)"
-                :structures="shownStructures"
-                :display="display"
-                :selected="selected"
-                @select="select"
-                @visibility="visibility"
-                @group-visibility="groupVisibility"
-                @solo="solo"
-                @all="showAll"
-                @hide-all="hideAll"
-              />
-            </aside>
-            <section
-              id="workspace-inspector-panel"
-              v-show="panels.inspector"
-              class="inspector"
-              :class="{ 'inspector-volume-active': shownInspectorTab === 'volume' }"
-              aria-label="Selection and history"
-            >
+          <div id="workspace-sidebar" v-show="panels.sidebar" class="workspace-sidebar">
+            <section id="workspace-inspector-panel" class="inspector" aria-label="Side panel">
+              <!-- The long names stay in the DOM: narrow panels show the short ones. -->
               <header class="inspector-tabs">
-                <button :class="{ active: shownInspectorTab === 'selection' }" @click="inspectorTab = 'selection'">
-                  <span class="tab-long">{{ ctOnly ? `Source ${sourceLabel}` : 'Selected structure' }}</span
-                  ><span class="tab-short" aria-hidden="true">{{ ctOnly ? sourceLabel : 'Structure' }}</span></button
-                ><button
-                  v-if="!ctOnly"
-                  :class="{ active: shownInspectorTab === 'refine' }"
-                  @click="
-                    inspectorTab = 'refine';
-                    before = false;
-                  "
-                >
-                  <span class="tab-long">Refinement</span><span class="tab-short" aria-hidden="true">Refine</span></button
-                ><button :class="{ active: shownInspectorTab === 'history' }" @click="inspectorTab = 'history'">
-                  <span class="tab-long">Revision history</span><span class="tab-short" aria-hidden="true">History</span>
-                  <span class="tab-count">{{ revisions.length }}</span></button
+                <button :class="{ active: shownSidebarTab === 'segments' }" @click="sidebarTab = 'segments'">Segments</button
                 ><button
                   v-if="volumeTabShown"
                   class="inspector-volume-tab"
-                  :class="{ active: shownInspectorTab === 'volume' }"
+                  :class="{ active: shownSidebarTab === 'volume' }"
                   :title="volumeSettings.error ? 'The 3D view has a problem; its settings say what failed' : '3D view and volume settings'"
-                  @click="inspectorTab = 'volume'"
+                  @click="sidebarTab = 'volume'"
                 >
                   <span class="tab-long">3D view</span><span class="tab-short" aria-hidden="true">3D</span
                   ><span v-if="volumeSettings.error" class="tab-alert" role="img" aria-label="needs attention"></span></button
                 ><button
+                  v-if="!ctOnly"
+                  :class="{ active: shownSidebarTab === 'refine' }"
+                  @click="
+                    sidebarTab = 'refine';
+                    before = false;
+                  "
+                >
+                  <span class="tab-long">Refinement</span><span class="tab-short" aria-hidden="true">Refine</span></button
+                ><button :class="{ active: shownSidebarTab === 'history' }" @click="sidebarTab = 'history'">
+                  <span class="tab-long">Revision history</span><span class="tab-short" aria-hidden="true">History</span>
+                  <span class="tab-count">{{ revisions.length }}</span></button
+                ><button
                   v-if="coronaryAvailable"
                   class="inspector-coronary-tab"
-                  :class="{ active: shownInspectorTab === 'coronary' }"
-                  @click="inspectorTab = 'coronary'"
+                  :class="{ active: shownSidebarTab === 'coronary' }"
+                  @click="sidebarTab = 'coronary'"
                 >
                   <span class="tab-long">Coronary FFR</span><span class="tab-short" aria-hidden="true">FFR</span></button
                 ><button
                   type="button"
-                  class="panel-hide inspector-hide"
-                  aria-label="Hide details panel"
-                  title="Hide details panel"
-                  @click="setPanel('inspector', false)"
+                  class="panel-collapse-button"
+                  aria-label="Hide side panel"
+                  title="Hide side panel (\)"
+                  aria-controls="workspace-sidebar"
+                  aria-expanded="true"
+                  aria-keyshortcuts="\"
+                  @click="setPanel('sidebar', false)"
                 >
-                  ×
+                  <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m12 5-5 5 5 5" /></svg>
                 </button>
               </header>
-              <AgreementPanel v-if="shownInspectorTab === 'history' && !ctOnly" :case-id="activeCase.id" :revision="revision" @select="select" />
+              <!-- Kept mounted, so the list keeps its search and folded groups across tabs. -->
+              <div v-show="shownSidebarTab === 'segments'" class="sidebar-segments">
+                <div v-if="pendingSelection && structure" class="pending-selection">
+                  <i :style="{ background: colorCss(structure.color) }"></i>
+                  <div>
+                    <strong>{{ prettyName(structure.name) }}</strong>
+                    <span class="selection-source">Unsaved segment · preview on {{ sourceLabel }} before saving</span>
+                    <p class="help">Review the candidate on {{ sourceLabel }}, then save to measure it and create its 3D surface.</p>
+                  </div>
+                </div>
+                <div v-if="ctOnly" class="ct-only-anatomy">
+                  <span class="eyebrow">SOURCE {{ sourceLabel }}</span>
+                  <h2>{{ sourceLabel }} ready</h2>
+                  <p>Explore the scan in 3D and the linked source views. Anatomical segments will appear here after segmentation.</p>
+                  <!-- The line breaks only at the dot, so neither triplet splits. -->
+                  <p class="ct-only-geometry">
+                    <span>{{ revision.geometry.shape.join(' × ') }} voxels</span>
+                    ·
+                    <span>{{ revision.geometry.spacing.map(n => Number(n).toFixed(2)).join(' × ') }} mm</span>
+                  </p>
+                  <button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Choose segmentation task</button>
+                  <button v-if="canSegment && workspaceMode !== 'review'" class="button secondary compact" @click="openInteractiveReview">
+                    + Add segment by hand
+                  </button>
+                  <p class="help">Opening the image does not start TotalSegmentator, and a segment added by hand needs no AI model.</p>
+                </div>
+                <AnatomyPanel
+                  v-else
+                  ref="anatomy"
+                  :structures="shownStructures"
+                  :display="display"
+                  :selected="selected"
+                  @select="select"
+                  @visibility="visibility"
+                  @group-visibility="groupVisibility"
+                  @solo="solo"
+                  @all="showAll"
+                  @hide-all="hideAll"
+                >
+                  <template #selected="{ structure: row }">
+                    <span class="selection-source">{{ row.task }} · mask-derived measurement</span>
+                    <SegmentColorControl
+                      :key="`${colorScope}:${row.id}`"
+                      :color="normalizeStructureColor(row.color) || '#91cbd9'"
+                      :name="prettyName(row.name)"
+                      :customized="Object.hasOwn(colorOverrides, row.id)"
+                      @update="changeSegmentColor"
+                      @reset="resetSegmentColor"
+                    />
+                    <label v-if="display[row.id]" class="structure-opacity"
+                      >Opacity <span>{{ Math.round(display[row.id].opacity * 100) }}%</span
+                      ><input v-model.number="display[row.id].opacity" type="range" min="0.05" max="1" step="0.01"
+                    /></label>
+                    <button class="button secondary compact structure-focus" @click="model?.focus()">Focus ↗</button>
+                    <div v-if="row.qc?.length" class="selection-qc">
+                      <span v-for="message in row.qc" :key="message">⚑ {{ message }}</span>
+                    </div>
+                  </template>
+                </AnatomyPanel>
+              </div>
+              <RefinementPanel
+                v-if="shownSidebarTab === 'refine' && refineTarget"
+                :key="revision.id"
+                :point="point"
+                :geometry="revision.geometry"
+                :selected="selected"
+                :name="prettyName(refineTarget.name)"
+                :color="colorCss(refineTarget.color)"
+                :busy="busy"
+                @apply="refine"
+              />
+              <p v-else-if="shownSidebarTab === 'refine'" class="help sidebar-note">Select a saved segment under Segments to refine it.</p>
+              <div v-else-if="shownSidebarTab === 'history'" class="sidebar-history">
+                <AgreementPanel v-if="!ctOnly" :case-id="activeCase.id" :revision="revision" @select="select" />
+                <div class="history-content">
+                  <div class="history-heading">
+                    <p class="help">Activate a previous revision for exact undo. Every mask and measurement is preserved.</p>
+                    <button
+                      class="button secondary compact"
+                      :disabled="!revision.parent_id || busy"
+                      @click="revision.parent_id && activate(revision.parent_id)"
+                    >
+                      ↶ Undo to parent
+                    </button>
+                    <button
+                      v-if="scanRevision"
+                      class="button secondary compact"
+                      :disabled="busy"
+                      title="Activates the image with no segmentation. Nothing is deleted."
+                      @click="
+                        activate(
+                          scanRevision!.id,
+                          interactiveDraft
+                            ? 'Back to the scan. Your draft stays with its version in Revision history.'
+                            : 'Back to the scan. Earlier versions stay in Revision history.',
+                        )
+                      "
+                    >
+                      Reset to scan
+                    </button>
+                  </div>
+                  <div v-for="item in revisions" :key="item.id" class="revision-row">
+                    <span class="revision-node" :class="{ active: revision.id === item.id }"></span>
+                    <div>
+                      <strong>{{ prettyName(item.source) }} <span v-if="revision.id === item.id" class="pill">ACTIVE</span></strong
+                      ><small>{{ new Date(item.created_at).toLocaleString() }} · {{ item.review_status }}</small
+                      ><small v-if="changeSummary(item)" class="revision-change">{{ changeSummary(item) }}</small>
+                    </div>
+                    <button class="text-button" :disabled="revision.id === item.id || busy" @click="activate(item.id)">Activate</button>
+                  </div>
+                </div>
+              </div>
               <CoronaryPanel
-                v-if="coronaryAvailable && (shownInspectorTab === 'coronary' || (coronaryKept && shownInspectorTab === 'volume'))"
-                v-show="shownInspectorTab === 'coronary'"
+                v-if="coronaryAvailable && (shownSidebarTab === 'coronary' || coronaryKept)"
+                v-show="shownSidebarTab === 'coronary'"
                 :case-id="activeCase.id"
                 :revision="revision"
                 :point="point"
@@ -2101,104 +2213,27 @@ onBeforeUnmount(() => {
                 @select="picked"
                 @tube="coronaryTube = $event"
               />
-              <div v-if="ctOnly && shownInspectorTab === 'selection'" class="ct-only-summary">
-                <div>
-                  <span class="eyebrow">{{ sourceLabel }} GEOMETRY</span>
-                  <p>
-                    {{ revision.geometry.shape.join(' × ') }} voxels <span>·</span>
-                    {{ revision.geometry.spacing.map(n => Number(n).toFixed(2)).join(' × ') }} mm
-                  </p>
-                  <p class="help">Select a segmentation task to create anatomical masks for review and measurement.</p>
-                </div>
-                <button v-if="!synthetic" class="button secondary compact" :disabled="busy" @click="openSegmentation">Segment {{ sourceLabel }}…</button>
-              </div>
-              <div v-if="shownInspectorTab === 'selection' && structure" class="selection-content">
-                <div class="selection-identity">
-                  <i :style="{ background: colorCss(structure.color) }"></i>
-                  <div>
-                    <span class="eyebrow">{{ prettyName(structure.group) }}</span>
-                    <h2>{{ prettyName(structure.name) }}</h2>
-                    <span class="selection-source">{{
-                      pendingStructures.some(s => s.id === selected)
-                        ? `Unsaved segment · preview on ${sourceLabel} before saving`
-                        : `${structure.task} · mask-derived measurement`
-                    }}</span>
-                  </div>
-                </div>
-                <p v-if="pendingSelection" class="help">Review the candidate on {{ sourceLabel }}, then save to measure it and create its 3D surface.</p>
-                <div v-else class="measurement">
-                  <span class="eyebrow">VOLUME</span
-                  ><strong>{{ Number(structure.volume_ml).toLocaleString(undefined, { maximumFractionDigits: 1 }) }}<small>mL</small></strong>
-                </div>
-                <div v-if="!pendingSelection" class="selection-controls">
-                  <SegmentColorControl
-                    :key="`${colorScope}:${selected}`"
-                    :color="normalizeStructureColor(structure.color) || '#91cbd9'"
-                    :name="prettyName(structure.name)"
-                    :customized="Object.hasOwn(colorOverrides, selected)"
-                    @update="changeSegmentColor"
-                    @reset="resetSegmentColor"
-                  /><label
-                    >Opacity <span>{{ Math.round((display[selected]?.opacity || 0) * 100) }}%</span
-                    ><input v-if="display[selected]" v-model.number="display[selected].opacity" type="range" min="0.05" max="1" step="0.01"
-                  /></label>
-                  <div class="button-row">
-                    <button class="button secondary compact" @click="solo(selected)">Isolate</button
-                    ><button class="button secondary compact" @click="model?.focus()">Focus ↗</button>
-                  </div>
-                </div>
-                <div v-if="structure.qc?.length" class="selection-qc">
-                  <span v-for="message in structure.qc" :key="message">⚑ {{ message }}</span>
-                </div>
-              </div>
-              <RefinementPanel
-                v-else-if="!ctOnly && shownInspectorTab === 'refine' && revision.structures.some(s => s.id === selected)"
-                :key="revision.id"
-                :point="point"
-                :geometry="revision.geometry"
-                :selected="selected"
-                :busy="busy"
-                @apply="refine"
-              />
-              <div v-else-if="shownInspectorTab === 'history'" class="history-content">
-                <div class="history-heading">
-                  <p class="help">Activate a previous revision for exact undo. Every mask and measurement is preserved.</p>
-                  <button class="button secondary compact" :disabled="!revision.parent_id || busy" @click="revision.parent_id && activate(revision.parent_id)">
-                    ↶ Undo to parent
-                  </button>
-                  <button
-                    v-if="scanRevision"
-                    class="button secondary compact"
-                    :disabled="busy"
-                    title="Activates the image with no segmentation. Nothing is deleted."
-                    @click="
-                      activate(
-                        scanRevision!.id,
-                        interactiveDraft
-                          ? 'Back to the scan. Your draft stays with its version in Revision history.'
-                          : 'Back to the scan. Earlier versions stay in Revision history.',
-                      )
-                    "
-                  >
-                    Reset to scan
-                  </button>
-                </div>
-                <div v-for="item in revisions" :key="item.id" class="revision-row">
-                  <span class="revision-node" :class="{ active: revision.id === item.id }"></span>
-                  <div>
-                    <strong>{{ prettyName(item.source) }} <span v-if="revision.id === item.id" class="pill">ACTIVE</span></strong
-                    ><small>{{ new Date(item.created_at).toLocaleString() }} · {{ item.review_status }}</small
-                    ><small v-if="changeSummary(item)" class="revision-change">{{ changeSummary(item) }}</small>
-                  </div>
-                  <button class="text-button" :disabled="revision.id === item.id || busy" @click="activate(item.id)">Activate</button>
-                </div>
-              </div>
               <!-- Always rendered: the 3D view teleports its volume settings here once, when it mounts. -->
-              <div id="workspace-volume-settings" v-show="shownInspectorTab === 'volume'" class="inspector-volume"></div>
+              <div id="workspace-volume-settings" v-show="shownSidebarTab === 'volume'" class="inspector-volume"></div>
             </section>
           </div>
+          <!-- A hidden side panel leaves an edge, so it comes back from where it went without covering a viewer. -->
+          <div v-show="!panels.sidebar" class="sidebar-edge">
+            <button
+              type="button"
+              class="sidebar-edge-tab"
+              aria-label="Show side panel"
+              title="Show side panel (\)"
+              aria-controls="workspace-sidebar"
+              aria-expanded="false"
+              aria-keyshortcuts="\"
+              @click="setPanel('sidebar', true)"
+            >
+              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m8 5 5 5-5 5" /></svg>
+            </button>
+          </div>
           <WorkspaceSplitter
-            v-show="sidebarVisible"
+            v-show="panels.sidebar"
             class="sidebar-splitter"
             axis="columns"
             mode="pixels"
@@ -2264,7 +2299,7 @@ onBeforeUnmount(() => {
                 "
                 :tile-focus="workspaceMode === 'review' ? (reviewFocus === 'model' ? 'focused' : 'shared') : undefined"
                 volume-settings-target="#workspace-volume-settings"
-                :volume-settings-dock="fold === 'compact' ? undefined : panels.inspector ? 'shown' : 'hidden'"
+                :volume-settings-dock="fold === 'compact' ? undefined : panels.sidebar ? 'shown' : 'hidden'"
                 @volume-settings="volumeSettings = $event"
                 @show-volume-settings="showVolumeSettings"
                 @export-view="exportView"
@@ -2619,12 +2654,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <nav v-if="revision && !prepareOpen" class="mobile-navigation" aria-label="Mobile workspace panels">
-          <!-- ☷ Anatomy shows the whole side panel, since a narrow window has no layout control to bring its details back. -->
+          <!-- ☷ Anatomy shows the side panel, since a narrow window has no layout control or edge to bring it back. -->
           <button
             :class="{ active: mobilePanel === 'anatomy' }"
             @click="
-              setPanel('anatomy', true);
-              setPanel('inspector', true);
+              setPanel('sidebar', true);
               mobilePanel = 'anatomy';
             "
           >
@@ -2778,28 +2812,35 @@ onBeforeUnmount(() => {
   font-size: 10px;
   color: var(--muted);
 }
-.ct-only-summary {
-  padding: 17px 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-.ct-only-summary p {
-  font-size: 11px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  margin: 6px 0 0;
-}
-.ct-only-summary p > span {
-  margin: 0 5px;
-  color: var(--muted);
-}
-.ct-only-summary .help {
+.ct-only-anatomy p.ct-only-geometry {
+  font-family: var(--mono);
   font-size: 10px;
-  color: var(--muted);
 }
-.ct-only-summary > .button {
+.ct-only-geometry > span {
+  white-space: nowrap;
+}
+/* An unsaved segment is not in the list until it is saved, so it shows above it. */
+.pending-selection {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+}
+.pending-selection > i {
   flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 50%;
+}
+.pending-selection strong {
+  display: block;
+  font-size: 12px;
+  color: var(--white);
+}
+.pending-selection .help {
+  margin: 6px 0 0;
+  font-size: 10px;
 }
 </style>

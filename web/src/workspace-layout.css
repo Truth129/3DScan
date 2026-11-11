@@ -29,13 +29,101 @@
   opacity: 0.35;
   cursor: default;
 }
+/* The Library's close button ends its tab strip. */
 .inspector-tabs .inspector-hide {
   margin-left: auto;
-  padding: 0;
   min-width: 26px;
+}
+/* One chevron at the end of the side panel's tabs hides it; the edge left behind brings it back. */
+:root .inspector-tabs > .panel-collapse-button,
+.sidebar-edge-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
   border: 1px solid var(--line-strong);
-  height: 26px;
+  border-radius: 5px;
+  background: var(--surface);
   color: var(--text-secondary);
+  cursor: pointer;
+}
+:root .inspector-tabs > .panel-collapse-button {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  margin-left: auto;
+}
+.inspector-tabs > .panel-collapse-button svg,
+.sidebar-edge-tab svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+:root .inspector-tabs > .panel-collapse-button:hover,
+.sidebar-edge-tab:hover {
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+  color: var(--white);
+}
+.sidebar-edge {
+  display: none;
+}
+/* The side panel: the tab strip, then one tab's body filling the rest. Each body scrolls itself. */
+.workspace-sidebar > .inspector {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  border-top: 0;
+  background: var(--panel);
+}
+.workspace-sidebar > .inspector > .inspector-tabs {
+  flex-shrink: 0;
+}
+.workspace-sidebar > .inspector > :not(.inspector-tabs) {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.workspace-sidebar .sidebar-segments {
+  display: flex;
+  flex-direction: column;
+}
+.workspace-sidebar .sidebar-segments > .anatomy-panel {
+  flex: 1 1 0;
+  min-height: 200px;
+  height: auto;
+}
+/* The selected row opens to its colour, opacity and checks. */
+.structure-details > .structure-opacity {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.structure-details > .structure-opacity > span {
+  font: 10px var(--mono);
+  color: var(--white);
+}
+.structure-details > .structure-opacity > input {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.structure-details > .structure-focus {
+  align-self: flex-end;
+  min-height: 28px;
+  padding: 5px 10px;
+  font-size: 11px;
+}
+.structure-details > .selection-qc {
+  flex-basis: auto;
 }
 .inspector-tabs .tab-short {
   display: none;
@@ -53,14 +141,6 @@
   height: 6px;
   border-radius: 50%;
   background: var(--warning);
-}
-.ct-only-anatomy {
-  position: relative;
-}
-.ct-only-anatomy > .panel-hide {
-  align-self: flex-end;
-  margin-bottom: -26px;
-  z-index: 1;
 }
 /*
  * One top bar holds the case and everything done to it, in the order the work goes: the case and its
@@ -659,10 +739,23 @@ header.top-bar.fold-compact > .segmentation-panel {
     gap: 0;
   }
   .workspace.modular-workspace.panel-sidebar-hidden {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     grid-template-areas:
-      'toolbar'
-      'stage';
+      'edge toolbar'
+      'edge stage';
+  }
+  .workspace.modular-workspace > .sidebar-edge {
+    grid-area: edge;
+    display: flex;
+    justify-content: center;
+    width: 22px;
+    padding-top: 6px;
+    border-right: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .sidebar-edge-tab {
+    width: 18px;
+    height: 30px;
   }
   .workspace.modular-workspace > .workspace-sidebar {
     grid-area: sidebar;
@@ -685,7 +778,7 @@ header.top-bar.fold-compact > .segmentation-panel {
     grid-area: stage;
   }
 
-  /* Sidebar: the anatomy list flexes; details keep their content height up to about half. */
+  /* Side panel: one tab at a time, at full height. The segment list scrolls inside its tab. */
   .workspace-sidebar {
     container: workspace-sidebar / inline-size;
     display: flex;
@@ -695,33 +788,7 @@ header.top-bar.fold-compact > .segmentation-panel {
     overflow: hidden;
     background: var(--panel);
   }
-  .workspace-sidebar > .anatomy-rail {
-    flex: 1 1 0;
-    min-height: 150px;
-    border-right: 0;
-  }
-  .workspace-sidebar > .inspector {
-    flex: 0 1 auto;
-    min-height: 0;
-    max-height: 48%;
-    overflow: auto;
-  }
-  /* The 3D tab's settings are longer than a selection, so it takes more of the column, at a fixed
-     height so the list above stays put as sections fold. Only the list gives up height: the column
-     keeps its width, so the viewers never resize. */
-  .workspace-sidebar > .inspector.inspector-volume-active {
-    height: max(48%, calc(100% - 320px));
-    max-height: max(48%, calc(100% - 320px));
-  }
-  .workspace.modular-workspace.panel-anatomy-hidden .workspace-sidebar > .inspector {
-    flex: 1 1 auto;
-    max-height: none;
-    border-top: 0;
-  }
   .workspace-sidebar .inspector-tabs {
-    position: sticky;
-    top: 0;
-    z-index: 2;
     gap: 14px;
     height: 38px;
     min-height: 38px;
@@ -750,67 +817,24 @@ header.top-bar.fold-compact > .segmentation-panel {
     min-height: 30px;
     margin: 0 12px 10px;
   }
-  .workspace-sidebar .selection-content {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 10px 12px;
-    min-height: 0;
-    padding: 12px 14px;
-  }
-  .workspace-sidebar .selection-content > * {
-    grid-column: 1 / -1;
-  }
-  .workspace-sidebar .selection-identity {
-    grid-column: 1;
-    min-width: 0;
-  }
-  .workspace-sidebar .selection-identity h2 {
-    margin: 3px 0 2px;
-    font-size: 14px;
-  }
-  .workspace-sidebar .measurement {
-    grid-column: 2;
-    align-items: flex-end;
-    gap: 5px;
-    min-width: 0;
-    padding: 0;
-    border-left: 0;
-  }
-  .workspace-sidebar .measurement strong {
-    font-size: 20px;
-  }
-  .workspace-sidebar .selection-controls {
-    min-width: 0;
-    gap: 9px;
-  }
-  .workspace-sidebar .selection-controls .button-row {
-    display: flex;
-    gap: 6px;
-  }
-  .workspace-sidebar .selection-controls .button-row > .button {
-    flex: 1;
-  }
-  .workspace-sidebar .ct-only-summary {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 14px;
-  }
   .workspace-sidebar .refinement-panel,
   .workspace-sidebar .history-content {
+    padding: 14px;
+  }
+  .workspace-sidebar .sidebar-note {
+    margin: 0;
     padding: 14px;
   }
   .workspace-sidebar .history-heading {
     flex-wrap: wrap;
   }
-  /* Four tabs and the hide button need about 460 px with long labels, so narrower sidebars use the short ones. */
+  /* Four tabs and the chevron need about 460 px with long labels, so narrower sidebars use the short ones. */
   @container workspace-sidebar (max-width: 479px) {
     .workspace-sidebar .inspector-tabs {
       gap: 6px;
       padding-left: 10px;
     }
-    .workspace-sidebar .inspector-tabs > button:not(.inspector-hide) {
+    .workspace-sidebar .inspector-tabs > button:not(.panel-collapse-button) {
       padding-inline: 6px;
     }
     .workspace-sidebar .inspector-tabs .tab-long {
@@ -824,15 +848,16 @@ header.top-bar.fold-compact > .segmentation-panel {
     .workspace-sidebar .inspector-tabs .tab-short {
       display: inline;
     }
-    /* If the strip still overflows, the words shorten before the hide button leaves it. */
-    .workspace-sidebar .inspector-tabs > button:not(.inspector-hide, .inspector-volume-tab, .inspector-coronary-tab) {
+    /* If the strip still overflows, the words shorten before the chevron leaves it. Segments, the main
+       tab, keeps its word. */
+    .workspace-sidebar .inspector-tabs > button:not(:first-child, .panel-collapse-button, .inspector-volume-tab, .inspector-coronary-tab) {
       flex: 0 1 auto;
       min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
     }
   }
-  /* Five tabs (the sixth child is the hide button) overflow even the widest sidebar with full names. */
+  /* Five tabs (the sixth child is the chevron) overflow even the widest sidebar with full names. */
   .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) .tab-long {
     position: absolute;
     width: 1px;
@@ -849,7 +874,7 @@ header.top-bar.fold-compact > .segmentation-panel {
     .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) {
       gap: 4px;
     }
-    .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) > button:not(.inspector-hide) {
+    .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) > button:not(.panel-collapse-button) {
       padding-inline: 5px;
     }
     .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) .tab-count {
@@ -857,22 +882,11 @@ header.top-bar.fold-compact > .segmentation-panel {
     }
   }
   @container workspace-sidebar (max-width: 279px) {
-    .workspace-sidebar .inspector-tabs > button:not(.inspector-hide) {
+    .workspace-sidebar .inspector-tabs > button:not(.panel-collapse-button) {
       padding-inline: 5px;
     }
     .workspace-sidebar .inspector-tabs {
       gap: 4px;
-    }
-  }
-  @container workspace-sidebar (min-width: 420px) {
-    .workspace-sidebar .selection-controls {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      align-items: center;
-      gap: 9px 16px;
-    }
-    .workspace-sidebar .selection-controls > .button-row {
-      grid-column: 1 / -1;
     }
   }
 
@@ -1014,25 +1028,9 @@ header.top-bar.fold-compact > .segmentation-panel {
     flex-direction: column;
     overflow: hidden;
   }
-  .workspace.modular-workspace .workspace-sidebar > .anatomy-rail {
-    flex: 1 1 0;
-    height: auto;
-    min-height: 45%;
-  }
-  .workspace.modular-workspace .workspace-sidebar > .inspector {
-    flex: 0 1 auto;
-    min-height: 0;
-    max-height: 55%;
-    overflow: auto;
-  }
-  .workspace.modular-workspace.panel-anatomy-hidden .workspace-sidebar > .inspector {
-    flex: 1 1 auto;
-    max-height: none;
-  }
-  .workspace.modular-workspace .workspace-sidebar .selection-content {
-    flex-wrap: wrap;
-    gap: 14px 20px;
-    min-height: 0;
+  /* The bottom navigation brings the panel back, so it has no chevron here. */
+  .workspace-sidebar .inspector-tabs > .panel-collapse-button {
+    display: none;
   }
 }
 

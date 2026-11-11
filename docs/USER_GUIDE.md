@@ -304,25 +304,37 @@ any job and your name. The worker shows at the bottom left.
   below 1400 px while a job or newer-version chip shows, **Series…**, **Source image** and
   **+ Import scan** move under **⋯**.
 - At 1000 px and narrower, every case action but review moves under **⋯**; the job chip and your
-  name stay. The layout control is hidden, and **☷ Anatomy** shows the whole sidebar.
+  name stay. The layout control is hidden, and **☷ Anatomy** shows the side panel.
 - While such a chip shows below 1500 px, only the layout **▾** stays; it has every arrangement.
 - Disabled buttons give their reason on hover, and in a menu under the item.
 - **Esc** or a click elsewhere closes a top bar menu. **Esc** also closes the segmentation settings.
 - A click on an image that closes a menu does only that: it never moves the crosshair or starts a
   mark.
 
-The sidebar holds the anatomy list and the **Selected structure**, **Refinement**, **Revision
-history** and **3D view** tabs, with **Coronary FFR** last when the revision has a coronary lumen.
-The stage tiles the 3D view and **CT review**.
+The side panel on the left shows one tab at a time: **Segments**, **3D**, **Refine** and
+**History**, with **FFR** last when the revision has a coronary lumen. At its widest, 480 px, the
+panel spells them out, such as **Revision history**, unless **FFR** shows. Your browser remembers
+the tab. The stage tiles the 3D view and **CT review**.
 
+- **‹** at the end of the tabs hides the side panel, and **›** on the left edge brings it back.
+  **\\** does both.
 - The layout icons at the top right show both views, the 3D view alone or CT review alone. Their
-  **▾** chooses side by side or stacked, shows or hides each area or the **Side panels**, and has
-  **Reset layout**. **\\** also hides or shows the side panels.
+  **▾** chooses side by side or stacked, shows or hides each view or the **Side panel**, and has
+  **Reset layout**.
 - Drag a divider to resize, and double-click it to reset.
 - **Layers** in the 3D header folds the 3D view's layer card without resizing the view.
 
+**Segments** lists the anatomy. Select a row to open it: the model that made it, **Color**,
+**Opacity**, **Focus ↗**, which frames it in 3D, and any QC messages. A structure picked in 3D, on a
+slice or in another tab opens the same way, even in a folded section. A row's **◎** shows it alone,
+and its eye hides it.
+
 **Show all**, **Hide all** and **Show selected only** apply to the whole case even when the list is
 filtered. A section's eye hides it, and its arrow collapses it.
+
+A scan with no segmentation shows its size and spacing under **Segments** instead, with **Choose
+segmentation task** and **+ Add segment by hand**. In review, a new segment shows at the top of the
+tab until you save it.
 
 ## View the images
 
@@ -358,8 +370,8 @@ The header holds the title, the window preset with **W** and **L**, **Projection
   **Cancel** stops the full download, and **Cache** starts it again.
 - **⤢** fills the screen, and **Restore ↙** or **Escape** returns. In review, **⤢** gives the
   stage to CT review, and **CT + 3D** shares it again.
-- **Colors:** bones are yellow. Change any color under **Selected structure**; your browser keeps
-  it.
+- **Colors:** bones are yellow. Change any color in the segment's row under **Segments**; your
+  browser keeps it.
 
 Tilted-gantry (sheared) scans are straightened for display only. Your marks still map to the
 original voxels.
@@ -386,8 +398,8 @@ returns. In review, **⤢** gives the stage to the 3D view, and **CT + 3D** shar
   visible: CT in front of a segment covers it, and CT behind shows through. If the browser lacks a
   feature this needs or GPU memory runs short, segments stay solid; the slider reads **Solid** and
   its tooltip says why. If the GPU cannot compile the see-through shader, the 3D view fails instead.
-- **Settings ›** on the **CT volume** row opens the sidebar's **3D view** tab, showing the sidebar
-  if it is hidden. In the expanded view and at 1000 px or narrower, it opens the settings inside
+- **Settings ›** on the **CT volume** row opens the side panel's **3D** tab, showing the panel if
+  it is hidden. In the expanded view and at 1000 px or narrower, it opens the settings inside
   **Layers** instead. If the volume fails, the row shows **Retry volume** or **Retry mask**, and the
   tab a dot.
 - **CT plane** shows one native slice, and **Face plane** turns the camera to it. While the plane
@@ -402,7 +414,7 @@ returns. In review, **⤢** gives the stage to the 3D view, and **CT + 3D** shar
 ### CT volume settings
 
 These settings change the display only, never source images, masks or measurements. They sit in
-the sidebar's **3D view** tab, in one column. The header shows the volume's state and **Reset
+the side panel's **3D** tab, in one column. The header shows the volume's state and **Reset
 volume**; while the volume is off it shows **Turn on**, and the sections stay listed but greyed.
 Each section folds. A folded section shows a summary, opens by itself when its setting changes, and
 your browser remembers which are open. **ⓘ** gives help on hover, or when you click or tap it.
@@ -423,7 +435,7 @@ your browser remembers which are open. **ⓘ** gives help on hover, or when you 
 ## Review and correct masks
 
 Select anatomy in the list or on the model, inspect its overlay in all three planes and check any
-QC messages under **Selected structure** against the CT. Then choose **Review segmentation ↗** and
+QC messages in its row under **Segments** against the CT. Then choose **Review segmentation ↗** and
 pick the target under **Structure**.
 
 Review opens on your main-page views, and slab projection and rotatable crosshairs pause until
@@ -531,7 +543,7 @@ Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a re
 **Create empty segment**. Mark its extent on the CT, apply, inspect and choose **Save new segment**.
 
 A scan with no segmentation needs no model run first: choose **+ Add segment ↗** in the top bar or
-**+ Add segment by hand** in the anatomy panel. Review opens on that form, in **Direct edit**. Saving
+**+ Add segment by hand** under **Segments**. Review opens on that form, in **Direct edit**. Saving
 makes the scan's first segmentation revision.
 
 ### Mark in the 3D view
@@ -612,9 +624,10 @@ To record your review, choose the status chip beside the case name and set **Rev
 
 ### Other correction routes
 
-The **Refinement** tab offers **Keep component at seed**, **Remove component at seed**, **Keep
+The **Refine** tab offers **Keep component at seed**, **Remove component at seed**, **Keep
 inside region** and **Erase inside region**. Click a slice or surface to place a seed, or enter
-coordinates or bounds in patient RAS millimetres, then choose **Create refinement revision →**.
+coordinates or bounds in patient RAS millimetres, then choose **Create refinement revision →**. The
+tab names the saved segment it changes, and a click on a surface changes which.
 
 For 3D Slicer, use **External correction with Slicer** under the status chip:
 
@@ -659,7 +672,7 @@ mask it took voxels from.
 > **Research use only · not for diagnostic use.** CT-FFR here is an unvalidated research model.
 > Check the centrelines and diameters on the source images before reading any FFR.
 
-The **Coronary FFR** tab appears when the revision has **Coronary arteries** from ImageCAS-X
+The **FFR** tab appears when the revision has **Coronary arteries** from ImageCAS-X
 (nnU-Net or CAS-Net) or TotalSegmentator. It traces centrelines in the lumen mask on its own grid,
 measures lumen area along them and solves steady hyperaemic pressure: Poiseuille resistance along
 the vessels, and Young–Tsai viscous and expansion losses across each narrowing.
@@ -709,8 +722,8 @@ nominal solve.
 In the native 3D view a centreline tube shows the result, sized to the lumen. Every coronary lumen
 segment fades behind it, or hides where surfaces are drawn solid. Colour by **FFR**: red at 0.75
 and below, amber at 0.80, blue from 0.90, grey where FFR is not reported. Or by **Diameter**, dark
-to light blue from 1 to 5 mm. The legend sits at the lower left. The tube shows while the
-**Coronary FFR** tab is open, or the **3D view** tab opened from it.
+to light blue from 1 to 5 mm. The legend sits at the lower left. The tube shows while the **FFR**
+tab is open, or the **3D** or **Segments** tab opened from it.
 PNG and DICOM view exports leave the tube out and draw the lumens as set. The Three.js view (MR,
 sheared grids) shows the table only.
 
@@ -789,7 +802,7 @@ overlap-preserving export for 3D Slicer.
 
 **Export SEG…** works for classic CT and classic single-frame MR from any import. Selected masks go
 into one SEG object with overlaps preserved. All nonempty masks start selected, and **Select
-visible** takes a snapshot of the masks switched on in the anatomy list.
+visible** takes a snapshot of the masks switched on in the **Segments** list.
 
 Deliver it as in [Export](#export); a file can build with the dialog closed. For Orthanc, see
 [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back). A SEG uses the colors

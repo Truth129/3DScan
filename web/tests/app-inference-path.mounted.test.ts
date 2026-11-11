@@ -430,7 +430,7 @@ describe('the revision history', () => {
 });
 
 describe('the Coronary FFR tab', () => {
-  it('stays open under the 3D tab opened from it, so the tube stays while the volume is tuned', async () => {
+  it('stays open under the 3D and Segments tabs opened from it, so the tube stays while the view is tuned', async () => {
     const lumen: Structure = {
       id: 'coronary_arteries:coronary_arteries',
       name: 'coronary_arteries',
@@ -457,10 +457,48 @@ describe('the Coronary FFR tab', () => {
     await press(root.button('Coronary FFR'));
     expect(root.named('coronary-panel')).toBe(panel);
     expect(list).toHaveBeenCalledOnce();
+    await press(root.button('Segments'));
+    expect(root.named('coronary-panel')).toBe(panel);
     // Another tab closes it, and the 3D tab opened from there does not bring it back.
-    await press(root.button('Selected structure'));
+    await press(root.button('Refinement'));
     await press(root.button('3D view'));
     expect(root.named('coronary-panel')).toBeUndefined();
+  });
+});
+
+describe('the side panel', () => {
+  const liver: Structure = {
+    id: 'total:liver',
+    name: 'liver',
+    task: 'total',
+    group: 'abdomen',
+    color: '#aa5500',
+    volume_ml: 1,
+    voxel_count: 1,
+    centroid_ras: null,
+    bounds_ras: null,
+    qc: ['2 disconnected components'],
+  };
+  it("opens the selected segment's row to its model, colour, opacity, Focus ↗ and checks", async () => {
+    workstation([amd], { revisions: [{ ...prepared, id: 'segmented', kind: 'segmentation', source: 'segmented', structures: [liver] }] });
+    const details = (await start()).named('structure-details')!;
+    expect(details.content).toContain('total · mask-derived measurement');
+    expect(details.all.some(node => node.props['aria-label'] === 'Segment color')).toBe(true);
+    expect(details.content).toContain('Opacity');
+    expect(details.button('Focus ↗')).toBeDefined();
+    expect(details.content).toContain('⚑ 2 disconnected components');
+  });
+  it('names the structure the Refine tab will change', async () => {
+    workstation([amd], { revisions: [{ ...prepared, id: 'segmented', kind: 'segmentation', source: 'segmented', structures: [liver] }] });
+    const root = await start();
+    await press(root.button('Refinement'));
+    expect(root.named('refinement-panel')!.content).toContain('Changes affect Liver.');
+  });
+  it('keeps a scan alone with its geometry and the prompt to add a segment by hand', async () => {
+    workstation([amd]);
+    const empty = (await start()).named('ct-only-anatomy')!;
+    expect(empty.content).toContain('4 × 4 × 4 voxels');
+    expect(empty.button('+ Add segment by hand')).toBeDefined();
   });
 });
 
