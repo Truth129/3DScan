@@ -221,6 +221,31 @@ export function samplePresetTransfer(preset: CTVolumePreset, scalar: number): [n
   return [rgb[0], rgb[1], rgb[2], alpha];
 }
 
+/**
+ * A preset's swatch: its colours across the values it draws, each as opaque as the preset makes it,
+ * as a CSS gradient. It is drawn from the preset's own ramps, so no swatch needs a render.
+ */
+export function presetSwatch(preset: CTVolumePreset, stops = 8): string {
+  const knots = preset.opacity,
+    first = Math.max(
+      0,
+      knots.findIndex(([, alpha]) => alpha > 0.001),
+    ),
+    end = knots.length - 1;
+  const low = knots[Math.max(0, first - 1)][0];
+  // A last knot at the top of the range only holds a plateau to the scanner's maximum, which would squeeze the ramp.
+  let high = end > first && knots[end][0] >= preset.transferRange[1] ? knots[end - 1][0] : knots[end][0];
+  if (!(high > low)) high = low + 1;
+  const colors = Array.from({ length: stops }, (_, index) => {
+    const at = index / (stops - 1),
+      [r, g, b, alpha] = samplePresetTransfer(preset, low + (high - low) * at);
+    // Many samples along a ray add up, so a faint knot still shows; the square root keeps that visible.
+    const shown = Math.sqrt(Math.min(1, Math.max(0, alpha)));
+    return `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)} / ${shown.toFixed(2)}) ${Math.round(at * 100)}%`;
+  });
+  return `linear-gradient(90deg, ${colors.join(', ')})`;
+}
+
 /** Gradient opacity multiplies scalar opacity before physical step correction. */
 export function sampleVolumeGradientOpacity(id: CTVolumePresetId, magnitude: number): number {
   return Number.isFinite(magnitude) ? interpolate(getVolumePreset(id).gradientOpacity, magnitude, 1)[0] : 0;

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { session, sessionFailure, signOut, signOutOthers } from '../lib/session';
-import { useFloatingDetails } from '../lib/use-floating-details';
+import { useFloatingDetails } from '../lib/use-popover';
 
 const menu = ref<HTMLDetailsElement>(),
   body = ref<HTMLElement>(),

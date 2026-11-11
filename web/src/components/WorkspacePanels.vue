@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue';
+import { ChevronDown, X } from '@lucide/vue';
 import {
   applyWorkspacePreset,
   canHideWorkspacePanel,
@@ -26,7 +27,7 @@ const root = ref<HTMLElement>(),
   popover = ref<HTMLElement>();
 const panelId = useId(),
   helpId = useId();
-const { open, close, toggle } = usePopover(root, trigger, popover);
+const { open, close, toggle, arrows } = usePopover(root, trigger, popover);
 const options = computed(() => [
   { id: 'model' as const, label: '3D view' },
   { id: 'review' as const, label: props.reviewLabel },
@@ -65,7 +66,7 @@ function reset() {
 </script>
 
 <template>
-  <div ref="root" class="workspace-panels">
+  <div ref="root" class="workspace-panels" @keydown="arrows">
     <div class="layout-presets" role="group" aria-label="Workspace layout">
       <button
         v-for="item in quick"
@@ -103,12 +104,13 @@ function reset() {
         :aria-controls="panelId"
         @click="toggle"
       >
-        <span aria-hidden="true">▾</span>
+        <ChevronDown />
       </button>
     </div>
     <section v-if="open" :id="panelId" ref="popover" class="panels-popover" aria-label="Workspace panels" :aria-describedby="helpId">
       <div class="panels-heading">
-        <strong>Layout</strong><button type="button" class="panels-close" aria-label="Close panel options" @click="close()">×</button>
+        <strong>Layout</strong
+        ><button type="button" class="panels-close" aria-label="Close panel options" title="Close panel options" @click="close()"><X /></button>
       </div>
       <div class="panels-arrangement" role="group" aria-label="Arrangement">
         <button v-for="item in arrangements" :key="item" type="button" class="panels-arrangement-option" :aria-pressed="preset === item" @click="choose(item)">
@@ -170,7 +172,7 @@ function reset() {
   color: var(--text-secondary);
   cursor: pointer;
 }
-.layout-preset svg {
+.layout-preset svg:not(.lucide) {
   width: 17px;
   height: 17px;
   stroke: currentColor;

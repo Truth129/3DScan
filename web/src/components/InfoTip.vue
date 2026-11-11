@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue';
+import { Info } from '@lucide/vue';
 
 defineProps<{ id: string; text: string }>();
 const anchor = ref<HTMLButtonElement>();
-/** The open note sits by its ⓘ, inside the window: the top layer it opens in has no anchor of its own. */
+/** The open note sits by its icon, inside the window: the top layer it opens in has no anchor of its own. */
 function place(event: Event) {
   const note = event.currentTarget as HTMLElement,
     at = anchor.value?.getBoundingClientRect();
   if ((event as Event & { newState?: string }).newState !== 'open' || !at) return;
-  // It ends at the ⓘ when there is room to its left, as at the end of a row, and starts there otherwise.
+  // It ends at the icon when there is room to its left, as at the end of a row, and starts there otherwise.
   const fromLeft = at.right < 208,
     left = Math.max(8, at.left),
     below = at.bottom < innerHeight * 0.6;
@@ -25,18 +26,19 @@ function place(event: Event) {
 <template>
   <!-- Help that used to be a paragraph: a tooltip for the pointer, a note a tap or a key opens, and a
        description the control names with aria-describedby. -->
-  <button ref="anchor" type="button" class="info-tip" :title="text" aria-label="More information" :aria-describedby="id" :popovertarget="id">ⓘ</button
+  <button ref="anchor" type="button" class="info-tip" :title="text" aria-label="More information" :aria-describedby="id" :popovertarget="id"><Info /></button
   ><span :id="id" class="info-tip-note" popover @beforetoggle="place">{{ text }}</span>
 </template>
 
 <style scoped>
 .info-tip {
+  display: inline-flex;
   flex: none;
   padding: 0;
   border: 0;
   background: none;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
   cursor: help;
 }

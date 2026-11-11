@@ -260,7 +260,7 @@ input[type='range'] {
   background: #0c0e12;
 }
 .model-viewport {
-  background: radial-gradient(ellipse at 50% 40%, #191c23 0%, #111318 55%, #0c0e12 100%);
+  background: radial-gradient(ellipse at 50% 40%, var(--surface) 0%, #111318 55%, #0c0e12 100%);
 }
 .orientation-gizmo > circle {
   fill: #11131888;
@@ -332,12 +332,12 @@ input[type='range'] {
   border-radius: 3px;
   background: #111823df;
   color: #bac8dc;
-  font-size: 10px;
+  font-size: 11px;
   pointer-events: none;
 }
 .ct-detail-error {
   color: #d5bc88;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   margin: 6px 0;
 }
@@ -384,20 +384,20 @@ input[type='range'] {
   .app-footer {
     height: 26px;
     min-height: 26px;
-    font-size: 9px;
+    font-size: 11px;
   }
   .structure-select > span {
     font-size: 11px;
   }
   .structure-select > small {
-    font-size: 10px;
+    font-size: 11px;
   }
   .group-heading,
   .library-action {
     font-size: 11px;
   }
   .library-meta {
-    font-size: 9px;
+    font-size: 11px;
   }
   .inspector-tabs button,
   .selection-controls > label,
@@ -405,7 +405,7 @@ input[type='range'] {
     font-size: 11px;
   }
   .selection-source {
-    font-size: 10px;
+    font-size: 11px;
   }
 }
 .render-notice {

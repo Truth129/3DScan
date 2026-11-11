@@ -549,14 +549,14 @@ describe('viewport capture through Cornerstone', () => {
     await expect(captureView(typeof request === 'object' && request ? request : expected)).rejects.toThrow(message);
     expect(fake.viewer.capturePNG.mock.calls).toHaveLength(0);
   });
-  it('refuses during review, while PNG ↗ keeps working', async () => {
+  it('refuses during review, while PNG keeps working', async () => {
     const shown = await open();
     shown.state.reviewActive = true;
     await settled();
     await shown.refused(VIEW_REVIEW_MESSAGE);
     expect(fake.viewer.capturePNG.mock.calls).toHaveLength(0);
-    expect(shown.button('PNG ↗')).toBeTruthy();
-    expect(shown.button('DICOM ↗')!.getAttribute('title')).toBe(VIEW_REVIEW_MESSAGE);
+    expect(shown.button('PNG')).toBeTruthy();
+    expect(shown.button('DICOM')!.getAttribute('title')).toBe(VIEW_REVIEW_MESSAGE);
   });
   it('refuses a missing view component, and a CT not yet at full resolution', async () => {
     await (await viewport({ localSession: session(), volumeViewComponent: defineAsyncComponent(() => new Promise(() => {})) })).refused();
@@ -859,11 +859,11 @@ describe('viewport capture through Three.js', () => {
     });
     await shown.refused();
   });
-  it('still saves PNG ↗ in review', async () => {
+  it('still saves PNG in review', async () => {
     const shown = await legacy();
     shown.state.reviewActive = true;
     await settled();
-    click(shown.button('PNG ↗'));
+    click(shown.button('PNG'));
     expect(fake.scene.screenshot).toHaveBeenCalledOnce();
   });
 });

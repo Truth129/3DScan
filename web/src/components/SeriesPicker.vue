@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { ChevronRight } from '@lucide/vue';
 import type { Series } from '../types';
 import { filterSeries, sequenceSummary, seriesIsReady, seriesIssues, seriesIssueSummary } from '../lib/image-workspace';
 
@@ -62,7 +63,7 @@ const filters = computed(() => [
         >
         <details v-if="!seriesIsReady(item) || seriesIssues(item).length" class="series-checks">
           <summary>
-            <span>{{ seriesIssueSummary(item) }}</span
+            <ChevronRight /><span>{{ seriesIssueSummary(item) }}</span
             ><small>{{ seriesIssues(item).length || 1 }} {{ seriesIssues(item).length <= 1 ? 'check' : 'checks' }}</small>
           </summary>
           <ul>
@@ -208,12 +209,12 @@ const filters = computed(() => [
   line-height: 1.5;
   color: var(--text-secondary);
 }
-.series-checks summary:before {
-  content: '▸';
-  flex-shrink: 0;
+.series-checks summary > .lucide-chevron-right {
+  margin-top: 1px;
+  transition: rotate 0.12s;
 }
-.series-checks[open] summary:before {
-  content: '▾';
+.series-checks[open] summary > .lucide-chevron-right {
+  rotate: 90deg;
 }
 .series-checks summary > span {
   display: -webkit-box;

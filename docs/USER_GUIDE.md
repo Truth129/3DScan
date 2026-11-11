@@ -296,18 +296,23 @@ it.
 ## Arrange the workspace
 
 The top bar reads in the order of the work: the case and its review status, **Series…** and
-**+ Import scan**, then **Segment CT…**, the **View** | **Review segmentation ↗** switch and the
+**+ Import scan**, then **Segment CT…**, the **View** | **Review segmentation** switch and the
 exports, then the layout, any job and your name. The worker shows at the bottom left.
 
+Icon buttons name themselves on hover. An arrow after a link means it opens in a new tab.
+
 - Below 1400 px wide, **Import DICOM SEG…** moves under the **▾** beside **Segment CT…** when that
-  is offered, and **Export SEG…** and **Export viewer ↗** under **Export ▾**. Below 1200 px, or
+  is offered, and **Export SEG…** and **Export viewer** under **Export ▾**. Below 1200 px, or
   below 1400 px while a job or newer-version chip shows, **Series…**, **Source image** and
   **+ Import scan** move under **⋯**.
 - At 1000 px and narrower, every case action but **View** and review moves under **⋯**; the job
-  chip and your name stay. The layout control is hidden, and **☷ Anatomy** shows the side panel.
+  chip and your name stay. The layout control is hidden, and **Anatomy** shows the side panel.
 - While such a chip shows below 1500 px, only the layout **▾** stays; it has every arrangement.
 - Disabled buttons give their reason on hover, and in a menu under the item.
-- **Esc** or a click elsewhere closes a top bar menu. **Esc** also closes the segmentation settings.
+- **Esc** closes a menu and returns focus to its button; a click elsewhere closes it too. **Esc**
+  also closes the segmentation settings.
+- In a menu, **↓** and **↑** move between its items and **Home** and **End** jump to the first and
+  last. **↓** on a menu's button opens it, except your name's, which opens with **Enter**.
 - A click on an image that closes a menu does only that: it never moves the crosshair or starts a
   mark.
 
@@ -329,7 +334,7 @@ panel, and leave the Segments list room for a few rows.
 - **Layers** in the 3D header folds the 3D view's layer card without resizing the view.
 
 **Segments** lists the anatomy. Select a row to open it: the model that made it, **Color**,
-**Opacity**, **Focus ↗**, which frames it in 3D, and any QC messages. A structure picked in 3D, on a
+**Opacity**, **Focus**, which frames it in 3D, and any QC messages. A structure picked in 3D, on a
 slice or in another tab opens the same way, even in a folded section. A row's **◎** shows it alone,
 and its eye hides it.
 
@@ -349,7 +354,8 @@ below them. Hover the header for what links them to the 3D view.
 
 The header holds the title, the window preset with **W** and **L**, **Projection**, **Overlays ▾**,
 **Slices ▾**, a download dot, **⤢** and **×**. In a narrow tile **W** and **L** fold under
-**W/L ▾**, **Slab mm**, **Cache** and **Cancel** under **Slices ▾**, then the words and the title go.
+**W/L ▾**, **Slab mm**, **Cache** and **Cancel** under **Slices ▾**, then the words and the title go,
+and in the narrowest the menus' arrows.
 
 - **Navigate:** click to move there, scroll or the slider to change slice, left or right drag for
   window/level, middle drag to pan, Ctrl or ⌘ scroll (or pinch) to zoom. Scrolling down moves
@@ -360,20 +366,20 @@ The header holds the title, the window preset with **W** and **L**, **Projection
   that point at their zoom. Tilted scans do not centre.
 - **Panes:** the top left corner names the plane, then **MPR**, **MIP** or **MinIP**, the native
   slice number, or the position in mm. A green dot means full resolution, and an amber ring a
-  preview. **⟲** at the top right resets that pane's pan and zoom. It shows on hover, stays on the
-  pane you pressed last, and always shows on a touch screen.
+  preview. **⟲** (**Reset pan and zoom**) at the top right resets that pane's pan and zoom. It
+  shows on hover, stays on the pane you pressed last, and always shows on a touch screen.
 - **Window:** **Soft tissue**, **Lung**, **Bone** or **Vessels**, or type **W** and **L**.
 - **Projection:** **MPR**, **MIP** or **MinIP**, with **Slab mm**. A slab shows overlays on its
   centre slice and pauses drawing. Review hides it while its planes stay on the source slices.
 - **Slices ▾:** **Rotatable crosshairs** adds crosshairs you can drag and rotate by their lines.
   **Reset planes** restores the planes.
 - **Overlays ▾:** **2D overlay opacity**, **Fill** and **Outline** set the style. **Segments**
-  chooses what shows, **Use selected segment** follows the selection and **Clear overlays** shows
-  CT alone. The button counts the overlays shown.
+  chooses what shows, **Use selected** follows the selection and **Clear** shows CT alone. The
+  button counts the overlays shown.
 - **Download:** the dot is amber until the full CT is cached, then green. Hover it for the detail.
   **Cancel** stops the full download, and **Cache** starts it again.
-- **⤢** fills the screen, and **Restore ↙** or **Escape** returns. In review, **⤢** gives the
-  stage to CT review, and **CT + 3D** shares it again.
+- **⤢** (**Expand**) fills the screen, and **Restore** or **Escape** returns. In review, **⤢** gives
+  the stage to CT review, and **CT + 3D** shares it again.
 - **Colors:** bones are yellow. Change any color in the segment's row under **Segments**; your
   browser keeps it.
 
@@ -382,27 +388,27 @@ original voxels.
 
 ### 3D view
 
-The 3D view's header holds its title, **Current** and **Before**, the volume preset, **PNG ↗**,
-**DICOM ↗**, **Layers**, **⤢** and **×**. Hover the title for its detail, the coordinate system and
-the mouse controls. In a narrow view the detail folds away, and **PNG ↗** and **DICOM ↗** fold
-under **Capture ▾**.
+The 3D view's header holds its title, **Current** and **Before**, the volume preset, **PNG**,
+**DICOM**, **Layers**, **⤢** and **×**. Hover the title for its detail, the coordinate system and
+the mouse controls. In a narrow view the detail folds away, and **PNG** and **DICOM** fold under
+**Capture ▾**.
 
 **Layers** switches what is drawn: **Segmentation**, **CT volume** and **CT plane**. Drag to
-rotate, right drag to pan, scroll to zoom. **⤢** fills the screen, and **Restore ↙** or **Escape**
+rotate, right drag to pan, scroll to zoom. **⤢** fills the screen, and **Restore** or **Escape**
 returns. In review, **⤢** gives the stage to the 3D view, and **CT + 3D** shares it again.
 
 - The rail on the left edge turns the camera: **A**nterior, **P**osterior, **R**ight, **L**eft,
   **S**uperior and **Obl**ique, or keys **1** to **6**. The current view is lit. A heart button
-  joins them with **Cinematic heart**. Below them, **+** and **−** zoom, **◎** focuses the selected
-  structure or fits the CT volume, and **⟲** resets the view.
+  joins them with **Cinematic heart**. Below them, **+** and **−** zoom, **Focus** frames the
+  selected structure or fits the CT volume, and **⟲** (**Reset view**) resets the view.
 - The keys do nothing while you type, pick from a list or fill in a form.
-- The preset in the header opens the volume settings, as **Settings ›** does.
+- The preset in the header opens the volume settings, as **Settings** does.
 
 - The slider beside **Segmentation** is **All segment opacity**. It works with **CT volume**
   visible: CT in front of a segment covers it, and CT behind shows through. If the browser lacks a
   feature this needs or GPU memory runs short, segments stay solid; the slider reads **Solid** and
   its tooltip says why. If the GPU cannot compile the see-through shader, the 3D view fails instead.
-- **Settings ›** on the **CT volume** row opens the side panel's **3D** tab, showing the panel if
+- **Settings** on the **CT volume** row opens the side panel's **3D** tab, showing the panel if
   it is hidden. In the expanded view and at 1000 px or narrower, it opens the settings inside
   **Layers** instead. If the volume fails, the row shows **Retry volume** or **Retry mask**, and the
   tab a dot.
@@ -423,12 +429,13 @@ volume**; while the volume is off it shows **Turn on**, and the sections stay li
 Each section folds. A folded section shows a summary, opens by itself when its setting changes, and
 your browser remembers which are open. **ⓘ** gives help on hover, or when you click or tap it.
 
-- **Appearance:** **Preset**, then **Intensity**, **Volume opacity** and **Quality**.
+- **Appearance:** **Preset**, then **Intensity**, **Volume opacity** and **Quality**. Under the
+  menu, a swatch for each CT preset shows its colours; choose one to use it.
 - **Lighting** (Cornerstone3D): the **Method** is **Preset lighting**, **Standard**, **Cinematic
   (VolView Hybrid)** or **Ambient occlusion**. **Reset lighting** returns to the preset.
 - **Limit to segments:** its switch shows the CT only inside or outside chosen segments. Pick them
-  under **Choose segments** with **Use selected**, **Use visible** or the list. **Margin** retains
-  thin walls.
+  under **Choose segments** with **Use selected**, **Use visible**, **Clear** or the list. Every
+  segment list uses these words, and **Find segments…** to search. **Margin** retains thin walls.
 - **Color segments** (Cornerstone3D, not in review): its switch tints the CT inside chosen segments
   with their anatomy-list colors, blended by **Color strength**.
 - **Crop** limits the native i, j and k ranges.
@@ -439,7 +446,7 @@ your browser remembers which are open. **ⓘ** gives help on hover, or when you 
 ## Review and correct masks
 
 Select anatomy in the list or on the model, inspect its overlay in all three planes and check any
-QC messages in its row under **Segments** against the CT. Then choose **Review segmentation ↗** and
+QC messages in its row under **Segments** against the CT. Then choose **Review segmentation** and
 pick the target under **Structure**. The review panel opens at the top of the side panel, which
 shows first if it was hidden. **View** in the top bar or **Exit review** leaves review; your draft
 stays saved.
@@ -548,7 +555,7 @@ from the removed GPU keeps **Re-run on this GPU**, even with one GPU left. If th
 Choose **+ Add segment**, enter a **Name**, **Group** and **Color**, choose a relationship, then
 **Create empty segment**. Mark its extent on the CT, apply, inspect and choose **Save new segment**.
 
-A scan with no segmentation needs no model run first: choose **+ Add segment ↗** in the top bar or
+A scan with no segmentation needs no model run first: choose **+ Add segment** in the top bar or
 **+ Add segment by hand** under **Segments**. Review opens on that form, in **Direct edit**. Saving
 makes the scan's first segmentation revision.
 
@@ -572,7 +579,7 @@ With **CT volume** on in review:
   In AI assist, **Point** adds it as an Include or Exclude; other tools move the crosshair there.
 - A click on no visible volume, or on an opaque surface or a CT plane in front of it, makes no
   mark; see-through surfaces do not block it. **Surface point** refuses a surface the volume covers.
-- While you mark on the **CT plane**, the volume on your side of it is cut away. **◎** (Focus) keeps
+- While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps
   the whole CT in depth.
 - **Limit to segments** masks by the saved segmentation, not your draft, so your edits do not
   change it until you save. **Volume point** sees only the CT the mask shows.
@@ -595,7 +602,7 @@ status, **Impact preview** and **Options +**. **Original** and **Candidate**, **
   nothing covers a viewer. A short panel scrolls its tools; the bottom buttons always show, and so
   does **Create empty segment**.
 - While the side panel is hidden, a dot on its edge means review has a message. **›** or
-  **Review segmentation ↗** brings the panel back.
+  **Review segmentation** brings the panel back.
 - At 1000 px and narrower, the panel sits under the 3D view or CT review, and scrolls on a short
   screen.
 
@@ -668,7 +675,7 @@ structure's saved model output. A later run that replaced a structure becomes it
 | **ΔV**         | Accepted volume minus original volume.                                                                                                                       |
 | **Voxels +/−** | Voxels added and removed.                                                                                                                                    |
 
-**All cases ↗** pools the active revision of each case marked **Reviewed** or **Corrected**, by
+**All cases** pools the active revision of each case marked **Reviewed** or **Corrected**, by
 task and structure: how often the model was accepted unchanged, how many were AI-assisted saves,
 Dice and mean absolute ΔV. Synthetic demo cases form a separate pool.
 
@@ -759,7 +766,7 @@ The HTML, DICOM SEG and DICOM view exports read the saved revision: first save o
 draft, return to the current revision and turn off comparison. Exports can contain patient images
 and metadata, so treat them like the study itself.
 
-**DICOM ↗** and **Export SEG…** deliver to these places, depending on where the scan came from:
+**DICOM** and **Export SEG…** deliver to these places, depending on where the scan came from:
 
 | Delivery         | Choose                                                                                              | Needs                                                                                   |
 | ---------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
@@ -775,11 +782,11 @@ retry, since a retry sends the same instances again.
 
 ### PNG
 
-**PNG ↗** in the 3D view saves the current view, including any review marks.
+**PNG** in the 3D view saves the current view, including any review marks.
 
 ### DICOM view
 
-**DICOM ↗** in the 3D view saves the current view as a one-image series in the original patient
+**DICOM** in the 3D view saves the current view as a one-image series in the original patient
 and study, delivered as in [Export](#export). For Orthanc, see
 [send a 3D view back](ORTHANC.md#send-a-3d-view-back).
 
@@ -792,11 +799,11 @@ and nothing in it marks left from right.
 - After a failure, retry from the dialog, or if it has gone, check the study in Orthanc and capture
   again. If the dialog says the outcome is unknown, press the same button again.
 - You can close the dialog during an export: the result appears as a notice or in the error banner.
-  A file that finishes meanwhile waits for the next **DICOM ↗**, with **Download file**.
+  A file that finishes meanwhile waits for the next **DICOM**, with **Download file**.
 
 ### Portable offline HTML
 
-1. Choose **Export viewer ↗**.
+1. Choose **Export viewer**.
 2. Under **Include layers**, choose **Segmentation**, **CT volume** and **CT plane**.
 3. Choose **Download HTML**.
 
@@ -816,8 +823,9 @@ overlap-preserving export for 3D Slicer.
 ### DICOM SEG
 
 **Export SEG…** works for classic CT and classic single-frame MR from any import. Selected masks go
-into one SEG object with overlaps preserved. All nonempty masks start selected, and **Select
-visible** takes a snapshot of the masks switched on in the **Segments** list.
+into one SEG object with overlaps preserved. All nonempty masks start selected. **Use all**, **Use
+visible** and **Clear** change the selection; **Use visible** takes a snapshot of the masks switched
+on in the **Segments** list.
 
 Deliver it as in [Export](#export); a file can build with the dialog closed. For Orthanc, see
 [send a saved segmentation back](ORTHANC.md#send-a-saved-segmentation-back). A SEG uses the colors
@@ -891,7 +899,7 @@ holds several phases is refused.
 
 MR signal values are not HU, so review each sequence separately. MR uses Three.js.
 
-SEG import and export, OsiriX ROIs and **DICOM ↗** work for classic single-frame MR as for CT, and
+SEG import and export, OsiriX ROIs and **DICOM** work for classic single-frame MR as for CT, and
 refuse Enhanced MR. They have been checked on synthetic MR only, not yet in OsiriX or another viewer.
 
 ## Command line

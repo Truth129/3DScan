@@ -316,7 +316,7 @@ describe('a segmentation that is refused', () => {
     const robustCrop = () => root.all.find(node => node.props['aria-label'] === 'Robust crop')!;
     (robustCrop().props.onChange as (event: unknown) => void)({ target: { checked: true } });
     await settled();
-    await press(root.button('×'));
+    await press(root.all.find(node => node.props['aria-label'] === 'Close segmentation settings'));
     vi.mocked(api.segmentationOptions).mockRejectedValueOnce(new TypeError('Failed to fetch'));
     await press(root.button('Segment CT…'));
     await press(root.button('Retry tasks'));
@@ -479,14 +479,14 @@ describe('the side panel', () => {
     bounds_ras: null,
     qc: ['2 disconnected components'],
   };
-  it("opens the selected segment's row to its model, colour, opacity, Focus ↗ and checks", async () => {
+  it("opens the selected segment's row to its model, colour, opacity, Focus and checks", async () => {
     workstation([amd], { revisions: [{ ...prepared, id: 'segmented', kind: 'segmentation', source: 'segmented', structures: [liver] }] });
     const details = (await start()).named('structure-details')!;
     expect(details.content).toContain('total · mask-derived measurement');
     expect(details.all.some(node => node.props['aria-label'] === 'Segment color')).toBe(true);
     expect(details.content).toContain('Opacity');
-    expect(details.button('Focus ↗')).toBeDefined();
-    expect(details.content).toContain('⚑ 2 disconnected components');
+    expect(details.button('Focus')).toBeDefined();
+    expect(details.content).toContain('2 disconnected components');
   });
   it('names the structure the Refine tab will change', async () => {
     workstation([amd], { revisions: [{ ...prepared, id: 'segmented', kind: 'segmentation', source: 'segmented', structures: [liver] }] });
@@ -506,7 +506,7 @@ describe('the side panel', () => {
     const root = await start();
     await press(root.button('Segment CT…'));
     expect(root.named('workspace-task')!.named('segmentation-panel')).toBeDefined();
-    await press(root.button('+ Add segment ↗'));
+    await press(root.named('review-action'));
     expect(root.named('review-workspace')).toBeDefined();
     expect(root.named('segmentation-panel'), 'one task at a time').toBeUndefined();
     expect(root.named('workspace-task')!.named('review-add-form')).toBeDefined();
@@ -521,11 +521,11 @@ describe('the side panel', () => {
     workstation([amd]);
     vi.spyOn(api, 'interactiveReviews').mockImplementation(async () => []);
     const root = await start();
-    await press(root.button('+ Add segment ↗'));
+    await press(root.named('review-action'));
     const sidebar = root.all.find(node => node.props.id === 'workspace-sidebar')!;
     await press(root.all.find(node => node.props['aria-label'] === 'Hide side panel')!);
     expect(sidebar.style).toMatchObject({ display: 'none' });
-    await press(root.button('+ Add segment ↗'));
+    await press(root.named('review-action'));
     expect(sidebar.style).not.toMatchObject({ display: 'none' });
     expect(root.named('review-workspace')).toBeDefined();
   });

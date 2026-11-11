@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue';
+import { Box, ChevronDown, Ellipsis, Flag, Grid2x2, ListTree, Maximize2, Minimize2, TriangleAlert, X } from '@lucide/vue';
 import AnatomyPanel from './components/AnatomyPanel.vue';
 import CaseLibrary from './components/CaseLibrary.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
@@ -475,7 +476,7 @@ const canCompareSurfaces = computed(
 );
 const modelKey = computed(() => `${activeCase.value?.id}:${shownRevision.value ? referenceImageKey(shownRevision.value) : ''}`);
 const busyJob = computed(() => !!job.value && ['queued', 'running'].includes(job.value.status));
-// A job or newer-version chip takes the room of the case's extras, which then fold into ⋯ (top-bar.ts).
+// A job or newer-version chip takes the room of the case's extras, which then fold into More actions (top-bar.ts).
 const chipShown = computed(() => !!activeCase.value && ((!!job.value && (busyJob.value || job.value.status === 'failed')) || newerVersion.value));
 // The chip cuts this line short, so its tooltip and details show it whole: who started a job matters once cases are shared.
 const jobStatus = computed(() => {
@@ -588,7 +589,7 @@ const caseOpen = computed(() => !!activeCase.value && !(loading.value && !revisi
 const caseEyebrow = computed(() =>
   [synthetic.value ? 'SYNTHETIC DEMONSTRATION' : 'LOCAL CASE · RESEARCH USE ONLY', ...(revision.value ? acquisitionTags.value : [])].join(' · '),
 );
-// ⋯ holds the case actions a narrow window has no room for. Over the Library it is hidden, so Import scan stays out.
+// More actions holds the case actions a narrow window has no room for. Over the Library it is hidden, so Import scan stays out.
 const moreShown = computed(() => place('import-scan') === 'more' && caseOpen.value && !!revision.value && !libraryShown.value);
 // Without Segment CT…, as in the demo, there is room for Import DICOM SEG… itself.
 const segImportPlace = computed(() => (place('seg-import') === 'segment' && synthetic.value ? 'bar' : place('seg-import')));
@@ -1163,14 +1164,14 @@ function openSegmentation() {
   segmentationOpen.value = true;
   void loadSegmentationOptions(!!segmentationCatalog.value);
 }
-/** The side panel holds the task slot. A narrow window shows it through ☷ Anatomy. */
+/** The side panel holds the task slot. A narrow window shows it through Anatomy. */
 function showTaskSlot() {
   if (!panels.value.sidebar) setPanel('sidebar', true);
   if (fold.value === 'compact') mobilePanel.value = 'anatomy';
 }
 function closeSegmentation() {
   segmentationOpen.value = false;
-  // Its close button leaves with it, so focus goes back to the button that opens it: Segment CT… or ⋯.
+  // Its close button leaves with it, so focus goes back to the button that opens it: Segment CT… or More actions.
   (place('segment') === 'bar' ? segmentButton.value : topBar.value?.querySelector<HTMLButtonElement>('.more-menu > button'))?.focus({ preventScroll: true });
 }
 async function segment() {
@@ -1560,8 +1561,8 @@ onBeforeUnmount(() => {
           >
             <template #trigger
               ><span class="status-dot" :class="revision.review_status">{{ reviewLabels[revision.review_status] }}</span
-              ><span class="menu-caret" aria-hidden="true">▾</span></template
-            >
+              ><ChevronDown class="menu-caret"
+            /></template>
             <h3>Review &amp; correction</h3>
             <label class="field"
               >Revision status<select :value="revision.review_status" :disabled="busy" @change="review">
@@ -1649,7 +1650,7 @@ onBeforeUnmount(() => {
             title="More segmentation actions"
             trigger-class="button secondary compact menu-split"
           >
-            <template #trigger><span aria-hidden="true">▾</span></template>
+            <template #trigger><ChevronDown /></template>
             <template #default="{ close }">
               <button
                 type="button"
@@ -1666,7 +1667,8 @@ onBeforeUnmount(() => {
           </TopBarMenu>
         </div>
         <span v-if="!ctOnly || canSegment" class="top-bar-divider" aria-hidden="true"></span
-        ><!-- Review is a mode: its tools take the side panel's top, and View leaves it as Exit review does. -->
+        ><!-- Review is a mode: its tools take the side panel's top, and View leaves it as Exit review does.
+          On a scan with no segmentation the switch names itself apart from review's own + Add segment, which opens the add form. -->
         <div v-if="!ctOnly || canSegment" class="mode-switch" role="group" aria-label="Mode">
           <button type="button" class="button secondary compact view-action" :aria-pressed="workspaceMode !== 'review'" @click="exitReview">View</button
           ><button
@@ -1674,9 +1676,11 @@ onBeforeUnmount(() => {
             class="button secondary compact review-action"
             :class="{ active: workspaceMode === 'review' }"
             :aria-pressed="workspaceMode === 'review'"
+            :aria-label="ctOnly ? 'Add segment in review' : undefined"
             @click="openInteractiveReview"
           >
-            <span v-if="!ctOnly">Review<span class="review-long"> segmentation</span> ↗</span><template v-else>+ Add segment ↗</template>
+            <span v-if="!ctOnly">Review<span class="review-long"> segmentation</span></span
+            ><template v-else>+ Add segment</template>
           </button>
         </div>
         <span class="top-bar-divider" aria-hidden="true"></span>
@@ -1697,9 +1701,9 @@ onBeforeUnmount(() => {
             :title="savedExportDisabledReason || 'Choose rendering layers for a portable HTML viewer.'"
             @click="openExport"
           >
-            Export viewer ↗</button
+            Export viewer</button
           ><TopBarMenu v-if="place('export-viewer') === 'export'" class="export-menu" title="Export saved masks or a portable viewer" panel-label="Export">
-            <template #trigger>Export <span aria-hidden="true">▾</span></template>
+            <template #trigger>Export<ChevronDown /></template>
             <template #default="{ close }">
               <template v-if="!ctOnly && segExport"
                 ><button
@@ -1722,13 +1726,13 @@ onBeforeUnmount(() => {
                   openExport();
                 "
               >
-                Export viewer ↗</button
+                Export viewer</button
               ><small v-if="savedExportDisabledReason" class="top-bar-menu-note">{{ savedExportDisabledReason }}</small>
             </template>
           </TopBarMenu>
         </div>
         <TopBarMenu v-if="moreShown" class="more-menu" label="More actions" title="More actions" align="end">
-          <template #trigger><span aria-hidden="true">⋯</span></template>
+          <template #trigger><Ellipsis /></template>
           <template #default="{ close }">
             <label v-if="place('series') === 'more' && sourceChoices.length > 1" class="top-bar-menu-field"
               >Source image<select
@@ -1813,7 +1817,7 @@ onBeforeUnmount(() => {
                   openExport();
                 "
               >
-                Export viewer ↗</button
+                Export viewer</button
               ><small v-if="savedExportDisabledReason" class="top-bar-menu-note">{{ savedExportDisabledReason }}</small></template
             >
           </template>
@@ -1891,8 +1895,8 @@ onBeforeUnmount(() => {
         <UserMenu />
       </div>
       <div v-if="error" class="error-banner" role="alert">
-        <span>⚠ {{ error }}</span
-        ><button aria-label="Dismiss error" @click="error = ''">×</button>
+        <span><TriangleAlert /> {{ error }}</span
+        ><button aria-label="Dismiss error" title="Dismiss error" @click="error = ''"><X /></button>
       </div>
     </header>
 
@@ -2155,9 +2159,9 @@ onBeforeUnmount(() => {
                       >Opacity <span>{{ Math.round(display[row.id].opacity * 100) }}%</span
                       ><input v-model.number="display[row.id].opacity" type="range" min="0.05" max="1" step="0.01"
                     /></label>
-                    <button class="button secondary compact structure-focus" @click="model?.focus()">Focus ↗</button>
+                    <button class="button secondary compact structure-focus" @click="model?.focus()">Focus</button>
                     <div v-if="row.qc?.length" class="selection-qc">
-                      <span v-for="message in row.qc" :key="message">⚑ {{ message }}</span>
+                      <span v-for="message in row.qc" :key="message"><Flag /> {{ message }}</span>
                     </div>
                   </template>
                 </AnatomyPanel>
@@ -2340,7 +2344,7 @@ onBeforeUnmount(() => {
                     :disabled="!canHideWorkspacePanel(panels, 'model')"
                     @click="setPanel('model', false)"
                   >
-                    ×
+                    <X />
                   </button>
                 </template>
                 <!-- Inside the view, so the label stays with Before when the view is expanded. -->
@@ -2419,7 +2423,7 @@ onBeforeUnmount(() => {
                     trigger-class="text-button ct-menu-toggle"
                     panel-class="ct-popover"
                   >
-                    <template #trigger>W/L<span aria-hidden="true">▾</span></template>
+                    <template #trigger>W/L<ChevronDown /></template>
                     <label
                       >W<input
                         v-model.number="windowWidth"
@@ -2466,8 +2470,8 @@ onBeforeUnmount(() => {
                 >
                   <template #trigger
                     >Overlays<span v-if="ctOverlayIds.length" class="ct-menu-count">{{ ctOverlayIds.length }}</span
-                    ><span aria-hidden="true">▾</span></template
-                  >
+                    ><ChevronDown
+                  /></template>
                   <label class="ct-overlay-opacity"
                     >2D overlay opacity
                     <input v-model.number="overlayOpacity" type="range" min="0" max="1" step="0.05" aria-label="2D overlay opacity" /><output
@@ -2502,7 +2506,7 @@ onBeforeUnmount(() => {
                   panel-class="ct-popover"
                   panel-label="Slices"
                 >
-                  <template #trigger>Slices<span aria-hidden="true">▾</span></template>
+                  <template #trigger>Slices<ChevronDown /></template>
                   <template #default="{ close }">
                     <label class="ct-popover-check"
                       ><input v-model="ctMPR.crosshairs" type="checkbox" :disabled="!!ctMPRUnavailable || ctNativeReview || ctMarking" /> Rotatable
@@ -2602,7 +2606,8 @@ onBeforeUnmount(() => {
                   "
                   @click="toggleCT"
                 >
-                  {{ workspaceMode === 'review' ? (reviewFocus === 'ct' ? `${sourceLabel} + 3D` : '⤢') : ctExpanded ? 'Restore ↙' : '⤢' }}</button
+                  <template v-if="workspaceMode === 'review' && reviewFocus === 'ct'">{{ sourceLabel }} + 3D</template
+                  ><template v-else-if="workspaceMode !== 'review' && ctExpanded">Restore<Minimize2 /></template><Maximize2 v-else /></button
                 ><button
                   type="button"
                   class="panel-hide"
@@ -2611,7 +2616,7 @@ onBeforeUnmount(() => {
                   :disabled="!canHideWorkspacePanel(panels, 'review')"
                   @click="setPanel('review', false)"
                 >
-                  ×
+                  <X />
                 </button>
               </header>
               <div class="ct-slice-stage">
@@ -2666,7 +2671,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <nav v-if="revision && !prepareOpen" class="mobile-navigation" aria-label="Mobile workspace panels">
-          <!-- ☷ Anatomy shows the side panel, since a narrow window has no layout control or edge to bring it back. -->
+          <!-- Anatomy shows the side panel, since a narrow window has no layout control or edge to bring it back. -->
           <button
             :class="{ active: mobilePanel === 'anatomy' }"
             @click="
@@ -2674,7 +2679,7 @@ onBeforeUnmount(() => {
               mobilePanel = 'anatomy';
             "
           >
-            ☷ Anatomy</button
+            <ListTree />Anatomy</button
           ><button
             :class="{ active: mobilePanel === 'model' }"
             @click="
@@ -2682,7 +2687,7 @@ onBeforeUnmount(() => {
               mobilePanel = 'model';
             "
           >
-            ◇ 3D model</button
+            <Box />3D model</button
           ><button
             :class="{ active: mobilePanel === 'review' }"
             @click="
@@ -2690,7 +2695,7 @@ onBeforeUnmount(() => {
               mobilePanel = 'review';
             "
           >
-            ⊞ {{ sourceLabel }} review
+            <Grid2x2 />{{ sourceLabel }} review
           </button>
         </nav>
       </template>

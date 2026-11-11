@@ -9,6 +9,7 @@ import {
   freshCinematicSettings,
   freshVolumeSettings,
   getVolumePreset,
+  presetSwatch,
   samplePresetTransfer,
   sampleVolumeGradientOpacity,
   sampleVolumeTransfer,
@@ -220,5 +221,14 @@ describe('relative cinematic heart appearance', () => {
       shadowReach: 0,
     });
     expect(freshCinematicSettings({ shadows: NaN, shadowReach: Infinity })).toEqual(DEFAULT_CINEMATIC_SETTINGS);
+  });
+});
+
+describe('preset swatches', () => {
+  it('draw the colour ramp from transparent to the last knot before the plateau, with no render', () => {
+    // CT-AAA draws from 143.556 HU, fully transparent there, to 419.736 HU; its 3071 HU knot only holds the plateau.
+    expect(presetSwatch(getVolumePreset('CT-AAA'), 3)).toBe(
+      'linear-gradient(90deg, rgb(157 91 47 / 0.00) 0%, rgb(255 250 251 / 0.86) 50%, rgb(255 239 243 / 0.91) 100%)',
+    );
   });
 });

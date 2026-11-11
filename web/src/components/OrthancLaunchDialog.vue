@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { X } from '@lucide/vue';
 import { api } from '../lib/api';
 import { ARCHIVE_LAUNCH, useQuietCountdown, type ArchiveLaunchRequest } from '../lib/archive';
 import { orthancDate, orthancImportBlockReason, useOrthancLaunch, waitForOrthancPoll, type OrthancLaunchRequest, type SeriesLaunch } from '../lib/orthanc';
@@ -79,7 +80,15 @@ onBeforeUnmount(() => {
     <section ref="dialog" class="import-dialog orthanc-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="orthanc-launch-title">
       <header>
         <span class="eyebrow">{{ dicomweb ? 'ARCHIVE SERIES' : 'ORTHANC SERIES' }}</span
-        ><button type="button" class="icon-button" :aria-label="dicomweb ? 'Close archive launch' : 'Close Orthanc launch'" @click="emit('close')">×</button>
+        ><button
+          type="button"
+          class="icon-button"
+          :aria-label="dicomweb ? 'Close archive launch' : 'Close Orthanc launch'"
+          :title="dicomweb ? 'Close archive launch' : 'Close Orthanc launch'"
+          @click="emit('close')"
+        >
+          <X />
+        </button>
       </header>
       <h2 id="orthanc-launch-title">Open in 3DScan</h2>
       <p v-if="!canUseArchive" class="launch-message error" role="status">{{ ARCHIVE_OFF }}</p>

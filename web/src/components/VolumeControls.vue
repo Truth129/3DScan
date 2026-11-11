@@ -6,6 +6,7 @@ import {
   MR_SIGNAL_PRESET,
   freshVolumeSettings,
   getVolumePreset,
+  presetSwatch,
   VOLUME_PRESET_GROUPS,
   VOLUME_PRESET_LABELS,
   type CTVolumePresetId,
@@ -18,6 +19,7 @@ import type { Structure, StructureDisplay } from '../types';
 import NativeVolumeLightingControls from './NativeVolumeLightingControls.vue';
 import VolumeSection from './VolumeSection.vue';
 import InfoTip from './InfoTip.vue';
+import { ChevronDown, ChevronUp } from '@lucide/vue';
 import { freshNativeVolumeLighting, type NativeVolumeLightingSettings } from '../lib/volume-lighting';
 
 const props = withDefaults(
@@ -106,6 +108,13 @@ const presetGroups = computed(() =>
   signalVolume.value ? [] : VOLUME_PRESET_GROUPS.filter(group => props.cinematicAvailable || !group.ids.some(id => id === CINEMATIC_HEART_PRESET)),
 );
 const modalityLabel = computed(() => props.modality ?? 'CT');
+// The swatches cover the presets made for CT. The menu still lists the others.
+const swatches = computed(() =>
+  presetGroups.value
+    .filter(group => group.label !== 'MR' && group.label !== 'Other modalities')
+    .flatMap(group => group.ids)
+    .map(id => ({ id, label: VOLUME_PRESET_LABELS[id], background: presetSwatch(getVolumePreset(id, props.settings.cinematic)) })),
+);
 const intensityLabel = computed(() => `${props.settings.shift > 0 ? '+' : ''}${props.settings.shift} HU`);
 const opacityLabel = computed(() => `${Math.round(props.settings.density * 100)}%`);
 const preset = computed(() => getVolumePreset(props.settings.preset, props.settings.cinematic, props.settings.signal_window));
@@ -307,6 +316,22 @@ watch(
           </optgroup></select
         ><InfoTip v-if="presetHelp" :id="`${tip}-preset-help`" :text="presetHelp" />
       </div>
+      <!-- The Preset menu above is the keyboard's way to every preset, so the swatches take no Tab stops. -->
+      <div v-if="swatches.length" class="volume-swatches" role="group" :aria-label="`${modalityLabel} volume preset swatches`">
+        <button
+          v-for="swatch in swatches"
+          :key="swatch.id"
+          type="button"
+          class="volume-swatch"
+          tabindex="-1"
+          :style="{ backgroundImage: swatch.background }"
+          :aria-label="swatch.label"
+          :title="swatch.label"
+          :aria-pressed="preset.id === swatch.id"
+          :disabled="inert"
+          @click="update({ preset: swatch.id, shift: 0, density: 1 })"
+        ></button>
+      </div>
       <p v-if="otherModality" class="volume-note">Made for another modality; it may need adjusting for CT.</p>
       <label v-if="!signalVolume" class="volume-row"
         ><span>Intensity</span
@@ -489,7 +514,7 @@ watch(
             aria-label="Choose volume mask segments"
             @click="maskOpen = !maskOpen"
           >
-            {{ maskOpen ? 'Done' : 'Choose segments' }} · {{ mask.ids.length }} {{ maskOpen ? '▴' : '▾' }}
+            {{ maskOpen ? 'Done' : 'Choose segments' }} · {{ mask.ids.length }}<ChevronUp v-if="maskOpen" /><ChevronDown v-else />
           </button>
         </div>
         <div v-if="maskOpen" class="volume-picker">
@@ -520,9 +545,9 @@ watch(
             v-model="maskSearch"
             class="volume-search"
             type="search"
-            aria-label="Search volume mask segments"
+            aria-label="Find volume mask segments"
             :aria-describedby="`${tip}-mask`"
-            placeholder="Search segments…"
+            placeholder="Find segments…"
             :disabled="inert"
           />
           <div class="volume-segments" role="group" aria-label="Volume mask segments">
@@ -617,7 +642,7 @@ watch(
             aria-label="Choose colored segments"
             @click="colorsOpen = !colorsOpen"
           >
-            {{ colorsOpen ? 'Done' : 'Choose segments' }} · {{ colors.ids.length }} {{ colorsOpen ? '▴' : '▾' }}
+            {{ colorsOpen ? 'Done' : 'Choose segments' }} · {{ colors.ids.length }}<ChevronUp v-if="colorsOpen" /><ChevronDown v-else />
           </button>
         </div>
         <div v-if="colorsOpen" class="volume-picker">
@@ -648,9 +673,9 @@ watch(
             v-model="colorSearch"
             class="volume-search"
             type="search"
-            aria-label="Search colored segments"
+            aria-label="Find colored segments"
             :aria-describedby="`${tip}-colors`"
-            placeholder="Search segments…"
+            placeholder="Find segments…"
             :disabled="inert"
           />
           <div class="volume-segments" role="group" aria-label="Colored segments">
@@ -859,6 +884,29 @@ watch(
   font-size: 11px;
   line-height: 1.45;
 }
+/* Each CT preset's colours as a swatch under the menu, in the control column. */
+.volume-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(26px, 1fr));
+  gap: 4px;
+  margin: 2px 0 6px 94px;
+}
+.volume-swatch {
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background-color: var(--bg);
+  cursor: pointer;
+}
+.volume-swatch:hover:not(:disabled) {
+  border-color: var(--control-border-hover);
+}
+.volume-swatch[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 /* 2.5 mm and its note sit under the slider, so the slider keeps the row's width. */
 .volume-controls .volume-margin > .text-button {
   grid-column: 2;

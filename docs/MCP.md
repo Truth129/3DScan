@@ -55,7 +55,7 @@ only what that account can.
 
 ## Not covered
 
-- Pictures of the 3D view, and so **PNG ↗** and **DICOM ↗**. The browser draws those.
+- Pictures of the 3D view, and so **PNG** and **DICOM**. The browser draws those.
 - Scissors cuts, which need a 3D camera.
 - Delete forever, Empty Trash, People, the TotalSegmentator licence and storage. These stay in
   the app.

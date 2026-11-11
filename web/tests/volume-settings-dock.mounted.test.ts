@@ -52,12 +52,12 @@ describe('docked volume settings', () => {
     await settled();
     expect(settingsIn(target)).toBe(true);
     expect(settingsIn(shown.root)).toBe(false);
-    // Hidden, the side panel gives them back to the Layers card, folded, until Settings › shows it again.
+    // Hidden, the side panel gives them back to the Layers card, folded, until Settings shows it again.
     state.volumeSettingsDock = 'hidden';
     await settled();
     expect(settingsIn(shown.root)).toBe(true);
     expect(drawn(shown.root)).toBe(false);
-    click(shown.button('Settings ›'));
+    click(shown.button('Settings'));
     expect(ask).toHaveBeenCalledOnce();
     state.volumeSettingsDock = 'shown';
     await settled();
@@ -66,7 +66,7 @@ describe('docked volume settings', () => {
     click(shown.labelled('Expand 3D view'));
     await settled();
     expect(settingsIn(shown.root)).toBe(true);
-    click(shown.button('Settings ▾'));
+    click(shown.button('Settings'));
     await settled();
     expect(drawn(shown.root)).toBe(true);
     click(shown.labelled('Restore 3D view'));

@@ -57,6 +57,20 @@ button:disabled {
   cursor: default;
   opacity: 0.42;
 }
+/* Lucide icons sit in their control's line of text and take its size, not their own 24 px. */
+.lucide {
+  flex: none;
+  width: 1.25em;
+  height: 1.25em;
+  vertical-align: -0.25em;
+}
+/* Buttons that held one large glyph draw their icon at one size, centred: on the line of their large font it sat low. */
+:is(.panel-hide, .icon-button, .error-banner button, .solo-button, .cornerstone-reset, .panels-close) > .lucide {
+  display: block;
+  width: 15px;
+  height: 15px;
+  margin: auto;
+}
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
@@ -944,6 +958,8 @@ h3 {
   white-space: nowrap;
 }
 .solo-button {
+  display: grid;
+  place-items: center;
   border: 0;
   background: none;
   color: var(--text-secondary);
@@ -2049,6 +2065,10 @@ h3 {
     padding: 0 8px;
   }
   .mobile-navigation button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     background: none;
     border: 0;
     border-top: 2px solid transparent;
@@ -2789,12 +2809,8 @@ h3 {
   display: none;
 }
 .ct-overlay-picker summary > span:last-child {
-  font: 9px var(--mono);
+  font: 11px var(--mono);
   color: var(--muted);
-}
-.ct-overlay-picker summary i {
-  font-style: normal;
-  margin-left: 5px;
 }
 .ct-overlay-actions {
   display: flex;
@@ -2803,7 +2819,7 @@ h3 {
   margin: 9px 0;
 }
 .ct-overlay-actions button {
-  font-size: 10px;
+  font-size: 11px;
 }
 .ct-overlay-options > input {
   width: 100%;
@@ -2865,7 +2881,7 @@ h3 {
   max-width: 100%;
 }
 .ct-overlay-hint {
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
   margin-top: 6px;
   color: var(--muted);

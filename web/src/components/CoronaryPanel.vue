@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, shallowRef, useId, watch } from 'vue';
+import { Flag } from '@lucide/vue';
 import { api } from '../lib/api';
 import { jobIsGone } from '../lib/jobs';
 import {
@@ -437,8 +438,10 @@ onBeforeUnmount(() => {
         interval. Indeterminate: the band crosses 0.80.
       </p>
       <ul v-if="result.flags.length || result.pieces.length" class="coronary-flags" aria-label="Flags">
-        <li v-for="flag in result.flags" :key="flag">⚑ {{ flag }}</li>
-        <li v-if="result.pieces.length">⚑ {{ result.pieces.length }} lumen {{ result.pieces.length === 1 ? 'piece' : 'pieces' }} with no root, not solved</li>
+        <li v-for="flag in result.flags" :key="flag"><Flag /> {{ flag }}</li>
+        <li v-if="result.pieces.length">
+          <Flag /> {{ result.pieces.length }} lumen {{ result.pieces.length === 1 ? 'piece' : 'pieces' }} with no root, not solved
+        </li>
       </ul>
       <p class="coronary-banner" role="note">{{ result.notice || CORONARY_NOTICE }}</p>
       <dl class="coronary-inputs" aria-label="Inputs and constants">

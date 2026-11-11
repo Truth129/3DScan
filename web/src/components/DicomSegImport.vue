@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { X } from '@lucide/vue';
 import { dicomSegSelectionError, useDicomSegImport } from '../lib/use-dicom-seg-import';
 import type { Job } from '../types';
 
@@ -72,7 +73,9 @@ defineExpose({ open });
   >
     <header>
       <span class="eyebrow">DICOM SEG</span
-      ><button class="icon-button" type="button" :disabled="submitting" aria-label="Close DICOM SEG import" @click="close">×</button>
+      ><button class="icon-button" type="button" :disabled="submitting" aria-label="Close DICOM SEG import" title="Close DICOM SEG import" @click="close">
+        <X />
+      </button>
     </header>
     <h2 id="dicom-seg-import-title">Import existing segmentations.</h2>
     <p id="dicom-seg-import-description">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
+import { X } from '@lucide/vue';
 import { dicomSegFileUrl } from '../lib/api';
 import {
   DICOM_DIRECT_SEG_KIND,
@@ -186,7 +187,8 @@ defineExpose({ open, disabled, label });
     @click="$event.target === dialog && close()"
   >
     <header>
-      <span class="eyebrow">DICOM SEG</span><button class="icon-button" type="button" aria-label="Close DICOM SEG export" @click="close">×</button>
+      <span class="eyebrow">DICOM SEG</span
+      ><button class="icon-button" type="button" aria-label="Close DICOM SEG export" title="Close DICOM SEG export" @click="close"><X /></button>
     </header>
     <h2 id="dicom-seg-title">Export saved masks.</h2>
     <p id="dicom-seg-description">{{ description }}</p>
@@ -201,16 +203,16 @@ defineExpose({ open, disabled, label });
     <fieldset :disabled="locked || !!disabled || (!orthancReady && !fileReady && !direct?.available)">
       <legend>Masks · {{ selected.length }} of {{ structures.length }} selected</legend>
       <div class="selection-actions">
-        <button type="button" class="text-button" @click="selected = structures.map(item => item.id)">Select all</button
+        <button type="button" class="text-button" title="Export every saved mask" @click="selected = structures.map(item => item.id)">Use all</button
         ><button
           type="button"
           class="text-button"
           :disabled="!visibleIds.length"
-          :title="visibleIds.length ? 'Select only the masks switched on in the anatomy list' : 'No saved mask is switched on in the anatomy list.'"
+          :title="visibleIds.length ? 'Export only the masks switched on in the anatomy list' : 'No saved mask is switched on in the anatomy list.'"
           @click="selected = visibleIds"
         >
-          Select visible</button
-        ><button type="button" class="text-button" @click="selected = []">Clear selection</button>
+          Use visible</button
+        ><button type="button" class="text-button" title="Export no masks" @click="selected = []">Clear</button>
       </div>
       <div class="segment-options">
         <label v-for="item in structures" :key="item.id"
@@ -219,7 +221,7 @@ defineExpose({ open, disabled, label });
       </div>
       <p class="help">
         <template v-if="structures.length !== revision.structures.length">Empty masks are excluded. </template>The anatomy list changes this selection only when
-        you choose Select visible.
+        you choose Use visible.
       </p>
       <fieldset v-if="roiReady" class="format-options">
         <legend>Format</legend>

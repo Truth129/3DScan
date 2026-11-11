@@ -83,7 +83,7 @@ Import runs on the CPU and is bound to the selected snapshot, like an
 
 ## Archive results
 
-For a case imported from the archive, **Export SEG…** and **DICOM ↗** offer **Archive in** the
+For a case imported from the archive, **Export SEG…** and **DICOM** offer **Archive in** the
 archive, which stores the SEG or view in the original study with STOW-RS. SEG and view files work
 as for any CT or classic MR prepared from DICOM.
 
@@ -97,7 +97,7 @@ as for any CT or classic MR prepared from DICOM.
 
 ## Direct DICOM sends
 
-With `SCAN3D_DICOM_DESTINATIONS_FILE` set, **Export SEG…** and **DICOM ↗** list its destinations
+With `SCAN3D_DICOM_DESTINATIONS_FILE` set, **Export SEG…** and **DICOM** list its destinations
 for cases imported from a folder, a ZIP or a DICOMweb archive. **Send to** stores the SEG or view
 there with C-STORE. Cases from Orthanc keep sending through Orthanc.
 [CONFIGURATION.md](CONFIGURATION.md#direct-dicom-sends) shows the file.

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { X } from '@lucide/vue';
 import type { PortableRenderSnapshot } from '../lib/portable-viewer';
 import { apiFetch } from '../lib/api-fetch';
 
@@ -147,7 +148,8 @@ onBeforeUnmount(() => {
   >
     <form @submit.prevent="download">
       <header>
-        <span class="eyebrow">PORTABLE VIEWER</span><button class="icon-button" type="button" aria-label="Close viewer export" @click="close">×</button>
+        <span class="eyebrow">PORTABLE VIEWER</span
+        ><button class="icon-button" type="button" aria-label="Close viewer export" title="Close viewer export" @click="close"><X /></button>
       </header>
       <h2 id="export-viewer-title">Export your rendering stack.</h2>
       <p id="export-viewer-description">Choose the layers to embed in one HTML file. The viewer keeps the current appearances and camera, and works offline.</p>

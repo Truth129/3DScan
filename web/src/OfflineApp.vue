@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef } from 'vue';
+import { Box, ListTree } from '@lucide/vue';
 import AnatomyPanel from './components/AnatomyPanel.vue';
 import SegmentColorControl from './components/SegmentColorControl.vue';
 import { displayStructures, normalizeStructureColor, normalizeStructureColors, setStructureColor, resetStructureColor } from './lib/display-appearance';
@@ -84,7 +85,7 @@ onBeforeUnmount(() => session.value?.dispose());
       <div class="header-divider"></div>
       <span class="header-context">PORTABLE VIEWER</span>
       <span class="offline-badge"><span class="live-dot"></span> Works offline · embedded rendering stack</span>
-      <button class="button secondary compact" @click="model?.screenshot()">Save PNG ↗</button>
+      <button class="button secondary compact" @click="model?.screenshot()">Save PNG</button>
     </header>
     <div class="case-toolbar">
       <div class="case-title">
@@ -193,7 +194,7 @@ onBeforeUnmount(() => session.value?.dispose());
               /></label>
               <div class="button-row">
                 <button class="button secondary compact" @click="solo(selected)">Isolate</button
-                ><button class="button secondary compact" @click="model?.focus()">Focus ↗</button>
+                ><button class="button secondary compact" @click="model?.focus()">Focus</button>
               </div>
             </div>
           </div>
@@ -201,8 +202,8 @@ onBeforeUnmount(() => session.value?.dispose());
       </section>
     </main>
     <nav v-if="surfaceStructures.length" class="mobile-navigation">
-      <button :class="{ active: mobile }" @click="mobile = true">☷ Anatomy</button
-      ><button :class="{ active: !mobile }" @click="mobile = false">◇ 3D model</button>
+      <button :class="{ active: mobile }" @click="mobile = true"><ListTree />Anatomy</button
+      ><button :class="{ active: !mobile }" @click="mobile = false"><Box />3D model</button>
     </nav>
     <footer class="app-footer">
       <span><span class="live-dot"></span> PORTABLE VIEWER</span><span>{{ included }}</span

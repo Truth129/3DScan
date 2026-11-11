@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useId } from 'vue';
+import { ChevronDown, ChevronRight } from '@lucide/vue';
 
 defineProps<{ title: string; summary?: string; open: boolean }>();
 const emit = defineEmits<{ toggle: [open: boolean] }>();
@@ -11,8 +12,9 @@ const id = useId();
   <section class="volume-section" :class="{ open }">
     <div class="volume-section-header">
       <button type="button" class="volume-section-toggle" :aria-expanded="open" :aria-controls="id" @click="emit('toggle', !open)">
-        <span class="volume-section-caret" aria-hidden="true">{{ open ? '▾' : '▸' }}</span
-        ><span class="volume-section-title">{{ title }}</span
+        <ChevronDown v-if="open" class="volume-section-caret" /><ChevronRight v-else class="volume-section-caret" /><span class="volume-section-title">{{
+          title
+        }}</span
         ><span v-if="summary && !open" class="volume-section-summary">{{ summary }}</span>
       </button>
       <slot name="actions" />
@@ -50,10 +52,10 @@ const id = useId();
   text-underline-offset: 3px;
 }
 .volume-section-caret {
-  flex: none;
-  width: 10px;
+  align-self: center;
+  width: 12px;
+  height: 12px;
   color: var(--muted);
-  font-size: 11px;
 }
 .volume-section-title {
   flex: none;

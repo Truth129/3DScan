@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { RotateCcw } from '@lucide/vue';
 import type { CTMPRSettings, Geometry, InteractivePrompt, InteractiveTool, Plane, Point, SliceMeta } from '../types';
 import type { LocalCTSession } from '../lib/ct-volume';
 import type { GPUVolumeSource } from '../lib/gpu-volume-data';
@@ -305,7 +306,7 @@ function gesture(plane: Plane, prompt: InteractivePrompt) {
   if ((!prompt.kind || prompt.kind === 'point') && !insideSource(prompt.ras)) return;
   emit('gesture', prompt);
 }
-// The last pane pressed keeps its ⟲ shown, so a pane zoomed by touch can be reset.
+// The last pane pressed keeps its reset button shown, so a pane zoomed by touch can be reset.
 const pressed = usePressedPane(() => Object.fromEntries(planes.map(plane => [plane, elements[plane]?.parentElement])));
 defineExpose({
   /** Reset planes in the CT header: every pane back to its plane, centred on the crosshair point. */
@@ -457,7 +458,7 @@ onBeforeUnmount(() => {
             configure();
           "
         >
-          ⟲
+          <RotateCcw />
         </button>
       </div>
       <label class="slice-slider"

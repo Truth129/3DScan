@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
+import { ArrowUpRight, ChevronRight } from '@lucide/vue';
 import { api, ApiError } from '../lib/api';
 import { canAdminister } from '../lib/session';
 import type { TotalSegmentatorLicenseStatus } from '../types';
@@ -98,7 +99,7 @@ onBeforeUnmount(() => {
 <template>
   <details class="totalseg-license" aria-label="TotalSegmentator license settings">
     <summary>
-      TotalSegmentator license <span class="license-status" :class="{ configured: status?.configured }">{{ statusLabel }}</span>
+      <ChevronRight />TotalSegmentator license <span class="license-status" :class="{ configured: status?.configured }">{{ statusLabel }}</span>
     </summary>
     <div class="license-content">
       <p>Licensed tasks use the key saved on this processing workstation. It applies to all cases.</p>
@@ -130,7 +131,8 @@ onBeforeUnmount(() => {
       </p>
       <p v-else class="help">An administrator saves or removes the key.</p>
       <p>
-        <a href="https://backend.totalsegmentator.com/license-academic/" target="_blank" rel="noopener noreferrer">Get a TotalSegmentator license ↗</a
+        <a href="https://backend.totalsegmentator.com/license-academic/" target="_blank" rel="noopener noreferrer"
+          >Get a TotalSegmentator license <ArrowUpRight /></a
         ><span class="license-terms"> Free academic licenses are for noncommercial use; follow the provider’s terms.</span>
       </p>
       <p v-if="error" class="license-error" role="status">
@@ -161,12 +163,12 @@ onBeforeUnmount(() => {
 .totalseg-license > summary::-webkit-details-marker {
   display: none;
 }
-.totalseg-license > summary::before {
-  content: '▸';
+.totalseg-license > summary > .lucide-chevron-right {
   color: var(--muted);
+  transition: rotate 0.12s;
 }
-.totalseg-license[open] > summary::before {
-  content: '▾';
+.totalseg-license[open] > summary > .lucide-chevron-right {
+  rotate: 90deg;
 }
 .license-status {
   margin-left: auto;

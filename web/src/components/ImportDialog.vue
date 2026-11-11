@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { X } from '@lucide/vue';
 import { api } from '../lib/api';
 import { dicomwebSource, orthancSource } from '../lib/archive';
 import { uploadImport, type ImportProgress } from '../lib/import-upload';
@@ -141,7 +142,8 @@ onBeforeUnmount(() => {
   <div class="dialog-backdrop" @click.self="close" @keydown.esc="close">
     <section class="import-dialog" :class="{ 'orthanc-import': source !== 'files' }" role="dialog" aria-modal="true" aria-labelledby="import-title">
       <header>
-        <span class="eyebrow">NEW CASE</span><button type="button" class="icon-button" aria-label="Close import" :disabled="locked" @click="close">×</button>
+        <span class="eyebrow">NEW CASE</span
+        ><button type="button" class="icon-button" aria-label="Close import" title="Close import" :disabled="locked" @click="close"><X /></button>
       </header>
       <h2 id="import-title">Start with an imaging study.</h2>
       <p class="muted">
@@ -241,7 +243,7 @@ onBeforeUnmount(() => {
         <p v-if="message" class="import-message" :class="{ error: message.error }" :role="message.error ? 'alert' : 'status'">{{ message.text }}</p>
         <footer>
           <button type="button" v-if="progress && progress.phase !== 'indexing'" class="text-button" @click="cancel">Cancel upload</button>
-          <button type="button" v-else class="text-button" :disabled="locked" @click="emit('demo')">Explore synthetic demo ↗</button>
+          <button type="button" v-else class="text-button" :disabled="locked" @click="emit('demo')">Explore synthetic demo</button>
           <button type="button" class="button primary" :disabled="!files.length || locked" @click="start">
             <span v-if="locked" class="spinner"></span
             >{{ progress ? (progress.phase === 'indexing' ? 'Checking series…' : 'Uploading…') : busy ? 'Importing…' : 'Import scan →' }}

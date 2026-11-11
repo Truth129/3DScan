@@ -33,7 +33,7 @@ vi.mock('../src/components/ModelViewport.vue', () => ({
           : h(
               'button',
               { class: 'dicom', disabled: !!props.dicomViewBlockReason, title: props.dicomViewBlockReason, onClick: () => emit('exportView') },
-              'DICOM ↗',
+              'DICOM',
             ),
       ];
     },
@@ -269,7 +269,7 @@ describe('capturing from the workspace', () => {
   it('asks the viewport for the frozen revision, opens a dialog on that frame, and captures again once it closes', async () => {
     const view = await app(),
       capture = vi.spyOn(fake, 'capture');
-    expect(view.dicom().textContent).toBe('DICOM ↗');
+    expect(view.dicom().textContent).toBe('DICOM');
     await view.export();
     expect(view.dialog()?.open).toBe(true);
     expect(view.text()).toContain('Synthetic A · Revision revision · 640 × 480 px');
@@ -337,7 +337,7 @@ describe('capturing from the workspace', () => {
   it('refuses to capture during review', async () => {
     const capture = vi.spyOn(fake, 'capture'),
       view = await app();
-    click(view.button('Review segmentation ↗'));
+    click(view.button('Review segmentation'));
     await settled();
     fake.viewports.at(-1).exportView();
     await settled();
@@ -389,7 +389,7 @@ describe('the recheck after the capture', () => {
     ['Before is shown', view => click(view.button('Before'))],
     ['comparison starts', () => fake.review.onPreviewOverlaps(['heart'])],
     ['a draft gains prompts', () => draft({ prompts: [{}] })],
-    ['review opens', view => click(view.button('Review segmentation ↗'))],
+    ['review opens', view => click(view.button('Review segmentation'))],
   ])('discards the capture when %s', async (_name, change) => {
     const held = holdCapture(),
       view = await app();
@@ -399,7 +399,7 @@ describe('the recheck after the capture', () => {
     held.resolve();
     await settled();
     expect(view.dialog()).toBeUndefined();
-    expect(view.banner()).toBe(`⚠ ${CHANGED}×`);
+    expect(view.banner().trim()).toBe(CHANGED);
     expect(posts).toHaveLength(0);
   });
   it('reports a view that closed during capture as a changed view', async () => {

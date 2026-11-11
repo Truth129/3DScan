@@ -20,11 +20,11 @@ const root = ref<HTMLElement>(),
   trigger = ref<HTMLButtonElement>(),
   panel = ref<HTMLElement>(),
   panelId = useId();
-const { open, close, toggle } = usePopover(root, trigger, panel);
+const { open, close, toggle, arrows } = usePopover(root, trigger, panel);
 </script>
 
 <template>
-  <div ref="root" class="top-bar-menu">
+  <div ref="root" class="top-bar-menu" @keydown="arrows">
     <button ref="trigger" type="button" :class="triggerClass" :aria-label="label" :title="title" :aria-expanded="open" :aria-controls="panelId" @click="toggle">
       <slot name="trigger" :open="open" /></button
     ><!-- The panel follows its button, so Tab reaches it next. -->

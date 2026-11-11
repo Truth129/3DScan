@@ -15,7 +15,7 @@ interface DicomViewJobOptions {
   caseLabel: (caseId: string) => string | undefined;
   /** True while the open dialog is presenting this job, so it needs no second report. */
   showing: (jobId: string) => boolean;
-  /** True while a closed dialog's capture is kept for this job, so DICOM ↗ can reopen it. */
+  /** True while a closed dialog's capture is kept for this job, so DICOM can reopen it. */
   held: (jobId: string) => boolean;
   success: (message: string) => void;
   failure: (message: string) => void;
@@ -49,8 +49,8 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       options.success(
         named(
           options.held(job.id)
-            ? `${dicomViewExportSummary(job)} Choose DICOM ↗ to save it.`
-            : 'A DICOM view file was prepared after its dialog closed. Choose DICOM ↗ and prepare it again to save it.',
+            ? `${dicomViewExportSummary(job)} Choose DICOM in the 3D view to save it.`
+            : 'A DICOM view file was prepared after its dialog closed. Choose DICOM in the 3D view and prepare it again to save it.',
           job.case_id,
         ),
       );

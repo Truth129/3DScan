@@ -3,9 +3,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  min-width: 26px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
   padding: 0;
   border: 1px solid var(--line-strong);
   border-radius: 5px;
@@ -145,7 +145,7 @@
   color: var(--text-secondary);
 }
 .structure-details > .structure-opacity > span {
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   color: var(--white);
 }
 .structure-details > .structure-opacity > input {
@@ -251,7 +251,7 @@
   max-width: 100%;
   overflow: hidden;
   padding-left: 1px;
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.4;
   text-overflow: ellipsis;
   text-transform: uppercase;
@@ -294,13 +294,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: 28px;
   padding: 0 8px 0 9px;
   border: 1px solid var(--control-border);
   border-radius: 13px;
   background: var(--surface);
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
 }
 .status-chip:hover,
 .status-chip[aria-expanded='true'] {
@@ -308,7 +308,6 @@
   background: var(--surface-hover);
 }
 .menu-caret {
-  font-size: 9px;
   color: var(--text-secondary);
 }
 .source-image-select {
@@ -322,7 +321,7 @@
 }
 .top-bar .button.compact {
   flex-shrink: 0;
-  min-height: 30px;
+  min-height: 28px;
   padding: 5px 10px;
   font-size: 11px;
 }
@@ -466,7 +465,7 @@
   display: block;
   padding: 0 9px 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.45;
 }
 .top-bar-menu-field {
@@ -475,7 +474,7 @@
   padding: 4px 9px 8px;
   border-bottom: 1px solid var(--line);
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
 }
 .top-bar-menu-field select {
   padding: 6px 8px;
@@ -492,7 +491,7 @@
 .review-status-popover h4 {
   margin: 0 0 6px;
   color: var(--text-secondary);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
 }
 .review-status-popover .field select {
@@ -510,7 +509,7 @@
 .review-status-popover .qc-list p {
   margin-top: 4px;
   color: #b9aa83;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
 }
 .review-status-popover .button-row .button {
@@ -518,7 +517,7 @@
 }
 .review-status-popover .help {
   margin-top: 6px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 /* One chip for a running or failed job, or for a newer version saved elsewhere. Details open under it. */
@@ -586,11 +585,11 @@
   min-height: 24px;
   padding: 3px 9px;
   border-radius: 12px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .job-banner > .text-button {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 11px;
 }
 .job-details {
   width: min(420px, calc(100vw - 24px));
@@ -618,7 +617,7 @@
 .measurement-progress > p {
   margin: 6px 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 .measurement-progress > div {
   max-height: 200px;
@@ -829,7 +828,7 @@
     flex: 1 1 auto;
     min-height: 28px;
     padding: 5px 7px;
-    font-size: 9px;
+    font-size: 11px;
     white-space: nowrap;
   }
   .workspace-sidebar .structure-search {
@@ -1104,10 +1103,10 @@
   gap: 4px 6px;
   min-width: 0;
   min-height: 32px;
-  padding: 3px 6px 3px 12px;
+  padding: 2px 6px 2px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 .ct-title {
@@ -1128,7 +1127,7 @@
   flex: 1 1 0;
   gap: 4px;
   min-width: 0;
-  font-size: 10px;
+  font-size: 11px;
 }
 /* The note goes first, then the name gives way, so which mask the slices show stays readable. */
 .ct-review-active > :is(.ct-header-label, .ct-review-shown) {
@@ -1166,13 +1165,13 @@
 }
 .ct-header :is(select, input[type='number']) {
   min-width: 0;
-  height: 24px;
+  height: 28px;
   padding: 2px 5px;
-  border: 1px solid #414b5d;
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
-  background: #252e3d;
-  font-size: 10px;
-  color: #e2eaf6;
+  background: var(--surface-active);
+  font-size: 11px;
+  color: var(--white);
 }
 .ct-header input[type='number'] {
   font-family: var(--mono);
@@ -1180,9 +1179,9 @@
 .ct-header .text-button,
 .ct-popover .top-bar-menu-item {
   flex: none;
-  min-height: 24px;
+  min-height: 28px;
   padding: 2px 8px;
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .ct-window,
@@ -1199,7 +1198,7 @@
   max-width: 92px;
 }
 .ct-window-values .top-bar-popover > label {
-  font: 9px var(--mono);
+  font: 11px var(--mono);
   color: var(--muted);
 }
 .ct-window-values input {
@@ -1234,10 +1233,12 @@
 .ct-menu-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
-.ct-menu-toggle > span[aria-hidden='true'] {
-  font-size: 9px;
+/* The row is the tightest in the app, so its icons stay small; the expand icon matches the 3D header's. */
+.ct-header .lucide:not(:where(.ct-expand-button > *)) {
+  width: 10px;
+  height: 10px;
 }
 .ct-menu-toggle[aria-expanded='true'] {
   border-color: var(--control-border-hover);
@@ -1249,7 +1250,7 @@
   padding: 0 4px;
   border-radius: 7px;
   background: var(--surface-active);
-  font: 9px var(--mono);
+  font: 11px var(--mono);
   text-align: center;
   color: var(--white);
 }
@@ -1281,14 +1282,14 @@
   text-overflow: ellipsis;
 }
 .ct-header > .panel-hide {
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
 }
 .ct-header .ct-expand-button.icon-only {
   min-width: 26px;
   padding: 0 6px;
-  font-size: 14px;
+  font-size: 11px;
   line-height: 1;
 }
 /* Wide tiles show W and L in the row; the panel that holds them only floats in narrow ones. */
@@ -1315,7 +1316,7 @@
   max-height: calc(100cqh - 44px);
   overflow: auto;
   padding: 8px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 .ct-overlays-popover {
@@ -1348,7 +1349,7 @@
 /*
  * The row needs about 760 px without a slab or a download, or 830 px with MR's wider fields. Below
  * that W and L fold under W/L ▾ and the words go, then the title shortens, then it goes and the
- * controls tighten.
+ * controls tighten, then the menus lose their arrows.
  */
 @container ct-tile (max-width: 759px) {
   .ct-header .ct-window:not(.signal-window-controls) .ct-window-values > .ct-menu-toggle {
@@ -1401,7 +1402,7 @@
     display: none;
   }
 }
-@container ct-tile (max-width: 449px) {
+@container ct-tile (max-width: 559px) {
   .ct-header {
     column-gap: 4px;
     padding-left: 8px;
@@ -1414,7 +1415,13 @@
     padding-inline: 3px;
   }
   .ct-window select {
-    max-width: 76px;
+    max-width: 84px;
+  }
+}
+/* Narrower still, the menus drop their arrows; each still says it opens a menu to assistive technology. */
+@container ct-tile (max-width: 449px) {
+  .ct-menu-toggle > .lucide {
+    display: none;
   }
 }
 /* In review the chip names what is being reviewed, which says more than the title. */
@@ -1434,7 +1441,7 @@
     min-height: 22px;
     padding-block: 1px;
   }
-  .ct-header > .panel-hide {
+  :is(.ct-header, .model-header) > .panel-hide {
     width: 22px;
     min-width: 22px;
     height: 22px;
@@ -1457,7 +1464,7 @@
   align-items: center;
   gap: 9px;
   padding: 4px 9px 8px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
@@ -1473,6 +1480,6 @@
 .ct-overlay-opacity output {
   min-width: 29px;
   text-align: right;
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   color: var(--white);
 }

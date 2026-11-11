@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { X } from '@lucide/vue';
 import TotalSegmentatorLicense from './TotalSegmentatorLicense.vue';
 import { prettyName } from '../lib/geometry';
 import { otherPathReasons, pathBlocked, pathOptionText, pathStatus } from '../lib/inference-path';
@@ -61,7 +62,7 @@ function selectTask(event: Event) {
     high_order_resampling: next?.high_order_resampling_supported !== false && !!props.catalog?.defaults.high_order_resampling,
   });
 }
-/** Escape closes the panel as its × does, once it has cleared a search typed into it. */
+/** Escape closes the panel as its close button does, once it has cleared a search typed into it. */
 function escape(event: KeyboardEvent) {
   const field = event.target as Partial<HTMLInputElement> | null;
   if (licensePending.value || (field?.type === 'search' && field.value)) return;
@@ -88,7 +89,7 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
         :disabled="licensePending"
         @click="emit('close')"
       >
-        ×
+        <X />
       </button>
     </header>
     <div class="segmentation-search-row">

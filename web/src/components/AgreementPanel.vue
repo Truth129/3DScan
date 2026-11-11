@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { X } from '@lucide/vue';
 import { api } from '../lib/api';
 import {
   AI_REWRITE_NOTE,
@@ -145,7 +146,7 @@ onBeforeUnmount(() => {
         >
           {{ open ? 'Hide details' : 'Details' }}
         </button>
-        <button ref="opener" type="button" class="text-button" aria-haspopup="dialog" @click="openSummary">All cases ↗</button>
+        <button ref="opener" type="button" class="text-button" aria-haspopup="dialog" @click="openSummary">All cases</button>
       </div>
     </div>
     <p v-if="error" class="agreement-error" role="alert">
@@ -240,7 +241,15 @@ onBeforeUnmount(() => {
     >
       <header>
         <span class="eyebrow">MODEL AGREEMENT · ALL CASES</span
-        ><button type="button" class="icon-button" aria-label="Close the all-cases agreement summary" @click="closeSummary">×</button>
+        ><button
+          type="button"
+          class="icon-button"
+          aria-label="Close the all-cases agreement summary"
+          title="Close the all-cases agreement summary"
+          @click="closeSummary"
+        >
+          <X />
+        </button>
       </header>
       <h2 id="agreement-summary-title">Where reviewers changed the model.</h2>
       <p id="agreement-summary-description">

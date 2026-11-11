@@ -38,7 +38,7 @@ and `REQUESTS_CA_BUNDLE`. It trusts the public CAs bundled with Python's `reques
 private CA set `SCAN3D_ORTHANC_CA_BUNDLE` to the absolute path of its PEM file.
 
 With sign-in on, an account also needs archive access. Without it, the page shows no **Orthanc
-archive** tab or **Add series from Orthanc**, and **Export SEG…** and **DICOM ↗** offer a local file
+archive** tab or **Add series from Orthanc**, and **Export SEG…** and **DICOM** offer a local file
 only.
 
 ## Run Orthanc
@@ -152,7 +152,7 @@ Only OsiriX reads these reports, so send them to an OsiriX destination. See
 
 ## Send a 3D view back
 
-**DICOM ↗** in the 3D view exports what **PNG ↗** saves, as a new one-image series in the original
+**DICOM** in the 3D view exports what **PNG** saves, as a new one-image series in the original
 patient and study. It needs a classic CT or MR imported from this same Orthanc, but no masks.
 Archiving, sending, retries and **Send again** work as for a segmentation.
 

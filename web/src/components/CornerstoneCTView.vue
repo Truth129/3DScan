@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { RotateCcw } from '@lucide/vue';
 import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point, SliceMeta } from '../types';
 import CTReviewInput from './CTReviewInput.vue';
 import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/interactive-review';
@@ -49,7 +50,7 @@ const emit = defineEmits<{
 }>();
 const element = ref<HTMLDivElement>(),
   overlay = ref<HTMLCanvasElement>();
-// The last pane pressed keeps its ⟲ shown, so a pane zoomed by touch can be reset.
+// The last pane pressed keeps its reset button shown, so a pane zoomed by touch can be reset.
 const pressed = usePressedPane(() => ({ pane: element.value?.parentElement }));
 const displayMeta = shallowRef<SliceMeta>();
 const quality = ref<'preview' | 'full'>('preview'),
@@ -469,7 +470,7 @@ onBeforeUnmount(() => {
         reviewDisabled ? 'Editing paused' : !overlaysAvailable ? 'Editing paused: selected overlays are unavailable' : 'Waiting for full-resolution detail'
       }}</span>
       <button v-if="!error" type="button" class="cornerstone-reset" aria-label="Reset pan and zoom" title="Reset pan and zoom" @click="viewer?.reset()">
-        ⟲
+        <RotateCcw />
       </button>
     </div>
     <p v-if="detailError" class="ct-detail-error" role="status">{{ detailError }}</p>

@@ -56,8 +56,8 @@ describe('view export watcher', () => {
     watcher.follow(job('running', { id: 'view-2', kind: 'view_file_export' }));
     await vi.advanceTimersByTimeAsync(1400);
     expect(success.mock.calls).toEqual([
-      ['View ready as a DICOM file. Nothing was archived or sent. Choose DICOM ↗ to save it.'],
-      ['A DICOM view file was prepared after its dialog closed. Choose DICOM ↗ and prepare it again to save it.'],
+      ['View ready as a DICOM file. Nothing was archived or sent. Choose DICOM in the 3D view to save it.'],
+      ['A DICOM view file was prepared after its dialog closed. Choose DICOM in the 3D view and prepare it again to save it.'],
     ]);
   });
   it('outlives everything keyed by the case, and exposes the same job as it changes', async () => {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
+import { ChevronDown, ChevronRight, CircleDot } from '@lucide/vue';
 import type { Structure, StructureDisplay } from '../types';
 import { colorCss, prettyName } from '../lib/geometry';
 const props = defineProps<{ structures: Structure[]; display: StructureDisplay; selected: string }>();
@@ -112,7 +113,7 @@ defineExpose({ reveal });
             :aria-expanded="!collapsed[group.name]"
             @click="collapsed[group.name] = !collapsed[group.name]"
           >
-            <span>{{ collapsed[group.name] ? '›' : '⌄' }} &nbsp; {{ prettyName(group.name) }}</span
+            <span><ChevronRight v-if="collapsed[group.name]" /><ChevronDown v-else /> {{ prettyName(group.name) }}</span
             ><span :title="`${group.visible} of ${group.total} visible`">{{ group.visible }}/{{ group.total }}</span>
           </button>
           <button
@@ -152,7 +153,7 @@ defineExpose({ reveal });
                 :title="`Show only ${prettyName(structure.name)}; hide other structures`"
                 @click.stop="emit('solo', structure.id)"
               >
-                ◎
+                <CircleDot />
               </button>
               <button
                 type="button"

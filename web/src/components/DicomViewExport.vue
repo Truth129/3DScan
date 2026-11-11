@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { X } from '@lucide/vue';
 import { api, ApiError, dicomViewFileUrl } from '../lib/api';
 import {
   DICOM_VIEW_FILE_KIND,
@@ -213,7 +214,8 @@ onBeforeUnmount(() => {
     @click="backdrop"
   >
     <header>
-      <span class="eyebrow">DICOM VIEW</span><button class="icon-button" type="button" aria-label="Close DICOM view export" @click="close">×</button>
+      <span class="eyebrow">DICOM VIEW</span
+      ><button class="icon-button" type="button" aria-label="Close DICOM view export" title="Close DICOM view export" @click="close"><X /></button>
     </header>
     <h2 id="dicom-view-title">Export this view.</h2>
     <p id="dicom-view-description">

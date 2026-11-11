@@ -57,6 +57,7 @@ import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
 import { useExpandedViewport } from '../lib/use-expanded-viewport';
 import { usePopover } from '../lib/use-popover';
+import { ChevronDown, ChevronRight, ChevronUp, Focus, Layers, Maximize2, Minimize2, Minus, Plus, RotateCcw, TriangleAlert } from '@lucide/vue';
 import { RAIL_VIEWS, railViewForKey } from '../lib/view-rail';
 import { COMPACT_SCREEN_QUERY, useFoldingControls, useReviewFoldingControls } from '../lib/use-folding-controls';
 import { cardiacCamera } from '../lib/cardiac-camera';
@@ -114,7 +115,7 @@ const props = defineProps<{
   initialSnapshot?: PortableRenderSnapshot;
   /** Supplied only by the live app so the portable bundle keeps its own renderer. */
   volumeViewComponent?: Component;
-  /** Set by the live app alone, to show DICOM ↗. Empty means the export may start. */
+  /** Set by the live app alone, to show DICOM. Empty means the export may start. */
   dicomViewBlockReason?: string;
   /**
    * The side panel's 3D tab, where the volume settings dock. It must stay the same for this view's
@@ -130,7 +131,7 @@ const props = defineProps<{
   headingDetail?: string;
   /**
    * Set by the live app in review alone: 'focused' while this tile has the stage to itself, 'shared'
-   * while it shares it. ⤢ then asks to change that, as expanding over the page would leave review's tools inert.
+   * while it shares it. Expand then asks to change that, as expanding over the page would leave review's tools inert.
    */
   tileFocus?: 'focused' | 'shared';
 }>();
@@ -146,7 +147,7 @@ const emit = defineEmits<{
   exportView: [];
   /** Whether the docked settings have anything to show, and whether they hold an error, for the 3D tab. */
   volumeSettings: [state: { shown: boolean; error: boolean }];
-  /** Settings › asks for the 3D tab, and for the side panel if it is hidden. */
+  /** Settings asks for the 3D tab, and for the side panel if it is hidden. */
   showVolumeSettings: [];
   nativeView: [active: boolean];
   focusTile: [focused: boolean];
@@ -516,13 +517,13 @@ const titleHint = computed(
 );
 // The plane's own controls sit on the canvas's bottom edge while it is drawn or marked on, with Layers folded or not.
 const planeBarShown = computed(() => planeAvailable.value && (showPlane.value || (!!props.reviewActive && reviewMode.value === 'plane')));
-// Narrow tiles fold PNG ↗ and DICOM ↗ under Capture ▾. Wide ones show them in the header, where nothing opens.
+// Narrow tiles fold PNG and DICOM under Capture. Wide ones show them in the header, where nothing opens.
 const captureMenu = ref<HTMLElement>(),
   captureToggle = ref<HTMLButtonElement>(),
   capturePanel = ref<HTMLElement>();
 const captureId = useId();
-const { open: captureOpen, close: closeCapture, toggle: toggleCapture } = usePopover(captureMenu, captureToggle, capturePanel);
-// The expanded view takes Esc before the popover does, so Capture ▾ closes with it rather than staying open over the tile.
+const { open: captureOpen, close: closeCapture, toggle: toggleCapture, arrows: captureArrows } = usePopover(captureMenu, captureToggle, capturePanel);
+// The expanded view takes Esc before the popover does, so Capture closes with it rather than staying open over the tile.
 watch(expanded, () => closeCapture(false));
 function expandOrFocus() {
   if (props.tileFocus && !expanded.value) emit('focusTile', props.tileFocus === 'shared');
@@ -1768,7 +1769,7 @@ function legacyPresents(expected: ViewCaptureRequest) {
   );
 }
 /**
- * The exact image App will freeze for export, with evidence of what it shows. Unlike PNG ↗
+ * The exact image App will freeze for export, with evidence of what it shows. Unlike PNG
  * it refuses rather than saves: a stale layer here gets a wrong revision into a patient's study.
  */
 async function captureView(expected: ViewCaptureRequest): Promise<ViewportCapture> {
@@ -1939,7 +1940,7 @@ defineExpose({
           <option value="plane">{{ modality }} plane</option>
         </select></label
       >
-      <div ref="captureMenu" class="model-capture" :class="{ folds: dicomViewBlockReason !== undefined }">
+      <div ref="captureMenu" class="model-capture" :class="{ folds: dicomViewBlockReason !== undefined }" @keydown="captureArrows">
         <button
           ref="captureToggle"
           type="button"
@@ -1949,10 +1950,10 @@ defineExpose({
           title="Save or export this view"
           @click="toggleCapture"
         >
-          Capture<span aria-hidden="true">▾</span>
+          Capture<ChevronDown />
         </button>
         <div :id="captureId" ref="capturePanel" class="viewport-tools" :class="{ open: captureOpen }" @click="closeCapture()">
-          <button title="Save image" @click="screenshot">PNG ↗</button>
+          <button title="Save image" @click="screenshot">PNG</button>
           <button
             v-if="dicomViewBlockReason !== undefined"
             class="dicom-view-action"
@@ -1960,7 +1961,7 @@ defineExpose({
             :disabled="!!dicomViewReason"
             @click="emit('exportView')"
           >
-            DICOM ↗
+            DICOM
           </button>
         </div>
       </div>
@@ -1973,11 +1974,7 @@ defineExpose({
         :title="controlsOpen ? 'Fold the layers away to see the whole view' : 'Show the layers and what they draw'"
         @click="setControlsOpen(!controlsOpen)"
       >
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path d="m10 3 7 3.5-7 3.5-7-3.5L10 3Z" />
-          <path d="m3 10 7 3.5 7-3.5M3 13.5 10 17l7-3.5" />
-        </svg>
-        <span class="layers-label">Layers</span><span aria-hidden="true">{{ controlsOpen ? '▴' : '▾' }}</span>
+        <Layers /><span class="layers-label">Layers</span><ChevronUp v-if="controlsOpen" /><ChevronDown v-else />
       </button>
       <button
         ref="expandButton"
@@ -1998,9 +1995,10 @@ defineExpose({
         :aria-controls="viewportId"
         @click="expandOrFocus"
       >
-        {{ expanded ? 'Restore ↙' : tileFocus === 'focused' ? `${modality} + 3D` : '⤢' }}
+        <template v-if="expanded">Restore<Minimize2 /></template><template v-else-if="tileFocus === 'focused'">{{ modality }} + 3D</template
+        ><Maximize2 v-else />
       </button>
-      <!-- Hiding the view from its expanded state would read as closing it; Restore ↙ does that. -->
+      <!-- Hiding the view from its expanded state would read as closing it; Restore does that. -->
       <slot v-if="!expanded" name="close"></slot>
     </header>
     <div class="view-rail" role="group" aria-label="Anatomical camera views">
@@ -2029,12 +2027,14 @@ defineExpose({
       >
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13.5S2.5 10.2 2.5 6.3A2.8 2.8 0 0 1 8 5a2.8 2.8 0 0 1 5.5 1.3c0 3.9-5.5 7.2-5.5 7.2Z" /></svg>
       </button>
-      <button type="button" class="view-rail-tools" title="Zoom in" aria-label="Zoom in" @click="zoomView(1.25)">+</button>
-      <button type="button" title="Zoom out" aria-label="Zoom out" @click="zoomView(0.8)">−</button>
+      <button type="button" class="view-rail-tools" title="Zoom in" aria-label="Zoom in" @click="zoomView(1.25)"><Plus /></button>
+      <button type="button" title="Zoom out" aria-label="Zoom out" @click="zoomView(0.8)"><Minus /></button>
       <button type="button" aria-label="Focus" :title="vtkSelected && !reviewActive ? 'Fit CT volume' : 'Focus selected structure'" @click="focusView">
-        ◎
+        <Focus />
       </button>
-      <button type="button" aria-label="Reset view" title="Reset view" @click="vtkSelected ? volumePreview?.resetView() : selectView('oblique')">⟲</button>
+      <button type="button" aria-label="Reset view" title="Reset view" @click="vtkSelected ? volumePreview?.resetView() : selectView('oblique')">
+        <RotateCcw />
+      </button>
     </div>
     <div ref="surface" class="model-canvas" :style="{ visibility: vtkSelected ? 'hidden' : undefined }"></div>
     <component
@@ -2168,7 +2168,7 @@ defineExpose({
             :title="volumeDockable ? `${modality} volume settings, in the side panel’s 3D tab` : `${modality} volume settings`"
             @click="openVolumeSettings"
           >
-            {{ volumeDockable ? 'Settings ›' : volumeOptionsOpen ? 'Settings ▴' : 'Settings ▾' }}
+            Settings<ChevronRight v-if="volumeDockable" /><ChevronUp v-else-if="volumeOptionsOpen" /><ChevronDown v-else />
           </button>
         </div>
         <div v-if="ctPlaneAvailable" class="rendering-stack-layer">
@@ -2261,7 +2261,7 @@ defineExpose({
       {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
     </p>
     <p v-if="exportRefusal" class="viewport-refusal" role="alert">
-      <span>⚠ {{ exportRefusal }}</span> <button class="text-button" type="button" @click="exportRefusal = ''">Dismiss</button>
+      <span><TriangleAlert /> {{ exportRefusal }}</span> <button class="text-button" type="button" @click="exportRefusal = ''">Dismiss</button>
     </p>
     <p v-if="!vtkSelected && transparencyWarning && !error" class="render-notice" role="status">{{ transparencyWarning }}</p>
     <svg v-if="!vtkSelected" class="orientation-gizmo" viewBox="0 0 78 78" role="img" aria-label="Patient RAS orientation axes">
@@ -2343,15 +2343,15 @@ defineExpose({
   text-overflow: ellipsis;
 }
 .model-title-detail {
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   color: var(--muted);
 }
 .model-header .text-button,
 .viewport-tools > button {
   flex: none;
-  min-height: 24px;
+  min-height: 28px;
   padding: 2px 8px;
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
 }
 .model-header .model-preset-chip {
@@ -2370,7 +2370,7 @@ defineExpose({
   margin-left: 4px;
   padding-left: 8px;
   border-left: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -2378,12 +2378,13 @@ defineExpose({
 .model-plane-navigation select {
   min-width: 0;
   max-width: 120px;
+  height: 28px;
   padding: 3px 5px;
-  border: 1px solid #414b5d;
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
-  background: #252e3d;
-  font-size: 10px;
-  color: #e2eaf6;
+  background: var(--surface-active);
+  font-size: 11px;
+  color: var(--white);
 }
 .model-capture {
   position: relative;
@@ -2417,15 +2418,8 @@ defineExpose({
   align-items: center;
   gap: 6px;
 }
-.viewport-controls-toggle svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  stroke-width: 1.3;
-  stroke-linejoin: round;
-}
-.viewport-controls-toggle > span[aria-hidden='true'] {
-  font-size: 9px;
+.viewport-controls-toggle .lucide-chevron-down,
+.viewport-controls-toggle .lucide-chevron-up {
   color: var(--text-secondary);
 }
 .viewport-controls-toggle[aria-expanded='true'] {
@@ -2435,7 +2429,7 @@ defineExpose({
 .model-header .viewport-expand-button.icon-only {
   min-width: 26px;
   padding: 0 6px;
-  font-size: 14px;
+  font-size: 11px;
   line-height: 1;
 }
 /* One area shows at a time there, so review's focus toggle has nothing to share; the review toolbar keeps its own. */
@@ -2454,6 +2448,9 @@ defineExpose({
     min-height: 22px;
     padding-block: 1px;
   }
+  .model-mark-on select {
+    height: 22px;
+  }
 }
 /* Narrow tiles give up the extras first, then fold the exports, so nothing wraps or scrolls sideways. */
 @container model-tile (max-width: 680px) {
@@ -2461,7 +2458,7 @@ defineExpose({
     display: none;
   }
 }
-/* Only when DICOM ↗ is there too: the portable viewer's PNG ↗ alone stays a plain button. */
+/* Only when DICOM is there too: the portable viewer's PNG alone stays a plain button. */
 @container model-tile (max-width: 600px) {
   .model-capture.folds .capture-toggle {
     display: inline-flex;
@@ -2526,7 +2523,7 @@ defineExpose({
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
 }
@@ -2557,7 +2554,7 @@ defineExpose({
   height: 1px;
   background: var(--line-strong);
 }
-.view-rail svg {
+.view-rail svg:not(.lucide) {
   width: 12px;
   height: 12px;
   fill: currentColor;
@@ -2585,7 +2582,7 @@ defineExpose({
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   background: var(--panel);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
 .model-plane-navigation > select {
@@ -2596,13 +2593,13 @@ defineExpose({
   width: 180px;
   min-width: 48px;
   margin: 0;
-  accent-color: #8aabff;
+  accent-color: var(--accent);
 }
 .model-plane-navigation > span {
   flex: none;
-  font: 9px var(--mono);
+  font: 11px var(--mono);
   white-space: nowrap;
-  color: #9aaac0;
+  color: var(--muted);
 }
 .model-plane-navigation > label {
   display: flex;
@@ -2619,12 +2616,12 @@ defineExpose({
   z-index: 4;
   display: grid;
   gap: 4px;
-  width: 172px;
+  width: 200px;
   padding: 7px 10px 6px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: #0b0c10d9;
-  font: 9px var(--mono);
+  font: 11px var(--mono);
   color: var(--text-secondary);
   pointer-events: none;
 }
@@ -2685,7 +2682,7 @@ defineExpose({
   bottom: calc(var(--plane-bar-space) + 8px);
 }
 .model-viewport.has-legend :deep(.cornerstone-surface-status) {
-  left: 192px;
+  left: 220px;
 }
 .orientation-gizmo {
   top: auto;
@@ -2709,7 +2706,7 @@ defineExpose({
   padding: 6px 10px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
-  background: #171d27e6;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
   box-shadow: 0 6px 20px #0005;
   backdrop-filter: blur(6px);
   color: var(--text-secondary);
@@ -2799,17 +2796,17 @@ defineExpose({
   margin: 0;
   padding: 4px 7px;
   border-radius: 4px;
-  background: #171d27b3;
-  font-size: 10px;
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  font-size: 11px;
   line-height: 1.4;
-  color: #a2b2c8;
+  color: var(--text-secondary);
   pointer-events: none;
 }
 .model-review-error {
-  color: #f2ba9c;
+  color: var(--warning);
 }
 .model-review-hint .text-button {
-  font-size: 10px;
+  font-size: 11px;
   pointer-events: auto;
 }
 /* The banner's colours, over the view the banner cannot be dismissed from. */
@@ -2856,7 +2853,7 @@ defineExpose({
     left: 86px;
   }
   .model-viewport.has-legend :deep(.cornerstone-surface-status) {
-    left: 266px;
+    left: 294px;
   }
 }
 @media (max-width: 1000px) {
@@ -2872,7 +2869,7 @@ defineExpose({
       left: 98px;
     }
     .model-viewport.has-legend :deep(.cornerstone-surface-status) {
-      left: 278px;
+      left: 306px;
     }
   }
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { X } from '@lucide/vue';
 import { api } from '../lib/api';
 import { caseDate, filterCases, formatSize, overdueInTrash, statusLabel } from '../lib/library';
 import { canAdminister, session } from '../lib/session';
@@ -265,7 +266,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', strayEscape));
       </button>
       <button v-if="canAdminister" :class="{ active: tab === 'storage' }" type="button" @click="showStorage">Storage</button>
       <button v-if="peopleOffered" :class="{ active: tab === 'people' }" type="button" @click="tab = 'people'">People</button>
-      <button v-if="closable" type="button" class="panel-hide inspector-hide" aria-label="Close Library" title="Close Library" @click="emit('close')">×</button>
+      <button v-if="closable" type="button" class="panel-hide inspector-hide" aria-label="Close Library" title="Close Library" @click="emit('close')">
+        <X />
+      </button>
     </header>
     <div class="case-library-body">
       <input

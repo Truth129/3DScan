@@ -2,7 +2,8 @@
 import { computed, ref } from 'vue';
 import type { Structure } from '../types';
 import { colorCss, prettyName } from '../lib/geometry';
-import { useFloatingDetails } from '../lib/use-floating-details';
+import { useFloatingDetails } from '../lib/use-popover';
+import { ChevronDown } from '@lucide/vue';
 
 const props = defineProps<{ structures: Structure[]; ids: string[]; selected: string; following: boolean; modality?: string }>();
 const emit = defineEmits<{ change: [ids: string[]]; follow: [] }>();
@@ -26,12 +27,13 @@ const { keyboard } = useFloatingDetails(details, options);
   <section class="ct-overlay-picker" :aria-label="`${modalityLabel} overlay segments`" @keydown="keyboard">
     <details ref="details">
       <summary>
-        <span>Segments</span><span>{{ ids.length }} selected <i>⌄</i></span>
+        <span>Segments</span><span>{{ ids.length }} selected <ChevronDown /></span>
       </summary>
       <div ref="options" class="ct-overlay-options">
         <div class="ct-overlay-actions">
-          <button class="text-button" :disabled="!selected" @click="emit('follow')">Use selected segment</button
-          ><button class="text-button" :disabled="!ids.length" @click="emit('change', [])">Clear overlays</button>
+          <button class="text-button" :disabled="!selected" title="Overlay the segment selected in the anatomy list" @click="emit('follow')">
+            Use selected</button
+          ><button class="text-button" :disabled="!ids.length" title="Overlay no segments" @click="emit('change', [])">Clear</button>
         </div>
         <input v-model="search" type="search" placeholder="Find segments…" :aria-label="`Find ${modalityLabel} overlay segments`" />
         <div class="ct-overlay-list">
