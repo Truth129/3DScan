@@ -13,7 +13,7 @@ vi.mock('../src/components/ModelViewport.vue', () => ({
   default: {
     props: ['dicomViewBlockReason', 'modelRevisionId', 'revisionId', 'caseId'],
     emits: ['exportView', 'unreadRefusal'],
-    setup(props: any, { emit, expose }: any) {
+    setup(props: any, { emit, expose, slots }: any) {
       const self = { props, exportView: () => emit('exportView'), unread: (message: string) => emit('unreadRefusal', message) };
       fake.viewports.push(self);
       expose({
@@ -25,15 +25,17 @@ vi.mock('../src/components/ModelViewport.vue', () => ({
           return fake.expanded;
         },
       });
-      // As in the real viewport, no reason at all means no button.
-      return () =>
+      // As in the real viewport, no reason at all means no button. Current | Before comes in through its header.
+      return () => [
+        slots.compare?.(),
         props.dicomViewBlockReason === undefined
           ? null
           : h(
               'button',
               { class: 'dicom', disabled: !!props.dicomViewBlockReason, title: props.dicomViewBlockReason, onClick: () => emit('exportView') },
               'DICOM ↗',
-            );
+            ),
+      ];
     },
   },
 }));

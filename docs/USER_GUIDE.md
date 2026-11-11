@@ -317,8 +317,8 @@ The stage tiles the 3D view and **CT review**.
   **▾** chooses side by side or stacked, shows or hides each area or the **Side panels**, and has
   **Reset layout**. **\\** also hides or shows the side panels.
 - Drag a divider to resize, and double-click it to reset.
-- **Layers** folds the 3D view's layer card, and **Display** the CT controls. Neither resizes a
-  view.
+- **Layers** in the 3D header folds the 3D view's layer card, and **Display** the CT controls.
+  Neither resizes a view.
 
 **Show all**, **Hide all** and **Show selected only** apply to the whole case even when the list is
 filtered. A section's eye hides it, and its arrow collapses it.
@@ -350,9 +350,21 @@ original voxels.
 
 ### 3D view
 
+The 3D view's header holds its title, **Current** and **Before**, the volume preset, **PNG ↗**,
+**DICOM ↗**, **Layers**, **⤢** and **×**. Hover the title for its detail, the coordinate system and
+the mouse controls. In a narrow view the detail folds away, and **PNG ↗** and **DICOM ↗** fold
+under **Capture ▾**.
+
 **Layers** switches what is drawn: **Segmentation**, **CT volume** and **CT plane**. Drag to
-rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and **Restore ↙** or
-**Escape** returns.
+rotate, right drag to pan, scroll to zoom. **⤢** fills the screen, and **Restore ↙** or **Escape**
+returns. In review, **⤢** gives the stage to the 3D view, and **CT + 3D** shares it again.
+
+- The rail on the left edge turns the camera: **A**nterior, **P**osterior, **R**ight, **L**eft,
+  **S**uperior and **Obl**ique, or keys **1** to **6**. The current view is lit. A heart button
+  joins them with **Cinematic heart**. Below them, **+** and **−** zoom, **◎** focuses the selected
+  structure or fits the CT volume, and **⟲** resets the view.
+- The keys do nothing while you type, pick from a list or fill in a form.
+- The preset in the header opens the volume settings, as **Settings ›** does.
 
 - The slider beside **Segmentation** is **All segment opacity**. It works with **CT volume**
   visible: CT in front of a segment covers it, and CT behind shows through. If the browser lacks a
@@ -362,8 +374,9 @@ rotate, right drag to pan, scroll to zoom. **Expand ↗** fills the screen, and 
   if it is hidden. In the expanded view and at 1000 px or narrower, it opens the settings inside
   **Layers** instead. If the volume fails, the row shows **Retry volume** or **Retry mask**, and the
   tab a dot.
-- **CT plane** shows one native slice: choose **Native i**, **j** or **k**, move its slider, or use
-  **Face plane**. **All three** adds the other two native slices through the same point, which
+- **CT plane** shows one native slice, and **Face plane** turns the camera to it. While the plane
+  shows, a bar along the bottom of the view chooses **Native i**, **j** or **k** and moves the
+  slice. **All three** there adds the other two native slices through the same point, which
   follows CT review. It carries into review and back. Three.js and the portable page show one plane.
 - Tilted-gantry scans, MRI and the [portable HTML](#portable-offline-html) page use Three.js instead
   of Cornerstone3D.
@@ -507,7 +520,7 @@ makes the scan's first segmentation revision.
 
 ### Mark in the 3D view
 
-**Mark on**, under **Review tools**, selects **Surface point**, which locks picking to the target,
+**Mark on**, in the 3D header, selects **Surface point**, which locks picking to the target,
 **CT plane**, which takes all the drawing tools on a native slice, or, with **CT volume** on,
 **Volume point**. Right drag rotates while marking, and a 3D point moves the linked CT crosshair so
 you can confirm it. **Face plane** faces the CT plane at any time.
@@ -525,15 +538,15 @@ With **CT volume** on in review:
   In AI assist, **Point** adds it as an Include or Exclude; other tools move the crosshair there.
 - A click on no visible volume, or on an opaque surface or a CT plane in front of it, makes no
   mark; see-through surfaces do not block it. **Surface point** refuses a surface the volume covers.
-- While you mark on the **CT plane**, the volume on your side of it is cut away. **Focus** keeps the
-  whole CT in depth.
+- While you mark on the **CT plane**, the volume on your side of it is cut away. **◎** (Focus) keeps
+  the whole CT in depth.
 - **Limit to segments** masks by the saved segmentation, not your draft, so your edits do not
   change it until you save. **Volume point** sees only the CT the mask shows.
 - **Color segments** and **Cinematic heart** stay off. A Cinematic heart volume shows the default
   preset, and returns on **Exit review** unless you choose another.
 
-**Review tools** starts folded. A mark cannot start underneath it, so fold it to reach that part of
-the view.
+**Layers** starts folded in review. A mark cannot start underneath it, so fold it to reach that
+part of the view.
 
 ### Toolbar messages and panels
 

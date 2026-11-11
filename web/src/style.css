@@ -984,45 +984,6 @@ h3 {
   background: var(--panel);
   overflow: hidden;
 }
-.model-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: space-between;
-  height: 45px;
-  min-height: 45px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-}
-.view-tabs {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 100%;
-}
-.view-tabs button {
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  font-size: 11px;
-  padding: 0;
-  height: 100%;
-  color: var(--text-secondary);
-}
-.view-tabs button.active {
-  border-bottom-color: var(--accent);
-}
-.view-tabs > span {
-  color: var(--muted);
-  font: 9px var(--mono);
-}
-.model-scale {
-  font: 8px var(--mono);
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  white-space: nowrap;
-}
 .comparison-toggle {
   display: flex;
   border: 1px solid var(--line);
@@ -1039,6 +1000,14 @@ h3 {
 .comparison-toggle button.active {
   color: var(--white);
   background: var(--surface-active);
+}
+/* In the 3D view's header it keeps inside the bar, which is 28 px on short windows. */
+:root .model-header .comparison-toggle {
+  flex: none;
+  padding: 1px;
+}
+.model-header .comparison-toggle button {
+  padding-block: 2px;
 }
 .model-viewport {
   flex: 1;
@@ -1057,107 +1026,6 @@ h3 {
   width: 100%;
   height: 100%;
   outline: 0;
-}
-.viewport-caption {
-  position: absolute;
-  top: 18px;
-  left: 20px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font: 8px var(--mono);
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  pointer-events: none;
-}
-.viewport-caption > span:last-child {
-  text-transform: uppercase;
-  color: var(--text-secondary);
-}
-.divider {
-  color: var(--muted);
-  padding: 0 4px;
-}
-.camera-strip {
-  position: absolute;
-  bottom: 63px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  padding: 3px;
-  background: #191c23cc;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  gap: 2px;
-  white-space: nowrap;
-}
-.camera-strip button {
-  border: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  font: 9px var(--mono);
-  padding: 6px 7px;
-  border-radius: 3px;
-  text-transform: capitalize;
-  min-height: 27px;
-}
-.camera-strip button.active {
-  color: var(--white);
-  background: var(--surface-active);
-}
-.camera-strip button:hover {
-  color: var(--white);
-  background: var(--surface-hover);
-}
-.viewport-tools {
-  position: absolute;
-  bottom: 22px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  border: 1px solid var(--line);
-  background: var(--surface-hover);
-  box-shadow: 0 3px 10px #0004;
-  border-radius: 5px;
-  overflow: hidden;
-  white-space: nowrap;
-}
-.viewport-tools button {
-  border: 0;
-  background: none;
-  font-size: 10px;
-  color: var(--white);
-  padding: 9px 12px;
-  min-height: 32px;
-}
-.viewport-tools button:first-child,
-.viewport-tools button:nth-child(2) {
-  font-size: 17px;
-  line-height: 1;
-}
-.viewport-tools button:hover {
-  background: var(--surface-active);
-  color: white;
-}
-.viewport-tools > span {
-  width: 1px;
-  height: 17px;
-  background: var(--surface-active);
-}
-.viewport-hint {
-  position: absolute;
-  bottom: 6px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 8px;
-  color: var(--muted);
-  pointer-events: none;
-}
-.viewport-hint span {
-  padding: 0 5px;
-  color: var(--muted);
 }
 .viewport-state {
   position: absolute;
@@ -1190,11 +1058,12 @@ h3 {
   font-size: 12px;
   color: #b4b4a1;
 }
+/* On the 3D view's canvas, along its bottom edge: the top holds Layers, the rail and review's hint. */
 .before-label {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  top: 64px;
+  bottom: calc(var(--plane-bar-space, 0px) + 8px);
   z-index: 3;
   padding: 6px 10px;
   background: #4d3f25;
@@ -2088,16 +1957,6 @@ h3 {
   .solo-button {
     font-size: 15px;
   }
-  .camera-strip button {
-    font-size: 8px;
-    padding: 6px;
-  }
-  .viewport-hint {
-    font-size: 7px;
-  }
-  .model-scale {
-    display: none;
-  }
   .prepare-workspace {
     gap: 40px;
   }
@@ -2256,28 +2115,6 @@ h3 {
   }
   .app-footer {
     display: none;
-  }
-  .camera-strip button {
-    font-size: 10px;
-    padding: 7px 12px;
-    min-height: 32px;
-  }
-  .viewport-tools button {
-    font-size: 11px;
-    padding: 10px 15px;
-    min-height: 35px;
-  }
-  .viewport-caption {
-    font-size: 9px;
-  }
-  .viewport-hint {
-    font-size: 9px;
-  }
-  .camera-strip {
-    bottom: 70px;
-  }
-  .viewport-tools {
-    bottom: 25px;
   }
   .review-rail .panel-heading {
     padding: 20px;
@@ -2475,7 +2312,6 @@ h3 {
   }
   .before-label {
     font-size: 9px;
-    top: 57px;
     max-width: calc(100% - 30px);
     white-space: normal;
     text-align: center;
@@ -2531,53 +2367,12 @@ h3 {
   .case-title .eyebrow {
     letter-spacing: 0.1em;
   }
-  .model-header {
-    height: 40px;
-    min-height: 40px;
-    padding: 0 13px;
-  }
-  .view-tabs > span {
-    font-size: 8px;
-  }
-  .view-tabs {
-    gap: 10px;
-  }
-  .view-tabs button {
-    font-size: 10px;
-  }
   .comparison-toggle button {
     font-size: 8px;
     padding: 5px 7px;
   }
   .model-viewport {
     min-height: 340px;
-  }
-  .viewport-caption {
-    top: 14px;
-    left: 13px;
-    font-size: 7px;
-    gap: 5px;
-  }
-  .camera-strip {
-    bottom: 67px;
-    max-width: calc(100% - 24px);
-    padding: 2px;
-    gap: 0;
-  }
-  .camera-strip button {
-    font-size: 8px;
-    padding: 7px;
-    min-height: 31px;
-  }
-  .viewport-tools {
-    bottom: 24px;
-  }
-  .viewport-tools button {
-    padding: 9px 12px;
-    font-size: 10px;
-  }
-  .viewport-hint {
-    font-size: 7px;
   }
   .selection-content {
     padding: 18px 15px;
@@ -3346,24 +3141,5 @@ h3 {
   }
   .review-workspace .probe-readout {
     padding: 9px 14px;
-  }
-  .review-workspace .model-header {
-    padding: 0 10px;
-  }
-  .review-workspace .model-scale {
-    display: none;
-  }
-  .review-workspace .view-tabs {
-    gap: 7px;
-  }
-  .review-workspace .view-tabs > span {
-    font-size: 8px;
-  }
-  .review-workspace .camera-strip button {
-    font-size: 8px;
-    padding: 6px;
-  }
-  .review-workspace .viewport-caption {
-    font-size: 8px;
   }
 }

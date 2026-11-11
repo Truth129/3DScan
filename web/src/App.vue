@@ -2168,33 +2168,6 @@ onBeforeUnmount(() => {
           />
           <div class="workspace-stage">
             <section id="workspace-model-panel" v-show="modelPanelVisible" class="central-workspace" aria-label="3D view">
-              <div class="model-header">
-                <div class="view-tabs">
-                  <button class="active">{{ ctOnly ? `${sourceLabel} view` : '3D anatomy' }}</button
-                  ><span>{{
-                    ctOnly
-                      ? `Source ${sourceLabel}`
-                      : interactiveReview?.candidate
-                        ? `Saved mask · candidate on ${sourceLabel}`
-                        : `${revision.structures.length} structures`
-                  }}</span>
-                </div>
-                <div v-if="canCompareSurfaces" class="comparison-toggle">
-                  <button :class="{ active: !before }" @click="before = false">Current</button
-                  ><button :class="{ active: before }" @click="before = true">Before</button>
-                </div>
-                <span class="model-scale">PATIENT RAS · mm</span
-                ><button
-                  type="button"
-                  class="panel-hide"
-                  aria-label="Hide 3D view"
-                  title="Hide 3D view"
-                  :disabled="!canHideWorkspacePanel(panels, 'model')"
-                  @click="setPanel('model', false)"
-                >
-                  ×
-                </button>
-              </div>
               <ModelViewport
                 v-if="shownRevision"
                 ref="model"
@@ -2236,6 +2209,15 @@ onBeforeUnmount(() => {
                 :level="displayLevel"
                 :dicom-view-block-reason="viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
                 :coronary-tube="before || coronaryTube?.result.revision_id !== shownRevision.id ? undefined : coronaryTube"
+                :heading="ctOnly ? `${sourceLabel} view` : '3D anatomy'"
+                :heading-detail="
+                  ctOnly
+                    ? `Source ${sourceLabel}`
+                    : interactiveReview?.candidate
+                      ? `Saved mask · candidate on ${sourceLabel}`
+                      : `${revision.structures.length} structures`
+                "
+                :tile-focus="workspaceMode === 'review' ? (reviewFocus === 'model' ? 'focused' : 'shared') : undefined"
                 volume-settings-target="#workspace-volume-settings"
                 :volume-settings-dock="fold === 'compact' ? undefined : panels.inspector ? 'shown' : 'hidden'"
                 @volume-settings="volumeSettings = $event"
@@ -2249,8 +2231,31 @@ onBeforeUnmount(() => {
                 @remove-mark="interactivePanel?.removeMark($event)"
                 @opacity="allSegmentOpacity"
                 @retry-volume-view="CornerstoneVolumeView = createVolumeView()"
-              />
-              <div v-if="before" class="before-label">Parent surface and measurements · {{ sourceLabel }} retains the active revision</div>
+                @focus-tile="setReviewFocus($event ? 'model' : 'both')"
+              >
+                <template v-if="canCompareSurfaces" #compare>
+                  <div class="comparison-toggle">
+                    <button :class="{ active: !before }" @click="before = false">Current</button
+                    ><button :class="{ active: before }" @click="before = true">Before</button>
+                  </div>
+                </template>
+                <template #close>
+                  <button
+                    type="button"
+                    class="panel-hide"
+                    aria-label="Hide 3D view"
+                    title="Hide 3D view"
+                    :disabled="!canHideWorkspacePanel(panels, 'model')"
+                    @click="setPanel('model', false)"
+                  >
+                    ×
+                  </button>
+                </template>
+                <!-- Inside the view, so the label stays with Before when the view is expanded. -->
+                <template #notice>
+                  <div v-if="before" class="before-label">Parent surface and measurements · {{ sourceLabel }} retains the active revision</div>
+                </template>
+              </ModelViewport>
               <div v-if="synthetic" class="demo-label">
                 SYNTHETIC DEMO <span>Illustrative shapes for workflow testing · no patient data or model inference</span>
               </div>

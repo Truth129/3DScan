@@ -41,7 +41,7 @@ import {
   type ModelReviewFrameRequest,
 } from '../lib/model-review-frame';
 import { imagePresentation, type ImageContext, type ImageCapability } from '../lib/image-domain';
-import { validWindow, validLevel, sourceViewLabel } from '../lib/image-workspace';
+import { validWindow, validLevel } from '../lib/image-workspace';
 import VolumeControls from './VolumeControls.vue';
 import { freshNativeVolumeLighting } from '../lib/volume-lighting';
 import {
@@ -49,12 +49,15 @@ import {
   MR_SIGNAL_PRESET,
   DEFAULT_CINEMATIC_SETTINGS,
   DEFAULT_VOLUME_SETTINGS,
+  VOLUME_PRESET_LABELS,
   freshVolumeSettings,
   type CTVolumeSettings,
 } from '../lib/volume-presets';
 import { hasCinematicReferenceMasks } from '../lib/cinematic-reference';
 import { useCinematicReference } from '../lib/use-cinematic-reference';
 import { useExpandedViewport } from '../lib/use-expanded-viewport';
+import { usePopover } from '../lib/use-popover';
+import { RAIL_VIEWS, railViewForKey } from '../lib/view-rail';
 import { COMPACT_SCREEN_QUERY, useFoldingControls, useReviewFoldingControls } from '../lib/use-folding-controls';
 import { cardiacCamera } from '../lib/cardiac-camera';
 import { freshVolumeMaskSettings, MAX_VOLUME_MASK_SEGMENTS, type VolumeMaskSettings, type VolumeMaskStatus } from '../lib/volume-mask';
@@ -122,6 +125,14 @@ const props = defineProps<{
   volumeSettingsDock?: 'shown' | 'hidden';
   /** The research centreline tube. Only the native 3D view draws it. */
   coronaryTube?: CoronaryTube;
+  /** The header's title and what follows it; without them it names the view and counts its structures. */
+  heading?: string;
+  headingDetail?: string;
+  /**
+   * Set by the live app in review alone: 'focused' while this tile has the stage to itself, 'shared'
+   * while it shares it. ⤢ then asks to change that, as expanding over the page would leave review's tools inert.
+   */
+  tileFocus?: 'focused' | 'shared';
 }>();
 const emit = defineEmits<{
   unreadRefusal: [message: string];
@@ -138,6 +149,7 @@ const emit = defineEmits<{
   /** Settings › asks for the 3D tab, and for the side panel if it is hidden. */
   showVolumeSettings: [];
   nativeView: [active: boolean];
+  focusTile: [focused: boolean];
 }>();
 interface VolumePreview {
   capturePNG(): Promise<string>;
@@ -484,6 +496,47 @@ const volumeDocked = computed(() => volumeDockable.value && props.volumeSettings
 function openVolumeSettings() {
   if (volumeDockable.value) emit('showVolumeSettings');
   else volumeOptionsOpen.value = !volumeOptionsOpen.value;
+}
+/** The header names the volume's preset and opens its settings. MR draws a signal window, which has none to name. */
+const presetChip = computed(() =>
+  ctVolumeAvailable.value && showVolume.value && !signalVolume.value && (!props.reviewActive || vtkSelected.value)
+    ? VOLUME_PRESET_LABELS[renderVolumeSettings.value.preset]
+    : '',
+);
+function showPresetSettings() {
+  if (volumeDockable.value) return emit('showVolumeSettings');
+  volumeOptionsOpen.value = true;
+  setControlsOpen(true);
+}
+const headingDetail = computed(() => props.headingDetail ?? (props.structures.length ? `${props.structures.length} structures` : ''));
+// The detail folds away in a narrow tile, so the title's tooltip still reads it.
+const titleHint = computed(
+  () =>
+    `${headingDetail.value ? `${headingDetail.value}. ` : ''}Patient RAS · mm. ${props.reviewActive && props.reviewTool !== 'navigate' && (vtkSelected.value || props.reviewTool !== 'remove') ? 'Right drag to rotate · Scroll to zoom' : 'Drag to rotate · Right drag to pan · Scroll to zoom'}`,
+);
+// The plane's own controls sit on the canvas's bottom edge while it is drawn or marked on, with Layers folded or not.
+const planeBarShown = computed(() => planeAvailable.value && (showPlane.value || (!!props.reviewActive && reviewMode.value === 'plane')));
+// Narrow tiles fold PNG ↗ and DICOM ↗ under Capture ▾. Wide ones show them in the header, where nothing opens.
+const captureMenu = ref<HTMLElement>(),
+  captureToggle = ref<HTMLButtonElement>(),
+  capturePanel = ref<HTMLElement>();
+const captureId = useId();
+const { open: captureOpen, close: closeCapture, toggle: toggleCapture } = usePopover(captureMenu, captureToggle, capturePanel);
+// The expanded view takes Esc before the popover does, so Capture ▾ closes with it rather than staying open over the tile.
+watch(expanded, () => closeCapture(false));
+function expandOrFocus() {
+  if (props.tileFocus && !expanded.value) emit('focusTile', props.tileFocus === 'shared');
+  else void setExpanded(!expanded.value);
+}
+/** Keys 1-6 pick the rail's views while this view is on screen and no dialog, or another view expanded over it, holds the page. */
+function railKey(event: KeyboardEvent) {
+  const name = railViewForKey(event, document.activeElement as HTMLElement | null);
+  if (!name || props.viewportActive === false || !viewport.value?.getClientRects().length || document.querySelector('dialog[open]')) return;
+  const modal = document.querySelector('[aria-modal="true"]');
+  if (modal && modal !== viewport.value) return;
+  // A focused viewer marks every key it sees as handled, so that mark is no reason to stop.
+  event.preventDefault();
+  selectView(name);
 }
 const gpuActive = computed(() => needsPlane.value && !!gpuFamilyReady.value && gpuFamilyReady.value === gpuFamily.value);
 const gpuMeta = computed(() => {
@@ -1304,6 +1357,7 @@ async function initializeThree() {
   }
 }
 onMounted(() => {
+  document.addEventListener('keydown', railKey);
   // The deferred Teleport has just resolved the same target, in this same flush. Enabling one whose
   // target was missing would move the settings into nothing.
   const target = props.volumeSettingsTarget;
@@ -1314,6 +1368,7 @@ onMounted(() => {
   } else initializeThree();
 });
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', railKey);
   emit('volumeSettings', { shown: false, error: false });
   legacyInitialization++;
   void setExpanded(false, false);
@@ -1615,7 +1670,6 @@ watch(
     reviewNotice.value = '';
   },
 );
-const cameras: CameraView[] = ['anterior', 'posterior', 'right', 'left', 'superior', 'oblique'];
 function cameraFitFactor() {
   if (!scene) {
     const rect = viewport.value?.querySelector('.cornerstone-volume-view canvas')?.getBoundingClientRect();
@@ -1816,7 +1870,14 @@ defineExpose({
     ref="viewport"
     :id="viewportId"
     class="model-viewport"
-    :class="{ 'model-review': reviewActive, 'model-plane': !reviewActive && planeLayout, 'viewport-expanded': expanded, 'cornerstone-primary': vtkSelected }"
+    :class="{
+      'model-review': reviewActive,
+      'model-plane': !reviewActive && planeLayout,
+      'viewport-expanded': expanded,
+      'cornerstone-primary': vtkSelected,
+      'has-plane-bar': planeBarShown,
+      'has-legend': !!legend,
+    }"
     :data-expanded="expanded"
     :role="expanded ? 'dialog' : undefined"
     :aria-modal="expanded ? true : undefined"
@@ -1855,6 +1916,126 @@ defineExpose({
     :data-volume-renderer="vtkSelected ? 'vtk' : 'three'"
     :data-volume-camera="vtkSelected ? JSON.stringify(vtkCamera) : undefined"
   >
+    <!-- The header belongs to the view, so it goes with it when expanded and serves the portable viewer too. -->
+    <header class="model-header">
+      <h2 class="model-title" :title="titleHint">
+        {{ heading ?? (ctOnly ? `${modality} view` : '3D anatomy') }}<span v-if="headingDetail" class="model-title-detail"> · {{ headingDetail }}</span>
+      </h2>
+      <slot name="compare"></slot>
+      <button
+        v-if="presetChip"
+        type="button"
+        class="text-button model-preset-chip"
+        :title="`${modality} volume preset: ${presetChip}. Opens the volume settings.`"
+        @click="showPresetSettings"
+      >
+        {{ presetChip }}
+      </button>
+      <label v-if="reviewActive && reviewTool !== 'scissors'" class="model-mark-on"
+        ><span>Mark on</span>
+        <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode">
+          <option value="surface">Surface point</option>
+          <option v-if="volumeMarkAvailable" value="volume">Volume point</option>
+          <option value="plane">{{ modality }} plane</option>
+        </select></label
+      >
+      <div ref="captureMenu" class="model-capture" :class="{ folds: dicomViewBlockReason !== undefined }">
+        <button
+          ref="captureToggle"
+          type="button"
+          class="text-button capture-toggle"
+          :aria-expanded="captureOpen"
+          :aria-controls="captureId"
+          title="Save or export this view"
+          @click="toggleCapture"
+        >
+          Capture<span aria-hidden="true">▾</span>
+        </button>
+        <div :id="captureId" ref="capturePanel" class="viewport-tools" :class="{ open: captureOpen }" @click="closeCapture()">
+          <button title="Save image" @click="screenshot">PNG ↗</button>
+          <button
+            v-if="dicomViewBlockReason !== undefined"
+            class="dicom-view-action"
+            :title="dicomViewReason || 'Add this view to the original study as a DICOM picture'"
+            :disabled="!!dicomViewReason"
+            @click="emit('exportView')"
+          >
+            DICOM ↗
+          </button>
+        </div>
+      </div>
+      <button
+        v-if="controlsVisible"
+        type="button"
+        class="text-button viewport-controls-toggle"
+        :aria-expanded="controlsOpen"
+        :aria-controls="controlsId"
+        :title="controlsOpen ? 'Fold the layers away to see the whole view' : 'Show the layers and what they draw'"
+        @click="setControlsOpen(!controlsOpen)"
+      >
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="m10 3 7 3.5-7 3.5-7-3.5L10 3Z" />
+          <path d="m3 10 7 3.5 7-3.5M3 13.5 10 17l7-3.5" />
+        </svg>
+        <span class="layers-label">Layers</span><span aria-hidden="true">{{ controlsOpen ? '▴' : '▾' }}</span>
+      </button>
+      <button
+        ref="expandButton"
+        type="button"
+        class="text-button viewport-expand-button"
+        :class="{ 'icon-only': !expanded && tileFocus !== 'focused', 'tile-focus': !!tileFocus && !expanded }"
+        :aria-label="expanded ? 'Restore 3D view' : tileFocus === 'focused' ? `Show ${modality} and 3D views` : tileFocus ? 'Focus 3D view' : 'Expand 3D view'"
+        :title="
+          expanded
+            ? 'Restore 3D view (Esc)'
+            : tileFocus === 'focused'
+              ? `Show the ${modality} and 3D views together`
+              : tileFocus
+                ? 'Focus the 3D view'
+                : 'Expand 3D view'
+        "
+        :aria-expanded="tileFocus ? undefined : expanded"
+        :aria-controls="viewportId"
+        @click="expandOrFocus"
+      >
+        {{ expanded ? 'Restore ↙' : tileFocus === 'focused' ? `${modality} + 3D` : '⤢' }}
+      </button>
+      <!-- Hiding the view from its expanded state would read as closing it; Restore ↙ does that. -->
+      <slot v-if="!expanded" name="close"></slot>
+    </header>
+    <div class="view-rail" role="group" aria-label="Anatomical camera views">
+      <button
+        v-for="(item, index) in RAIL_VIEWS"
+        :key="item.view"
+        type="button"
+        :class="{ active: view === item.view }"
+        :aria-label="`${item.name} view`"
+        :aria-pressed="view === item.view"
+        :aria-keyshortcuts="String(index + 1)"
+        :title="`${item.name} (${index + 1})`"
+        @click="selectView(item.view)"
+      >
+        {{ item.letter }}
+      </button>
+      <button
+        v-if="volumeSettings.preset === CINEMATIC_HEART_PRESET && heartCamera && !reviewActive"
+        type="button"
+        :class="{ active: view === 'Heart' }"
+        aria-label="Heart view"
+        :aria-pressed="view === 'Heart'"
+        :disabled="vtkSelected && !vtkReady"
+        title="Heart view: face the red outer wall using the supplied Slicer heart orientation"
+        @click="showHeartView"
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13.5S2.5 10.2 2.5 6.3A2.8 2.8 0 0 1 8 5a2.8 2.8 0 0 1 5.5 1.3c0 3.9-5.5 7.2-5.5 7.2Z" /></svg>
+      </button>
+      <button type="button" class="view-rail-tools" title="Zoom in" aria-label="Zoom in" @click="zoomView(1.25)">+</button>
+      <button type="button" title="Zoom out" aria-label="Zoom out" @click="zoomView(0.8)">−</button>
+      <button type="button" aria-label="Focus" :title="vtkSelected && !reviewActive ? 'Fit CT volume' : 'Focus selected structure'" @click="focusView">
+        ◎
+      </button>
+      <button type="button" aria-label="Reset view" title="Reset view" @click="vtkSelected ? volumePreview?.resetView() : selectView('oblique')">⟲</button>
+    </div>
     <div ref="surface" class="model-canvas" :style="{ visibility: vtkSelected ? 'hidden' : undefined }"></div>
     <component
       :is="volumeViewComponent"
@@ -1916,41 +2097,11 @@ defineExpose({
       <span v-if="legend.notReported" class="coronary-legend-grey"><i :style="{ background: NOT_REPORTED }"></i>Not reported</span>
       <span v-if="tubeError" class="coronary-legend-error" role="alert">Tube hidden: {{ tubeError }}</span>
     </div>
+    <slot name="notice"></slot>
     <div v-if="vtkSelected && vtkComponentFailed" class="viewport-state error-state" role="alert">
       <strong>Cornerstone3D unavailable</strong>
       <p>{{ vtkError }}</p>
       <button class="button" @click="retryVolume">Retry 3D view</button>
-    </div>
-    <div class="viewport-caption">
-      {{ ctOnly ? `${modality} view` : '3D anatomy' }} <span class="divider">·</span> <span>{{ sourceViewLabel(view, modality) }}</span>
-    </div>
-    <div class="viewport-corner">
-      <button
-        v-if="controlsVisible"
-        type="button"
-        class="text-button viewport-controls-toggle"
-        :aria-expanded="controlsOpen"
-        :aria-controls="controlsId"
-        :title="controlsOpen ? 'Fold the controls away to see the whole view' : 'Show layers and rendering controls'"
-        @click="setControlsOpen(!controlsOpen)"
-      >
-        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-          <path d="m10 3 7 3.5-7 3.5-7-3.5L10 3Z" />
-          <path d="m3 10 7 3.5 7-3.5M3 13.5 10 17l7-3.5" />
-        </svg>
-        {{ reviewActive ? 'Review tools' : 'Layers' }}<span aria-hidden="true">{{ controlsOpen ? '▴' : '▾' }}</span>
-      </button>
-      <button
-        ref="expandButton"
-        class="text-button viewport-expand-button"
-        :aria-label="expanded ? 'Restore 3D view' : 'Expand 3D view'"
-        :title="expanded ? 'Restore 3D view (Esc)' : 'Expand 3D view'"
-        :aria-expanded="expanded"
-        :aria-controls="viewportId"
-        @click="setExpanded(!expanded)"
-      >
-        {{ expanded ? 'Restore ↙' : 'Expand ↗' }}
-      </button>
     </div>
     <div
       v-if="controlsVisible"
@@ -1959,16 +2110,6 @@ defineExpose({
       class="model-review-controls"
       :class="{ 'main-plane-controls': !reviewActive, 'volume-options-inline': !volumeDockable && volumeOptionsOpen }"
     >
-      <div v-if="reviewActive && reviewTool !== 'scissors'" class="model-review-row review-marking-row">
-        <label
-          >Mark on
-          <select aria-label="3D marking mode" :value="reviewMode" @change="changeMode">
-            <option value="surface">Surface point</option>
-            <option v-if="volumeMarkAvailable" value="volume">Volume point</option>
-            <option value="plane">{{ modality }} plane</option>
-          </select></label
-        >
-      </div>
       <!-- Layers only switch what is drawn. The volume's settings dock in the side panel's 3D tab. -->
       <section class="rendering-stack" aria-label="Rendering stack">
         <div class="rendering-stack-layer">
@@ -2043,27 +2184,6 @@ defineExpose({
           <button v-if="showPlane" class="text-button" :disabled="vtkSelected ? !vtkReady : !planeReady" @click="facePlane">Face plane</button>
         </div>
       </section>
-      <div v-if="showPlane || (reviewActive && reviewMode === 'plane')" class="model-review-row model-plane-navigation">
-        <select :aria-label="`3D ${modality} plane`" :value="reviewPlane" @change="changePlane">
-          <option value="axial">Native k</option>
-          <option value="coronal">Native j</option>
-          <option value="sagittal">Native i</option>
-        </select>
-        <input
-          v-if="planeRequest"
-          :aria-label="`3D ${modality} slice`"
-          type="range"
-          min="0"
-          :max="geometry!.shape[planeRequest.native.axis] - 1"
-          step="1"
-          :value="planeRequest.native.index"
-          @input="slidePlane"
-        />
-        <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
-        <label v-if="vtkSelected && showPlane" title="Also show the other two native planes through the same point."
-          ><input type="checkbox" :aria-label="`Show all three ${modality} planes`" v-model="allPlanes" /> All three</label
-        >
-      </div>
       <Teleport defer :to="volumeSettingsTarget ?? 'body'" :disabled="!volumeDocked">
         <div
           v-if="(!reviewActive || vtkSelected) && ctVolumeAvailable"
@@ -2116,6 +2236,27 @@ defineExpose({
         </div>
       </Teleport>
     </div>
+    <div v-if="planeBarShown" class="model-plane-navigation" role="group" :aria-label="`3D ${modality} plane position`">
+      <select :aria-label="`3D ${modality} plane`" :value="reviewPlane" @change="changePlane">
+        <option value="axial">Native k</option>
+        <option value="coronal">Native j</option>
+        <option value="sagittal">Native i</option>
+      </select>
+      <input
+        v-if="planeRequest"
+        :aria-label="`3D ${modality} slice`"
+        type="range"
+        min="0"
+        :max="geometry!.shape[planeRequest.native.axis] - 1"
+        step="1"
+        :value="planeRequest.native.index"
+        @input="slidePlane"
+      />
+      <span v-if="planeRequest">{{ planeRequest.native.index + 1 }} / {{ geometry!.shape[planeRequest.native.axis] }}</span>
+      <label v-if="vtkSelected && showPlane" title="Also show the other two native planes through the same point."
+        ><input type="checkbox" :aria-label="`Show all three ${modality} planes`" v-model="allPlanes" /> All three</label
+      >
+    </div>
     <p v-if="reviewHint && (!vtkSelected || reviewActive)" class="model-review-hint" :class="{ 'model-review-error': !!planeError }" role="status">
       {{ reviewHint }} <button v-if="planeError" class="text-button" @click="queueReviewPlane">Retry</button>
     </p>
@@ -2142,42 +2283,6 @@ defineExpose({
       <p>{{ error }}<template v-if="hasModel"> Previous surfaces remain shown.</template></p>
       <button class="button" @click="load">Reload model</button>
     </div>
-    <div class="camera-strip" aria-label="Anatomical camera views">
-      <button
-        v-if="volumeSettings.preset === CINEMATIC_HEART_PRESET && heartCamera && !reviewActive"
-        :class="{ active: view === 'Heart' }"
-        aria-label="Heart view"
-        :disabled="vtkSelected && !vtkReady"
-        title="Face the red outer wall using the supplied Slicer heart orientation"
-        @click="showHeartView"
-      >
-        Heart view
-      </button>
-      <button v-for="camera in cameras" :key="camera" :class="{ active: view === camera }" @click="selectView(camera)">{{ camera }}</button>
-    </div>
-    <div class="viewport-tools">
-      <button title="Zoom in" aria-label="Zoom in" @click="zoomView(1.25)">+</button>
-      <button title="Zoom out" aria-label="Zoom out" @click="zoomView(0.8)">−</button>
-      <span></span><button :title="vtkSelected && !reviewActive ? 'Fit CT volume' : 'Focus selected structure'" @click="focusView">Focus</button>
-      <button title="Reset view" @click="vtkSelected ? volumePreview?.resetView() : selectView('oblique')">Reset</button>
-      <button title="Save image" @click="screenshot">PNG ↗</button>
-      <button
-        v-if="dicomViewBlockReason !== undefined"
-        class="dicom-view-action"
-        :title="dicomViewReason || 'Add this view to the original study as a DICOM picture'"
-        :disabled="!!dicomViewReason"
-        @click="emit('exportView')"
-      >
-        DICOM ↗
-      </button>
-    </div>
-    <div class="viewport-hint">
-      {{
-        reviewActive && reviewTool !== 'navigate' && (vtkSelected || reviewTool !== 'remove')
-          ? 'Right drag to rotate · Scroll to zoom'
-          : 'Drag to rotate · Right drag to pan · Scroll to zoom'
-      }}
-    </div>
   </div>
 </template>
 
@@ -2194,27 +2299,323 @@ defineExpose({
     0 15px 80px #0009;
 }
 /*
- * The canvas always fills the tile. Controls float over it and fold away, so
- * opening options never shrinks the rendered view.
+ * The header takes the first row and everything else shares the second, so the canvas fills the
+ * tile under it and each overlay is placed against the canvas. Overlays never shrink the render.
  */
 .model-viewport {
-  container: model-tile / inline-size;
-  --viewport-toolbar-space: 104px;
+  /* Size, not just width: a short tile folds the rail into two columns. Everything in it is placed absolutely, so it sizes nothing. */
+  container: model-tile / size;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  --plane-bar-space: 0px;
+  --view-rail-space: 46px;
 }
-.viewport-corner {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  z-index: 5;
+.model-viewport > * {
+  grid-area: 2 / 1;
+}
+.model-viewport > .model-header {
+  grid-area: 1 / 1;
+}
+.model-viewport.has-plane-bar {
+  --plane-bar-space: 44px;
+}
+.model-header {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.model-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--white);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.model-title-detail {
+  font: 10px var(--mono);
+  color: var(--muted);
+}
+.model-header .text-button,
+.viewport-tools > button {
+  flex: none;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.model-header .model-preset-chip {
+  display: inline-block;
+  min-width: 0;
+  max-width: 132px;
+  overflow: hidden;
+  border-radius: 12px;
+  text-overflow: ellipsis;
+}
+.model-mark-on {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.model-mark-on select,
+.model-plane-navigation select {
+  min-width: 0;
+  max-width: 120px;
+  padding: 3px 5px;
+  border: 1px solid #414b5d;
+  border-radius: 4px;
+  background: #252e3d;
+  font-size: 10px;
+  color: #e2eaf6;
+}
+.model-capture {
+  position: relative;
+  display: flex;
+  flex: none;
+  margin-left: auto;
+}
+.model-header .capture-toggle {
+  display: none;
+}
+.viewport-tools {
+  display: flex;
+  gap: 4px;
+}
+.viewport-tools > button {
+  border: 1px solid var(--control-border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+.viewport-tools > button:hover:not(:disabled) {
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+  color: var(--white);
+}
+.viewport-tools > button:disabled {
+  opacity: 0.45;
+}
+.viewport-controls-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.viewport-controls-toggle svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.viewport-controls-toggle > span[aria-hidden='true'] {
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+.viewport-controls-toggle[aria-expanded='true'] {
+  border-color: var(--control-border-hover);
+  background: var(--surface-hover);
+}
+.model-header .viewport-expand-button.icon-only {
+  min-width: 26px;
+  padding: 0 6px;
+  font-size: 14px;
+  line-height: 1;
+}
+/* One area shows at a time there, so review's focus toggle has nothing to share; the review toolbar keeps its own. */
+@media (max-width: 1000px) {
+  .model-header .viewport-expand-button.tile-focus {
+    display: none;
+  }
+}
+/* Short windows shrink the bars, as the side panel's do. */
+@media (max-height: 760px) {
+  .model-header {
+    height: 28px;
+  }
+  .model-header .text-button,
+  .viewport-tools > button {
+    min-height: 22px;
+    padding-block: 1px;
+  }
+}
+/* Narrow tiles give up the extras first, then fold the exports, so nothing wraps or scrolls sideways. */
+@container model-tile (max-width: 680px) {
+  .model-header .model-preset-chip {
+    display: none;
+  }
+}
+/* Only when DICOM ↗ is there too: the portable viewer's PNG ↗ alone stays a plain button. */
+@container model-tile (max-width: 600px) {
+  .model-capture.folds .capture-toggle {
+    display: inline-flex;
+  }
+  .model-capture.folds .viewport-tools {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 7;
+    flex-direction: column;
+    padding: 4px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--panel);
+    box-shadow: 0 6px 20px #0005;
+  }
+  .model-capture.folds .viewport-tools.open {
+    display: flex;
+  }
+}
+@container model-tile (max-width: 460px) {
+  .model-title-detail,
+  .layers-label,
+  .model-mark-on > span {
+    display: none;
+  }
+  .model-mark-on {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  .model-mark-on select {
+    max-width: 84px;
+  }
+}
+@container model-tile (max-width: 360px) {
+  .model-title {
+    display: none;
+  }
+}
+/* The rail lies on the canvas's left edge, one column of cameras then tools. */
+.view-rail {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: 30px;
+  grid-auto-rows: 26px;
+  gap: 3px 2px;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.view-rail > button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.view-rail > button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--white);
+}
+.view-rail > button.active {
+  border-color: var(--accent);
+  background: #303d53;
+  color: var(--white);
+}
+.view-rail > button:disabled {
+  opacity: 0.4;
+}
+.view-rail > .view-rail-tools,
+.view-rail > .view-rail-tools ~ button {
+  font-size: 14px;
+  font-weight: 400;
+}
+/* A rule between the cameras and the zoom tools, inside the gap so the rows keep one height. */
+.view-rail > .view-rail-tools::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 3px;
+  right: 3px;
+  height: 1px;
+  background: var(--line-strong);
+}
+.view-rail svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+@media (max-width: 1000px) {
+  .view-rail {
+    grid-template-columns: 36px;
+    grid-auto-rows: 32px;
+  }
+}
+/* Only while the plane shows or is marked on, along the canvas's bottom edge. */
+.model-plane-navigation {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  z-index: 4;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.model-plane-navigation > select {
+  flex: none;
+}
+.model-plane-navigation > input {
+  flex: 1 1 180px;
+  width: 180px;
+  min-width: 48px;
+  margin: 0;
+  accent-color: #8aabff;
+}
+.model-plane-navigation > span {
+  flex: none;
+  font: 9px var(--mono);
+  white-space: nowrap;
+  color: #9aaac0;
+}
+.model-plane-navigation > label {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
 }
 /* Drawn over the black 3D view, so it keeps its own dark backing. Captures leave it and the tube out. */
 .coronary-legend {
   position: absolute;
-  left: 12px;
-  bottom: calc(var(--viewport-toolbar-space) + 4px);
+  left: 8px;
+  bottom: calc(var(--plane-bar-space) + 8px);
   z-index: 4;
   display: grid;
   gap: 4px;
@@ -2278,48 +2679,33 @@ defineExpose({
 .coronary-legend-error {
   color: #dfbb83;
 }
-.viewport-expand-button,
-.viewport-controls-toggle {
-  min-height: 28px;
-  padding: 5px 9px;
-  border: 1px solid var(--line-strong);
-  border-radius: 4px;
-  background: var(--panel);
-  color: var(--white);
-  font-size: 10px;
-  white-space: nowrap;
+/* The native view's own surface and plane messages keep clear of the rail, the plane bar and the legend. */
+.model-viewport :deep(.cornerstone-surface-status) {
+  left: calc(var(--view-rail-space) + 8px);
+  bottom: calc(var(--plane-bar-space) + 8px);
 }
-.viewport-controls-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.model-viewport.has-legend :deep(.cornerstone-surface-status) {
+  left: 192px;
 }
-.viewport-controls-toggle svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  stroke-width: 1.3;
-  stroke-linejoin: round;
+.orientation-gizmo {
+  top: auto;
+  right: 10px;
+  bottom: calc(var(--plane-bar-space) + 8px);
+  width: 64px;
+  height: 64px;
 }
-.viewport-controls-toggle > span {
-  font-size: 9px;
-  color: var(--text-secondary);
+.render-notice {
+  top: 8px;
+  left: calc(var(--view-rail-space) + 8px);
 }
-.viewport-controls-toggle[aria-expanded='true'] {
-  border-color: var(--control-border-hover);
-  background: var(--surface-hover);
-}
-.viewport-expand-button:hover,
-.viewport-controls-toggle:hover {
-  background: var(--surface-hover);
-}
+/* Layers hangs under its header button. */
 .model-review-controls {
   position: absolute;
-  top: 44px;
-  right: 10px;
-  z-index: 4;
-  width: min(272px, calc(100% - 20px));
-  max-height: max(96px, calc(100% - 44px - var(--viewport-toolbar-space)));
+  top: 6px;
+  right: 8px;
+  z-index: 5;
+  width: min(272px, calc(100% - 16px));
+  max-height: max(96px, calc(100% - 12px - var(--plane-bar-space)));
   padding: 6px 10px;
   border: 1px solid var(--line-strong);
   border-radius: 6px;
@@ -2334,50 +2720,7 @@ defineExpose({
 }
 /* Only the fallback holds the volume settings here, and then it may scroll. */
 .model-review-controls.volume-options-inline {
-  width: min(320px, calc(100% - 20px));
-}
-/* Narrow tiles stack the camera views above the tools; wide tiles keep one bottom row. */
-.camera-strip {
-  bottom: 54px;
-}
-.viewport-tools {
-  bottom: 12px;
-}
-.viewport-hint {
-  top: 34px;
-  bottom: auto;
-  left: 20px;
-  right: auto;
-  text-align: left;
-}
-.model-review .viewport-hint {
-  top: 30px;
-  left: 12px;
-}
-/* One row needs room for both toolbars, with Heart view in the camera strip and DICOM ↗ in the tools. */
-@container model-tile (min-width: 880px) {
-  /* A container query styles descendants only, so the reserved space is set where it is used. */
-  .model-review-controls,
-  .orientation-gizmo,
-  .coronary-legend {
-    --viewport-toolbar-space: 60px;
-  }
-  .camera-strip {
-    left: 12px;
-    bottom: 12px;
-    transform: none;
-  }
-  .viewport-tools {
-    left: auto;
-    right: 12px;
-    bottom: 12px;
-    transform: none;
-  }
-}
-@container model-tile (max-width: 420px) {
-  .viewport-hint {
-    display: none;
-  }
+  width: min(320px, calc(100% - 16px));
 }
 /* Three rows, one per drawn layer, so the card never needs to scroll. */
 .rendering-stack-layer {
@@ -2446,72 +2789,13 @@ defineExpose({
   padding: 12px 14px 16px;
   border: 0;
 }
-.review-marking-row {
-  min-height: 30px;
-  padding-bottom: 4px;
-  margin-bottom: 2px;
-  border-bottom: 1px solid var(--line);
-}
-.model-review .orientation-gizmo,
-.model-plane .orientation-gizmo {
-  top: auto;
-  bottom: calc(var(--viewport-toolbar-space) + 4px);
-  right: 12px;
-  width: 64px;
-  height: 64px;
-}
-.model-review-row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-}
-.model-review-row > label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-.model-review-row select {
-  font-size: 10px;
-  padding: 4px 5px;
-  max-width: 132px;
-  min-width: 0;
-  background: #252e3d;
-  border: 1px solid #414b5d;
-  border-radius: 4px;
-  color: #e2eaf6;
-}
-.model-review-row .text-button {
-  font-size: 10px;
-  margin-left: auto;
-  white-space: nowrap;
-}
-/* All three takes its own line, so the slice slider keeps room to place the plane in a narrow card. */
-.model-plane-navigation {
-  flex-wrap: wrap;
-  margin-top: 7px;
-}
-.model-plane-navigation > label {
-  flex-basis: 100%;
-}
-.model-plane-navigation > input {
-  flex: 1;
-  min-width: 30px;
-  accent-color: #8aabff;
-}
-.model-plane-navigation > span {
-  font: 9px var(--mono);
-  white-space: nowrap;
-  color: #9aaac0;
-}
-/* Guidance and plane errors stay readable with the controls folded. It lies over the canvas, so only its Retry button takes input. */
+/* Guidance and plane errors stay readable with Layers folded. It lies over the canvas, so only its Retry button takes input. */
 .model-review-hint {
   position: absolute;
-  top: 48px;
-  left: 12px;
+  top: 8px;
+  left: calc(var(--view-rail-space) + 8px);
   z-index: 3;
-  max-width: min(240px, calc(100% - 24px));
+  max-width: min(240px, calc(100% - var(--view-rail-space) - 16px));
   margin: 0;
   padding: 4px 7px;
   border-radius: 4px;
@@ -2552,8 +2836,44 @@ defineExpose({
   font-size: 11px;
   text-decoration: underline;
 }
-.model-review .viewport-caption {
-  top: 14px;
-  left: 12px;
+/*
+ * A short tile puts the tools in a second column beside the cameras, and anything else on the left
+ * moves beside the rail rather than under it. A fixed row count keeps its width exact as the tile resizes.
+ */
+@container model-tile (max-height: 540px) {
+  .view-rail {
+    grid-auto-flow: column;
+    grid-template-rows: repeat(6, 26px);
+    grid-auto-columns: 30px;
+  }
+  .view-rail > .view-rail-tools::before {
+    display: none;
+  }
+  .model-review-hint,
+  .render-notice,
+  .coronary-legend,
+  .model-viewport :deep(.cornerstone-surface-status) {
+    left: 86px;
+  }
+  .model-viewport.has-legend :deep(.cornerstone-surface-status) {
+    left: 266px;
+  }
+}
+@media (max-width: 1000px) {
+  @container model-tile (max-height: 540px) {
+    .view-rail {
+      grid-template-rows: repeat(6, 32px);
+      grid-auto-columns: 36px;
+    }
+    .model-review-hint,
+    .render-notice,
+    .coronary-legend,
+    .model-viewport :deep(.cornerstone-surface-status) {
+      left: 98px;
+    }
+    .model-viewport.has-legend :deep(.cornerstone-surface-status) {
+      left: 278px;
+    }
+  }
 }
 </style>

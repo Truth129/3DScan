@@ -26,6 +26,16 @@ describe('3D view toolbar', () => {
     expect(html).toContain('title="Save image"');
     expect(html).not.toContain('DICOM ↗');
   });
+  it('gives the portable viewer the same header and view rail', async () => {
+    const html = await renderToString(
+      createSSRApp(OfflineApp, {
+        manifest: { label: 'Synthetic', review_status: 'unreviewed', structures: [] },
+        payload: undefined,
+      }),
+    );
+    expect(html).toMatch(/<header class="model-header"[^>]*>[\s\S]*aria-label="Expand 3D view"[\s\S]*<\/header>/);
+    for (const name of ['Anterior', 'Posterior', 'Right', 'Left', 'Superior', 'Oblique']) expect(html).toContain(`aria-label="${name} view"`);
+  });
   it('explains why it is disabled, and leaves PNG ↗ alone', async () => {
     const blocked = tools(await viewport({ dicomViewBlockReason: 'Wait for the current operation to finish before exporting.' }));
     expect(blocked).toMatch(/title="Wait for the current operation to finish before exporting\."[^>]*disabled/);
