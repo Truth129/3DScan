@@ -286,6 +286,14 @@ avoid that, first put `det_model.onnx` and `cls_model.onnx` from
 [sc-crop v0.0.11](https://github.com/ivadomed/sc-crop/releases/tag/v0.0.11) in
 `.runtime/segmentation-models/sc_crop_detector-v0.0.11/`.
 
+**Spinal Cord Toolbox spinal cord** is an optional model for the spinal cord on MRI. It shares the
+sc-crop cord detector with the lesion model, and installs it if it is missing. It downloads about
+230 MB and keeps about 250 MB, plus 16 MB for the detector:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py sct_spinal_cord
+```
+
 **BreastDivider** is an optional left and right breast model for MRI. It needs about 100 MB:
 
 ```bash

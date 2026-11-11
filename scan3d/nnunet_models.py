@@ -65,6 +65,8 @@ class NnunetModel:
     vote: bool = False
     # A stock nnU-Net trainer that builds the network, when the checkpoint names a trainer nnU-Net lacks.
     trainer: str = ""
+    # Only each mask's largest piece is kept, on the full image; only voxels sharing a face join a piece.
+    keep_largest: bool = False
 
 
 MODELS = {
@@ -242,7 +244,7 @@ MODELS = {
             name="sc-crop",
             version="v0.0.11",
             label="Spinal cord box — sc-crop",
-            description="Finds the spinal cord, so the Spinal Cord Toolbox lesion model sees only the cord.",
+            description="Finds the spinal cord, so the Spinal Cord Toolbox models see only the cord.",
             license="Code MIT (ivadomed/sc-crop); the ONNX files carry Ultralytics' AGPL-3.0 export notice",
             # A helper, so no modality offers it.
             modalities=(),
@@ -299,6 +301,37 @@ MODELS = {
                 "fold_2/checkpoint_best.pth": "8f51d149ebf709572ee528176c078a88330be5e23c64636454d3d3466ed66f00",
                 "fold_3/checkpoint_best.pth": "f4705a4be7e41a5e56320cd7f7cd0f74cc1dcff66f98f3aca61a48ba5f4b79d5",
                 "fold_4/checkpoint_best.pth": "78eea456f582ff47036184c719e126e62d1295ba8a9ea099c493923d6fcdb887",
+            },
+        ),
+        NnunetModel(
+            id="sct_spinal_cord",
+            name="Spinal Cord Toolbox",
+            version="v4.0",
+            label="Spinal cord — Spinal Cord Toolbox",
+            description="The spinal cord on one series of the cord in any common contrast, such as T2, T2*, T1, PSIR, STIR, MP2RAGE UNIT1, diffusion or MT, from the Spinal Cord Toolbox's contrast-agnostic nnU-Net, trained and tested on about 3,450 scans from 1,631 people, healthy and with cord disease. sc-crop finds the cord and crops to it first, so cord outside the box it finds is not marked, and only the largest piece is kept.",
+            license="Code MIT (sct-pipeline/contrast-agnostic-softseg-spinalcord), which states no separate license for the weights; sc-crop code MIT, and its detector files carry Ultralytics' AGPL-3.0 export notice",
+            modalities=("MR",),
+            labels=("spinal_cord",),
+            dataset_labels=("sc",),
+            folds=(0,),
+            tile_step_size=0.5,
+            url="https://github.com/sct-pipeline/contrast-agnostic-softseg-spinalcord/releases/download/v4.0/model_contrast_agnostic_20260628.zip",
+            archive_sha256="0b7e5cbea6ceb63d6e8cae4583af8fd91371d8235816d104e20837685b92bc52",
+            archive_folder="model_contrast_agnostic_20260628/nnUNetTrainer__nnUNetPlans__3d_fullres",
+            # The release ships one fold and no final checkpoint.
+            checkpoint="checkpoint_best.pth",
+            # dataset.json's "RPI" in the toolbox's letters, which name where each axis starts.
+            axes="LAS",
+            crop="sc_crop_detector",
+            # The release's crop_metadata.json.
+            crop_padding={"superior": 40.0, "inferior": 100.0, "left": 15.0, "right": 15.0, "anterior": 15.0, "posterior": 22.0},
+            mirror=False,
+            # The toolbox always keeps one cord for this task.
+            keep_largest=True,
+            files={
+                "dataset.json": "e883293ba4bc093fd7a6c5599bcc1de6b3338c97002cd065ae04f9ea2e260436",
+                "plans.json": "b8a3c0b245f3ecbf03ccb9ce69f3b18977ce5ca94e5e521a2445cdcca4a5e3e2",
+                "fold_0/checkpoint_best.pth": "de46f09d42d623fb0ea6079aba680391e0136c03be4dd687f8c586320376d25d",
             },
         ),
         NnunetModel(

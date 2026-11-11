@@ -198,6 +198,34 @@ def test_small_pieces_go_and_only_face_neighbours_join_a_piece():
     assert nnunet_models.MODELS["mrsegmentator"].smallest_piece == 0
 
 
+def test_largest_piece_joins_only_face_neighbours_and_keeps_the_first_of_equal_pieces():
+    # Expected masks are the Spinal Cord Toolbox's keep_largest_object on the same arrays.
+    corner = np.zeros((6, 6), bool)
+    corner[0:2, 0:2] = corner[2:5, 2:5] = True  # Touching only at a corner.
+    assert np.array_equal(nnunet_worker.largest_piece(corner, True), np.pad(np.ones((3, 3), bool), ((2, 1), (2, 1))))
+    assert nnunet_worker.largest_piece(corner, False) is corner
+    edge = np.zeros((4, 6, 6), bool)
+    edge[0:2, 0:2, 0:3] = edge[2:4, 2:5, 0:3] = True  # Touching only along an edge.
+    kept = nnunet_worker.largest_piece(edge, True)
+    assert kept.sum() == 18 and kept[2:4, 2:5, 0:3].all()
+    # Of equal pieces, the one whose first voxel comes first in C order, not the one nearest the origin.
+    equal = np.zeros((6, 6), bool)
+    equal[3:5, 0:2] = equal[0:2, 3:5] = True
+    expected = np.zeros((6, 6), bool)
+    expected[0:2, 3:5] = True
+    assert np.array_equal(nnunet_worker.largest_piece(equal, True), expected)
+    ends = np.zeros((5, 10, 5), bool)
+    ends[1:4, 0:3, 1:4] = ends[1:4, 7:10, 1:4] = True
+    kept = nnunet_worker.largest_piece(ends, True)
+    assert kept.sum() == 27 and kept[1:4, 0:3, 1:4].all()
+    # In Fortran order, as nibabel reads a file, the numbering is still C order.
+    assert np.array_equal(nnunet_worker.largest_piece(np.asfortranarray(equal), True), expected)
+    empty, single = np.zeros((3, 4, 5), bool), np.zeros((3, 4, 5), bool)
+    single[1, 2, 3] = True
+    assert not nnunet_worker.largest_piece(empty, True).any()
+    assert np.array_equal(nnunet_worker.largest_piece(single, True), single)
+
+
 def test_cas_net_returns_bright_voxels_on_the_source_grid_through_its_tiles_mirrors_and_resampling(monkeypatch):
     torch = pytest.importorskip("torch")
     from scan3d import cas_net
@@ -407,9 +435,10 @@ def placed(model_id, monkeypatch):
     return model
 
 
-def test_cord_lesions_are_offered_on_mr_only_need_the_hidden_detector_and_a_run_checks_both(tmp_path, monkeypatch):
+@pytest.mark.parametrize("task", ["sct_cord_ms_lesions", "sct_spinal_cord"])
+def test_cord_models_are_offered_on_mr_only_need_the_hidden_detector_and_a_run_checks_both(tmp_path, monkeypatch, task):
     monkeypatch.setenv("SCAN3D_SEGMENTATION_MODELS", str(tmp_path / "models"))
-    model, detector = nnunet_models.MODELS["sct_cord_ms_lesions"], nnunet_models.MODELS["sc_crop_detector"]
+    model, detector = nnunet_models.MODELS[task], nnunet_models.MODELS["sc_crop_detector"]
     assert model.id in task_ids("MR") and model.id not in task_ids("CT")
     assert detector.id not in task_ids("MR") + task_ids("CT")
     with pytest.raises(ValueError, match="supported MR segmentation task"):
@@ -421,9 +450,10 @@ def test_cord_lesions_are_offered_on_mr_only_need_the_hidden_detector_and_a_run_
     assert next(item for item in segmentation_catalog("MR")["tasks"] if item["id"] == model.id)["available"] is True
     descriptor = segmentation._nnunet_descriptor(model)
     assert descriptor["complete"] and {item["name"].split("/")[0] for item in descriptor["files"]} == {
-        "sct_cord_ms_lesions-r20260703",
+        f"{model.id}-{model.version}",
         "sc_crop_detector-v0.0.11",
     }
+    assert descriptor.get("keep_largest", False) is model.keep_largest
     assert descriptor["sc_crop_sha256"] and descriptor["onnxruntime_version"] and descriptor["crop_padding"]["inferior"] == 100.0
     # An added path's worker imports its own onnxruntime, so the version comes from its site-packages.
     added = SimpleNamespace(site_packages=tmp_path / "site")
@@ -456,7 +486,7 @@ def test_cord_lesions_are_offered_on_mr_only_need_the_hidden_detector_and_a_run_
         segmentation.segment(image, tmp_path / "bare", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
     (nnunet_models.model_dir(detector) / "det_model.onnx").write_bytes(b"not the pinned detector")
     monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: pytest.fail("A child started"))
-    with pytest.raises(RuntimeError, match=r"checksums; nothing ran\. Move sc_crop_detector-v0\.0\.11 aside and run .*\.py sct_cord_ms_lesions again\.$"):
+    with pytest.raises(RuntimeError, match=rf"checksums; nothing ran\. Move sc_crop_detector-v0\.0\.11 aside and run .*\.py {model.id} again\.$"):
         segmentation.segment(image, tmp_path / "again", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
 
 
@@ -581,6 +611,25 @@ def test_worker_runs_the_cord_model_on_the_box_and_puts_the_mask_back_on_a_refle
     with pytest.raises(SystemExit):
         nnunet_worker.main()
     assert json.loads(report.read_text()) == {"error": "No spinal cord was found in this series."}
+
+
+@pytest.mark.parametrize(("task", "name", "kept"), [("sct_spinal_cord", "spinal_cord", 8), ("sct_cord_ms_lesions", "spinal_cord_lesions", 16)])
+def test_worker_keeps_only_the_largest_cord_piece_on_the_full_image_and_every_lesion(tmp_path, monkeypatch, task, name, kept):
+    nib.save(nib.Nifti1Image(np.ones((6, 7, 8), np.int16), np.diag([-0.8, 0.9, 1.1, 1.0])), tmp_path / "image.nii.gz")
+    cord_crop(monkeypatch, lambda *_: ((1, 6), (0, 7), (0, 8)))
+
+    def predict(model, folder, image, spacing, device, step):
+        # Two equal pieces; in the model's z, y, x order the other one starts first.
+        labels = np.zeros(image.shape[1:], np.uint8)
+        labels[0:2, 0:2, 3:5] = labels[4:6, 0:2, 0:2] = 1
+        return labels, "test"
+
+    monkeypatch.setattr(nnunet_worker, "predict", predict)
+    arguments = f"-i {tmp_path}/image.nii.gz -o {tmp_path} --task {task} --model-folder model --crop-folder detector"
+    monkeypatch.setattr(sys, "argv", ["worker", *arguments.split(), "--device", "cpu", "--report", str(tmp_path / "report.json")])
+    nnunet_worker.main()
+    mask = np.asarray(nib.load(tmp_path / f"{name}.nii.gz").dataobj) > 0
+    assert mask.sum() == kept and not mask[0].any() and mask[1:3, 0:2, 4:6].all()
 
 
 @pytest.mark.parametrize(("left", "start", "own"), [(-0.8, 0, True), (-0.8, 1, False), (0.8, 0, False)])

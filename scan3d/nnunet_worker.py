@@ -65,6 +65,18 @@ def without_small_pieces(mask, smallest):
     return keep[pieces]
 
 
+def largest_piece(mask, largest):
+    # As the Spinal Cord Toolbox's keep_largest_object, on the mask in the file's voxel order: scipy's default
+    # labelling joins only face neighbours, and numbers pieces by their first voxel in C order, so argmax's
+    # first maximum keeps, of equal pieces, the one that starts first. Its zeroing under 0.001 does nothing to a mask.
+    if not largest:
+        return mask
+    pieces, count = ndi.label(mask)
+    if count < 2:
+        return mask
+    return pieces == np.bincount(pieces.ravel())[1:].argmax() + 1
+
+
 def full_size_labels(logits, resample, properties, transpose_backward):
     """nnU-Net's export, one channel at a time.
 
@@ -258,7 +270,8 @@ def main():
         full[box] = labels
         labels = full
     for value, name in enumerate(model.labels, 1):
-        _save_mask(without_small_pieces(labels == value, model.smallest_piece), reference, args.output / f"{name}.nii.gz")
+        mask = largest_piece(labels == value, model.keep_largest)
+        _save_mask(without_small_pieces(mask, model.smallest_piece), reference, args.output / f"{name}.nii.gz")
     report = {
         "device": "cpu" if args.device == "cpu" else "gpu",
         "fast": False,

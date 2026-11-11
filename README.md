@@ -19,9 +19,10 @@ other service.
   [DICOMweb archive](docs/ARCHIVES.md). Static MRI is experimental and opt-in.
 - **Segmentation:** selected TotalSegmentator tasks on a GPU or the CPU, plus optional
   MRSegmentator and two ImageCAS-X coronary models to compare beside them, FLAMeS for MS lesions
-  on FLAIR MRI, the Spinal Cord Toolbox model for MS lesions in the spinal cord, BreastDivider for
-  the left and right breast on MRI, and the MAMA-MIA model for breast tumours on DCE MRI. With
-  [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
+  on FLAIR MRI, the Spinal Cord Toolbox models for the spinal cord and its MS lesions,
+  BreastDivider for the left and right breast on MRI, and the MAMA-MIA model for breast tumours on
+  DCE MRI. With [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job
+  runs on.
 - **Corrections:** nnInteractive prompts, direct mask edits, scissors and recipes, with
   exact undo.
 - **Library:** one library for everyone signed in, with search, rename, Trash with undo, and
@@ -99,6 +100,8 @@ downloads with their own terms, which you must accept yourself:
 - **Spinal Cord Toolbox MS lesions:** the model's repository is MIT, and states no separate license
   for the weights. Its sc-crop cord detector is MIT, adapted in `scan3d/sc_crop.py`; the detector's
   model files carry Ultralytics' AGPL-3.0 notice.
+- **Spinal Cord Toolbox spinal cord:** the model's repository is MIT, and states no separate license
+  for the weights. It uses the same sc-crop detector.
 
 Using these models commercially may require permission from their authors. Third-party
 notices are in [`web/public/licenses/`](web/public/licenses/). A viewer build adds

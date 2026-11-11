@@ -226,6 +226,15 @@ segment is **Spinal cord lesions (Spinal Cord Toolbox)**. It was trained and tes
 from 1,849 people with MS at 23 centres, and it can miss small lesions. On an AMD GPU a run took
 about 23 GB of GPU memory whatever the scan's size, and on the CPU about 7 GB of RAM.
 
+**Spinal cord — Spinal Cord Toolbox** marks the spinal cord on an MRI series of the spine in any
+common contrast, such as T2, T2\*, T1, STIR or PSIR. Install it with
+`scripts/download_segmentation_model.py sct_spinal_cord`. Like the lesion model, it runs on a box
+the sc-crop detector finds around the cord, and the run fails and says why if it finds no cord. It
+keeps only the largest piece of the cord it marks. On a tilted series the box can cut the cord, and
+cord outside it is not marked. The segment is **Spinal cord (Spinal Cord Toolbox)**. It was trained
+and tested on about 3,450 scans from 1,631 people, healthy and with MS, spinal cord injury,
+degenerative cervical myelopathy and other cord diseases, in many contrasts.
+
 **Breasts — BreastDivider** marks the left and right breast on MRI of the breasts in any common
 sequence: T1 with or without contrast, T2 or DWI. Install it with
 `scripts/download_segmentation_model.py breastdivider`. Its segments are **Left breast

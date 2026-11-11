@@ -237,6 +237,8 @@ def _nnunet_descriptor(model, inference_path=None):
         "files": files,
         "complete": matches,
     }
+    if model.keep_largest:
+        descriptor["keep_largest"] = True
     if model.engine == "cas_net":
         # Its network and inference are this repository's code, not a package's.
         descriptor["cas_net_sha256"] = _digest(Path(__file__).with_name("cas_net.py"))
