@@ -384,7 +384,13 @@ def test_flames_needs_hd_bet_and_a_run_checks_both_before_starting(tmp_path, mon
         segmentation.segment(image, tmp_path / "again", "other", lambda _: None, lambda: False, {"tasks": [flames.id]}, modality="MR")
 
 
-def test_worker_gives_flames_only_the_voxels_hd_bet_keeps(tmp_path, monkeypatch):
+@pytest.fixture
+def nnunet_version(monkeypatch):
+    """The worker's report reads nnU-Net's installed version, and CI installs no nnU-Net."""
+    monkeypatch.setattr(nnunet_worker, "metadata", SimpleNamespace(version=lambda _: "test"))
+
+
+def test_worker_gives_flames_only_the_voxels_hd_bet_keeps(tmp_path, monkeypatch, nnunet_version):
     shape = (6, 7, 8)
     affine = np.array([[-0.9, 0.1, 0.0, 30.0], [0.1, 0.0, 1.0, -60.0], [0.0, 1.2, 0.1, 10.0], [0.0, 0.0, 0.0, 1.0]])
     values = np.random.default_rng(3).integers(1, 1000, shape).astype(np.int16)
@@ -600,7 +606,7 @@ def cord_crop(monkeypatch, crop_box):
     return stand_in
 
 
-def test_worker_runs_the_cord_model_on_the_box_and_puts_the_mask_back_on_a_reflected_sheared_grid(tmp_path, monkeypatch):
+def test_worker_runs_the_cord_model_on_the_box_and_puts_the_mask_back_on_a_reflected_sheared_grid(tmp_path, monkeypatch, nnunet_version):
     shape = (9, 10, 11)
     # A reflected first axis and two sheared ones, whose float64 lengths are not the rounded float32 zooms the toolbox reads.
     affine = np.array([[-0.74999999925, 0.1, 0.05, 30.0], [0.0, 0.0, 1.1, -60.0], [0.0, 1.2, 0.2, 10.0], [0.0, 0.0, 0.0, 1.0]])
@@ -650,7 +656,7 @@ def test_worker_runs_the_cord_model_on_the_box_and_puts_the_mask_back_on_a_refle
 
 
 @pytest.mark.parametrize(("task", "name", "kept"), [("sct_spinal_cord", "spinal_cord", 8), ("sct_cord_ms_lesions", "spinal_cord_lesions", 16)])
-def test_worker_keeps_only_the_largest_cord_piece_on_the_full_image_and_every_lesion(tmp_path, monkeypatch, task, name, kept):
+def test_worker_keeps_only_the_largest_cord_piece_on_the_full_image_and_every_lesion(tmp_path, monkeypatch, nnunet_version, task, name, kept):
     nib.save(nib.Nifti1Image(np.ones((6, 7, 8), np.int16), np.diag([-0.8, 0.9, 1.1, 1.0])), tmp_path / "image.nii.gz")
     cord_crop(monkeypatch, lambda *_: ((1, 6), (0, 7), (0, 8)))
 
@@ -669,7 +675,7 @@ def test_worker_keeps_only_the_largest_cord_piece_on_the_full_image_and_every_le
 
 
 @pytest.mark.parametrize(("left", "start", "own"), [(-0.8, 0, True), (-0.8, 1, False), (0.8, 0, False)])
-def test_cord_model_spacing_is_the_files_own_zooms_only_for_an_uncut_corner_in_the_models_axes(tmp_path, monkeypatch, left, start, own):
+def test_cord_model_spacing_is_the_files_own_zooms_only_for_an_uncut_corner_in_the_models_axes(tmp_path, monkeypatch, nnunet_version, left, start, own):
     image = nib.Nifti1Image(np.ones((6, 7, 8), np.int16), np.diag([left, 0.9, 1.1, 1.0]))
     image.header.set_zooms((0.5, 0.6, 0.7))  # Apart from the affine's, which the toolbox takes once it moves or turns the image.
     nib.save(image, tmp_path / "image.nii.gz")
