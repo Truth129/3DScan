@@ -11,6 +11,7 @@ from importlib import metadata
 import json
 import os
 from pathlib import Path
+import tempfile
 import time
 
 from nibabel import orientations
@@ -96,6 +97,40 @@ def full_size_labels(logits, resample, properties, transpose_backward):
     return restored.transpose(transpose_backward)
 
 
+def region_labels(logits, resample, properties, transpose_backward, order, above_half):
+    """nnU-Net's export for a region-based model, one channel at a time.
+
+    A voxel takes the value of the last region, in output order, that above_half marks.
+    """
+    shape = properties["shape_after_cropping_and_before_resampling"]
+    labels = np.zeros(shape, dtype=np.uint8)
+    for channel, value in enumerate(order):
+        labels[above_half(np.asarray(resample(logits[channel : channel + 1]), dtype=np.float32)[0])] = value
+    restored = np.zeros(properties["shape_before_cropping"], dtype=np.uint8)
+    restored[tuple(slice(*limits) for limits in properties["bbox_used_for_cropping"])] = labels
+    return restored.transpose(transpose_backward)
+
+
+def check_labels(model, labels, has_regions, regions_class_order):
+    """Refuse a dataset.json whose labels are not the pinned ones in the pinned order.
+
+    A wrong order would silently mislabel anatomy.
+    """
+    if has_regions:
+        # JSON object order is the output order, so this pins which output is which region.
+        names = tuple(name for name in labels if name != "background")
+        order = [int(value) for value in regions_class_order]
+        if names != model.dataset_labels or order != list(range(1, len(names) + 1)):
+            raise RuntimeError(f"{model.name} labels do not match the pinned list")
+        if model.vote:
+            raise RuntimeError(f"{model.name} is region-based, which this worker does not vote on")
+        return
+    named = sorted((value, name) for name, value in labels.items() if value)
+    expected = model.dataset_labels or model.labels
+    if tuple(name for _, name in named) != expected or [value for value, _ in named] != list(range(1, len(model.labels) + 1)):
+        raise RuntimeError(f"{model.name} labels do not match the pinned list")
+
+
 def fold_weights(model, model_folder):
     """Each fold's checkpoint in turn, loaded only when asked for, so folds are never all in memory at once."""
     import torch
@@ -148,13 +183,8 @@ def predict(model, model_folder, image, spacing, device, step=lambda _: None):
     else:
         predictor.initialize_from_trained_model_folder(str(model_folder), use_folds=model.folds, checkpoint_name=model.checkpoint)
         weights = iter(())
-    # A wrong order here would silently mislabel anatomy.
-    named = sorted((value, name) for name, value in predictor.dataset_json["labels"].items() if value)
-    expected = model.dataset_labels or model.labels
-    if tuple(name for _, name in named) != expected or [value for value, _ in named] != list(range(1, len(model.labels) + 1)):
-        raise RuntimeError(f"{model.name} labels do not match the pinned list")
-    if predictor.label_manager.has_regions:
-        raise RuntimeError(f"{model.name} is region-based, which this worker does not export")
+    manager = predictor.label_manager
+    check_labels(model, predictor.dataset_json["labels"], manager.has_regions, manager.regions_class_order)
     plans, configuration = predictor.plans_manager, predictor.configuration_manager
     step("preparing the scan")
     adapter = PreprocessAdapterFromNpy([image], None, [{"spacing": spacing}], None, plans, predictor.dataset_json, configuration)
@@ -172,13 +202,17 @@ def predict(model, model_folder, image, spacing, device, step=lambda _: None):
     shape = properties["shape_after_cropping_and_before_resampling"]
     target = [spacing[axis] for axis in plans.transpose_forward]
 
+    def resample(channel):
+        return configuration.resampling_fn_probabilities(channel, shape, configuration.spacing, target)
+
+    def above_half(values):
+        # nnU-Net's own rule, on float32: sigmoid(x) > 0.5 and x > 0 differ for tiny half-precision logits.
+        return (torch.sigmoid(torch.from_numpy(values)) > 0.5).numpy()
+
     def export(logits):
-        return full_size_labels(
-            logits,
-            lambda channel: configuration.resampling_fn_probabilities(channel, shape, configuration.spacing, target),
-            properties,
-            plans.transpose_backward,
-        )
+        if manager.has_regions:
+            return region_labels(logits, resample, properties, plans.transpose_backward, manager.regions_class_order, above_half)
+        return full_size_labels(logits, resample, properties, plans.transpose_backward)
 
     if not model.vote:
         logits = predictor.predict_logits_from_preprocessed_data(prepared["data"]).cpu()
@@ -213,29 +247,8 @@ def run(model, model_folder, image, spacing, device, step=lambda _: None):
     return *predict(model, model_folder, image, spacing, device, step), None
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", dest="image", type=Path, required=True)
-    parser.add_argument("-o", dest="output", type=Path, required=True)
-    parser.add_argument("--task", required=True, choices=sorted(MODELS))
-    parser.add_argument("--model-folder", type=Path, required=True)
-    parser.add_argument("--skull-strip-folder", type=Path, help="The folder of the model named by the model's skull_strip")
-    parser.add_argument("--crop-folder", type=Path, help="The folder of the helper named by the model's crop")
-    parser.add_argument("--device", required=True)
-    parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--progress", type=Path, help="A file that always holds the current step, for the parent to show")
-    parser.add_argument("--probability", type=Path, help="Where CAS-Net saves its uint8 lumen probability on the reference grid")
-    args = parser.parse_args()
-    model = MODELS[args.task]
-    started = time.monotonic()
-
-    def step(text):
-        if args.progress:
-            pending = args.progress.with_name(args.progress.name + ".tmp")
-            pending.write_text(text)
-            os.replace(pending, args.progress)
-
-    reference, affine = _image(args.image)
+def one_pass(model, reference, affine, args, step):
+    """Labels on the reference grid, in the image's voxel order, and the PyTorch version."""
     source, box = reference, ()
     if model.crop:
         if not args.crop_folder:
@@ -277,7 +290,72 @@ def main():
         full[box] = native_labels(probability, back)
         _save_mask(full, reference, args.probability)
         del full, probability
-    for value, name in enumerate(model.labels, 1):
+    return labels, torch_version
+
+
+def two_passes(model, reference, args, step):
+    """TotalSpineSeg's two networks around its own grids and numbering (scan3d/totalspineseg.py)."""
+    if not args.step1_folder:
+        raise RuntimeError(f"{model.name} needs --step1-folder")
+    from . import totalspineseg  # Imports SimpleITK, which only this child needs.
+
+    versions = []
+
+    def network(part, folder, words):
+        def labels(image, spacing):
+            found, version = predict(part, folder, image, spacing, args.device, lambda text: step(f"{words}, {text}"))
+            versions.append(version)
+            return found
+
+        return labels
+
+    # Beside the report, never in the output folder, whose every NIfTI is read as a mask.
+    with tempfile.TemporaryDirectory(prefix="totalspineseg-", dir=args.report.parent) as scratch:
+        try:
+            labels = totalspineseg.segment(
+                reference,
+                network(MODELS[model.step1], args.step1_folder, "first pass"),
+                network(model, args.model_folder, "second pass"),
+                Path(scratch),
+                step,
+            )
+        except totalspineseg.Unusable as error:
+            # Only this: PyTorch's out-of-memory error is a RuntimeError and keeps its own failure text.
+            args.report.write_text(json.dumps({"error": str(error)}))
+            raise SystemExit(1) from error
+    return labels, versions[-1]
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", dest="image", type=Path, required=True)
+    parser.add_argument("-o", dest="output", type=Path, required=True)
+    parser.add_argument("--task", required=True, choices=sorted(MODELS))
+    parser.add_argument("--model-folder", type=Path, required=True)
+    parser.add_argument("--skull-strip-folder", type=Path, help="The folder of the model named by the model's skull_strip")
+    parser.add_argument("--crop-folder", type=Path, help="The folder of the helper named by the model's crop")
+    parser.add_argument("--step1-folder", type=Path, help="The folder of the model named by the model's step1")
+    parser.add_argument("--device", required=True)
+    parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--progress", type=Path, help="A file that always holds the current step, for the parent to show")
+    parser.add_argument("--probability", type=Path, help="Where CAS-Net saves its uint8 lumen probability on the reference grid")
+    args = parser.parse_args()
+    model = MODELS[args.task]
+    started = time.monotonic()
+
+    def step(text):
+        if args.progress:
+            pending = args.progress.with_name(args.progress.name + ".tmp")
+            pending.write_text(text)
+            os.replace(pending, args.progress)
+
+    reference, affine = _image(args.image)
+    if model.step1:
+        labels, torch_version = two_passes(model, reference, args, step)
+    else:
+        labels, torch_version = one_pass(model, reference, affine, args, step)
+    values = model.label_values or range(1, len(model.labels) + 1)
+    for value, name in zip(values, model.labels):
         mask = largest_piece(labels == value, model.keep_largest)
         _save_mask(without_small_pieces(mask, model.smallest_piece), reference, args.output / f"{name}.nii.gz")
     report = {
@@ -288,7 +366,7 @@ def main():
         "torch_version": torch_version,
         "nnunetv2_version": metadata.version("nnunetv2") if model.engine == "nnunet" else None,
         "runtime_seconds": round(time.monotonic() - started, 3),
-        "classes": {str(value): name for value, name in enumerate(model.labels, 1)},
+        "classes": {str(value): name for value, name in zip(values, model.labels)},
     }
     args.report.write_text(json.dumps(report))
 

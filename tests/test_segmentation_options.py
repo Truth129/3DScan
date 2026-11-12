@@ -41,6 +41,7 @@ def test_task_appearance_has_meaningful_fallback_and_keeps_anatomical_priorities
         ("rib_left_12", "total"),
         ("scapula_right", "total_mr"),
         ("left_hip", "mrsegmentator"),
+        ("vertebrae_L3", "totalspineseg"),
         ("femur", "appendicular_bones"),
     ],
 )

@@ -9,6 +9,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -38,7 +39,10 @@ _NAME_COLORS = ["#d88a72", "#ad91d6", "#a6c682", "#e3bb78", "#7ebbb7", "#c092b8"
 # Saturated yellow: ivory vanishes on bright CT bone in the slices, and a fill still tints white.
 BONE_COLOR = "#f5cc00"
 # A pinned model keeps its own group, so its bones are found by name.
-_MODEL_BONES = {"mrsegmentator": {"spine", "sacrum", "left_hip", "right_hip", "left_femur", "right_femur"}}
+_MODEL_BONES = {
+    "mrsegmentator": {"spine", "sacrum", "left_hip", "right_hip", "left_femur", "right_femur"},
+    "totalspineseg": {"sacrum", *(f"vertebrae_{region}{n}" for region, count in (("C", 7), ("T", 12), ("L", 6)) for n in range(1, count + 1))},
+}
 
 
 def _name_color(name):
@@ -239,6 +243,9 @@ def _nnunet_descriptor(model, inference_path=None):
     }
     if model.keep_largest:
         descriptor["keep_largest"] = True
+    if model.step1:
+        # The grids, the numbering and the second channel are this repository's port of TotalSpineSeg.
+        descriptor["totalspineseg_sha256"] = _digest(Path(__file__).with_name("totalspineseg.py"))
     if model.engine == "cas_net":
         # Its network and inference are this repository's code, not a package's.
         descriptor["cas_net_sha256"] = _digest(Path(__file__).with_name("cas_net.py"))
@@ -602,6 +609,8 @@ def segment(
                     command += ["--skull-strip-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.skull_strip]))]
                 if model.crop:
                     command += ["--crop-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.crop]))]
+                if model.step1:
+                    command += ["--step1-folder", str(nnunet_models.model_dir(nnunet_models.MODELS[model.step1]))]
             # Beside the task's folder, whose every NIfTI is read as a mask.
             probability_path = run_dir / f"{task}-probability.nii.gz" if model and model.engine == "cas_net" else None
             if probability_path:
@@ -655,6 +664,9 @@ def segment(
                     raise
                 finally:
                     resources.sample(process.pid)
+                    # A worker stopped by a signal leaves its scratch copy of the scan beside the report.
+                    for scratch in run_dir.glob("totalspineseg-*"):
+                        shutil.rmtree(scratch, ignore_errors=True)
                     record["elapsed_seconds"] = round(time.monotonic() - started, 3)
                     record["resources"] = resources.result()
             record["returncode"] = process.returncode

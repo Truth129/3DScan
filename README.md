@@ -20,9 +20,9 @@ other service.
 - **Segmentation:** selected TotalSegmentator tasks on a GPU or the CPU, plus optional
   MRSegmentator and two ImageCAS-X coronary models to compare beside them, FLAMeS for MS lesions
   on FLAIR MRI, the Spinal Cord Toolbox models for the spinal cord and its MS lesions,
-  BreastDivider for the left and right breast on MRI, and the MAMA-MIA model for breast tumours on
-  DCE MRI. With [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job
-  runs on.
+  TotalSpineSeg for the vertebrae, discs, cord and canal on MRI of the spine, BreastDivider for
+  the left and right breast on MRI, and the MAMA-MIA model for breast tumours on DCE MRI. With
+  [a second GPU](docs/INSTALL.md#add-a-second-gpu), choose which one each AI job runs on.
 - **Corrections:** nnInteractive prompts, direct mask edits, scissors and recipes, with
   exact undo.
 - **Library:** one library for everyone signed in, with search, rename, Trash with undo, and
@@ -80,8 +80,8 @@ distributions and GPUs.
 
 ## Licenses
 
-3DScan is released under the [Apache License 2.0](LICENSE). The AI models are separate
-downloads with their own terms, which you must accept yourself:
+3DScan is released under the [Apache License 2.0](LICENSE), except `scan3d/totalspineseg.py`. The
+AI models are separate downloads with their own terms, which you must accept yourself:
 
 - **nnInteractive weights:** CC BY-NC-SA 4.0, noncommercial. The engine code is Apache-2.0.
 - **TotalSegmentator:** the code is Apache-2.0, but some subtasks need a separate license
@@ -102,6 +102,9 @@ downloads with their own terms, which you must accept yourself:
   model files carry Ultralytics' AGPL-3.0 notice.
 - **Spinal Cord Toolbox spinal cord:** the model's repository is MIT, and states no separate license
   for the weights. It uses the same sc-crop detector.
+- **TotalSpineSeg:** the code is LGPL-3.0, and its numbering is adapted in
+  `scan3d/totalspineseg.py`, which stays under that license; the LGPL-3.0 and GPL-3.0 texts are in
+  [`scan3d/licenses/`](scan3d/licenses/). Its repository states no separate license for the weights.
 
 Using these models commercially may require permission from their authors. Third-party
 notices are in [`web/public/licenses/`](web/public/licenses/). A viewer build adds

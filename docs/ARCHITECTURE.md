@@ -50,6 +50,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/segmentation*.py`                                               | TotalSegmentator runs, task catalog, result merging     |
 | `scan3d/nnunet_models.py`, `nnunet_worker.py`, `cas_net.py`             | Pinned nnU-Net models, CAS-Net and their worker         |
 | `scan3d/sc_crop.py`                                                     | Spinal cord box for the Spinal Cord Toolbox models      |
+| `scan3d/totalspineseg.py`                                               | TotalSpineSeg's grids and disc and vertebra numbering   |
 | `scan3d/review.py`, `relationships.py`, `direct_edit.py`, `scissors.py` | Correction sessions and deterministic edits             |
 | `scan3d/interactive*.py`                                                | nnInteractive engine, worker, batching, prompts         |
 | `scan3d/inference_paths.py`                                             | Inference paths: discovery, binding, child environment  |
@@ -159,6 +160,10 @@ record is committed only after its files are complete. Records store absolute pa
   Toolbox lesion model runs on the box the sc-crop detector finds around the cord, keeps the voxels
   at least three of its five folds mark, and puts the mask back into the full image. The detector
   runs in the worker on the CPU through onnxruntime.
+  A pinned model can also run in two passes on its own grid: TotalSpineSeg resamples the scan to
+  1 mm, runs a first network, numbers its discs, gives every second disc to a second network as a
+  second channel, numbers the vertebrae from the discs, and returns the labels to the scan's grid
+  with the full affine.
 
 Other tables:
 

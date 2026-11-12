@@ -294,6 +294,21 @@ sc-crop cord detector with the lesion model, and installs it if it is missing. I
 .venv/bin/python scripts/download_segmentation_model.py sct_spinal_cord
 ```
 
+**TotalSpineSeg** is an optional spine model for MRI: vertebrae, discs, cord and canal. It installs
+two networks, downloads 2.1 GB and keeps 2.3 GB:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py totalspineseg
+```
+
+With both zips from [release r20260730](https://github.com/neuropoly/totalspineseg/releases/tag/r20260730)
+downloaded by hand, install the first network, then the second:
+
+```bash
+.venv/bin/python scripts/download_segmentation_model.py totalspineseg_step1 --archive Dataset101_TotalSpineSeg_step1_r20260730.zip
+.venv/bin/python scripts/download_segmentation_model.py totalspineseg --archive Dataset102_TotalSpineSeg_step2_r20260730.zip
+```
+
 **BreastDivider** is an optional left and right breast model for MRI. It needs about 100 MB:
 
 ```bash

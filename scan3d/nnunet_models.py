@@ -39,7 +39,8 @@ class NnunetModel:
     axes: str = "LPS"
     # The model's folder inside the archive, when it is not the archive's root.
     archive_folder: str = ""
-    # The names in the model's dataset.json, when 3DScan shows other names.
+    # The names in the model's dataset.json, when 3DScan shows other names. For a region-based model, its
+    # regions in output order.
     dataset_labels: tuple[str, ...] = ()
     # Pieces of a mask with fewer voxels than this are dropped; only voxels sharing a face join a piece.
     smallest_piece: int = 0
@@ -67,6 +68,11 @@ class NnunetModel:
     trainer: str = ""
     # Only each mask's largest piece is kept, on the full image; only voxels sharing a face join a piece.
     keep_largest: bool = False
+    # Another pinned model that runs first: its labels crop this model's input and give it a second channel.
+    # Both run on TotalSpineSeg's own 1 mm grid, and its numbering makes the labels (scan3d/totalspineseg.py).
+    step1: str = ""
+    # The value each label has in the model's output, when the values are not 1, 2, 3 and so on.
+    label_values: tuple[int, ...] = ()
 
 
 MODELS = {
@@ -386,6 +392,131 @@ MODELS = {
                 "fold_4/checkpoint_final.pth": "24d8308c1e44d849b39983f4e059221abf8ffbecc85c76fcef91b11ceb8ac445",
             },
         ),
+        NnunetModel(
+            id="totalspineseg_step1",
+            name="TotalSpineSeg step 1",
+            version="r20260730",
+            label="Spine, first pass — TotalSpineSeg",
+            description="Finds the discs, canal and cord that TotalSpineSeg's second network starts from.",
+            license="Code LGPL-3.0 (neuropoly/totalspineseg), which states no separate license for the weights",
+            # A helper, so no modality offers it.
+            modalities=(),
+            labels=(),
+            dataset_labels=("disc", "disc_C2_C3", "disc_C7_T1", "disc_T12_L1", "disc_L5_S", "vertebrae", "vertebrae_C1", "canal", "cord"),
+            folds=(0,),
+            tile_step_size=0.5,
+            url="https://github.com/neuropoly/totalspineseg/releases/download/r20260730/Dataset101_TotalSpineSeg_step1_r20260730.zip",
+            archive_sha256="781f81e8c94feccd3cef17d819ba5c293b506e9b1f2b106fc5e31b9dd85887b0",
+            archive_folder="Dataset101_TotalSpineSeg_step1/nnUNetTrainerDAExtGPU__nnUNetPlans__3d_fullres",
+            # The release ships one fold and no final checkpoint.
+            checkpoint="checkpoint_best.pth",
+            # TotalSpineSeg turns every image to RAS and resamples it to 1 mm itself (scan3d/totalspineseg.py).
+            axes="RAS",
+            mirror=False,
+            # The checkpoint names auglab's trainer, which only changes training; the network is the stock one.
+            trainer="nnUNetTrainer",
+            files={
+                "dataset.json": "e335a8b04a17ac298439409f7584e89e8af4be346434941b4f3225790bdb72fc",
+                "plans.json": "eeccf818fbb873eb7f4046a8cebba1fe5db4c3e2c2e1eee8481c67fa50249444",
+                "fold_0/checkpoint_best.pth": "174566a0d729639e375b2bcb4d834eaee58f8fc321bcf5302ab652489538aace",
+            },
+        ),
+        NnunetModel(
+            id="totalspineseg",
+            name="TotalSpineSeg",
+            version="r20260730",
+            label="Spine — TotalSpineSeg",
+            description="Every vertebra and disc, the spinal cord, the spinal canal and the sacrum on one MRI series of the spine, sagittal or axial, in T1, T2, STIR or T2*, from TotalSpineSeg's two nnU-Nets. Levels are counted from the C2-C3, C7-T1, T12-L1 or L5-S disc, so a series that shows none of them fails, and one that shows neither end of the spine can be numbered a level off. The cord mask is not validated for measuring cord area.",
+            license="Code LGPL-3.0 (neuropoly/totalspineseg), which states no separate license for the weights",
+            modalities=("MR",),
+            labels=(
+                "spinal_cord",
+                "spinal_canal",
+                "vertebrae_C1",
+                "vertebrae_C2",
+                "vertebrae_C3",
+                "vertebrae_C4",
+                "vertebrae_C5",
+                "vertebrae_C6",
+                "vertebrae_C7",
+                "vertebrae_T1",
+                "vertebrae_T2",
+                "vertebrae_T3",
+                "vertebrae_T4",
+                "vertebrae_T5",
+                "vertebrae_T6",
+                "vertebrae_T7",
+                "vertebrae_T8",
+                "vertebrae_T9",
+                "vertebrae_T10",
+                "vertebrae_T11",
+                "vertebrae_T12",
+                "vertebrae_L1",
+                "vertebrae_L2",
+                "vertebrae_L3",
+                "vertebrae_L4",
+                "vertebrae_L5",
+                "vertebrae_L6",
+                "sacrum",
+                "disc_C2_C3",
+                "disc_C3_C4",
+                "disc_C4_C5",
+                "disc_C5_C6",
+                "disc_C6_C7",
+                "disc_C7_T1",
+                "disc_T1_T2",
+                "disc_T2_T3",
+                "disc_T3_T4",
+                "disc_T4_T5",
+                "disc_T5_T6",
+                "disc_T6_T7",
+                "disc_T7_T8",
+                "disc_T8_T9",
+                "disc_T9_T10",
+                "disc_T10_T11",
+                "disc_T11_T12",
+                "disc_T12_L1",
+                "disc_L1_L2",
+                "disc_L2_L3",
+                "disc_L3_L4",
+                "disc_L4_L5",
+                "disc_L5_L6",
+                "disc_L5_S",
+            ),
+            # Upstream's values: cord, canal, C1-C7, T1-T12, L1-L6, sacrum, then each disc by the vertebra above it.
+            label_values=(1, 2, *range(11, 18), *range(21, 33), *range(41, 47), 50, *range(63, 68), 71, *range(72, 83), 91, *range(92, 97), 100),
+            dataset_labels=(
+                "disc",
+                "disc_C2_C3",
+                "disc_C7_T1",
+                "disc_T12_L1",
+                "disc_L5_S",
+                "vertebrae",
+                "vertebrae_O",
+                "vertebrae_E",
+                "sacrum",
+                "canal",
+                "cord",
+            ),
+            folds=(0,),
+            tile_step_size=0.5,
+            url="https://github.com/neuropoly/totalspineseg/releases/download/r20260730/Dataset102_TotalSpineSeg_step2_r20260730.zip",
+            archive_sha256="494c640ab8cb25475bd0fc4338c0931d37079af9dd19403879335c3908c06b46",
+            archive_folder="Dataset102_TotalSpineSeg_step2/nnUNetTrainerDAExtGPU__nnUNetPlans__3d_fullres",
+            # The release ships one fold and no final checkpoint.
+            checkpoint="checkpoint_best.pth",
+            # TotalSpineSeg turns every image to RAS and resamples it to 1 mm itself (scan3d/totalspineseg.py).
+            axes="RAS",
+            mirror=False,
+            # The checkpoint names auglab's trainer, which only changes training; the network is the stock one.
+            trainer="nnUNetTrainer",
+            step1="totalspineseg_step1",
+            files={
+                "dataset.json": "f3c5a51e14da2f8c4dc169c5471f4bbe287fc3c53b75696faf57f3852bdb6edc",
+                "plans.json": "42f771a42e3171bd97509336e3db61b787dd3271d98ef33fcbca3590d0e862fa",
+                "fold_0/checkpoint_best.pth": "35fe49c6a8f6b700c9cbb2110985f4ecccc74b74fca630c9c37e5c653578f84c",
+            },
+        ),
     )
 }
 
@@ -396,7 +527,7 @@ def models_for(modality: str) -> list[NnunetModel]:
 
 def required(model: NnunetModel) -> tuple[NnunetModel, ...]:
     """The model and any model it runs first."""
-    return (model, *(MODELS[name] for name in (model.skull_strip, model.crop) if name))
+    return (model, *(MODELS[name] for name in (model.skull_strip, model.crop, model.step1) if name))
 
 
 def model_dir(model: NnunetModel) -> Path:

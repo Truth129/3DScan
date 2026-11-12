@@ -236,6 +236,16 @@ cord outside it is not marked. The segment is **Spinal cord (Spinal Cord Toolbox
 and tested on about 3,450 scans from 1,631 people, healthy and with MS, spinal cord injury,
 degenerative cervical myelopathy and other cord diseases, in many contrasts.
 
+**Spine — TotalSpineSeg** marks every vertebra and disc, the spinal cord, the spinal canal and the
+sacrum on an MRI series of the spine, sagittal or axial, in T1, T2, STIR or T2\*. Install it with
+`scripts/download_segmentation_model.py totalspineseg`, which installs both of its networks. The
+first finds the discs and the second separates the vertebrae; the job shows which pass it is on.
+Levels are counted from the C2-C3, C7-T1, T12-L1 or L5-S disc, so the run fails and says why if
+the series shows none of them, or no spinal canal. Only the levels in view are added, as segments
+such as **Vertebrae l3 (TotalSpineSeg)** and **Disc l3 l4 (TotalSpineSeg)**; each of the others
+adds a QC message. A series that shows neither end of the spine can be numbered a level off, and
+the cord mask is not validated for measuring cord area.
+
 **Breasts — BreastDivider** marks the left and right breast on MRI of the breasts in any common
 sequence: T1 with or without contrast, T2 or DWI. Install it with
 `scripts/download_segmentation_model.py breastdivider`. Its segments are **Left breast

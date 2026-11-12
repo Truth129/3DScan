@@ -36,7 +36,12 @@ const tissueColors: Record<string, string> = {
 // Saturated yellow: ivory vanishes on bright CT bone in the slices. Matches scan3d BONE_COLOR.
 const boneColor = '#f5cc00';
 // A pinned model keeps its own group, so its bones are found by name.
-const modelBones = new Map([['mrsegmentator', new Set(['spine', 'sacrum', 'left_hip', 'right_hip', 'left_femur', 'right_femur'])]]);
+// Names are matched in lowercase. Matches scan3d _MODEL_BONES.
+const spineLevels = (region: string, count: number) => Array.from({ length: count }, (_, i) => `vertebrae_${region}${i + 1}`);
+const modelBones = new Map([
+  ['mrsegmentator', new Set(['spine', 'sacrum', 'left_hip', 'right_hip', 'left_femur', 'right_femur'])],
+  ['totalspineseg', new Set(['sacrum', ...spineLevels('c', 7), ...spineLevels('t', 12), ...spineLevels('l', 6)])],
+]);
 const nameOf = (structure: Structure) => structure.id.split(':').at(-1)!.toLowerCase();
 
 export function presentStructures(structures: Structure[]): Structure[] {

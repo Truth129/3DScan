@@ -78,7 +78,8 @@ describe('new custom segment drafts', () => {
       { ...target, group: 'Bones' },
       { ...target, id: 'total:rib_left_1', task: 'total', group: 'Bones', color: '#d8cdb1' },
       { ...target, id: 'mrsegmentator:left_femur', task: 'mrsegmentator', group: 'MRSegmentator', color: '#ad91d6' },
+      { ...target, id: 'totalspineseg:vertebrae_L3', task: 'totalspineseg', group: 'TotalSpineSeg', color: '#ad91d6' },
     ];
-    expect(presentStructures(bones).map(s => s.color)).toEqual(['#ab45cd', '#f5cc00', '#f5cc00']);
+    expect(presentStructures(bones).map(s => s.color)).toEqual(['#ab45cd', '#f5cc00', '#f5cc00', '#f5cc00']);
   });
 });

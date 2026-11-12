@@ -56,6 +56,7 @@ docker compose exec scan3d python scripts/download_segmentation_model.py imageca
 docker compose exec scan3d python scripts/download_segmentation_model.py flames_ms_lesions
 docker compose exec scan3d python scripts/download_segmentation_model.py sct_cord_ms_lesions
 docker compose exec scan3d python scripts/download_segmentation_model.py sct_spinal_cord
+docker compose exec scan3d python scripts/download_segmentation_model.py totalspineseg
 docker compose exec scan3d python scripts/download_segmentation_model.py breastdivider
 ```
 

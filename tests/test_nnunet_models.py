@@ -155,6 +155,30 @@ def test_a_cas_net_run_keeps_its_probability_beside_the_masks_for_grow_branch(pi
     assert [item["id"] for item in structures] == [f"{model.id}:liver"]
 
 
+def test_a_stopped_worker_leaves_no_scratch_copy_of_the_scan(pinned, tmp_path, monkeypatch):
+    model, archive = pinned
+    install(model, archive)
+    image = tmp_path / "image.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((4, 4, 4), np.int16), np.eye(4)), image)
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "cpu", "torch": "test"})
+
+    class Worker:
+        pid, returncode = None, -15
+
+        def __init__(self, command, **_):
+            scratch = Path(command[command.index("--report") + 1]).parent / "totalspineseg-x"
+            scratch.mkdir()
+            (scratch / "crop_0000.nii").write_bytes(b"scan")
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(segmentation.subprocess, "Popen", Worker)
+    with pytest.raises(RuntimeError):
+        segmentation.segment(image, tmp_path / "output", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
+    assert not list((tmp_path / "output").rglob("totalspineseg-*"))
+
+
 def test_changed_weights_stop_a_run_before_any_child_can_load_them(pinned, tmp_path, monkeypatch):
     model, archive = pinned
     target = install(model, archive)
@@ -215,6 +239,43 @@ def test_one_channel_export_gives_nnunets_full_export():
     expected = np.zeros(properties["shape_before_cropping"], np.uint8)
     expected[1:11, 2:14, 0:14] = resample(logits).argmax(0)
     assert labels.dtype == np.uint8 and np.array_equal(labels, expected.transpose(2, 0, 1))
+
+
+def test_region_export_gives_each_voxel_the_last_region_above_half():
+    logits = np.full((3, 4, 5, 6), -1.0, np.float32)
+    logits[0, 0:3] = logits[1, 1:2] = logits[2, 2:4, 0:2] = 1.0  # Region 2 inside region 1; region 3 overlaps both.
+    properties = {
+        "shape_after_cropping_and_before_resampling": (4, 5, 6),
+        "shape_before_cropping": (6, 5, 7),
+        "bbox_used_for_cropping": [[1, 5], [0, 5], [1, 7]],
+    }
+    labels = nnunet_worker.region_labels(logits, lambda channel: channel, properties, [2, 0, 1], [1, 2, 3], lambda values: values > 0)
+    expected = np.zeros((4, 5, 6), np.uint8)
+    expected[0:3], expected[1:2], expected[2:4, 0:2] = 1, 2, 3
+    restored = np.zeros((6, 5, 7), np.uint8)
+    restored[1:5, 0:5, 1:7] = expected
+    assert labels.dtype == np.uint8 and np.array_equal(labels, restored.transpose(2, 0, 1))
+
+
+def test_label_check_pins_names_order_and_regions():
+    for model in (nnunet_models.MODELS["totalspineseg"], nnunet_models.MODELS["totalspineseg_step1"]):
+        names = list(model.dataset_labels)
+        regions = {"background": 0, **{name: [1] for name in names}}  # Region contents are not checked.
+        nnunet_worker.check_labels(model, regions, True, list(range(1, len(names) + 1)))
+        swapped = [names[1], names[0], *names[2:]]
+        for labels, order in (
+            ({"background": 0, **{name: [1] for name in swapped}}, range(1, len(names) + 1)),
+            ({"background": 0, **{name: [1] for name in names[:-1]}}, range(1, len(names))),
+            (regions, [2, 1, *range(3, len(names) + 1)]),
+        ):
+            with pytest.raises(RuntimeError, match="do not match"):
+                nnunet_worker.check_labels(model, labels, True, list(order))
+        with pytest.raises(RuntimeError, match="does not vote"):
+            nnunet_worker.check_labels(replace(model, vote=True), regions, True, list(range(1, len(names) + 1)))
+    model = nnunet_models.MODELS["breastdivider"]
+    nnunet_worker.check_labels(model, {"background": 0, "left": 1, "right": 2}, False, None)
+    with pytest.raises(RuntimeError, match="do not match"):
+        nnunet_worker.check_labels(model, {"background": 0, "left": 2, "right": 1}, False, None)
 
 
 def test_small_pieces_go_and_only_face_neighbours_join_a_piece():
@@ -320,9 +381,12 @@ def test_every_pinned_model_lists_its_own_checkpoint_for_each_fold():
             assert "cas_net_sha256" in segmentation._nnunet_descriptor(model)
             continue
         assert {f"fold_{fold}/{model.checkpoint}" for fold in model.folds} | {"dataset.json", "plans.json"} == set(model.files)
-        assert not model.dataset_labels or len(model.dataset_labels) == len(model.labels)
+        # A model with its own output values names its regions or labels in its own order.
+        assert not model.dataset_labels or not model.labels or model.label_values or len(model.dataset_labels) == len(model.labels)
+        assert len(model.label_values) in (0, len(model.labels))
         # The worker applies the first model's mask to the second model's input array unchanged.
         assert not model.skull_strip or nnunet_models.MODELS[model.skull_strip].axes == model.axes
+        assert not model.step1 or (not nnunet_models.MODELS[model.step1].modalities and nnunet_models.MODELS[model.step1].axes == model.axes)
 
 
 def test_download_publishes_only_pinned_files_that_match(pinned):
@@ -708,7 +772,7 @@ def test_cord_model_folds_vote_without_mirrors_while_other_models_average_and_mi
             self.manual_initialization(None, None, None, list(use_folds), None, "own", (0, 1, 2))
 
         def manual_initialization(self, network, plans, configuration, parameters, dataset_json, trainer_name, mirror_axes):
-            self.list_of_parameters, self.label_manager = parameters, SimpleNamespace(has_regions=False)
+            self.list_of_parameters, self.label_manager = parameters, SimpleNamespace(has_regions=False, regions_class_order=None)
             self.dataset_json = {"labels": {"background": 0, name: 1}}
             self.plans_manager = SimpleNamespace(transpose_forward=[0, 1, 2], transpose_backward=[0, 1, 2])
             self.configuration_manager = SimpleNamespace(spacing=[1, 1, 1], resampling_fn_probabilities=lambda logits, *_: logits)
@@ -754,3 +818,73 @@ def test_cord_model_folds_vote_without_mirrors_while_other_models_average_and_mi
     name = "Lesion"
     labels, _ = nnunet_worker.predict(nnunet_models.MODELS["flames_ms_lesions"], "folder", scan, [1, 1, 1], "cpu")
     assert made[-1]["use_mirroring"] is True and np.array_equal(labels, scan[0] >= 1)
+
+
+def test_totalspineseg_is_offered_on_mr_only_needs_its_first_network_and_names_its_port(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCAN3D_SEGMENTATION_MODELS", str(tmp_path / "models"))
+    model, first = nnunet_models.MODELS["totalspineseg"], nnunet_models.MODELS["totalspineseg_step1"]
+    assert model.id in task_ids("MR") and model.id not in task_ids("CT")
+    assert first.id not in task_ids("MR") + task_ids("CT")
+    model = placed(model.id, monkeypatch)
+    assert next(item for item in segmentation_catalog("MR")["tasks"] if item["id"] == model.id)["available"] is False
+    first = placed(first.id, monkeypatch)
+    assert next(item for item in segmentation_catalog("MR")["tasks"] if item["id"] == model.id)["available"] is True
+    descriptor = segmentation._nnunet_descriptor(model)
+    assert descriptor["complete"] and descriptor["totalspineseg_sha256"]
+    assert {item["name"].split("/")[0] for item in descriptor["files"]} == {"totalspineseg-r20260730", "totalspineseg_step1-r20260730"}
+    image = tmp_path / "image.nii.gz"
+    nib.save(nib.Nifti1Image(np.zeros((4, 4, 4), np.int16), np.eye(4)), image)
+    monkeypatch.setattr(segmentation, "_resolve_device", lambda *_: {"selected_device": "cpu", "torch": "test"})
+    commands = []
+
+    class Started(Exception):
+        pass
+
+    def started(command, **_):
+        commands.append(command)
+        raise Started
+
+    monkeypatch.setattr(segmentation.subprocess, "Popen", started)
+    with pytest.raises(Started):
+        segmentation.segment(image, tmp_path / "run", "other", lambda _: None, lambda: False, {"tasks": [model.id]}, modality="MR")
+    assert commands[0][commands[0].index("--step1-folder") + 1] == str(nnunet_models.model_dir(first))
+
+
+def test_worker_saves_every_totalspineseg_label_by_its_value_and_a_failure_as_a_sentence(tmp_path, monkeypatch, nnunet_version):
+    from scan3d import totalspineseg
+
+    model = nnunet_models.MODELS["totalspineseg"]
+    affine = np.array([[0.0, 0.0, -0.9, 30.0], [-0.9, 0.0, 0.0, 10.0], [0.0, 4.0, 0.0, -60.0], [0.0, 0.0, 0.0, 1.0]])
+    nib.save(nib.Nifti1Image(np.zeros((6, 7, 8), np.int16), affine), tmp_path / "image.nii.gz")
+    found = np.zeros((6, 7, 8), np.uint8)
+    found[1:3, 2:4, 3:5], found[4, 5, 6], found[0, 0, 0] = 45, 100, 3  # 3 is no label's value.
+    calls = []
+
+    def segment(image, first, second, scratch, step):
+        calls.append((image.shape, scratch.parent))
+        first(np.zeros((1, 2, 2, 2), np.float32), [1.0, 1.0, 1.0])
+        return found
+
+    monkeypatch.setattr(nnunet_worker, "predict", lambda part, *_: (np.zeros((2, 2, 2), np.uint8), f"torch for {part.id}"))
+    monkeypatch.setattr(totalspineseg, "segment", segment)
+    out = tmp_path / "masks"
+    out.mkdir()
+    arguments = f"-i {tmp_path}/image.nii.gz -o {out} --task totalspineseg --model-folder second --step1-folder first"
+    monkeypatch.setattr(sys, "argv", ["worker", *arguments.split(), "--device", "cpu", "--report", str(tmp_path / "report.json")])
+    nnunet_worker.main()
+    assert calls == [((6, 7, 8), tmp_path)] and len(list(out.iterdir())) == 52
+    source = nib.load(tmp_path / "image.nii.gz")
+    for value, name in zip(model.label_values, model.labels):
+        mask = nib.load(out / f"{name}.nii.gz")
+        assert np.array_equal(np.asarray(mask.dataobj) > 0, found == value) and np.array_equal(mask.affine, source.affine)
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert report["classes"]["45"] == "vertebrae_L5" and report["classes"]["100"] == "disc_L5_S" and len(report["classes"]) == 52
+    assert report["torch_version"] == "torch for totalspineseg_step1"
+
+    def unusable(*_):
+        raise totalspineseg.Unusable(totalspineseg.NO_LANDMARK)
+
+    monkeypatch.setattr(totalspineseg, "segment", unusable)
+    with pytest.raises(SystemExit) as stopped:
+        nnunet_worker.main()
+    assert stopped.value.code == 1 and json.loads((tmp_path / "report.json").read_text()) == {"error": totalspineseg.NO_LANDMARK}

@@ -89,7 +89,8 @@ build.
 - **Third-party code.** `web/vite-third-party-notices.ts` writes the licence of every bundled
   package to `licenses/THIRD-PARTY-NOTICES.txt` in the build, and into the portable viewer file.
   Code adapted from a dependency keeps its copyright in a comment and its licence in
-  `web/public/licenses/`.
+  `web/public/licenses/`, or in `scan3d/licenses/` for code that stays under another licence
+  inside the Python package, which `license-files` in `pyproject.toml` must reach.
 - **Routes.** Every new route needs a rule in `RULES` in `scan3d/access.py`, and `check_policy`
   stops the app from starting without one, in both modes.
   - A route with `{case_id}` gets the case rule on its own, which also hides a case in Trash, and
