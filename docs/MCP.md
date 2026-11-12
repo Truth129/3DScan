@@ -10,13 +10,20 @@ may share that way, such as a scratch server with the demo case.
 
 ## Run it
 
-It needs [uv](https://docs.astral.sh/uv/), which `scripts/bootstrap.sh` installs as `.tools/bin/uv`.
-uv reads the script's own dependencies (the MCP SDK, httpx and NumPy) and keeps them apart from
-3DScan's.
+It needs only [uv](https://docs.astral.sh/uv/getting-started/installation/): no clone of 3DScan and
+no `scripts/bootstrap.sh`. uv reads the script's own dependencies (the MCP SDK, httpx and NumPy),
+keeps them apart from anything else, and downloads Python 3.12 or newer if the machine has none.
+It has been tested on Linux only.
+
+Run it straight from a release, using the tag of the 3DScan version the server runs:
 
 ```bash
-claude mcp add scan3d -- /path/to/3DScan/.tools/bin/uv run --script /path/to/3DScan/scripts/scan3d_mcp.py --url http://127.0.0.1:9010
+claude mcp add scan3d -- uv run https://raw.githubusercontent.com/Truth129/3DScan/v0.3.0/scripts/scan3d_mcp.py --url https://3dscan.example
 ```
+
+A tag never changes, so neither does the code this runs. To read the script first, download it and
+run `uv run --script scan3d_mcp.py` with the same arguments. In a clone, `scripts/bootstrap.sh`
+installs uv as `.tools/bin/uv`, and the script is `scripts/scan3d_mcp.py`.
 
 Other clients take the same command and arguments in their MCP server settings. The server talks
 over stdio.
