@@ -35,25 +35,33 @@ const tissueColors: Record<string, string> = {
 };
 // Saturated yellow: ivory vanishes on bright CT bone in the slices. Matches scan3d BONE_COLOR.
 const boneColor = '#f5cc00';
-// A pinned model keeps its own group, so its bones are found by name.
+// A pinned model kept its own group before anatomical groups, so its bones are found by name.
 // Names are matched in lowercase. Matches scan3d _MODEL_BONES.
 const spineLevels = (region: string, count: number) => Array.from({ length: count }, (_, i) => `vertebrae_${region}${i + 1}`);
 const modelBones = new Map([
   ['mrsegmentator', new Set(['spine', 'sacrum', 'left_hip', 'right_hip', 'left_femur', 'right_femur'])],
   ['totalspineseg', new Set(['sacrum', ...spineLevels('c', 7), ...spineLevels('t', 12), ...spineLevels('l', 6)])],
 ]);
+// The saved colour of TotalSegmentator's arteries, veins and airways, which no other output has. Since anatomical
+// groups, an Arteries group also holds MRSegmentator's aorta or CAS-Net's coronaries, which keep their own colours,
+// so the saved colour, not the group, picks these display colours. Matches scan3d _legacy_appearance.
+const vesselColors: Record<string, (name: string) => string> = {
+  '#eb655d': () => '#ed2222',
+  '#4d82e8': () => '#224ce6',
+  '#f1dfb1': name => (name.includes('wall') ? '#cccccc' : '#eeeeee'),
+};
 const nameOf = (structure: Structure) => structure.id.split(':').at(-1)!.toLowerCase();
 
 export function presentStructures(structures: Structure[]): Structure[] {
   return structures.map(structure => {
-    if (structure.task === 'custom' || structure.id.startsWith('custom:')) return structure;
+    // A custom or imported segment keeps the colour it was given.
+    if (structure.task === 'custom' || structure.task === 'dicom_seg' || structure.id.startsWith('custom:')) return structure;
     const name = nameOf(structure),
-      group = structure.group.toLowerCase();
+      vessel = typeof structure.color === 'string' ? vesselColors[structure.color.toLowerCase()] : undefined;
     let color = tissueColors[name];
-    if (group === 'arteries') color = '#ed2222';
-    else if (group === 'veins') color = '#224ce6';
-    else if (group === 'airways') color = name.includes('wall') ? '#cccccc' : '#eeeeee';
-    else if (group === 'bones' || modelBones.get(structure.task)?.has(name)) color = boneColor;
+    if (vessel) color = vessel(name);
+    // A bone's saved colour may be the ivory of older revisions. The Bones group holds only outputs that were bones before.
+    else if (structure.group.toLowerCase() === 'bones' || modelBones.get(structure.task)?.has(name)) color = boneColor;
     return color ? { ...structure, color } : structure;
   });
 }

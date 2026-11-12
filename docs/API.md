@@ -248,6 +248,11 @@ An immutable source image.
  reference_image_id, relationship?, growable?}
 ```
 
+A model output's `name` is its label with the model in brackets, such as `Vertebrae L3
+(TotalSegmentator)`, and `group` is an anatomical group shared by every model (`Spine`, `Bones`,
+`Arteries` and so on; `scan3d/structure_groups.py`). Revisions saved before then keep their names and
+groups, which may name the model or task.
+
 `growable` is true when the segment's CAS-Net run stored its probability, so
 [Grow branch](#preparation-and-segmentation) can use it. Later edits of the segment keep it.
 
@@ -383,7 +388,8 @@ capabilities, presentation, enabled}]}`.
 
 **`GET /api/segmentation-options?modality=CT`** returns `{engine_version, tasks, license_configured,
 defaults, remove_small_blobs_mm3, inference_paths}`. The default task is `total` for CT and
-`total_mr` for MR. Each task has `id`, `label`, `modality`, `classes`, `class_count`,
+`total_mr` for MR. Tasks come sorted by `group`, the Task list's anatomical group (`Whole body`
+first). Each task has `id`, `label` (with its model in brackets), `group`, `modality`, `classes`, `class_count`,
 `model_class_count`, `description`, `engine`, `license_required`, `license_available`, `available`,
 `uses_organ_crop`, `robust_crop_default`, `robust_crop_supported`, `body_seg_supported`,
 `remove_small_blobs_supported` and `high_order_resampling_supported`. A pinned nnU-Net model adds `engine_version` and `comparison: true`,

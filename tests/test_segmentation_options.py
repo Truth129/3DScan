@@ -25,7 +25,10 @@ from scan3d.segmentation_options import normalize_options, segmentation_catalog
     [
         ("eye_left", "head_glands_cavities", "Head organs"),
         ("torso_fat", "tissue_types", "Tissues"),
-        ("lung_pleural", "pleural_pericard_effusion", "Chest findings"),
+        ("lung_pleural", "pleural_pericard_effusion", "Lung lobes"),
+        ("thyroid_gland", "total", "Head and neck"),
+        ("teeth_lower", "craniofacial_structures", "Teeth"),
+        ("lower_jawbone", "teeth", "Head and neck"),
         ("aorta", "heartchambers_highres", "Arteries"),
         ("liver", "total_v3", "Abdominal organs"),
     ],
@@ -47,6 +50,58 @@ def test_task_appearance_has_meaningful_fallback_and_keeps_anatomical_priorities
 )
 def test_bones_default_to_a_yellow_that_shows_on_bright_ct_bone(name, task):
     assert segmentation._appearance(name, task)[1] == "#f5cc00"
+
+
+@pytest.mark.parametrize(
+    "name,task,label",
+    [
+        ("vertebrae_L3", "total", "Vertebrae L3 (TotalSegmentator)"),
+        ("liver", "total_mr", "Liver (TotalSegmentator)"),
+        ("disc_L5_S", "totalspineseg", "Disc L5 S (TotalSpineSeg)"),
+        ("disc_C7_T1", "totalspineseg", "Disc C7 T1 (TotalSpineSeg)"),
+        ("vertebrae_body", "vertebrae_body", "Vertebrae body (TotalSegmentator)"),
+        ("coronary_arteries", "imagecasx_cas_net", "Coronary arteries (CAS-Net)"),
+    ],
+)
+def test_outputs_are_named_with_their_model_in_brackets(name, task, label):
+    assert segmentation._structure_name(name, task) == label
+
+
+def test_pinned_task_labels_name_their_model_as_their_outputs_do():
+    from scan3d import nnunet_models
+
+    for model in nnunet_models.MODELS.values():
+        assert model.label.endswith(f" ({model.display_name})"), model.id
+
+
+def test_every_output_and_task_sits_in_an_anatomical_group():
+    from totalsegmentator.registry import get_task_classes
+    from scan3d import nnunet_models, structure_groups
+
+    for modality in ("CT", "MR"):
+        for task in segmentation.segmentation_options.task_ids(modality):
+            model = nnunet_models.MODELS.get(task)
+            for name in model.labels if model else get_task_classes(task).values():
+                assert segmentation._appearance(name, task)[0] in structure_groups.GROUPS, (task, name)
+        groups = [item["group"] for item in segmentation_catalog(modality)["tasks"]]
+        assert groups == sorted(groups, key=structure_groups.TASK_GROUP_ORDER.index)
+
+
+# Colours follow the grouping before anatomical groups, so none moved (a scratch script compared every output).
+@pytest.mark.parametrize(
+    "name,task,group,color",
+    [
+        ("aorta", "mrsegmentator", "Arteries", "#e3bb78"),
+        ("coronary_arteries", "imagecasx_cas_net", "Arteries", "#c092b8"),
+        ("celiac_trunk", "renal_arteries", "Arteries", "#ad91d6"),
+        ("vertebrae_L3", "total", "Spine", "#f5cc00"),
+        ("spinal_cord", "totalspineseg", "Spine", "#e3bb78"),
+        ("heart", "total", "Heart", "#ce94a7"),
+        ("hip_implant", "hip_implant", "Implants", "#f5cc00"),
+    ],
+)
+def test_anatomical_groups_keep_every_colour(name, task, group, color):
+    assert segmentation._appearance(name, task) == (group, color)
 
 
 def test_catalog_is_ct_only_stable_and_does_not_initialize_torch():
@@ -105,8 +160,8 @@ def test_catalog_exposes_output_names_and_correct_vertebral_and_brain_labels():
     assert "skull" in tasks["craniofacial_structures"]["classes"]
     assert tasks["body"]["model_class_count"] == 2
     assert set(tasks["body"]["classes"]) == {"body", "body_trunc", "body_extremities", "skin"}
-    assert tasks["vertebrae_pp"]["label"] == "Vertebrae C1–L5 — postprocessed"
-    assert tasks["vertebrae_pp_refined"]["label"] == "Vertebrae C1–L5 — body-refined"
+    assert tasks["vertebrae_pp"]["label"] == "Vertebrae C1–L5, postprocessed (TotalSegmentator)"
+    assert tasks["vertebrae_pp_refined"]["label"] == "Vertebrae C1–L5, body-refined (TotalSegmentator)"
     assert "Brain" in tasks["ventricle_parts"]["label"]
     assert {"renal_arteries", "celiac_trunk", "superior_mesenteric_artery"} <= set(tasks["renal_arteries"]["classes"])
 

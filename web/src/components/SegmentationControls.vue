@@ -27,6 +27,15 @@ const emit = defineEmits<{
 const licensePending = ref(false);
 const search = ref('');
 const searchedTasks = computed(() => searchSegmentationTasks(props.catalog?.tasks ?? [], search.value, props.modelValue.task));
+/** The Task list's anatomical groups, in the catalogue's order. */
+const taskGroups = computed(() => {
+  const groups = new Map<string, typeof searchedTasks.value.options>();
+  for (const item of searchedTasks.value.options) {
+    const label = item.group || 'Other';
+    groups.set(label, [...(groups.get(label) ?? []), item]);
+  }
+  return [...groups].map(([label, tasks]) => ({ label, tasks }));
+});
 const working = computed(() => props.busy || licensePending.value);
 const task = computed(() => props.catalog?.tasks.find(item => item.id === props.modelValue.task));
 const paths = computed(() => props.catalog?.inference_paths ?? []);
@@ -112,11 +121,13 @@ function check(field: 'robust_crop' | 'body_seg' | 'remove_small_blobs' | 'high_
       <label class="segmentation-task"
         >Task<select aria-label="Segmentation task" :value="modelValue.task" :disabled="working || loading || !catalog" @change="selectTask">
           <option v-if="!catalog" value="total">{{ loading ? 'Loading available tasks…' : 'Tasks unavailable' }}</option>
-          <option v-for="item in searchedTasks.options" :key="item.id" :value="item.id" :disabled="item.license_required && !item.license_available">
-            {{ item.label }}{{ item.license_required && !item.license_available ? ' · license required' : ''
-            }}{{ item.comparison && item.available === false ? ' · not installed' : ''
-            }}{{ searchedTasks.retainedSelection && item.id === modelValue.task ? ' · current' : '' }}
-          </option>
+          <optgroup v-for="group in taskGroups" :key="group.label" :label="group.label">
+            <option v-for="item in group.tasks" :key="item.id" :value="item.id" :disabled="item.license_required && !item.license_available">
+              {{ item.label }}{{ item.license_required && !item.license_available ? ' · license required' : ''
+              }}{{ item.comparison && item.available === false ? ' · not installed' : ''
+              }}{{ searchedTasks.retainedSelection && item.id === modelValue.task ? ' · current' : '' }}
+            </option>
+          </optgroup>
         </select></label
       >
       <label v-if="paths.length > 1" class="segmentation-task"

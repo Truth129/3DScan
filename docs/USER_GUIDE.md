@@ -172,12 +172,17 @@ the series list, adds another series of that study. Each series keeps its own se
 ## Run TotalSegmentator
 
 1. Choose **Segment CT…**. Its settings open at the top of the side panel.
-2. Pick a **Task**. **Find a task or structure** searches tasks and anatomy, and **Included
-   structures** lists the outputs.
+2. Pick a **Task**. Tasks are listed under anatomical groups such as **Spine**, each named with its
+   model in brackets, as in **Whole body (TotalSegmentator)**. **Find a task or structure** searches
+   tasks and anatomy, and **Included structures** lists the outputs.
 3. Set any options the task supports: **Robust crop** (`-rc`), **Body crop** (`-bs`), **Remove
    small blobs** (`-rmb`, components below 200 mm³) and **Higher-order resampling** (`-ho`, smoother
    edges on scans finer than the model's spacing, with more time and memory).
 4. Choose **Run segmentation**.
+
+Every model's segments are named with the model in brackets, such as **Vertebrae L3
+(TotalSegmentator)**, and sorted into the same anatomical groups; **Spine** holds the vertebrae, discs,
+sacrum, cord and canal from every model. Scans segmented before this keep their names and groups.
 
 Each run creates a revision that replaces that task's results **and** any segments with matching
 anatomical names, including manual corrections. Matching ignores capitalization, underscores and
@@ -191,34 +196,34 @@ they do not wait behind a segmentation.
 
 ### Compare a second model
 
-**Whole body — MRSegmentator** is a separate model for CT and MRI, with 40 structures. Install it
+**Whole body (MRSegmentator)** is a separate model for CT and MRI, with 40 structures. Install it
 once with `scripts/download_segmentation_model.py mrsegmentator`. It runs alone, not with other
 tasks, without the crop or small-blob options, and always with all five folds. The job shows which
 fold it is on.
 
-Its segments sit in their own **MRSegmentator** group, named like **Liver (MRSegmentator)**. A run
+Its segments are named like **Liver (MRSegmentator)**. A run
 of either model replaces only that model's earlier segments, so the two sets stay side by side.
 
-**Coronary arteries — ImageCAS-X nnU-Net** is a CT model for the coronary lumen on gated coronary
+**Coronary arteries (ImageCAS-X nnU-Net)** is a CT model for the coronary lumen on gated coronary
 CT angiography, from the ImageCAS-X benchmark. Install it with
 `scripts/download_segmentation_model.py imagecasx_coronary`. Its segment is **Coronary arteries
 (ImageCAS-X nnU-Net)**, beside TotalSegmentator's. It was trained at one centre on scans without
 artefacts, and it works at 0.35 mm, so a large non-cardiac CT needs a lot of memory and time.
 As in the benchmark, pieces of its mask smaller than 100 voxels are removed.
 
-**Coronary arteries — ImageCAS-X CAS-Net** is the same benchmark's CAS-Net, which scored above its
+**Coronary arteries (CAS-Net)** is the same benchmark's CAS-Net, which scored above its
 nnU-Net with fewer stray pieces. Install it with `scripts/download_segmentation_model.py
-imagecasx_cas_net`. Its segment is **Coronary arteries (ImageCAS-X CAS-Net)**. It runs as one
+imagecasx_cas_net`. Its segment is **Coronary arteries (CAS-Net)**. It runs as one
 network at 0.5 mm, so a large non-cardiac CT still needs a lot of memory and time, and pieces smaller
 than 100 voxels are removed in the same way. The job shows which of its four mirrored passes it is on.
 
-**MS lesions — FLAMeS** marks multiple sclerosis white-matter lesions on a FLAIR series. Install it
+**MS lesions (FLAMeS)** marks multiple sclerosis white-matter lesions on a FLAIR series. Install it
 with `scripts/download_segmentation_model.py flames_ms_lesions`, which also installs HD-BET. HD-BET
-removes the skull first, because FLAMeS was trained on images without one; **Brain — HD-BET** shows
+removes the skull first, because FLAMeS was trained on images without one; **Brain (HD-BET)** shows
 that brain mask on its own. The segment is **White matter lesions (FLAMeS)**. It was trained on 668
 scans and often misses lesions under about 10 mm³.
 
-**Spinal cord MS lesions — Spinal Cord Toolbox** marks multiple sclerosis lesions in the spinal
+**Spinal cord MS lesions (Spinal Cord Toolbox)** marks multiple sclerosis lesions in the spinal
 cord on an MRI series of the spine, axial or sagittal, such as T2, T2\*, STIR or PSIR. Install it
 with `scripts/download_segmentation_model.py sct_cord_ms_lesions`, which also installs the sc-crop
 cord detector. The detector finds the cord and the model runs on a box around it. The run fails and
@@ -227,7 +232,7 @@ segment is **Spinal cord lesions (Spinal Cord Toolbox)**. It was trained and tes
 from 1,849 people with MS at 23 centres, and it can miss small lesions. On an AMD GPU a run took
 about 23 GB of GPU memory whatever the scan's size, and on the CPU about 7 GB of RAM.
 
-**Spinal cord — Spinal Cord Toolbox** marks the spinal cord on an MRI series of the spine in any
+**Spinal cord (Spinal Cord Toolbox)** marks the spinal cord on an MRI series of the spine in any
 common contrast, such as T2, T2\*, T1, STIR or PSIR. Install it with
 `scripts/download_segmentation_model.py sct_spinal_cord`. Like the lesion model, it runs on a box
 the sc-crop detector finds around the cord, and the run fails and says why if it finds no cord. It
@@ -236,23 +241,23 @@ cord outside it is not marked. The segment is **Spinal cord (Spinal Cord Toolbox
 and tested on about 3,450 scans from 1,631 people, healthy and with MS, spinal cord injury,
 degenerative cervical myelopathy and other cord diseases, in many contrasts.
 
-**Spine — TotalSpineSeg** marks every vertebra and disc, the spinal cord, the spinal canal and the
+**Spine (TotalSpineSeg)** marks every vertebra and disc, the spinal cord, the spinal canal and the
 sacrum on an MRI series of the spine, sagittal or axial, in T1, T2, STIR or T2\*. Install it with
 `scripts/download_segmentation_model.py totalspineseg`, which installs both of its networks. The
 first finds the discs and the second separates the vertebrae; the job shows which pass it is on.
 Levels are counted from the C2-C3, C7-T1, T12-L1 or L5-S disc, so the run fails and says why if
 the series shows none of them, or no spinal canal. Only the levels in view are added, as segments
-such as **Vertebrae l3 (TotalSpineSeg)** and **Disc l3 l4 (TotalSpineSeg)**; each of the others
+such as **Vertebrae L3 (TotalSpineSeg)** and **Disc L3 L4 (TotalSpineSeg)**; each of the others
 adds a QC message. A series that shows neither end of the spine can be numbered a level off, and
 the cord mask is not validated for measuring cord area.
 
-**Breasts — BreastDivider** marks the left and right breast on MRI of the breasts in any common
+**Breasts (BreastDivider)** marks the left and right breast on MRI of the breasts in any common
 sequence: T1 with or without contrast, T2 or DWI. Install it with
 `scripts/download_segmentation_model.py breastdivider`. Its segments are **Left breast
 (BreastDivider)** and **Right breast (BreastDivider)**, by the patient's side. It was trained on
 13,752 public scans, but its accuracy has been measured only against labels it helped make.
 
-**Breast tumour — MAMA-MIA** marks the primary breast tumour on one post-contrast phase of a DCE
+**Breast tumour (MAMA-MIA nnU-Net)** marks the primary breast tumour on one post-contrast phase of a DCE
 series; the authors used the first. Install it as [Install](INSTALL.md#ai-models) describes: the
 weights need a free Synapse sign-in. The segment is **Breast tumour (MAMA-MIA nnU-Net)**. It was
 trained on 1,506 cases and scored Dice 0.69 on 516 exams from three unseen centres. In a fifth of

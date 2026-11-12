@@ -73,6 +73,12 @@ class NnunetModel:
     step1: str = ""
     # The value each label has in the model's output, when the values are not 1, 2, 3 and so on.
     label_values: tuple[int, ...] = ()
+    # Shown in brackets after the model's outputs and in its task's label, when shorter than name.
+    short_name: str = ""
+
+    @property
+    def display_name(self) -> str:
+        return self.short_name or self.name
 
 
 MODELS = {
@@ -82,7 +88,7 @@ MODELS = {
             id="mrsegmentator",
             name="MRSegmentator",
             version="1.2.0",
-            label="Whole body — MRSegmentator",
+            label="Whole body (MRSegmentator)",
             description="Structures on MRI and CT from a separate group's model. Results stay beside other models' results, so you can compare them.",
             license="Code Apache-2.0; the repository states no separate license for the weights",
             modalities=("CT", "MR"),
@@ -146,7 +152,7 @@ MODELS = {
             id="imagecasx_coronary",
             name="ImageCAS-X nnU-Net",
             version="zenodo-23894668",
-            label="Coronary arteries — ImageCAS-X nnU-Net",
+            label="Coronary arteries (ImageCAS-X nnU-Net)",
             description="Coronary artery lumen on gated coronary CT angiography, from the ImageCAS-X benchmark's nnU-Net. It was trained at one centre on scans without artefacts. Results stay beside other models' results, so you can compare them.",
             license="Weights CC BY 4.0 (Zenodo record 23894668); code MIT",
             modalities=("CT",),
@@ -176,8 +182,9 @@ MODELS = {
         NnunetModel(
             id="imagecasx_cas_net",
             name="ImageCAS-X CAS-Net",
+            short_name="CAS-Net",
             version="zenodo-23894668",
-            label="Coronary arteries — ImageCAS-X CAS-Net",
+            label="Coronary arteries (CAS-Net)",
             description="Coronary artery lumen on gated coronary CT angiography, from the ImageCAS-X benchmark's CAS-Net, which scored above its nnU-Net with fewer stray pieces. It was trained at one centre on scans without artefacts. Results stay beside other models' results, so you can compare them.",
             license="Weights CC BY 4.0 (Zenodo record 23894668); network code MIT (ImageCAS-X's port; the original CAS-Net repository states no license)",
             modalities=("CT",),
@@ -198,7 +205,7 @@ MODELS = {
             id="hdbet_brain",
             name="HD-BET",
             version="zenodo-14445620",
-            label="Brain — HD-BET",
+            label="Brain (HD-BET)",
             description="The brain without skull, scalp or orbits on MRI of any contrast, from HD-BET 2.0. FLAMeS uses it to remove the skull first.",
             license="Weights CC BY-NC 4.0 (Zenodo record 14445620); code Apache-2.0",
             modalities=("MR",),
@@ -219,7 +226,7 @@ MODELS = {
             id="flames_ms_lesions",
             name="FLAMeS",
             version="hf-ea055ae",
-            label="MS lesions — FLAMeS",
+            label="MS lesions (FLAMeS)",
             description="Multiple sclerosis white-matter lesions on a FLAIR series, from FLAMeS, an nnU-Net trained on 668 scans from three vendors at 1.5 and 3 T. HD-BET removes the skull first. Lesions under about 10 mm³ are often missed.",
             license="Weights CC BY-NC 4.0 (Hugging Face FrancescoLR/FLAMeS-model); HD-BET weights CC BY-NC 4.0",
             modalities=("MR",),
@@ -249,7 +256,7 @@ MODELS = {
             id="sc_crop_detector",
             name="sc-crop",
             version="v0.0.11",
-            label="Spinal cord box — sc-crop",
+            label="Spinal cord box (sc-crop)",
             description="Finds the spinal cord, so the Spinal Cord Toolbox models see only the cord.",
             license="Code MIT (ivadomed/sc-crop); the ONNX files carry Ultralytics' AGPL-3.0 export notice",
             # A helper, so no modality offers it.
@@ -269,7 +276,7 @@ MODELS = {
             id="sct_cord_ms_lesions",
             name="Spinal Cord Toolbox",
             version="r20260703",
-            label="Spinal cord MS lesions — Spinal Cord Toolbox",
+            label="Spinal cord MS lesions (Spinal Cord Toolbox)",
             description="Multiple sclerosis lesions in the spinal cord on one series of the cord in T2, T2*, PSIR, STIR, MP2RAGE UNIT1 or T1, from the Spinal Cord Toolbox's nnU-Net, trained and tested on 4,428 images from 1,849 people at 23 centres. sc-crop finds the cord and crops to it first, so lesions outside the part it finds are missed.",
             license="Code MIT (ivadomed/seg-sc-ms-lesion-multicontrast), which states no separate license for the weights; sc-crop code MIT, and its detector files carry Ultralytics' AGPL-3.0 export notice",
             modalities=("MR",),
@@ -313,7 +320,7 @@ MODELS = {
             id="sct_spinal_cord",
             name="Spinal Cord Toolbox",
             version="v4.0",
-            label="Spinal cord — Spinal Cord Toolbox",
+            label="Spinal cord (Spinal Cord Toolbox)",
             description="The spinal cord on one series of the cord in any common contrast, such as T2, T2*, T1, PSIR, STIR, MP2RAGE UNIT1, diffusion or MT, from the Spinal Cord Toolbox's contrast-agnostic nnU-Net, trained and tested on about 3,450 scans from 1,631 people, healthy and with cord disease. sc-crop finds the cord and crops to it first, so cord outside the box it finds is not marked, and only the largest piece is kept.",
             license="Code MIT (sct-pipeline/contrast-agnostic-softseg-spinalcord), which states no separate license for the weights; sc-crop code MIT, and its detector files carry Ultralytics' AGPL-3.0 export notice",
             modalities=("MR",),
@@ -344,7 +351,7 @@ MODELS = {
             id="breastdivider",
             name="BreastDivider",
             version="hf-e02a0ad",
-            label="Breasts — BreastDivider",
+            label="Breasts (BreastDivider)",
             description="The left and right breast on MRI of the breasts in any common sequence, from BreastDivider, an nnU-Net trained on 13,752 public scans. Its accuracy has been measured only against labels it helped make.",
             license="Weights CC BY-NC-SA 4.0 (Hugging Face ykirchhoff/BreastDividerModel); code Apache-2.0",
             modalities=("MR",),
@@ -367,7 +374,7 @@ MODELS = {
             id="mamamia_breast_tumour",
             name="MAMA-MIA nnU-Net",
             version="synapse-syn61906708.1",
-            label="Breast tumour — MAMA-MIA",
+            label="Breast tumour (MAMA-MIA nnU-Net)",
             description="The primary breast tumour on one post-contrast DCE phase, from the MAMA-MIA challenge baseline, an nnU-Net trained on 1,506 cases. It scored Dice 0.69 on 516 exams from three unseen centres. It can also mark enhancing tissue away from the tumour.",
             license="Weights CC BY-NC 4.0 (Synapse syn61906708)",
             modalities=("MR",),
@@ -396,7 +403,7 @@ MODELS = {
             id="totalspineseg_step1",
             name="TotalSpineSeg step 1",
             version="r20260730",
-            label="Spine, first pass — TotalSpineSeg",
+            label="Spine, first pass (TotalSpineSeg step 1)",
             description="Finds the discs, canal and cord that TotalSpineSeg's second network starts from.",
             license="Code LGPL-3.0 (neuropoly/totalspineseg), which states no separate license for the weights",
             # A helper, so no modality offers it.
@@ -425,7 +432,7 @@ MODELS = {
             id="totalspineseg",
             name="TotalSpineSeg",
             version="r20260730",
-            label="Spine — TotalSpineSeg",
+            label="Spine (TotalSpineSeg)",
             description="Every vertebra and disc, the spinal cord, the spinal canal and the sacrum on one MRI series of the spine, sagittal or axial, in T1, T2, STIR or T2*, from TotalSpineSeg's two nnU-Nets. Levels are counted from the C2-C3, C7-T1, T12-L1 or L5-S disc, so a series that shows none of them fails, and one that shows neither end of the spine can be numbered a level off. The cord mask is not validated for measuring cord area.",
             license="Code LGPL-3.0 (neuropoly/totalspineseg), which states no separate license for the weights",
             modalities=("MR",),

@@ -82,4 +82,14 @@ describe('new custom segment drafts', () => {
     ];
     expect(presentStructures(bones).map(s => s.color)).toEqual(['#ab45cd', '#f5cc00', '#f5cc00', '#f5cc00']);
   });
+  it('keeps each colour when a model output moves to an anatomical group', () => {
+    const outputs = [
+      { ...target, id: 'total:aorta', task: 'total', group: 'Arteries', color: '#eb655d' },
+      { ...target, id: 'mrsegmentator:aorta', task: 'mrsegmentator', group: 'Arteries', color: '#e3bb78' },
+      { ...target, id: 'total:trachea', task: 'total', group: 'Airways', color: '#f1dfb1' },
+      { ...target, id: 'total:vertebrae_L3', task: 'total', group: 'Spine', color: '#f5cc00' },
+      { ...target, id: 'dicom_seg:a:1', task: 'dicom_seg', group: 'Imported segmentations', color: '#eb655d' },
+    ];
+    expect(presentStructures(outputs).map(s => s.color)).toEqual(['#ed2222', '#e3bb78', '#eeeeee', '#f5cc00', '#eb655d']);
+  });
 });

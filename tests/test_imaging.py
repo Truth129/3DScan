@@ -706,13 +706,13 @@ def test_full_resolution_adapter_retains_all_nonempty_outputs_and_retries(fixtur
     groups = {entry["id"]: entry["group"] for entry in first if entry["task"] == "total"}
     assert groups == {
         "total:liver": "Abdominal organs",
-        "total:brain": "Head organs",
+        "total:brain": "Brain",
         "total:skull": "Bones",
-        "total:vertebrae_C1": "Bones",
+        "total:vertebrae_C1": "Spine",
         "total:humerus_left": "Bones",
         "total:femur_left": "Bones",
         "total:gluteus_maximus_left": "Muscles",
-        "total:atrial_appendage_left": "Chest organs",
+        "total:atrial_appendage_left": "Heart",
     }
     lung = {entry["id"] for entry in first if entry["task"] == "lung_vessels"}
     assert lung == ({f"lung_vessels:{name}" for name in segmentation._LUNG} if profile != "abdomen" else set())

@@ -15,7 +15,7 @@ from scan3d.store import identifier
 
 
 @pytest.fixture
-def saved_run(tmp_path, monkeypatch):
+def saved_run(tmp_path, monkeypatch, request):
     service = Service(Settings(tmp_path / "data", (tmp_path,)))
     case = service.new_case("Previously filtered native output fixture")
     case_dir = service.store.case_dir(case["id"])
@@ -46,6 +46,8 @@ def saved_run(tmp_path, monkeypatch):
         "structure_count": 1,
         "qc": ["Empty label omitted: total:spleen; inspect scan coverage"],
     }
+    if getattr(request, "param", False):
+        manifest["structure_names"] = "anatomical_groups"
     atomic_json(run / "inference.json", manifest)
     group, color = segmentation._appearance("liver")
     liver = dict(id="total:liver", name="Liver", task="total", group=group, color=color, mask_file=str(masks / "liver.nii.gz"))
@@ -98,7 +100,8 @@ def test_saved_outputs_add_skull_without_replacing_corrections_and_allow_exact_u
     assert set(entries) == {"total:liver", "total:skull"}
     assert entries["total:liver"] == parent["structures"][0]
     assert entries["total:liver"]["volume_ml"] < original["structures"][0]["volume_ml"]
-    assert entries["total:skull"]["group"] == "Bones"
+    # A run saved before anatomical groups keeps its names.
+    assert (entries["total:skull"]["name"], entries["total:skull"]["group"]) == ("Skull", "Bones")
     assert entries["total:skull"]["voxel_count"] == 8 * 8 * 4
     assert entries["total:skull"]["volume_ml"] == pytest.approx(8 * 8 * 4 * 24 / 1000)
     assert len(revision["surface_assets"]) == 2
@@ -162,3 +165,12 @@ def test_active_revision_changed_during_restore_is_not_overwritten(saved_run, mo
     assert job["status"] == "failed" and "active revision changed" in job["error"].lower()
     assert service.store.get("cases", case["id"])["active_revision_id"] == original["id"]
     assert service.store.list("revisions", case["id"]) == revisions_before
+
+
+@pytest.mark.parametrize("saved_run", [True], indirect=True)
+def test_a_run_since_anatomical_groups_adds_outputs_named_with_their_model(saved_run):
+    service, case, *_ = saved_run
+    job = execute_next(service, case["id"])
+    assert job["status"] == "completed", job.get("error")
+    skull = next(s for s in service.store.revision(case["id"], job["revision_id"])["structures"] if s["id"] == "total:skull")
+    assert (skull["name"], skull["group"], skull["color"]) == ("Skull (TotalSegmentator)", "Bones", "#f5cc00")

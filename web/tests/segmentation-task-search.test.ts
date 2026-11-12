@@ -15,7 +15,7 @@ const task = (id: string, label: string, classes: string[], licensed = false): S
   body_seg_supported: true,
 });
 const tasks = [
-  task('total', 'Whole body — Total', ['skull', 'lung_upper_lobe_left', 'lung_lower_lobe_right']),
+  task('total', 'Whole body (TotalSegmentator)', ['skull', 'lung_upper_lobe_left', 'lung_lower_lobe_right']),
   task('lung_vessels', 'Lung vessels and airways', ['lung_vessels', 'lung_trachea_bronchia']),
   task('body', 'Body outline', ['body', 'body_trunc', 'body_extremities', 'skin']),
   task('craniofacial_structures', 'Craniofacial structures', ['skull', 'mandible'], true),
@@ -49,6 +49,15 @@ describe('task and output-name search', () => {
     expect(result.matches).toEqual([]);
     expect(ids(result.options)).toEqual(['lung_vessels']);
     expect(result.retainedSelection).toBe(true);
+  });
+  it('matches a bracketed model name only as whole words', () => {
+    const labelled = [
+      task('total', 'Whole body (TotalSegmentator)', ['liver']),
+      task('lung_vessels', 'Lung vessels (TotalSegmentator)', ['lung_vessels']),
+      task('imagecasx_cas_net', 'Coronary arteries (CAS-Net)', ['coronary_arteries']),
+    ];
+    expect(ids(searchSegmentationTasks(labelled, 'total', 'total').matches)).toEqual(['total']);
+    expect(ids(searchSegmentationTasks(labelled, 'cas-net', 'total').matches)).toEqual(['imagecasx_cas_net']);
   });
   it('never bypasses licensing while finding a licensed task', () => {
     const result = searchSegmentationTasks(tasks, 'mandible', 'total');

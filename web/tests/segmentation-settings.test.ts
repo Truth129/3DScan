@@ -91,4 +91,26 @@ describe('comparison models in the panel', () => {
     expect(/<input[^>]*aria-label="Remove small blobs"[^>]*>/.exec(html)?.[0]).toContain('disabled');
     expect(runDisabled(html)).toBe(false);
   });
+  it('lists tasks under their anatomical groups in the catalogue order', async () => {
+    const grouped = {
+      ...catalog,
+      tasks: [task('total', { group: 'Whole body' }), task('mrsegmentator', { group: 'Whole body' }), task('totalspineseg', { group: 'Spine' })],
+    };
+    const html = await renderToString(
+      createSSRApp(SegmentationControls, {
+        modelValue: { task: 'totalspineseg', robust_crop: false, body_seg: false, remove_small_blobs: false, high_order_resampling: false },
+        catalog: grouped,
+        busy: false,
+        loading: false,
+      }),
+    );
+    const groups = [...html.matchAll(/<optgroup label="([^"]+)"[^>]*>(.*?)<\/optgroup>/g)].map(([, label, body]) => [
+      label,
+      [...body.matchAll(/value="([^"]+)"/g)].map(match => match[1]),
+    ]);
+    expect(groups).toEqual([
+      ['Whole body', ['total', 'mrsegmentator']],
+      ['Spine', ['totalspineseg']],
+    ]);
+  });
 });

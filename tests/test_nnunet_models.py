@@ -117,7 +117,7 @@ def test_run_starts_the_worker_and_records_the_model_as_its_engine(pinned, tmp_p
     assert command[:5] == [sys.executable, "-u", "-P", "-m", "scan3d.nnunet_worker"]
     assert command[command.index("--model-folder") + 1] == str(target)
     assert str(ROOT) in options["env"]["PYTHONPATH"].split(":")
-    assert [(item["id"], item["name"], item["group"]) for item in structures] == [("mrsegmentator:liver", "Liver (MRSegmentator)", "MRSegmentator")]
+    assert [(item["id"], item["name"], item["group"]) for item in structures] == [("mrsegmentator:liver", "Liver (MRSegmentator)", "Abdominal organs")]
     manifest = json.loads((output / "inference.json").read_text())
     assert (manifest["engine"], manifest["engine_version"]) == ("MRSegmentator", model.version)
     assert manifest["empty_labels"] == ["mrsegmentator:spleen"]

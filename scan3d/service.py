@@ -1214,6 +1214,8 @@ class Service:
         if not tasks or len({t["task"] for t in tasks}) != len(tasks):
             raise ValueError("The saved inference task manifest is incomplete")
         outputs = []
+        # A run saved before anatomical groups keeps its own names and groups.
+        legacy = manifest.get("structure_names") != "anatomical_groups"
         from .segmentation_options import task_ids
 
         reference = self.store.resolve_reference(parent)
@@ -1229,11 +1231,11 @@ class Service:
                 path = run / task_name / f"{name}.nii.gz"
                 if not path.is_file():
                     raise ValueError(f"Saved output {task_name}:{name} is unavailable; no inference was rerun")
-                group, color = segmentation._appearance(name, task_name)
+                group, color = segmentation._appearance(name, task_name, legacy)
                 outputs.append(
                     dict(
                         id=f"{task_name}:{name}",
-                        name=segmentation._structure_name(name, task_name),
+                        name=segmentation._structure_name(name, task_name, legacy),
                         task=task_name,
                         group=group,
                         color=color,

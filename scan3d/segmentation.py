@@ -9,6 +9,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -19,7 +20,7 @@ import uuid
 from .config import ROOT, device_request
 from .fileio import atomic_text, hash_file as _digest
 from .imaging import _binary_nonempty, _image
-from . import nnunet_models, segmentation_options
+from . import nnunet_models, segmentation_options, structure_groups
 from .segmentation_options import normalize_options, resolved_task_config, task_capabilities
 
 
@@ -38,7 +39,7 @@ _FAILURE_LOG_BYTES = 64 * 1024
 _NAME_COLORS = ["#d88a72", "#ad91d6", "#a6c682", "#e3bb78", "#7ebbb7", "#c092b8"]
 # Saturated yellow: ivory vanishes on bright CT bone in the slices, and a fill still tints white.
 BONE_COLOR = "#f5cc00"
-# A pinned model keeps its own group, so its bones are found by name.
+# A pinned model kept its own group before anatomical groups, so its bones are found by name.
 _MODEL_BONES = {
     "mrsegmentator": {"spine", "sacrum", "left_hip", "right_hip", "left_femur", "right_femur"},
     "totalspineseg": {"sacrum", *(f"vertebrae_{region}{n}" for region, count in (("C", 7), ("T", 12), ("L", 6)) for n in range(1, count + 1))},
@@ -49,13 +50,36 @@ def _name_color(name):
     return _NAME_COLORS[int.from_bytes(hashlib.sha256(name.encode()).digest()[:2], "little") % len(_NAME_COLORS)]
 
 
-def _structure_name(name, task):
+def model_name(task):
+    """The model a task runs, as structure names and task labels show it in brackets."""
+    model = nnunet_models.MODELS.get(task)
+    return model.display_name if model else "TotalSegmentator"
+
+
+def _structure_name(name, task, legacy=False):
+    """The output's name with its model in brackets, such as Vertebrae L3 (TotalSegmentator).
+
+    An exported SEG or ROI shows only this name, and two models can name an organ alike. A run saved before
+    anatomical groups named TotalSegmentator's outputs without the model, and spinal levels in lower case.
+    """
     label = name.replace("_", " ").capitalize()
-    # Two models can name an organ alike, and an exported SEG or ROI shows only this name.
-    return f"{label} ({nnunet_models.MODELS[task].name})" if task in nnunet_models.MODELS else label
+    if legacy:
+        return f"{label} ({nnunet_models.MODELS[task].name})" if task in nnunet_models.MODELS else label
+    if name.startswith(("vertebrae_", "disc_")):
+        first, *levels = label.split(" ")
+        label = " ".join((first, *(level.upper() if re.fullmatch(r"[ctls]\d*", level) else level for level in levels)))
+    return f"{label} ({model_name(task)})"
 
 
-def _appearance(name, task=None):
+def _appearance(name, task=None, legacy=False):
+    """A model output's group and colour. Only the group moved to anatomical groups."""
+    group, color = _legacy_appearance(name, task)
+    return (group if legacy else structure_groups.group(name, task)), color
+
+
+def _legacy_appearance(name, task=None):
+    """The grouping before anatomical groups. Every colour still follows it, so no colour moved, and it
+    still groups the outputs of a run saved before then."""
     if task in nnunet_models.MODELS:
         return nnunet_models.MODELS[task].name, BONE_COLOR if name in _MODEL_BONES.get(task, ()) else _name_color(name)
     if "vein" in name or "vena" in name:
@@ -549,6 +573,8 @@ def segment(
         "modality": modality,
         "options": options,
         "output_selection": "all_nonempty_task_outputs",
+        # Outputs named with their model in brackets and grouped by anatomy; older runs lack this.
+        "structure_names": "anatomical_groups",
         "input_sha256": _digest(ct_path),
         "runtime": runtime,
         "started_at": datetime.now(timezone.utc).isoformat(),

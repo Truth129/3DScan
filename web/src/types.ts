@@ -154,6 +154,8 @@ export interface RecordedSegmentationSettings extends Partial<SegmentationSettin
 export interface SegmentationTask {
   id: string;
   label: string;
+  /** The anatomical group, such as Spine, the Task list shows it under. */
+  group?: string;
   description?: string;
   modality: 'CT' | 'MR';
   classes: string[];

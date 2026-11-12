@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from importlib import metadata
 from . import nnunet_models
+from .structure_groups import TASK_GROUP_ORDER, TASK_GROUPS
 from .totalsegmentator_license import license_configured
 
 
@@ -17,27 +18,35 @@ _OPTION_NAMES = {"tasks", "robust_crop", "body_seg", "remove_small_blobs", "high
 _BOOLEAN_OPTIONS = ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling")
 REMOVE_SMALL_BLOBS_MM3 = 200
 
+# What each task segments; the label adds its model in brackets. A task missing here shows its ID.
 _LABELS = {
-    "total": "Whole body — Total",
-    "total_v3": "Whole body — Total v3",
+    "total": "Whole body",
+    "total_v3": "Whole body v3",
     "body": "Body outline",
     "lung_vessels": "Lung vessels and airways",
-    "heartchambers_highres": "Heart chambers — high resolution",
+    "heartchambers_highres": "Heart chambers, high resolution",
     "head_glands_cavities": "Head glands and cavities",
     "headneck_bones_vessels": "Head/neck bones and vessels",
     "headneck_muscles": "Head/neck muscles",
     "pleural_pericard_effusion": "Pleural and pericardial effusions",
-    "vertebrae_pp": "Vertebrae C1–L5 — postprocessed",
-    "vertebrae_pp_refined": "Vertebrae C1–L5 — body-refined",
+    "vertebrae_pp": "Vertebrae C1–L5, postprocessed",
+    "vertebrae_pp_refined": "Vertebrae C1–L5, body-refined",
     "vertebrae_body": "Vertebral bodies and discs",
     "ventricle_parts": "Brain ventricular regions",
     "liver_vessels": "Liver vessels and tumor",
-    "tissue_4_types": "Tissue composition — four types",
-    "total_mr": "Whole body — MRI",
-    "body_mr": "Body outline — MRI",
-    "vertebrae_mr": "Vertebrae — MRI",
-    "brain_aneurysm": "Brain aneurysms — TOF MRI",
+    "tissue_4_types": "Tissue composition, four types",
+    "total_mr": "Whole body",
+    "body_mr": "Body outline",
+    "vertebrae_mr": "Vertebrae",
+    "brain_aneurysm": "Brain aneurysms, TOF",
 }
+
+
+def _label(task: str) -> str:
+    # The dialog already chose the modality, so an MR task's ID drops its _mr.
+    what = _LABELS.get(task) or task.removesuffix("_mr").replace("_", " ").capitalize()
+    return f"{what} (TotalSegmentator)"
+
 
 _DESCRIPTIONS = {
     "body": "Body outline, trunk, extremities and skin. Body and skin are derived from the predicted masks.",
@@ -131,6 +140,7 @@ def _model_entry(model: nnunet_models.NnunetModel, modality: str) -> dict:
     return {
         "id": model.id,
         "label": model.label,
+        "group": TASK_GROUPS[model.id],
         "engine": model.name,
         "engine_version": model.version,
         "comparison": True,
@@ -166,7 +176,8 @@ def segmentation_catalog(modality: str = "CT") -> dict:
         tasks.append(
             {
                 "id": task,
-                "label": _LABELS.get(task, task.replace("_", " ").capitalize()),
+                "label": _label(task),
+                "group": TASK_GROUPS.get(task, "Other"),
                 "engine": "TotalSegmentator",
                 "license_required": required,
                 "license_available": available,
@@ -179,6 +190,8 @@ def segmentation_catalog(modality: str = "CT") -> dict:
                 **task_capabilities(task),
             }
         )
+    # Grouped as the Task list shows them, in the registry's order within a group.
+    tasks.sort(key=lambda item: TASK_GROUP_ORDER.index(item["group"]) if item["group"] in TASK_GROUP_ORDER else len(TASK_GROUP_ORDER))
     return {
         "engine_version": metadata.version("TotalSegmentator"),
         "tasks": tasks,
