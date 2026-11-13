@@ -386,6 +386,9 @@ Pruned stubs in steps 3 to 5:
 - A lesion needs a station whose area is not a copy. One that runs into a vessel's end, which the
   solve takes as the end's taper, needs a trusted station: a stub zone there reads where the mask
   stops.
+- A mask break can leave a vessel's near side as a short end, a stub by shape. So an end is also a
+  gap when a rootless piece of 5 mm³ or more lies within 8.5 mm of it, inside 35° of its heading,
+  taken before the end's last two radii.
 
 The folder's key covers the code, image, masks and inputs, so a revision with the same masks reuses
 it, and each read checks it again. It sits in the case folder, so backups keep it and Clear caches

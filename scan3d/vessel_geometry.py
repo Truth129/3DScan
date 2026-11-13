@@ -39,6 +39,11 @@ _PASSES = 2  # recentring passes
 _SPLICE = 0.25
 _GAP_REACH = 5.0  # mm from a branch end to a rootless piece that makes the end a gap
 _GAP_VOLUME = 5.0  # mm³; smaller rootless pieces are noise, not the far side of a gap
+# A mask break can leave the near side as a short end pointing at the far side's piece: a stub by
+# shape, but the vessel goes on. A sizeable piece this far straight ahead of an end also makes it a gap.
+_GAP_AHEAD = 8.5  # mm from the end; in a synthetic test a whole vessel's end pointed at another's piece 9.7 mm away
+_GAP_CONE = 35.0  # degrees either side of the end's heading
+_GAP_HEADING = 2.0  # mm of path the heading is taken over, before the end's tip cover
 
 
 @dataclass(frozen=True, eq=False)
@@ -162,8 +167,8 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
     of lumen, which makes them a gap. Neither a root's branch nor a junction's last branch goes.
     Each branch is then resampled every `spacing` mm and moved to the centroids of its stations'
     cells, so it follows the lumen centre between voxel centres; where a pruned stub's lumen pulls
-    it into the stub's mouth, it is moved again without that lumen. Lumen with no root is listed as pieces; a branch that ends near a sizeable piece is
-    marked `gap`, since a break in the mask hides the flow and the narrowing that caused it.
+    it into the stub's mouth, it is moved again without that lumen. Lumen with no root is listed as pieces; a branch that ends near a sizeable piece, or
+    with one straight ahead (_GAP_AHEAD), is marked `gap`, since a break in the mask hides the flow and the narrowing that caused it.
 
     `covered`, a mask over the lumen points, is lumen no trace starts from, though paths may cross
     it: the face where the aorta cuts an ostium, whose rim would otherwise grow stub branches.
@@ -188,7 +193,7 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
     near_gap = np.zeros(n, dtype=bool)
     if gaps is not None:
         near_gap = np.isfinite(gaps.query(lumen.points, distance_upper_bound=_GAP_REACH)[0])
-    chains, stubs = _prune(lumen, roots, radius, _skeleton(lumen, roots, radius, reach, previous, covered), near_gap)
+    chains, stubs = _prune(lumen, roots, radius, _skeleton(lumen, roots, radius, reach, previous, covered), near_gap, gaps)
 
     stations = [_resample(lumen.points[chain], spacing) for chain, _, _ in chains]
     # A root whose whole component lies within its first cover grows no branch.
@@ -206,7 +211,7 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
     tips = [i for i in range(len(chains)) if all(up != i for _, up, _ in chains)]
     if gaps is not None and tips:
         distance, _ = gaps.query([stations[i][-1] for i in tips], distance_upper_bound=_GAP_REACH)
-        gap[tips] = np.isfinite(distance)
+        gap[tips] = np.isfinite(distance) | np.array([_gap_ahead(gaps, lumen.points[chains[i][0]], radius[chains[i][0]]) for i in tips])
     branches = [Branch(points, up, k, bool(gap[i])) for i, (points, (_, up, k)) in enumerate(zip(stations, chains))]
     return Tree(lumen.points[roots], branches, pieces.reshape(-1, 3), volume, tuple(lumen.points[chain] for chain in stubs))
 
@@ -333,7 +338,7 @@ def _chains(parent: np.ndarray, roots: np.ndarray) -> list[tuple[list[int], int,
 
 
 def _prune(
-    lumen: Lumen, roots: np.ndarray, radius: np.ndarray, parent: np.ndarray, near_gap: np.ndarray
+    lumen: Lumen, roots: np.ndarray, radius: np.ndarray, parent: np.ndarray, near_gap: np.ndarray, gaps: cKDTree | None = None
 ) -> tuple[list[tuple[list[int], int, int]], list[list[int]]]:
     """Chains once every spur and stub is gone, and the stubs' voxel chains.
 
@@ -351,7 +356,15 @@ def _prune(
             s = _arc(lumen.points[chain])
             end = chain[-1] not in junctions
             spur = end and s[-1] < max(_SPUR, 2 * radius[chain[0]])
-            stub = end and not spur and chain[0] not in root_set and not near_gap[chain[-1]] and s[-1] < _STUB_LENGTH and _stubby(lumen, radius, chains, chain)
+            stub = (
+                end
+                and not spur
+                and chain[0] not in root_set
+                and not near_gap[chain[-1]]
+                and s[-1] < _STUB_LENGTH
+                and _stubby(lumen, radius, chains, chain)
+                and not _gap_ahead(gaps, lumen.points[chain], radius[chain])
+            )
             starts.setdefault(chain[0], []).append((s[-1], chain, spur, stub))
         pruned = False
         for leaving in starts.values():
@@ -385,6 +398,29 @@ def _stubby(lumen: Lumen, radius: np.ndarray, chains: list[tuple[list[int], int,
     s = _arc(lumen.points[chain])
     width = 2 * float(np.median(radius[chain][outside])) + lumen.edge
     return s[-1] - s[outside[0]] < _STUB_WIDTHS * width
+
+
+def _gap_ahead(gaps: cKDTree | None, path: np.ndarray, wall: np.ndarray) -> bool:
+    """Whether a sizeable rootless piece lies within _GAP_AHEAD of a traced path's end, inside
+    _GAP_CONE of its heading.
+
+    The heading is taken over _GAP_HEADING mm before the end's tip cover (two of its radii, as
+    `_skeleton` covers it): within that the path turns to a rim of the end face, 33-46 degrees off a
+    straight synthetic vessel over its last 2 mm, and a piece 7 mm straight ahead was missed on 6 of 8 grids.
+    """
+    if gaps is None or len(path) < 2:
+        return False
+    s = _arc(path)
+    back = s[-1] - s
+    stop = s[-1] - 2 * wall[back <= 2 * wall].max(initial=0.0)
+    at = np.clip([stop - _GAP_HEADING, stop], 0, s[-1])
+    ends = np.stack([np.interp(at, s, path[:, axis]) for axis in range(3)], 1)
+    heading = ends[1] - ends[0] if at[1] > at[0] else path[-1] - path[0]
+    near = gaps.query_ball_point(path[-1], _GAP_AHEAD)
+    if not near or not np.linalg.norm(heading):
+        return False
+    offset = gaps.data[near] - path[-1]
+    return bool(np.any(offset @ (heading / np.linalg.norm(heading)) >= np.cos(np.radians(_GAP_CONE)) * np.linalg.norm(offset, axis=1)))
 
 
 def _recentre(

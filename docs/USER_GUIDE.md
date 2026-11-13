@@ -781,7 +781,8 @@ Limits:
   vessel's end beside a stub's mouth is solved, but listed only if read clear of the mouth.
 - Where two vessels touch, their areas can mix. Such branches carry a contact note.
 - A lumen gap withholds FFR on the branch that ends at it, since the flow beyond is unknown. FFR
-  above the gap is still shown, with a flag that it may read low.
+  above the gap is still shown, with a flag that it may read low. An end pointing at a separate
+  piece of lumen up to 8.5 mm ahead counts as a gap.
 - A flag that flow is slow or fast for a vessel's size means its flow share or reference diameter
   may be off, so doubt its FFR. A parent thinner than its daughters imply may read narrow.
 

@@ -144,6 +144,26 @@ def test_a_splice_moves_only_the_pulled_stations():
     assert np.array_equal(out[:8], pulled[:8]) and np.array_equal(out[13:], pulled[13:]) and np.allclose(out[8:13], path[8:13])
 
 
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_stub_pointing_at_a_far_piece_is_a_gap_not_a_stub(grid):
+    """A mask break 7 mm past a short side end: the vessel goes on, so the end stays and is a gap."""
+    tube = Vessel(1.5, 40)
+    stub = Vessel(1.3, 4, start=(20, 0, 0), heading=60)
+    far = Vessel(1.3, 8, start=(20 + 11 * np.cos(np.radians(60)), 11 * np.sin(np.radians(60)), 0), heading=60)
+    tree = grow(Phantom((tube, stub, far), joints=(((20, 0, 0), 1.3),)), GRIDS[grid])[1]
+    assert len(tree.branches) == 3 and not tree.stubs and len(tree.pieces) == 1
+    ends = [branch for branch in tree.branches if branch.gap]
+    assert len(ends) == 1 and np.linalg.norm(ends[0].points[-1] - stub.axis(np.array([4.0]))[0]) < 2
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_long_vessel_pointing_at_a_far_piece_is_a_gap(grid):
+    """An end 7 mm short of a piece straight ahead is a gap on every grid. Headed over its last
+    2 mm, where the traced path turns to the end face's rim, it was one on 2 of 8."""
+    tree = grow(Phantom((Vessel(1.5, 30), Vessel(1.5, 10, start=(37, 0, 0)))), GRIDS[grid])[1]
+    assert [branch.gap for branch in tree.branches] == [True] and len(tree.pieces) == 1
+
+
 def test_a_gap_and_touching_vessels_are_flagged():
     """The branch ending at a break is a gap and the far piece has no root; two trees whose
     vessels touch are flagged there and nowhere else."""
