@@ -1091,10 +1091,12 @@ case, revision or kind, before it completes, and when its saved files fail their
 - `parent` is -1 at a root. `start` and `end` are mm from the ostium along the tree, and `stenosis`
   is the diameter stenosis at the throat, 0 to 1.
 - `held` stations take the nearest trusted station's area: the first 1 mm of a root branch, the last
-  1.5 mm of an end, junction zones (including where a pruned stub's lumen joins), and spur runs
-  that touch them. A branch with no trusted station takes its reference area.
+  1.5 mm of an end, junction zones and spur runs that touch them. Where a pruned stub's lumen
+  joins, also marked `junction`, they keep their area up to the reference's. A branch with no
+  trusted station takes its reference area.
 - A lesion is a stretch under 0.7 of the reference for at least 1 mm. Stretches less than 1 mm apart
-  are one lesion, with the deepest throat.
+  are one lesion, with the deepest throat. It needs a station whose area is not a copy, and a
+  trusted one if it runs into a vessel's end.
 - `reason` says why a branch's FFR is not reported, such as one tree with no `share`, or a lumen gap.
 - `assumed` is `["blood pressure"]` when neither pressure is given, else empty.
 - `pieces` are lumen components no root reaches, not solved.

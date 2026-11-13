@@ -367,7 +367,7 @@ Research use only. A `coronary_analysis` job (`scan3d/coronary.py`) on the CPU l
    junction's last branch or ends at a gap. Its near-trunk width would take a trunk's share of the
    flow; pruned, the other outlets share that flow, so FFR beyond reads a little low.
 4. Measures area every 0.5 mm from the voxels each station owns, averaged over 1 mm. Stations whose
-   cells take a pruned stub's lumen are junction zones.
+   cells take a pruned stub's lumen are stub zones.
 5. Fits a reference diameter, finds lesions and solves steady hyperaemic pressure in a reduced-order
    model (`ffr_physics.py`). Ostium, tip and junction zones are held at the nearest trusted area,
    with spur runs that touch them; an isolated spur run is a throat and is kept. A branch with no
@@ -376,6 +376,16 @@ Research use only. A `coronary_analysis` job (`scan3d/coronary.py`) on the CPU l
    TCRI and flow-split exponent, for each FFR's band.
 6. Applies the reading rules and writes `result.json`, then `complete.json`. Lesions whose reference
    diameter at the throat is under 1.8 mm are not listed, but their loss stays in the solve.
+
+Pruned stubs in steps 3 to 5:
+
+- A stub's lumen pulls the vessel it leaves into its mouth, so recentring runs again without it.
+  Only the stations this moves take the new path, so the rest of the tree keeps its stations.
+- A stub zone counts the stub's lumen as well as the vessel's, so its area is capped at the
+  reference, not replaced, and a narrowing beside the mouth stays in the solve.
+- A lesion needs a station whose area is not a copy. One that runs into a vessel's end, which the
+  solve takes as the end's taper, needs a trusted station: a stub zone there reads where the mask
+  stops.
 
 The folder's key covers the code, image, masks and inputs, so a revision with the same masks reuses
 it, and each read checks it again. It sits in the case folder, so backups keep it and Clear caches

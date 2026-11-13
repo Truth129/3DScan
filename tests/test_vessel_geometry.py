@@ -6,7 +6,7 @@ import pytest
 from scipy.spatial import cKDTree
 from synthetic_vessels import GRIDS, Phantom, Stenosis, Vessel
 
-from scan3d.vessel_geometry import centrelines, contact, lumen, measure, ostia
+from scan3d.vessel_geometry import _splice, centrelines, contact, lumen, measure, ostia
 
 TUBES = {
     "straight r1.0": Vessel(1.0, 30),
@@ -120,6 +120,28 @@ def test_a_clipped_side_stub_is_pruned_and_a_long_side_branch_stays(grid):
     side = Vessel(1.2, 12, start=(20, 0, 0), heading=60)
     tree = grow(Phantom((tube, side), joints=(((20, 0, 0), 1.2),)), GRIDS[grid])[1]
     assert len(tree.branches) == 3 and not tree.stubs
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_pruned_stub_does_not_pull_the_vessel_it_leaves(grid):
+    """Recentring must not hand the stub's lumen to the trunk's cells: it pulled the trunk 0.8-2.7 mm
+    into the mouth and added 0.2-1.5 mm to its length, and next to a narrowing made a false throat."""
+    tube = Vessel(1.5, 40)
+    alone = grow(Phantom((tube,)), GRIDS[grid])[1].branches[0].points
+    tree = grow(Phantom((tube, Vessel(1.3, 4, start=(20, 0, 0), heading=60)), joints=(((20, 0, 0), 1.3),)), GRIDS[grid])[1]
+    assert len(tree.branches) == 1 and len(tree.stubs) == 1
+    length = [np.linalg.norm(np.diff(points, axis=0), axis=1).sum() for points in (tree.branches[0].points, alone)]
+    assert length[0] == pytest.approx(length[1], abs=0.2)
+
+
+def test_a_splice_moves_only_the_pulled_stations():
+    """Stations a stub's lumen pulled off the vessel take the straight path, as many as before;
+    the rest keep their place."""
+    path = np.column_stack([np.linspace(0, 10, 21), np.zeros(21), np.zeros(21)])
+    pulled = path.copy()
+    pulled[8:13, 1] = [0.2, 0.6, 0.8, 0.6, 0.2]
+    out = _splice(pulled, path, 0.1)
+    assert np.array_equal(out[:8], pulled[:8]) and np.array_equal(out[13:], pulled[13:]) and np.allclose(out[8:13], path[8:13])
 
 
 def test_a_gap_and_touching_vessels_are_flagged():

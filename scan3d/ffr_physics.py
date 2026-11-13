@@ -101,7 +101,8 @@ class Network:
 @dataclass(frozen=True, eq=False)
 class Lesion:
     """A reported narrowing: r_eq under 0.7 of the reference for at least 1 mm, with runs less
-    than 1 mm apart taken as one."""
+    than 1 mm apart taken as one, read on at least one station whose area is not a copy (a trusted
+    one if it runs into a vessel's end)."""
 
     branch: int
     throat: int  # station with the least r_eq/r_ref
@@ -125,7 +126,8 @@ class Result:
     pressure: list[np.ndarray]  # per station, mmHg; NaN where not solved
     ffr: list[np.ndarray]  # P/Pa per station; NaN where not reported
     reason: list[str | None]  # per branch, why FFR is not reported
-    held: list[np.ndarray]  # stations whose area was replaced by the nearest trusted one
+    held: list[np.ndarray]  # stations whose area was replaced by the nearest trusted one, or capped
+    area: list[np.ndarray]  # per station as solved, mm²
     flags: tuple[str, ...]
 
 
@@ -249,18 +251,25 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
         if parent >= 0:
             children[parent].append(branch)
             depth[branch] = depth[parent] + stations[parent].s[-1]
-    area, held = _held(stations, parents, children)
-    for branch, (values, st) in enumerate(zip(area, stations)):
-        empty = np.flatnonzero(~(np.isfinite(values) & (values > 0)))
+    replaced, capped = _zones(stations, parents, children)
+    held = [bad | stub for bad, stub in zip(replaced, capped)]
+    for branch, (st, kept) in enumerate(zip(stations, held)):
+        # Stations that keep their area need one; held stations take another's, checked below.
+        empty = np.flatnonzero(~kept & ~(np.isfinite(st.area) & (st.area > 0)))
         if len(empty):
             raise ValueError(f"Branch {branch} station {empty[0]} has no lumen area")
         back = np.flatnonzero(np.diff(st.s) < 0)
         if len(back):
             raise ValueError(f"Branch {branch} station {back[0] + 1} runs backwards along the centreline")
-    radius = [np.sqrt(values / np.pi) for values in area]
     leaves = [branch for branch in range(len(parents)) if not children[branch]]
     paths = _paths(tree, stations, parents, depth, leaves)
     reference = _reference(stations, parents, children, held, depth, paths, contact)
+    area = _held(stations, replaced, capped, reference)
+    for branch, values in enumerate(area):
+        empty = np.flatnonzero(~(np.isfinite(values) & (values > 0)))
+        if len(empty):
+            raise ValueError(f"Branch {branch} station {empty[0]} has no lumen area")
+    radius = [np.sqrt(values / np.pi) for values in area]
     for branch, untrusted in enumerate(held):
         if untrusted.all():
             # Nothing here can be measured: a short branch between junctions is all mixed cells,
@@ -282,7 +291,11 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
             else:
                 spans.append((first, last, start, end))
         for first, last, start, end in spans:
-            if end - start >= _LESION_LENGTH:
+            # A copied area reads no narrowing, so a lesion needs a station whose area is not a copy.
+            # One that runs into a vessel's end, which the solve takes as the end's taper, needs a
+            # trusted station: a stub zone there reads the taper of a mask that stops.
+            tapers = last == len(ratio) - 1 and not children[branch]
+            if end - start >= _LESION_LENGTH and (~(held if tapers else replaced)[branch][first : last + 1]).any():
                 throat = first + int(np.argmin(ratio[first : last + 1]))
                 lesions.append(
                     Lesion(
@@ -345,7 +358,7 @@ def analyse(tree: Tree, stations: list[Stations], physiology: Physiology, contac
     pressure = [values / MMHG for values in pressure]
     ffr = [values / aortic if text is None else np.full(len(values), np.nan) for values, text in zip(pressure, reason)]
     flags += _plausibility(flow, reference, reason, children, physiology.exponent)
-    return Result(physiology, aortic, network, reference, lesions, outlet_radius, flow * 6e7, pressure, ffr, reason, held, tuple(flags))
+    return Result(physiology, aortic, network, reference, lesions, outlet_radius, flow * 6e7, pressure, ffr, reason, held, area, tuple(flags))
 
 
 def band(result: Result, tree: Tree, stations: list[Stations], voxel: float, contact: list[np.ndarray] | None = None) -> tuple[list, list]:
@@ -413,36 +426,59 @@ def _plausibility(flow: np.ndarray, reference: list[np.ndarray], reason: list[st
     return flags
 
 
-def _held(stations: list[Stations], parents: list[int], children: list[list[int]]) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Areas with untrusted stations replaced by the nearest trusted one in the same branch.
+def _zones(stations: list[Stations], parents: list[int], children: list[list[int]]) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Per branch, the untrusted stations, whose area `_held` replaces, and the stub stations, whose
+    area it caps.
 
     Untrusted: the first mm of a root branch, the last 1.5 mm of an end, junction zones, whose
     mixed cells read false narrowings worth 0.5-7 mmHg on a healthy Y, and spur runs touching
     those zones, which at blunt ends lose real end-cap lumen (a 2.5 mm tube's last trusted station
-    read 0.40-0.48 of its area). A branch with no trusted station takes its own median area here,
-    and `analyse` gives it its reference area once that is fitted.
+    read 0.40-0.48 of its area). Stub stations count a pruned stub's lumen (`Stations.stub`), as do
+    spur runs touching only them. Neither feeds the reference fit.
     """
-    area, held = [], []
+    untrusted, capped = [], []
     for branch, st in enumerate(stations):
         zone = st.junction.copy()
         if parents[branch] < 0:
             zone |= st.s < _OSTIUM
         if not children[branch]:
             zone |= st.s > st.s[-1] - _TIP
-        untrusted = zone.copy()
+        stub = np.zeros(len(st.s), dtype=bool) if st.stub is None else st.stub & ~zone
+        bad = zone.copy()
         # A spur run touching an ostium, tip or junction zone is lost end-cap or junction lumen and
         # extends the zone. An isolated one is a throat: its inscribed radius, and so the spur rule's
         # cover, collapses there, and holding it would erase a real narrowing.
         for first, last in _runs(st.spur):
             if zone[max(first - 1, 0) : last + 2].any():
-                untrusted[first : last + 1] = True
-        trusted = np.flatnonzero(~untrusted)
-        if len(trusted):
-            area.append(st.area[trusted[np.abs(np.arange(len(st.s))[:, None] - trusted).argmin(1)]])
+                bad[first : last + 1] = True
+            elif stub[max(first - 1, 0) : last + 2].any():
+                stub[first : last + 1] = True
+        untrusted.append(bad)
+        capped.append(stub & ~bad)
+    return untrusted, capped
+
+
+def _held(stations: list[Stations], untrusted: list[np.ndarray], capped: list[np.ndarray], reference: list[np.ndarray]) -> list[np.ndarray]:
+    """Areas as solved.
+
+    A stub station's cell adds the stub's lumen to the vessel's, so it keeps the lesser of its own
+    area and the reference's. Replaced by the nearest trusted area, three stub mouths in a row read
+    8 of 16 synthetic narrowings among them within 0.05 (16 capped); capped at that area instead,
+    they carried a narrowing just upstream on to a vessel's end, which lost most of its drop.
+    Untrusted stations take the nearest trusted or stub station's area. A branch with neither takes
+    its own median area here, and `analyse` gives it its reference area once that is fitted.
+    """
+    area = []
+    for st, bad, stub, healthy in zip(stations, untrusted, capped, reference):
+        values = st.area.astype(float).copy()
+        cap = np.pi * healthy**2
+        values[stub] = np.minimum(values[stub], cap[stub])
+        source = np.flatnonzero(~bad)
+        if len(source):
+            area.append(values[source[np.abs(np.arange(len(st.s))[:, None] - source).argmin(1)]])
         else:
             area.append(np.full(len(st.s), np.median(st.area)))
-        held.append(untrusted)
-    return area, held
+    return area
 
 
 def _paths(tree: Tree, stations: list[Stations], parents: list[int], depth: np.ndarray, leaves: list[int]) -> list[list[int]]:

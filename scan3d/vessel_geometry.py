@@ -34,6 +34,9 @@ _STUB_LENGTH = 8.0  # mm along the traced path from the junction
 _STUB_WIDTHS = 2.25  # own widths outside the other vessels' lumen
 _SMOOTH = 2  # stations on each side of a moving average, applied twice when recentring
 _PASSES = 2  # recentring passes
+# Recentred with and without a pruned stub's lumen, stations farther apart than this fraction of a
+# voxel edge were moved by the stub; nearer is the noise of cells that resampling shifted.
+_SPLICE = 0.25
 _GAP_REACH = 5.0  # mm from a branch end to a rootless piece that makes the end a gap
 _GAP_VOLUME = 5.0  # mm³; smaller rootless pieces are noise, not the far side of a gap
 
@@ -83,6 +86,9 @@ class Stations:
     inscribed: np.ndarray  # distance from each station to the nearest wall midpoint, mm
     spur: np.ndarray  # some of the station's voxels were too far from it to count, such as a pruned stub
     junction: np.ndarray  # within reach of a junction, where the branches' lumen mixes
+    # Within `window` of a cell that counts a pruned stub's lumen: such a cell can only read wider
+    # than the vessel, so the physics caps it rather than replacing it. None from older callers.
+    stub: np.ndarray | None = None
 
 
 def lumen(mask: np.ndarray, affine: np.ndarray) -> Lumen:
@@ -155,7 +161,8 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
     where the mask clips a side branch (see _STUB_LENGTH), unless they end near a rootless piece
     of lumen, which makes them a gap. Neither a root's branch nor a junction's last branch goes.
     Each branch is then resampled every `spacing` mm and moved to the centroids of its stations'
-    cells, so it follows the lumen centre between voxel centres. Lumen with no root is listed as pieces; a branch that ends near a sizeable piece is
+    cells, so it follows the lumen centre between voxel centres; where a pruned stub's lumen pulls
+    it into the stub's mouth, it is moved again without that lumen. Lumen with no root is listed as pieces; a branch that ends near a sizeable piece is
     marked `gap`, since a break in the mask hides the flow and the narrowing that caused it.
 
     `covered`, a mask over the lumen points, is lumen no trace starts from, though paths may cross
@@ -185,25 +192,14 @@ def centrelines(lumen: Lumen, roots: np.ndarray, spacing: float = 0.5, covered: 
 
     stations = [_resample(lumen.points[chain], spacing) for chain, _, _ in chains]
     # A root whose whole component lies within its first cover grows no branch.
-    for _ in range(_PASSES if chains else 0):
-        owner = assign(lumen, stations)
-        inside = owner >= 0
-        total = sum(len(branch) for branch in stations)
-        counts = np.bincount(owner[inside], minlength=total)
-        centroid = np.concatenate(stations)
-        filled = counts > 0
-        for axis in range(3):
-            sums = np.bincount(owner[inside], weights=lumen.points[inside, axis], minlength=total)
-            centroid[filled, axis] = sums[filled] / counts[filled]
-        moved, start = [], 0
-        for chain, branch in zip(chains, stations):
-            points = centroid[start : start + len(branch)]
-            start += len(branch)
-            # The end cell of a polyline is a half-space, so its centroid drifts sideways pass by
-            # pass. Roots, junctions and ends stay on their TEASAR voxels instead.
-            points[[0, -1]] = lumen.points[[chain[0][0], chain[0][-1]]]
-            moved.append(_resample(_smooth(_smooth(points)), spacing))
-        stations = moved
+    if chains:
+        first, stations = stations, _recentre(lumen, chains, stations, spacing)
+        if stubs:
+            # A pruned stub's lumen pulls the vessel it leaves into its mouth. Recentred again without
+            # that lumen, the vessel runs straight past; only stations that this moves take that path,
+            # as many as before, so the rest of the tree keeps its stations.
+            straight = _recentre(lumen, chains, first, spacing, tuple(lumen.points[chain] for chain in stubs))
+            stations = [_splice(pulled, path, _SPLICE * lumen.edge) for pulled, path in zip(stations, straight)]
 
     pieces = np.stack([np.bincount(inverse, weights=lumen.points[rootless, axis]) for axis in range(3)], 1) / sizes[:, None]
     gap = np.zeros(len(chains), dtype=bool)
@@ -391,6 +387,65 @@ def _stubby(lumen: Lumen, radius: np.ndarray, chains: list[tuple[list[int], int,
     return s[-1] - s[outside[0]] < _STUB_WIDTHS * width
 
 
+def _recentre(
+    lumen: Lumen, chains: list[tuple[list[int], int, int]], stations: list[np.ndarray], spacing: float, stubs: tuple[np.ndarray, ...] = ()
+) -> list[np.ndarray]:
+    """Each branch moved to the centroids of its stations' cells, smoothed and resampled, _PASSES
+    times. Voxels nearer one of `stubs` outside the vessels than any station, as `measure` marks
+    a stub zone, are left out of the centroids."""
+    for _ in range(_PASSES):
+        owner = assign(lumen, stations)
+        inside = owner >= 0
+        total = sum(len(branch) for branch in stations)
+        if len(stubs):
+            placed = np.concatenate(stations)
+            inscribed, _ = lumen.wall.query(placed)
+            path = np.concatenate(stubs)
+            distance, nearest = cKDTree(placed).query(path)
+            path = path[distance > inscribed[nearest]]
+            inside &= cKDTree(np.concatenate([placed, path])).query(lumen.points)[1] < total
+        counts = np.bincount(owner[inside], minlength=total)
+        centroid = np.concatenate(stations)
+        filled = counts > 0
+        for axis in range(3):
+            sums = np.bincount(owner[inside], weights=lumen.points[inside, axis], minlength=total)
+            centroid[filled, axis] = sums[filled] / counts[filled]
+        moved, start = [], 0
+        for chain, branch in zip(chains, stations):
+            points = centroid[start : start + len(branch)]
+            start += len(branch)
+            # The end cell of a polyline is a half-space, so its centroid drifts sideways pass by
+            # pass. Roots, junctions and ends stay on their TEASAR voxels instead.
+            points[[0, -1]] = lumen.points[[chain[0][0], chain[0][-1]]]
+            moved.append(_resample(_smooth(_smooth(points)), spacing))
+        stations = moved
+    return stations
+
+
+def _splice(stations: np.ndarray, path: np.ndarray, tolerance: float) -> np.ndarray:
+    """`stations` with each run farther than `tolerance` from the polyline `path` replaced by as many
+    points, evenly spaced along `path` between the run's neighbours. Both share their end points."""
+    start, step = path[:-1], np.diff(path, axis=0)
+    t = np.clip(np.einsum("mkd,kd->mk", stations[:, None] - start, step) / np.maximum(np.einsum("kd,kd->k", step, step), 1e-12), 0, 1)
+    gap = np.linalg.norm(stations[:, None] - (start + t[..., None] * step), axis=2)
+    nearest = gap.argmin(1)
+    s = _arc(path)
+    along = s[nearest] + t[np.arange(len(stations)), nearest] * np.linalg.norm(step[nearest], axis=1)
+    out = stations.copy()
+    for first, last in _runs(gap.min(1) > tolerance):
+        if first == 0 or last == len(stations) - 1 or not along[first - 1] < along[last + 1]:
+            return path  # a fold the runs cannot follow: take the whole recentred path
+        at = np.linspace(along[first - 1], along[last + 1], last - first + 3)[1:-1]
+        out[first : last + 1] = np.stack([np.interp(at, s, path[:, axis]) for axis in range(3)], 1)
+    return out
+
+
+def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """First and last index of each run of True."""
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], mask.astype(int), [0]])))
+    return list(zip(edges[::2], edges[1::2] - 1))
+
+
 def _arc(points: np.ndarray) -> np.ndarray:
     return np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))])
 
@@ -449,9 +504,10 @@ def measure(
     an end station's point count towards that station. A voxel farther from its station than
     the cover distance (as `centrelines` uses) is lumen the tree does not follow, such as a
     pruned stub, so it is left out and the station marked `spur`. With `parents` (each branch's
-    parent, -1 at a root), stations within that distance of a junction are marked `junction`. So
-    are stations within `window` of a cell that counts lumen of one of `stubs` (Tree.stubs): voxels
-    nearer a stub's path outside the vessels than any station, which would widen the vessel there.
+    parent, -1 at a root), stations within that distance of a junction are marked `junction`.
+    Stations within `window` of a cell that counts lumen of one of `stubs` (Tree.stubs), voxels
+    nearer a stub's path outside the vessels than any station, are marked `stub`: that lumen can
+    only widen the vessel there, so the reading is an upper bound, not a mixed junction cell.
     At blunt ends the rule also drops real end-cap lumen, so end stations read low; the physics
     holds spur runs that touch an end or junction. Feed it `centrelines` output: at an eccentric narrowing off the true
     axis, the spur rule would remove real lumen.
@@ -478,7 +534,7 @@ def measure(
         low, high = np.clip(s - window / 2, s[0], s[-1]), np.clip(s + window / 2, s[0], s[-1])
         area = (np.interp(high, edges, volume) - np.interp(low, edges, volume)) / (high - low)
         junction = np.zeros(len(branch), dtype=bool)
-        result.append(Stations(branch, s, counts[start:stop], area, inscribed[start:stop], spur[start:stop], junction))
+        result.append(Stations(branch, s, counts[start:stop], area, inscribed[start:stop], spur[start:stop], junction, np.zeros(len(branch), dtype=bool)))
         start = stop
     for child, parent in enumerate(parents or ()):
         if parent >= 0:
@@ -495,5 +551,5 @@ def measure(
         for station in np.unique(owner[counted[mixed]]):
             branch = int(np.searchsorted(start, station, side="right")) - 1
             s = result[branch].s
-            result[branch].junction[np.abs(s - s[station - start[branch]]) <= window] = True
+            result[branch].stub[np.abs(s - s[station - start[branch]]) <= window] = True
     return result, int((owner < 0).sum())

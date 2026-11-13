@@ -361,7 +361,7 @@ def _analyse(service, job, revision, inputs, key):
                     "pressure": _column(result.pressure[b], 2),
                     "reported": readings.shown[b].tolist(),
                     "held": result.held[b].tolist(),
-                    "junction": st.junction.tolist(),
+                    "junction": (st.junction if st.stub is None else st.junction | st.stub).tolist(),
                     "spur": st.spur.tolist(),
                     "contact": np.asarray(touching[b], dtype=bool).tolist(),
                 },

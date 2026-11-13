@@ -236,3 +236,68 @@ def test_a_healthy_wide_vessel_has_no_lesion():
     tree = centrelines(found, ostia(found, np.argwhere(aorta) @ affine[:3, :3].T + affine[:3, 3]))
     stations, _ = measure(found, [branch.points for branch in tree.branches], parents=[branch.parent for branch in tree.branches])
     assert analyse(tree, stations, Physiology(150, share=1 / 3)).lesions == []
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_narrowing_just_past_a_pruned_stub_is_still_read(grid):
+    """Stations next to a pruned stub's mouth count its lumen. Held at a neighbour's area, they
+    erased a 50% narrowing 3 mm on: listed on 2 of 8 grids within 0.05 of the trunk alone."""
+    trunk = Vessel(1.5, 40, stenoses=(Stenosis(23, 4, 0.5),))
+    read = []
+    for phantom in (Phantom((trunk,)), Phantom((trunk, Vessel(1.3, 4, start=(20, 0, 0), heading=60)), joints=(((20, 0, 0), 1.3),))):
+        mask, aorta, affine = phantom.masks(GRIDS[grid])
+        found = lumen(mask, affine)
+        tree = centrelines(found, ostia(found, np.argwhere(aorta) @ affine[:3, :3].T + affine[:3, 3]))
+        stations, _ = measure(found, [branch.points for branch in tree.branches], parents=[branch.parent for branch in tree.branches], stubs=tree.stubs)
+        result = analyse(tree, stations, Physiology(150, 120, 80, 60, share=1 / 3))
+        at = [trunk.locate(stations[x.branch].points[x.throat : x.throat + 1])[0][0] for x in result.lesions]
+        read.append([x.stenosis for x, s in zip(result.lesions, at) if abs(s - 23) < 3])
+    (alone,), stubbed = read
+    assert len(tree.stubs) == 1 and len(stubbed) == 1 and stubbed[0] == pytest.approx(alone, abs=0.05)
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_narrowing_just_before_a_stub_near_an_end_keeps_its_drop(grid):
+    """Past a 70% narrowing, the stations by a stub's mouth 3 mm from the end read the vessel and the
+    stub. Capped at the nearest trusted area, they carried the narrowing on to the end, which the
+    solve took as the end's taper: 0.20-0.35 of a 0.36-0.47 FFR drop was lost. Capped at the
+    reference, the drop stays within 0.06 of the trunk alone's."""
+    trunk = Vessel(1.5, 40, stenoses=(Stenosis(34, 4, 0.7),))
+    drops = []
+    for phantom in (Phantom((trunk,)), Phantom((trunk, Vessel(1.3, 4, start=(37, 0, 0), heading=60)), joints=(((37, 0, 0), 1.3),))):
+        mask, aorta, affine = phantom.masks(GRIDS[grid])
+        found = lumen(mask, affine)
+        tree = centrelines(found, ostia(found, np.argwhere(aorta) @ affine[:3, :3].T + affine[:3, 3]))
+        stations, _ = measure(found, [branch.points for branch in tree.branches], parents=[branch.parent for branch in tree.branches], stubs=tree.stubs)
+        ffr = analyse(tree, stations, Physiology(150, 120, 80, 60, share=1 / 3)).ffr[0]
+        drops.append(ffr[np.abs(trunk.locate(stations[0].points)[0] - 28).argmin()] - ffr[-1])
+    assert len(tree.branches) == 1 and len(tree.stubs) == 1 and drops[1] == pytest.approx(drops[0], abs=0.06)
+
+
+def test_a_taper_read_only_beside_a_stub_at_an_end_is_no_lesion():
+    """Where a mask stops, its taper reads as a narrowing that stub stations keep under their cap.
+    Running into the end, it needs a trusted station to be a lesion: on capped stations alone it
+    was listed. A dip there that recovers before the end is still one."""
+    s = np.arange(0, 20 + 1e-9, 0.5)
+    points = np.column_stack([s, np.zeros(len(s)), np.zeros(len(s))])
+    tree = Tree(np.zeros((1, 3)), [Branch(points, -1, 0, False)], np.empty((0, 3)), np.empty(0))
+    found = []
+    for radius in (np.minimum(1.5, 1.5 - 0.18 * (s - 15)), np.where(np.abs(s - 17) < 1.5, 0.75, 1.5)):
+        none = np.zeros(len(s), dtype=bool)
+        stations = [Stations(points, s, np.ones(len(s), dtype=int), np.pi * radius**2, radius, none, none, s >= 15)]
+        found.append(analyse(tree, stations, Physiology(150, share=1 / 3)).lesions)
+    assert found[0] == [] and len(found[1]) == 1
+
+
+def test_a_narrowing_on_copied_areas_only_is_no_lesion():
+    """A root widening over its trusted first 15 mm into a long held end: the held stations copy
+    the last trusted area while the reference climbs on, which listed a 35% narrowing at the tip
+    that no station read."""
+    s = np.arange(0, 30 + 1e-9, 0.5)
+    radius = np.where(s < 15, 1.0 + 0.07 * s, 2.0 - 0.03 * (s - 15))
+    points = np.column_stack([s, np.zeros(len(s)), np.zeros(len(s))])
+    tree = Tree(np.zeros((1, 3)), [Branch(points, -1, 0, False)], np.empty((0, 3)), np.empty(0))
+    held = s >= 15
+    stations = [Stations(points, s, np.ones(len(s), dtype=int), np.pi * radius**2, radius - 0.2, held, np.zeros(len(s), dtype=bool), held)]
+    result = analyse(tree, stations, Physiology(150, share=1 / 3))
+    assert result.held[0][held].all() and result.reference[0][-1] / 2.0 > 1 / 0.7 and result.lesions == []
