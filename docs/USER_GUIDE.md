@@ -721,10 +721,18 @@ The **FFR** tab appears when the revision has **Coronary arteries** from ImageCA
 measures lumen area along them and solves steady hyperaemic pressure: Poiseuille resistance along
 the vessels, and Young–Tsai viscous and expansion losses across each narrowing.
 
+The lumen mask gives each vessel's width and how it changes along the vessel. By default the CT
+values then correct how thick the mask draws the vessels.
+
 Inputs:
 
 - **Lumen**, **Aorta** and **Myocardium** come from the revision's segments. The lumen starts as
   CAS-Net's, then the ImageCAS-X nnU-Net's, then TotalSegmentator's, whichever the revision has.
+- **Lumen width** is **Mask, corrected from the CT** unless you choose **Mask as drawn**. Two
+  models' masks of one scan differ by a few tenths of a millimetre in width all along the vessels,
+  enough to move FFR. The correction reads that offset where the CT shows the lumen's edge and moves
+  every width by it, so either mask gives nearly the same widths. **Mask as drawn** is what every
+  run used before this choice.
 - **LV mass** is required without a myocardium mask. With one, its volume × 1.05 g/mL is used.
 - **SBP**, **DBP** and **heart rate** are optional. Missing blood pressure is taken as 120/80 and
   marked as assumed. Heart rate is recorded only and never assumed.
@@ -754,7 +762,9 @@ all trees' inflow.
 FFR +20 mm is read nearer, with a note, if the vessel ends or FFR is not reported there. Stations
 under 1.8 mm are solved but not reported. Notes under a row say why a value is missing, or that a
 lesion uses a neighbour's area (ostium, junction or vessel end), so its %DS and drop are uncertain.
-Every input, assumption and model constant is listed under the table, with units.
+Every input, assumption and model constant is listed under the table, with units. **Lumen width**
+there gives the correction applied in mm, the edge blur it took out and how many stations the CT
+was read at.
 
 Each FFR shows a band in brackets, such as 0.84 (0.78–0.90): the lowest and highest FFR when the
 solve is repeated with every lumen half a voxel wider or narrower, resting flow 25% lower or higher,
@@ -785,6 +795,22 @@ Limits:
   piece of lumen up to 8.5 mm ahead counts as a gap.
 - A flag that flow is slow or fast for a vessel's size means its flow share or reference diameter
   may be off, so doubt its FFR. A parent thinner than its daughters imply may read narrow.
+- The CT corrects how thick the mask draws the vessels, not its shape. Where a model under-draws a
+  narrowing, so does the result.
+- A narrowing shorter than about 5 mm reads wider than it is: the scan's blur along the vessel is
+  as long as the narrowing.
+- The corrected width rests on the CT's half-height edge at vessels of about 1.5 mm and more. It
+  has not been checked against a known true width on a real scan.
+- That edge is taken against soft tissue, not the fat or lung beyond the vessel wall, which
+  suits a wall of about 0.5 mm. On test phantoms a vessel in fat reads 0.3 mm thin with no wall
+  and 0.2 mm wide with a 1 mm wall. One in muscle reads about 0.2 mm thin, more where the
+  contrast is weaker, with any mask. So the correction shown is not only the mask's error.
+- With too few stations read, or a correction beyond 1 mm, the widths stay the mask's and a flag
+  says so.
+- Calcium or a stent that reads 150 HU above the lumen is flagged, and widths there are less
+  certain. Thin or faint calcium is not flagged and reads about 0.3 mm wide.
+- On slices of about 0.6 mm or thicker, a vessel lying in the slice plane can be traced as two
+  branches. It carries a contact note, and its FFR is unreliable.
 
 ## Export
 

@@ -4,6 +4,7 @@ import {
   fadeUnderTube,
   ffrColour,
   LUMEN_IDS,
+  lumenWidthText,
   NOT_REPORTED,
   preferred,
   tubeGeometry,
@@ -100,6 +101,19 @@ describe('coronary inputs', () => {
     expect(preferred(ids('coronary_arteries:coronary_arteries', 'imagecasx_coronary:coronary_arteries'), LUMEN_IDS)).toBe(
       'imagecasx_coronary:coronary_arteries',
     );
+  });
+});
+
+describe('coronary lumen width', () => {
+  it('says what the CT corrected, and reads a result from before the choice as the mask as drawn', () => {
+    const inputs = { lumen_width: 'ct' } as CoronaryResult['inputs'];
+    expect(lumenWidthText({ inputs, lumen: { width: 'ct', calibrated: true, offset: 0.42, blur: 1.06, read: 310, stations: 480 } })).toBe(
+      'mask, corrected from the CT by +0.42 mm · edge blur 1.1 mm · CT read at 310 of 480 stations',
+    );
+    expect(lumenWidthText({ inputs, lumen: { width: 'ct', calibrated: false, offset: null, blur: null, read: 12, stations: 480 } })).toBe(
+      'mask as drawn · not corrected · CT read at 12 of 480 stations',
+    );
+    expect(lumenWidthText({ inputs: {} as CoronaryResult['inputs'] })).toBe('mask as drawn');
   });
 });
 

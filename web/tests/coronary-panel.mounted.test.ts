@@ -115,6 +115,7 @@ describe('Coronary panel', () => {
       heart_rate: null,
       share: null,
       ostia: [[1, 2, 3]],
+      lumen_width: 'ct',
     });
   });
 
@@ -130,6 +131,8 @@ describe('Coronary panel', () => {
     expect(view.text()).toContain('Tube needs the native 3D view');
     expect(view.text()).toContain('assumed');
     expect(view.text()).toContain('5 mmHg');
+    // This result is from before the lumen width choice, when every run used the mask as drawn.
+    expect(view.text()).toContain('mask as drawn');
     // Four columns fit the sidebar: one FFR column holds a branch's distal FFR and a lesion's FFR +20 mm.
     expect(view.all(element => element.getAttribute('scope') === 'col').map(cell => cell.textContent.trim())).toEqual(['Vessel', '%DS', 'FFR', 'ΔFFR']);
     const [branch, lesion] = view.all(element => element.tagName === 'TR' && element.children[0]?.getAttribute('scope') === 'row');
@@ -170,7 +173,8 @@ describe('Coronary panel', () => {
     expect(view.text()).toContain('The newest run failed: Ostium point 1 is more than 3 mm from the lumen');
     view.labelled('Coronary analysis inputs')!.dispatchEvent(new Event('submit'));
     await settled();
-    expect(coronaryApi.start).toHaveBeenCalledWith('c1', 'r1', expect.objectContaining({ aorta: 'total:aorta', ostia: [] }));
+    // The run shown is from before the lumen width choice and used the mask as drawn; the next run still takes the default.
+    expect(coronaryApi.start).toHaveBeenCalledWith('c1', 'r1', expect.objectContaining({ aorta: 'total:aorta', ostia: [], lumen_width: 'ct' }));
     expect(view.text()).not.toContain('The newest run failed');
   });
 

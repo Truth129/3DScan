@@ -5,6 +5,17 @@ import { rasToLps } from './cornerstone-frame';
 /** Research CT-FFR (format `scan3d-coronary-v1`). Coordinates are patient RAS mm. */
 export const CORONARY_NOTICE = 'Research use only. Not for diagnostic use.';
 export const MAX_OSTIA = 4;
+/** Each station's lumen width: the mask's corrected from the CT values, or the mask's as drawn. Runs from before the choice have none and used the mask as drawn. */
+export type LumenWidth = 'ct' | 'mask';
+/** How the CT corrected the mask's widths; absent from results saved before it existed. `offset` (mm) and `blur` (the edge width taken out, FWHM, mm) are null unless `calibrated`. */
+export interface CoronaryLumen {
+  width: LumenWidth;
+  calibrated: boolean;
+  offset: number | null;
+  blur: number | null;
+  read: number;
+  stations: number;
+}
 
 export interface CoronaryInput {
   lumen: string;
@@ -16,6 +27,7 @@ export interface CoronaryInput {
   heart_rate: number | null;
   share: number | null;
   ostia: Point[];
+  lumen_width?: LumenWidth;
 }
 export interface CoronarySummary {
   trees: number;
@@ -38,6 +50,10 @@ export interface CoronaryStations {
   s: number[];
   area: (number | null)[];
   diameter: (number | null)[];
+  /** The mask's diameter as drawn, and the CT's own reading where the station was read; these three are absent from older results. */
+  mask_diameter?: (number | null)[];
+  ct_diameter?: (number | null)[];
+  calcium?: boolean[];
   reference_diameter: (number | null)[];
   ffr: (number | null)[];
   /** The uncertainty band per station; absent from results saved before it existed. */
@@ -105,6 +121,7 @@ export interface CoronaryResult {
   constants: Record<string, number>;
   /** The band's corners: voxel size in mm, resting flow factors, TCRI values and flow-split exponents. */
   band?: { voxel: number; flow: number[]; tcri: number[]; exponent: number[]; cutoff: number };
+  lumen?: CoronaryLumen;
   aortic_pressure: number;
   assumed: string[];
   flags: string[];
@@ -122,6 +139,17 @@ export const coronaryApi = {
   result: (id: string, rid: string, analysisId: string, signal?: AbortSignal) =>
     request<CoronaryResult>(`${coronaryUrl(id, rid)}/${encodeURIComponent(analysisId)}`, { signal }),
 };
+
+/** What a result's lumen widths are, for the list under the table. Results from before the choice used the mask as drawn. */
+export function lumenWidthText(result: Pick<CoronaryResult, 'inputs' | 'lumen'>): string {
+  const lumen = result.lumen;
+  if ((lumen?.width ?? result.inputs.lumen_width ?? 'mask') === 'mask') return 'mask as drawn';
+  if (!lumen) return 'mask, corrected from the CT';
+  const read = `CT read at ${lumen.read} of ${lumen.stations} stations`;
+  if (!lumen.calibrated || lumen.offset === null) return `mask as drawn · not corrected · ${read}`;
+  const blur = lumen.blur === null ? '' : ` · edge blur ${lumen.blur.toFixed(1)} mm`;
+  return `mask, corrected from the CT by ${lumen.offset > 0 ? '+' : lumen.offset < 0 ? '−' : ''}${Math.abs(lumen.offset).toFixed(2)} mm${blur} · ${read}`;
+}
 
 /** The first structure in the revision from each preference list; aorta IDs from either task share one identity. */
 export const LUMEN_IDS = ['imagecasx_cas_net:coronary_arteries', 'imagecasx_coronary:coronary_arteries', 'coronary_arteries:coronary_arteries'];
@@ -153,6 +181,7 @@ export interface CoronaryForm {
   heart_rate: number | string | null;
   share: number | string | null;
   ostia: Point[];
+  lumen_width: LumenWidth;
 }
 const numberOrNull = (value: number | string | null | undefined) => (value === '' || value === null || value === undefined ? null : Number(value));
 const within = (value: number | null, low: number, high: number) => value === null || (Number.isFinite(value) && value >= low && value <= high);
@@ -169,6 +198,7 @@ export function coronaryRequest(form: CoronaryForm): { input?: CoronaryInput; pr
     heart_rate: numberOrNull(form.heart_rate),
     share: numberOrNull(form.share),
     ostia: form.ostia.map(point => [...point] as Point),
+    lumen_width: form.lumen_width,
   };
   if (!input.lumen) return { problem: 'Choose the coronary lumen.' };
   if (!input.aorta && !input.ostia.length) return { problem: 'Choose the aorta or add an ostium point.' };

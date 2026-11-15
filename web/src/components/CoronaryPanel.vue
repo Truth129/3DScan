@@ -21,6 +21,7 @@ import {
   formatMM,
   formatStenosis,
   lesionPoint,
+  lumenWidthText,
   needsShare,
   preferred,
   shareFlag,
@@ -52,7 +53,18 @@ const pending = ref<Job>(),
   dismissed = ref('');
 const showTube = ref(true),
   colouring = ref<TubeColouring>('ffr');
-const form = reactive<CoronaryForm>({ lumen: '', aorta: '', myocardium: '', lv_mass: '', sbp: '', dbp: '', heart_rate: '', share: '', ostia: [] });
+const form = reactive<CoronaryForm>({
+  lumen: '',
+  aorta: '',
+  myocardium: '',
+  lv_mass: '',
+  sbp: '',
+  dbp: '',
+  heart_rate: '',
+  share: '',
+  ostia: [],
+  lumen_width: 'ct',
+});
 
 const structures = computed(() => props.revision.structures);
 // The server refuses LV mass alongside a myocardium mask, which gives it.
@@ -72,6 +84,7 @@ const shareWarning = computed(() => {
   return flag ? `${flag[0].toUpperCase()}${flag.slice(1)}, which scales every tree's flow. Clear the flow share and run again.` : '';
 });
 const shareHelpId = useId();
+const widthHelpId = useId();
 const running = computed(() => !!pending.value && ['queued', 'running'].includes(pending.value.status));
 /** A newer failed run is context for the table, which shows the newest complete one; it clears once the user runs again. */
 const lastFailure = computed(() => {
@@ -99,6 +112,8 @@ function fill(inputs?: Partial<CoronaryInput>) {
     heart_rate: text(inputs?.heart_rate),
     share: text(inputs?.share),
     ostia: (inputs?.ostia ?? []).map(point => [...point] as Point),
+    // A run from before the choice used the mask as drawn, which does not make that the next run's choice.
+    lumen_width: inputs?.lumen_width ?? 'ct',
   });
 }
 
@@ -310,6 +325,13 @@ onBeforeUnmount(() => {
         </select></label
       >
       <label class="field"
+        >Lumen width<span :id="widthHelpId" class="help">The mask gives each vessel's shape; the CT corrects how thick the mask draws it</span
+        ><select v-model="form.lumen_width" aria-label="Lumen width" :aria-describedby="widthHelpId">
+          <option value="ct">Mask, corrected from the CT</option>
+          <option value="mask">Mask as drawn</option>
+        </select></label
+      >
+      <label class="field"
         >LV mass, g<span v-if="!form.myocardium" class="coronary-required">required</span
         ><input v-model.number="form.lv_mass" aria-label="LV mass" type="number" min="20" max="1000" step="1" :disabled="!!form.myocardium"
       /></label>
@@ -456,6 +478,10 @@ onBeforeUnmount(() => {
         <div>
           <dt>Myocardium</dt>
           <dd>{{ label(result.inputs.myocardium) }}</dd>
+        </div>
+        <div>
+          <dt>Lumen width</dt>
+          <dd>{{ lumenWidthText(result) }}</dd>
         </div>
         <div>
           <dt>LV mass</dt>
