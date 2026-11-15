@@ -58,6 +58,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/review_volume.py`, `volume_mask_union.py`                       | Volume and frame transport, display unions              |
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange        |
 | `scan3d/coronary.py`, `vessel_geometry.py`, `ffr_physics.py`            | Research CT-FFR job, centrelines and areas, pressure    |
+| `scan3d/lumen_ct.py`                                                    | Lumen mask widths corrected from the CT values          |
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX ROIs      |
 | `scan3d/archive/`                                                       | DICOMweb client, imports, STOW exports, C-STORE sends   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                 |
@@ -368,16 +369,19 @@ Research use only. A `coronary_analysis` job (`scan3d/coronary.py`) on the CPU l
    flow; pruned, the other outlets share that flow, so FFR beyond reads a little low.
 4. Measures area every 0.5 mm from the voxels each station owns, averaged over 1 mm. Stations whose
    cells take a pruned stub's lumen are stub zones.
-5. Fits a reference diameter, finds lesions and solves steady hyperaemic pressure in a reduced-order
+5. With `lumen_width` `ct`, the default, corrects how thick the mask draws the vessels
+   (`lumen_ct.py`): the mask keeps each station's width relative to its neighbours, and the CT
+   gives the offset. See [Lumen width from the CT](#lumen-width-from-the-ct).
+6. Fits a reference diameter, finds lesions and solves steady hyperaemic pressure in a reduced-order
    model (`ffr_physics.py`). Ostium, tip and junction zones are held at the nearest trusted area,
    with spur runs that touch them; an isolated spur run is a throat and is kept. A branch with no
    trusted station takes its reference area. Runs under 0.7 of the reference less than 1 mm apart
    are one lesion. Solves 16 more times, each corner of lumen ± half a voxel, resting flow ±25%,
    TCRI and flow-split exponent, for each FFR's band.
-6. Applies the reading rules and writes `result.json`, then `complete.json`. Lesions whose reference
+7. Applies the reading rules and writes `result.json`, then `complete.json`. Lesions whose reference
    diameter at the throat is under 1.8 mm are not listed, but their loss stays in the solve.
 
-Pruned stubs in steps 3 to 5:
+Pruned stubs in steps 3 to 6:
 
 - A stub's lumen pulls the vessel it leaves into its mouth, so recentring runs again without it.
   Only the stations this moves take the new path, so the rest of the tree keeps its stations.
@@ -393,6 +397,49 @@ Pruned stubs in steps 3 to 5:
 The folder's key covers the code, image, masks and inputs, so a revision with the same masks reuses
 it, and each read checks it again. It sits in the case folder, so backups keep it and Clear caches
 does not remove it. [API.md](API.md#coronary-analysis) has the routes and the result.
+
+### Lumen width from the CT
+
+Two masks of one scan draw the same vessels a few tenths of a millimetre apart in width, by an
+amount that is nearly constant over a scan and differs between models. That moves FFR more than the
+physics does. Step 5 keeps the mask's widths and reads that offset from the CT:
+
+- The CT is read through the full affine on 32 rays across each station, from a centre moved onto
+  the lumen. Only the part of the volume within 7.5 mm of the stations is loaded.
+- A ray's edge is where it falls halfway from the station's centre HU to the ray's own background,
+  taken no lower than 0 HU. The wall is soft tissue and thinner than the blur, so against the fat
+  or lung beyond it the edge would read wide. No lumen HU is carried between stations. A ray is
+  left out when its background is nearly as bright as the centre (a chamber, a vein, another
+  branch) or it lies near values 150 HU above the centre (calcium, a stent), which marks the
+  station `calcium`.
+- The blur comes from the 25-75% edge width of stations 3 mm or wider, or is taken as 1.06 mm
+  with fewer than five. A table for a blurred disc turns each half-height radius into the
+  lumen's. That edge includes the vessel wall, so the blur is not exactly the scan's point spread.
+- A station is read when blur leaves its centre at 0.7 of the lumen's contrast or more (a diameter
+  of about 1.5 times the blur's full width at half maximum), three rays in four were kept, none
+  met calcium, and it is not a junction, spur, stub or contact station. A vessel traced as two
+  branches is contact lumen: read, each branch would be given the whole vessel's width.
+- The scan's offset is the median of CT minus mask diameter over the stations read. Each station
+  moves by the median over those within 7.5 mm on its branch, pulled towards the scan's where they
+  are fewer than 16, and keeps at least half the mask's diameter. A negative scan offset counts
+  as 0 for that pull, so a stretch the CT could not read is not thinned.
+- With fewer than 20 stations read, or an offset beyond 1 mm, nothing is corrected and a flag says
+  so.
+
+Limits:
+
+- A narrowing keeps the mask's shape. Where a model under-draws a narrowing, so does the result.
+- The scan's blur along the vessel is as long as a narrowing under about 5 mm, which reads wide.
+- The absolute width rests on the half-height edge of vessels of about 1.5 mm and more. It has not
+  been checked against a known true width on a real scan.
+- That edge is taken against soft tissue, which suits a wall of about 0.5 mm. On phantoms a vessel
+  in fat reads 0.3 mm thin with no wall and 0.2 mm wide with a 1 mm wall. One in muscle reads
+  about 0.2 mm thin, and 0.3 mm at a 200 HU lumen, whatever the mask. So the offset is not only
+  the mask's error, and two masks that agree do not show the width is right.
+- Only calcium or metal 150 HU above the lumen is marked. Thinner or fainter calcium along 10 mm
+  or more reads about 0.3 mm wide, unmarked.
+- A vessel lying in the slice plane on slices of about 0.6 mm or thicker can be traced as two
+  branches. The contact flag shows it, and FFR beyond is unreliable with either width.
 
 ## Geometry rules
 

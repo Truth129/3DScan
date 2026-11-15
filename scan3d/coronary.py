@@ -2,7 +2,9 @@
 
 Research use only, not for diagnostic use. The job reads the revision's own binary masks on its CT
 grid, never resampled, traces centrelines from the ostia, measures areas and solves hyperaemic
-pressure (`vessel_geometry`, `ffr_physics`). It never makes a revision. Its result lives in
+pressure (`vessel_geometry`, `ffr_physics`). The lumen mask gives each vessel's place and its shape
+along it; by default the CT values then correct how thick the mask draws the vessels (`lumen_ct`).
+It never makes a revision. Its result lives in
 `cases/<case>/coronary/<key>/`: `result.json`, then `complete.json` last. The key covers the code,
 the image, the masks and the inputs, so a later revision with the same masks reuses the folder,
 and every read checks the folder again.
@@ -10,7 +12,7 @@ and every read checks the folder again.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -22,7 +24,7 @@ import scipy
 from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import cKDTree
 
-from . import identity, imaging, review_volume
+from . import identity, imaging, lumen_ct, review_volume
 from .errors import NotFound
 from .ffr_physics import BAND_EXPONENT, BAND_FLOW, BAND_TCRI, Physiology, analyse, band
 from .fileio import atomic_json, atomic_text
@@ -47,8 +49,11 @@ _SHELL = 2.0  # mm; depth of the shell of lumen whose pieces say whether a point
 _DENSITY = 1.05  # g/mL of myocardium
 _LV_MASS = (20.0, 1000.0)  # g
 _ROLES = ("lumen", "aorta", "myocardium")
+_WIDTHS = ("ct", "mask")  # each station's lumen width: the mask's corrected from the CT values, or the mask's as drawn
 _KEY = re.compile(r"[0-9a-f]{64}")
-_CODE = [hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in ("vessel_geometry.py", "ffr_physics.py", "coronary.py")]
+_CODE = [
+    hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in ("vessel_geometry.py", "ffr_physics.py", "lumen_ct.py", "coronary.py")
+]
 
 
 def start(service, case_id, revision_id, inputs):
@@ -163,6 +168,10 @@ def _prepare(service, case_id, revision_id, inputs):
     normal = {role: inputs.get(role) for role in _ROLES}
     normal.update({name: None if inputs.get(name) is None else float(inputs[name]) for name in ("lv_mass", "sbp", "dbp", "heart_rate", "share")})
     normal["ostia"] = [[float(value) for value in point] for point in inputs.get("ostia") or ()]
+    # The API fills in the default; a job queued before the choice existed carries none and gets it here.
+    normal["lumen_width"] = inputs.get("lumen_width") or "ct"
+    if normal["lumen_width"] not in _WIDTHS:
+        raise ValueError('The lumen width must be "ct" or "mask"')
     chosen = [normal[role] for role in _ROLES if normal[role]]
     for role in _ROLES:
         if normal[role] and normal[role] not in structures:
@@ -190,7 +199,8 @@ def _prepare(service, case_id, revision_id, inputs):
         raise ValueError("A mask of this revision cannot be read") from None
     geometry = revision["geometry"]
     basis = {
-        "format": "coronary-v1",
+        # v2: the CT may correct the lumen widths. Earlier folders keep their keys and stay readable.
+        "format": "coronary-v2",
         "code": _CODE,
         "image": asset["content_sha256"],
         "shape": list(geometry["shape"]),
@@ -304,6 +314,13 @@ def _analyse(service, job, revision, inputs, key):
     service.stage(job, "Areas")
     stations, unassigned = measure(found, [branch.points for branch in tree.branches], WINDOW, parents, tree.stubs)
     touching = contact(found, tree)
+    mask_area = [st.area for st in stations]
+    widths = None
+    if inputs["lumen_width"] == "ct":
+        service.stage(job, "Lumen width")
+        widths = lumen_ct.areas(stations, parents, _ct(image, affine, stations), touching)
+        # Everything downstream reads Stations.area: the reference fit, held stations, lesions and the band.
+        stations = [replace(st, area=area) for st, area in zip(stations, widths.area)]
 
     service.stage(job, "Pressure")
     result = analyse(tree, stations, physiology, touching)
@@ -354,6 +371,9 @@ def _analyse(service, job, revision, inputs, key):
                     "s": _column(st.s, 2),
                     "area": _column(st.area, 2),
                     "diameter": _column(2 * np.sqrt(st.area / np.pi), 2),
+                    "mask_diameter": _column(2 * np.sqrt(mask_area[b] / np.pi), 2),
+                    "ct_diameter": _column(widths.ct_diameter[b], 2) if widths else [None] * len(st.s),
+                    "calcium": widths.calcium[b].tolist() if widths else [False] * len(st.s),
                     "reference_diameter": _column(diameter[b], 2),
                     "ffr": _column(result.ffr[b], 3),
                     "ffr_low": _column(low[b], 3),
@@ -402,6 +422,15 @@ def _analyse(service, job, revision, inputs, key):
         )
     if touched := sum(int(np.count_nonzero(marks)) for marks in touching):
         flags.append(f"lumen touches lumen more than 10 mm away along the tree at {touched} stations; areas there may mix")
+    if widths:
+        if not widths.calibrated:
+            if widths.read >= lumen_ct.ENOUGH:
+                why = f"the CT puts the mask {abs(widths.offset):.1f} mm too {'thin' if widths.offset > 0 else 'wide'}, more than a correction is trusted for"
+            else:
+                why = f"the CT gave the lumen's edge at only {widths.read} of {widths.stations} stations, too few to correct them"
+            flags.append(f"lumen widths are the mask's own: {why}")
+        if calcified := sum(int(np.count_nonzero(marks)) for marks in widths.calcium):
+            flags.append(f"calcium or a stent beside the lumen at {calcified} stations; widths there are less certain")
     constants = {name: getattr(physiology, name) for name in ("perfusion", "heart_factor", "tcri", "exponent", "venous", "viscosity", "density", "kt")}
     return {
         "format": FORMAT,
@@ -422,9 +451,18 @@ def _analyse(service, job, revision, inputs, key):
             "heart_rate": inputs["heart_rate"],
             "share": inputs["share"],
             "ostia": inputs["ostia"],
+            "lumen_width": inputs["lumen_width"],
         },
         "constants": {**constants, "spacing": SPACING, "window": WINDOW, "report_diameter": REPORT_DIAMETER, "report_beyond": REPORT_BEYOND},
         "band": {"voxel": _number(voxel, 3), "flow": list(BAND_FLOW), "tcri": list(BAND_TCRI), "exponent": _column(BAND_EXPONENT, 3), "cutoff": CUTOFF},
+        "lumen": {
+            "width": inputs["lumen_width"],
+            "calibrated": bool(widths and widths.calibrated),
+            "offset": _number(widths.offset, 2) if widths and widths.calibrated else None,
+            "blur": _number(widths.blur, 2) if widths and widths.calibrated else None,
+            "read": widths.read if widths else 0,
+            "stations": sum(len(st.s) for st in stations),
+        },
         "aortic_pressure": _number(result.aortic, 2),
         "assumed": list(physiology.assumed()),
         "flags": [*result.flags, *flags],
@@ -450,6 +488,18 @@ def _partway(found, index):
         return False
     pieces = np.bincount(connected_components(found.graph[shell][:, shell], directed=False)[1])
     return np.count_nonzero(pieces >= 3) >= 2
+
+
+def _ct(image, affine, stations):
+    """A sampler over the part of the CT within reach of the stations, so a whole chest is not held as floats."""
+    inverse = np.linalg.inv(affine)
+    index = np.concatenate([st.points for st in stations]) @ inverse[:3, :3].T + inverse[:3, 3]
+    # A step of d mm in RAS moves at most d·‖A⁻¹‖ voxels along any axis, on any grid.
+    pad = int(np.ceil(lumen_ct.REACH * np.linalg.norm(inverse[:3, :3], 2))) + 1
+    low = np.maximum(np.floor(index.min(0)).astype(int) - pad, 0)
+    high = np.minimum(np.ceil(index.max(0)).astype(int) + pad + 1, image.shape)
+    values = np.asarray(image.dataobj[tuple(slice(a, b) for a, b in zip(low, high))], dtype=np.float32)
+    return lumen_ct.sampler(values, affine, tuple(int(a) for a in low))
 
 
 def _near(aorta, lumen_mask, affine):

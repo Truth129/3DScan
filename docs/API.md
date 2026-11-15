@@ -1035,18 +1035,23 @@ revision's coronary lumen mask, measures lumen area along them and solves steady
 to give FFR: Poiseuille resistance along the vessels, and Young–Tsai viscous and expansion losses
 across each narrowing. It reads the masks on their CT grid and commits no revision.
 
+The lumen mask gives each station's width and how it changes along a vessel. By default the CT
+values then correct how thick the mask draws the vessels, by an offset read where the CT shows the
+lumen's edge.
+
 **`POST .../coronary-analysis`** takes:
 
-| Field        | Rule                                                                                              |
-| ------------ | ------------------------------------------------------------------------------------------------- |
-| `lumen`      | Structure ID in the revision, required                                                            |
-| `aorta`      | Structure ID or null. Lumen within 1.5 mm of it gives one root per contact patch                  |
-| `myocardium` | Structure ID or null. LV mass is its volume times 1.05 g/mL, and must be 20 to 1000 g             |
-| `lv_mass`    | g, 20 to 1000. Required without `myocardium`, refused with it                                     |
-| `sbp`, `dbp` | mmHg, both or neither: SBP 60 to 300 above DBP 20 to 200. Neither means 120/80                    |
-| `heart_rate` | bpm, 20 to 250. Recorded only: the model does not use it, so it is never `assumed`                |
-| `share`      | More than 0 and at most 1: the share of whole-heart flow in the trees solved                      |
-| `ostia`      | Up to four RAS points, each snapped to lumen within 3 mm, and dropped within 3 mm of another root |
+| Field         | Rule                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| `lumen`       | Structure ID in the revision, required                                                            |
+| `aorta`       | Structure ID or null. Lumen within 1.5 mm of it gives one root per contact patch                  |
+| `myocardium`  | Structure ID or null. LV mass is its volume times 1.05 g/mL, and must be 20 to 1000 g             |
+| `lv_mass`     | g, 20 to 1000. Required without `myocardium`, refused with it                                     |
+| `sbp`, `dbp`  | mmHg, both or neither: SBP 60 to 300 above DBP 20 to 200. Neither means 120/80                    |
+| `heart_rate`  | bpm, 20 to 250. Recorded only: the model does not use it, so it is never `assumed`                |
+| `share`       | More than 0 and at most 1: the share of whole-heart flow in the trees solved                      |
+| `ostia`       | Up to four RAS points, each snapped to lumen within 3 mm, and dropped within 3 mm of another root |
+| `lumen_width` | `"ct"` (default) corrects the mask's widths from the CT values. `"mask"` uses them as drawn       |
 
 It returns the Job. A queued, running or complete job for the same revision and inputs is returned
 instead of a new one; a failed or cancelled one, or one being cancelled, is not. Field bounds fail
@@ -1057,8 +1062,8 @@ candidate alias.
 The job fails when the lumen is empty, an ostium point is more than 3 mm from the lumen, or no root
 is found: `The lumen does not touch the aorta; add an ostium point`. It also fails on an ostium
 point more than 5 mm from the aorta partway along lumen an aortic root already reaches, since that
-would split the vessel. Its stages are `Loading masks`, `Centrelines`, `Areas`, `Pressure` and `Saving`, and its
-`result` is `{analysis_id, key, summary}`.
+would split the vessel. Its stages are `Loading masks`, `Centrelines`, `Areas`, `Lumen width` (with
+`lumen_width` `"ct"`), `Pressure` and `Saving`, and its `result` is `{analysis_id, key, summary}`.
 
 **`GET .../coronary-analysis`** returns `{analyses: [{analysis_id, state, stage, created_at,
 finished_at, error, inputs, summary}]}`, this revision's runs, newest first. `analysis_id` is the job
@@ -1070,16 +1075,18 @@ case, revision or kind, before it completes, and when its saved files fail their
 ```text
 {format: "scan3d-coronary-v1", notice, analysis_id, case_id, revision_id, key, created_at,
  inputs: {lumen, aorta, myocardium, lv_mass, lv_mass_source: "myocardium mask" | "typed", sbp, dbp,
-          heart_rate, share, ostia},
+          heart_rate, share, ostia, lumen_width: "ct" | "mask"},
  constants: {perfusion, heart_factor, tcri, exponent, venous, viscosity, density, kt, spacing,
              window, report_diameter, report_beyond},
  band: {voxel, flow, tcri, exponent, cutoff},
+ lumen: {width: "ct" | "mask", calibrated, offset, blur, read, stations},
  aortic_pressure, assumed, flags,
  roots: [{tree, point, source: "aorta" | "ostium point"}],
  pieces: [{point, volume}],
  branches: [{id, parent, tree, gap, length, flow, reason, distal: {ffr, low, high, indeterminate, station, note},
-             stations: {point, s, area, diameter, reference_diameter, ffr, ffr_low, ffr_high,
-                        pressure, reported, held, junction, spur, contact}}],
+             stations: {point, s, area, diameter, mask_diameter, ct_diameter, calcium,
+                        reference_diameter, ffr, ffr_low, ffr_high, pressure, reported, held,
+                        junction, spur, contact}}],
  lesions: [{id, branch, throat, start, end, length, mld, stenosis, held,
             beyond: {ffr, low, high, indeterminate, branch, station, note},
             before: {ffr, low, high, indeterminate, branch, station}, delta_ffr}]}
@@ -1088,6 +1095,32 @@ case, revision or kind, before it completes, and when its saved files fail their
 - Points are RAS mm. Lengths are mm, areas mm², flow mL/min, pressure mmHg. NaN is null.
 - `stations` holds one array per field, one entry per station 0.5 mm apart. `diameter` is
   2·√(area/π) and `reference_diameter` the fitted healthy diameter.
+- `area` and `diameter` are what the solve used, and `mask_diameter` is the mask's as drawn. When
+  `lumen.calibrated`, `diameter` is `mask_diameter` plus the offset found near the station, and
+  never under half of `mask_diameter`. Otherwise the two are equal.
+- `ct_diameter` is the CT's own reading at a station that was read, else null. It only feeds the
+  offset. A station is read when it is wide enough for its centre to show the lumen's HU (about
+  1.5 times `lumen.blur`), its surroundings are darker than the lumen on three rays in four, and
+  it is not a junction, spur, stub or `contact` station.
+- `calcium` marks stations with values 150 HU above their centre beside them, calcium or a stent.
+  They are not read. Thin or faint calcium stays under that and is not marked. It is always false
+  with `lumen_width` `"mask"`.
+- `lumen.read` of `lumen.stations` stations were read. `offset` is the median of `ct_diameter`
+  minus `mask_diameter` over them, mm. `blur` is the edge width the correction took out (full
+  width at half maximum, mm), taken as 1.06 with fewer than five stations of 3 mm or more. It
+  includes the vessel wall, so it is not exactly the scan's point spread.
+- A station moves by the median over the read stations within 7.5 mm on its branch, each kept
+  within 0.5 mm of `offset`. With fewer than 16 it is pulled towards `offset`, and with none it
+  moves by `offset`. A negative `offset` counts as 0 for that, so a stretch the CT could not read
+  is not thinned.
+- `offset` is not only the mask's error. The CT's edge is taken against soft tissue, which suits
+  a vessel wall of about 0.5 mm. On phantoms with a 400 HU lumen a vessel in fat reads 0.3 mm
+  thin with no wall and 0.2 mm wide with a 1 mm wall. One in muscle reads about 0.2 mm thin, and
+  0.3 mm at 200 HU, whatever the mask.
+- `lumen.calibrated` is false, with `offset` and `blur` null, when `lumen_width` is `"mask"`, fewer
+  than 20 stations were read, or the offset is beyond 1 mm. The widths are then the mask's.
+- `lumen`, `inputs.lumen_width`, `mask_diameter`, `ct_diameter` and `calcium` are missing from
+  results saved before they existed, which all used the mask as drawn.
 - `parent` is -1 at a root. `start` and `end` are mm from the ostium along the tree, and `stenosis`
   is the diameter stenosis at the throat, 0 to 1.
 - `held` stations take the nearest trusted station's area: the first 1 mm of a root branch, the last
@@ -1111,7 +1144,9 @@ case, revision or kind, before it completes, and when its saved files fail their
   crosses 0.80; null with no band. Stations carry no such field; apply the same test to
   `ffr_low` and `ffr_high`.
 - `flags` lists assumed values, gaps, dropped ostium points, a `share` applied to more than one tree,
-  unmeasured voxels, lumen that touches lumen far along the tree, and how many end branches were
+  unmeasured voxels, lumen that touches lumen far along the tree, lumen widths left as the mask's
+  own (too few stations read, or an offset beyond 1 mm), how many stations have calcium or a stent
+  beside them, and how many end branches were
   pruned as clipped side-branch stubs (under 8 mm, and under 2.25 of their widths out of the parent)
   and left out of `branches` and the flow split. Plausibility flags change no number and come as at
   most one line per kind, naming the branches: hyperaemic mean speed at a solved branch's start

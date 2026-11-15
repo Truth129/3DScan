@@ -83,6 +83,8 @@ def test_coronary_analysis_runs_lists_and_reads_one_branch_in_full(rig):
     # The same inputs return the same run, now complete, read without its station arrays.
     result = tools.run_coronary_analysis(case_id, revision_id=revision_id, wait_seconds=0, **RUN)
     assert result["notice"] == "Research use only. Not for diagnostic use." and len(result["branches"]) == 3 and "stations" not in result
+    # The CT corrects the widths unless the mask is asked for, and the result says what it applied.
+    assert result["inputs"]["lumen_width"] == result["lumen"]["width"] == "ct" and result["lumen"]["stations"] > result["lumen"]["read"] > 0
     (listed,) = tools.list_coronary_analyses(case_id, revision_id)["analyses"]
     daughter = next(branch["id"] for branch in result["branches"] if branch["parent"] >= 0)
     one = tools.get_coronary_analysis(case_id, listed["analysis_id"], revision_id, station_branches=[daughter])

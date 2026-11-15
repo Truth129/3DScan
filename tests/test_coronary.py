@@ -1,13 +1,14 @@
 """Research-only coronary analysis: the job on a synthetic Y over HTTP, and the reading rules."""
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 import nibabel as nib
 import numpy as np
 import pytest
-from synthetic_vessels import GRIDS, Phantom, Stenosis, Vessel
+from synthetic_vessels import GRIDS, THICK, Phantom, Scan, Stenosis, Vessel
 
 from scan3d.api import create_app
 from scan3d.config import Settings
@@ -31,14 +32,22 @@ RUN = {"lumen": LUMEN, "aorta": AORTA, "lv_mass": 150, "sbp": 120, "dbp": 80, "h
 def rig(tmp_path, request):
     """A saved revision holding a phantom's lumen, its aorta box and the rest as myocardium on a sheared grid.
 
-    The phantom is the Y unless the test passes another. No lane runs; the test does.
+    The phantom is the Y unless the test passes another. Its CT is the masks at two flat values, or
+    with a `Scan` the phantom as imaged, under the tight mask a model might draw, on another grid
+    if one follows. No lane runs; the test does.
     """
     app = create_app(Settings(tmp_path / "data", (tmp_path,), web_dir=tmp_path / "dist", allowed_hosts=("127.0.0.1",)))
     service = app.state.service
     case = service.new_case("Synthetic coronary Y")
     folder = service.store.case_dir(case["id"]) / "synthetic"
     folder.mkdir()
-    lumen, aorta, affine = getattr(request, "param", Y).masks(GRIDS["0.35x0.35x0.5 sheared"])
+    phantom, grid = getattr(request, "param", Y), GRIDS["0.35x0.35x0.5 sheared"]
+    if isinstance(phantom, tuple):
+        image = phantom[0].image(phantom[2] if len(phantom) > 2 else grid, phantom[1])
+        lumen, aorta, affine, hu = image.thin, image.aorta, image.affine, image.ct
+    else:
+        lumen, aorta, affine = phantom.masks(grid)
+        hu = np.where(lumen | aorta, 400, -50).astype(np.int16)
 
     def save(name, values):
         image = nib.Nifti1Image(values, affine)
@@ -46,7 +55,7 @@ def rig(tmp_path, request):
         nib.save(image, folder / name)
         return folder / name
 
-    ct = save("reference.nii.gz", np.where(lumen | aorta, 400, -50).astype(np.int16))
+    ct = save("reference.nii.gz", hu)
     structures = [
         dict(id=sid, name=sid, task=sid.split(":")[0], group="Vessels", color="#d04040", mask_file=str(save(f"{n}.nii.gz", mask.astype(np.uint8))))
         for n, (sid, mask) in enumerate(((LUMEN, lumen), (AORTA, aorta), (MYOCARDIUM, ~(lumen | aorta))))
@@ -113,6 +122,69 @@ def test_a_narrowed_daughter_reads_a_drop_across_its_lesion(rig):
     assert lesion["beyond"]["ffr"] is not None and lesion["delta_ffr"] > 0
     for read in (lesion["beyond"], lesion["before"]):
         assert read["low"] <= read["ffr"] <= read["high"] and read["indeterminate"] == (read["low"] <= 0.8 < read["high"])
+
+
+@pytest.mark.parametrize("rig", [(Phantom((Vessel(1.7, 25),)), Scan(seed=6))], indirect=True, ids=["imaged vessel under a tight mask"])
+def test_the_ct_corrects_the_masks_widths_unless_the_mask_is_asked_for(rig):
+    http, service, case_id, _, route = rig
+    jobs, read = {}, {}
+    for width in ("ct", "mask"):
+        jobs[width] = http.post(route, json={**RUN, "lumen_width": width}).json()["id"]
+        service.execute(service.store.claim("cpu"))
+        read[width] = http.get(f"{route}/{jobs[width]}").json()
+        assert read[width]["inputs"]["lumen_width"] == read[width]["lumen"]["width"] == width
+        assert not [flag for flag in read[width]["flags"] if "mask's own" in flag or "calcium" in flag]
+        # NaN is not JSON: a station the CT did not read says null.
+        saved = service.store.case_dir(case_id) / "coronary" / read[width]["key"] / "result.json"
+        json.loads(saved.read_text(), parse_constant=lambda name: pytest.fail(f"{name} in the saved result"))
+    # The CT is the default, and each choice is its own run.
+    assert http.post(route, json=RUN).json()["id"] == jobs["ct"] != jobs["mask"]
+    ct, mask = (read[width]["branches"][0]["stations"] for width in ("ct", "mask"))
+    count = len(mask["s"])
+    assert read["mask"]["lumen"] == {"width": "mask", "calibrated": False, "offset": None, "blur": None, "read": 0, "stations": count}
+    assert mask["diameter"] == mask["mask_diameter"] == ct["mask_diameter"] and mask["ct_diameter"] == [None] * count and not any(mask["calcium"])
+    found = read["ct"]["lumen"]
+    assert found["calibrated"] and found["stations"] == count and found["read"] == sum(value is not None for value in ct["ct_diameter"]) >= 40
+    assert None in ct["ct_diameter"] and not any(ct["calcium"])
+    # The mask is drawn 0.2 mm inside the 3.4 mm vessel's blurred edge all round, which is most of the offset the CT finds.
+    assert 0.4 < found["offset"] < 0.8 and 0.9 < found["blur"] < 1.5
+    trusted = ~np.array(ct["held"])
+    assert np.array(ct["diameter"])[trusted] - np.array(ct["mask_diameter"])[trusted] == pytest.approx(found["offset"], abs=0.15)
+    assert np.median(np.array(ct["diameter"])[trusted]) == pytest.approx(3.4, abs=0.15)
+    assert np.median(np.array(mask["diameter"])[trusted]) < 3.0
+    assert http.post(route, json={**RUN, "lumen_width": "voxels"}).status_code == 422
+
+
+@pytest.mark.parametrize("rig", [Phantom((Vessel(1.5, 9),))], indirect=True, ids=["a vessel too short to correct"])
+def test_too_few_stations_for_the_ct_leave_the_masks_widths_and_say_so(rig):
+    http, service, _, _, route = rig
+    queued = http.post(route, json=RUN).json()
+    service.execute(service.store.claim("cpu"))
+    result = http.get(f"{route}/{queued['id']}").json()
+    found, (branch,) = result["lumen"], result["branches"]
+    assert found["read"] < 20 and found["stations"] == len(branch["stations"]["s"])
+    assert found == {"width": "ct", "calibrated": False, "offset": None, "blur": None, "read": found["read"], "stations": found["stations"]}
+    why = f"the CT gave the lumen's edge at only {found['read']} of {found['stations']} stations, too few to correct them"
+    assert f"lumen widths are the mask's own: {why}" in result["flags"]
+    assert branch["stations"]["diameter"] == branch["stations"]["mask_diameter"]
+
+
+TWICE = Phantom(
+    (Vessel(1.8, 16), Vessel(1.3, 24, start=(16, 0, 0), heading=35), Vessel(1.05, 24, start=(16, 0, 0), heading=-35)),
+    joints=(((16, 0, 0), 1.8),),
+)
+
+
+@pytest.mark.parametrize("rig", [(TWICE, Scan(seed=21), THICK)], indirect=True, ids=["a daughter lying in 1 mm slices"])
+def test_the_ct_is_not_read_where_lumen_touches_lumen_far_along_the_tree(rig):
+    """The daughter is traced as two branches that each hold part of its lumen, which the contact rule marks: read, each would take its whole width."""
+    http, service, _, _, route = rig
+    queued = http.post(route, json=RUN).json()
+    service.execute(service.store.claim("cpu"))
+    result = http.get(f"{route}/{queued['id']}").json()
+    marks = [pair for branch in result["branches"] for pair in zip(branch["stations"]["contact"], branch["stations"]["ct_diameter"])]
+    assert result["lumen"]["calibrated"] and sum(touching for touching, _ in marks) > 10
+    assert not [read for touching, read in marks if touching and read is not None]
 
 
 @pytest.mark.parametrize("rig", [STUBBED], indirect=True, ids=["clipped side stub"])

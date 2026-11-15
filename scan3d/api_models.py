@@ -192,6 +192,7 @@ class CoronaryInput(Input):
     heart_rate: float | None = Field(None, ge=20, le=250)  # bpm; recorded only
     share: float | None = Field(None, gt=0, le=1)  # of whole-heart flow, into the trees solved
     ostia: list[tuple[float, float, float]] = Field(default_factory=list, max_length=4)  # RAS mm
+    lumen_width: Literal["ct", "mask"] = "ct"  # the lumen mask's widths corrected from the CT values, or as the mask draws them
 
 
 class CaseRename(Input):

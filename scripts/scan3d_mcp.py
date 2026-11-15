@@ -25,7 +25,7 @@ import struct
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Literal
 import zlib
 
 import httpx
@@ -520,7 +520,7 @@ def _compact(value, digits=3):
 
 def coronary_row(result: dict, station_branches=()) -> dict:
     """A coronary analysis without its per-station arrays, which run to hundreds of numbers a branch."""
-    keys = ("notice", "analysis_id", "revision_id", "created_at", "inputs", "aortic_pressure", "assumed", "flags", "roots", "pieces", "lesions")
+    keys = ("notice", "analysis_id", "revision_id", "created_at", "inputs", "lumen", "aortic_pressure", "assumed", "flags", "roots", "pieces", "lesions")
     row = {key: result[key] for key in keys if key in result}
     branches = result.get("branches") or []
     row["branches"] = [{key: b.get(key) for key in ("id", "parent", "tree", "gap", "length", "flow", "reason", "distal")} for b in branches]
@@ -765,17 +765,20 @@ class Tools:
         heart_rate: float | None = None,
         share: float | None = None,
         ostia: list[list[float]] | None = None,
+        lumen_width: Literal["ct", "mask"] = "ct",
         wait_seconds: float = 120,
     ) -> dict:
         """Research use only, not for diagnostic use. Trace centrelines in a coronary lumen mask, measure lumen area
         and solve steady hyperaemic pressure to estimate FFR (CT-FFR). Runs on the CPU and makes no revision.
         lumen, aorta and myocardium are structure IDs of the revision. Give aorta or up to four ostia RAS points.
         Give myocardium or lv_mass (g, 20 to 1000), not both. sbp and dbp (mmHg) go together; neither means 120/80.
-        share is the fraction of whole-heart flow into the trees solved. A finished run returns its result as
+        share is the fraction of whole-heart flow into the trees solved. lumen_width "ct" keeps the lumen mask's
+        widths but corrects how thick the mask draws the vessels, by an offset read from the CT values near each station
+        (the result's lumen object says what was applied); "mask" uses the widths as drawn. A finished run returns its result as
         get_coronary_analysis does; the same inputs return the same run."""
         rid = self.api.revision_id(case_id, revision_id)
         body = {"lumen": lumen, "aorta": aorta, "myocardium": myocardium, "lv_mass": lv_mass, "sbp": sbp, "dbp": dbp, "heart_rate": heart_rate}
-        body.update(share=share, ostia=ostia)
+        body.update(share=share, ostia=ostia, lumen_width=lumen_width)
         job = self.api.post(f"/api/cases/{case_id}/revisions/{rid}/coronary-analysis", _params(body))
         job = self.api.wait(job["id"], wait_seconds) if wait_seconds > 0 else job
         if job["status"] != "completed":
