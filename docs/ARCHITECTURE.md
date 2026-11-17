@@ -59,6 +59,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange        |
 | `scan3d/coronary.py`, `vessel_geometry.py`, `ffr_physics.py`            | Research CT-FFR job, centrelines and areas, pressure    |
 | `scan3d/lumen_ct.py`                                                    | Lumen mask widths corrected from the CT values          |
+| `scan3d/reports.py`, `aorta_report.py`, `report_worker.py`              | Measurement reports, their definitions and worker       |
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX ROIs      |
 | `scan3d/archive/`                                                       | DICOMweb client, imports, STOW exports, C-STORE sends   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                 |
@@ -128,6 +129,7 @@ cases/<case>/
   refinements/, corrections/, reviews/, seg-imports/, dicom-exports/, grow-branch/
   dicom-view-captures/   Retained 3D view captures, each named by its SHA-256
   coronary/<key>/        Coronary analysis: result.json, then complete.json
+  reports/<report>/<key>/ Measurement report: pictures, result.json, then complete.json
   uploads/               Slicer corrections as received
   synthetic/             The demo phantom
 surface-cache/, review-cache/, analysis-cache/, agreement-cache/, cinematic-cache/
@@ -212,7 +214,7 @@ process per data directory executes jobs. [API.md](API.md#job) lists the job kin
 - GPU jobs never overlap, whichever GPU they use, which keeps TotalSegmentator's shared settings and
   first-time weight downloads safe. The lane runs even when inference uses the CPU device.
 - CPU work never waits behind a segmentation. Review jobs run before queued batch work in each lane.
-- Exports and `coronary_analysis` complete their own jobs and commit no revision.
+- Exports, `coronary_analysis` and `report` complete their own jobs and commit no revision.
 - A correction saved during a segmentation stays active. The segmentation fails at commit, and a
   retry from the current revision reuses its cached inference.
 
@@ -440,6 +442,39 @@ Limits:
   or more reads about 0.3 mm wide, unmarked.
 - A vessel lying in the slice plane on slices of about 0.6 mm or thicker can be traced as two
   branches. The contact flag shows it, and FFR beyond is unreliable with either width.
+
+## Measurement reports
+
+Research use only. A report (`scan3d/reports.py`) is a recipe of TotalSegmentator tasks and a
+`report` job on the CPU lane that measures a saved revision's masks with TotalSegmentator's own
+report code. A corrected mask therefore gives corrected numbers. Adding a report is one
+`Definition` and one function in `report_worker.WORKERS`.
+
+1. A definition names its needs, each a structure `task:label` with whether it is required, and its
+   recipe tasks. A need is present, missing (its task never ran on this revision's line of
+   `segmentation_runs`) or not found.
+2. `POST .../segment` queues one `segment` job of the missing tasks. When it commits its revision,
+   `Service._queue_report` queues the report there; a refusal leaves the segmentation done.
+3. The job runs `python -P -m scan3d.report_worker` with `MPLBACKEND=Agg`, so the API process never
+   imports upstream's report code or the PyTorch it pulls in. Its scratch is `work-<job>/` beside the
+   result folders and goes when the job ends, or at the next start after a hard stop. Cancelling
+   stops the child.
+4. The aorta worker crops the CT and masks to the aorta plus 30 mm on the CT's own voxel lattice and
+   writes them under upstream's file names, with empty masks for names the revision lacks. It then
+   calls upstream's functions in upstream's order, from loading the data through the curved view,
+   so the numbers are upstream's for the same masks. A test runs upstream's own generator on the
+   same folders and compares.
+5. Differences from upstream's command: no contrast phase model (it needs xgboost); a median
+   aorta value under 100 HU counts as native. No 3D previews, HTML page or page frame around the
+   curved view, which need a display server and wkhtmltoimage. No usage statistics are sent.
+6. Upstream's landmark points are mapped through its grid's affine to RAS mm. Each landmark's outline
+   is its cut plane's voxels projected into the plane, filled and cut by 72 rays from the centre.
+
+Sheared grids are refused, because upstream measures with per-axis voxel spacings. The folder's key
+covers the report code, the image, its grid, the masks and the versions of TotalSegmentator and the
+numeric libraries. It sits in
+the case folder, so Trash, Delete forever and backups treat it as they treat coronary results, and
+Clear caches does not remove it. [API.md](API.md#measurement-reports) has the routes and the result.
 
 ## Geometry rules
 

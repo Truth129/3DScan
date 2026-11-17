@@ -275,10 +275,11 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
   (DICOMweb), `orthanc_export` (Orthanc SEG exports and every SEG file), `orthanc_roi_export`
   (OsiriX ROIs), `orthanc_view_export`, `view_file_export`, `archive_seg_export`,
   `archive_view_export` (DICOMweb), `direct_seg_export`, `direct_view_export` (C-STORE),
-  `dicom_seg_import` or `coronary_analysis`. [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes)
-  lists the lanes.
+  `dicom_seg_import`, `coronary_analysis` or `report`.
+  [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists the lanes.
 - `revision_id`: the new revision once committed, the exported one for an export, or the analysed
-  one for a [coronary analysis](#coronary-analysis), which commits none.
+  one for a [coronary analysis](#coronary-analysis) or a [report](#measurement-reports), which
+  commit none.
 - `delivery_started`: `true` once an export has started a send, through Orthanc or directly.
   Cancelling cannot then stop it.
 - `inference_path`: the [inference path](#inference-paths) frozen at queue time. `identity` is
@@ -346,28 +347,32 @@ relationship}`.
 
 Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 
-| Method and path                                     | Purpose                                           | Candidate alias |
-| --------------------------------------------------- | ------------------------------------------------- | --------------- |
-| `GET .../image-volume`, `.../{key}/chunks/{index}`  | Scalar descriptor and chunks (legacy `ct-volume`) | Yes             |
-| `GET .../mask-volume`, `.../{key}/chunks/{index}`   | Cropped mask and parent                           | Yes             |
-| `GET .../volume-mask`, `.../{key}/chunks/{index}`   | Display union                                     | Yes             |
-| `GET .../volume-labels`, `.../{key}/chunks/{index}` | Display label union                               | Yes             |
-| `GET .../review-frame`                              | Exact slice with binary overlays                  | Yes             |
-| `GET .../probe`                                     | Voxel value at a RAS point                        | Yes             |
-| `GET .../model-manifest`                            | Per-structure surface URLs                        | If prepared     |
-| `GET .../surfaces/{key}.glb`                        | One structure's surface                           | If prepared     |
-| `GET .../model.glb`                                 | Combined surface model                            | No              |
-| `GET .../agreement`                                 | Agreement with model outputs                      | No              |
-| `GET`, `POST .../coronary-analysis`                 | Coronary analysis runs and start                  | No              |
-| `GET .../coronary-analysis/{analysis_id}`           | One coronary analysis result                      | No              |
-| `GET .../cinematic-reference`                       | Cardiac HU references                             | No              |
-| `GET .../slicer.zip`                                | Slicer bundle                                     | No              |
-| `GET`, `POST .../export.html`                       | Offline HTML viewer                               | No              |
-| `GET`, `POST .../dicom-seg`                         | SEG and OsiriX ROI export                         | No              |
-| `GET .../dicom-seg/{export_id}/segment.dcm`         | Prepared SEG file                                 | No              |
-| `GET`, `POST .../dicom-view`                        | 3D view export status and start                   | No              |
-| `GET`, `POST .../dicom-view-file`                   | 3D view file status and start                     | No              |
-| `GET .../dicom-view-file/{export_id}/view.dcm`      | Prepared 3D view file                             | No              |
+| Method and path                                       | Purpose                                           | Candidate alias |
+| ----------------------------------------------------- | ------------------------------------------------- | --------------- |
+| `GET .../image-volume`, `.../{key}/chunks/{index}`    | Scalar descriptor and chunks (legacy `ct-volume`) | Yes             |
+| `GET .../mask-volume`, `.../{key}/chunks/{index}`     | Cropped mask and parent                           | Yes             |
+| `GET .../volume-mask`, `.../{key}/chunks/{index}`     | Display union                                     | Yes             |
+| `GET .../volume-labels`, `.../{key}/chunks/{index}`   | Display label union                               | Yes             |
+| `GET .../review-frame`                                | Exact slice with binary overlays                  | Yes             |
+| `GET .../probe`                                       | Voxel value at a RAS point                        | Yes             |
+| `GET .../model-manifest`                              | Per-structure surface URLs                        | If prepared     |
+| `GET .../surfaces/{key}.glb`                          | One structure's surface                           | If prepared     |
+| `GET .../model.glb`                                   | Combined surface model                            | No              |
+| `GET .../agreement`                                   | Agreement with model outputs                      | No              |
+| `GET`, `POST .../coronary-analysis`                   | Coronary analysis runs and start                  | No              |
+| `GET .../coronary-analysis/{analysis_id}`             | One coronary analysis result                      | No              |
+| `GET .../reports`, `GET`, `POST .../reports/{report}` | Measurement reports: status, runs and start       | No              |
+| `POST .../reports/{report}/segment`                   | Segment the tasks a report still needs            | No              |
+| `GET .../reports/{report}/{analysis_id}`              | One report result                                 | No              |
+| `GET .../reports/{report}/{analysis_id}/files/{name}` | One picture of a report result                    | No              |
+| `GET .../cinematic-reference`                         | Cardiac HU references                             | No              |
+| `GET .../slicer.zip`                                  | Slicer bundle                                     | No              |
+| `GET`, `POST .../export.html`                         | Offline HTML viewer                               | No              |
+| `GET`, `POST .../dicom-seg`                           | SEG and OsiriX ROI export                         | No              |
+| `GET .../dicom-seg/{export_id}/segment.dcm`           | Prepared SEG file                                 | No              |
+| `GET`, `POST .../dicom-view`                          | 3D view export status and start                   | No              |
+| `GET`, `POST .../dicom-view-file`                     | 3D view file status and start                     | No              |
+| `GET .../dicom-view-file/{export_id}/view.dcm`        | Prepared 3D view file                             | No              |
 
 ## System routes
 
@@ -570,7 +575,7 @@ measured on each request and leaving out shared caches.
 
 **`POST /api/storage/clear-caches`** empties the caches that rebuild when next needed: every review
 volume, the analysis and agreement caches and the surface contours. Saved surfaces, cases and
-their coronary analysis results stay.
+their coronary analysis and report results stay.
 It returns `{freed, storage}`, the bytes freed and a fresh storage report, or one of these 409s:
 
 | `detail`                                                                                      | When                                                                       |
@@ -1168,6 +1173,92 @@ Reading rules:
 
 The result is saved in `cases/<case>/coronary/<key>/`, keyed by the code, image, masks and inputs.
 A later revision with the same masks reuses it.
+
+## Measurement reports
+
+Research use only, not for diagnostic use. A report measures a saved revision's masks with
+TotalSegmentator's own report code. Its masks come from a recipe of TotalSegmentator tasks saved
+as a normal revision, so a corrected mask gives corrected numbers. Only `aorta` exists so far,
+TotalSegmentator 2.18.0's aorta report. Routes are relative to `.../revisions/{rid}/reports`.
+
+**`GET .../reports`** returns `{reports: [ReportStatus]}`, and **`GET .../reports/{report}`**
+returns `{report: ReportStatus, analyses: [...]}`, this revision's runs newest first, each
+`{analysis_id, state, stage, created_at, finished_at, error, summary}`.
+
+```text
+{id: "aorta", title, engine, available, reason, ready,
+ needs: [{id, title, task, task_title, required, state: "present" | "missing" | "not_found", structure_id}],
+ missing_tasks: [{id, title, license_required}], can_segment, segment_reason}
+```
+
+- A need matches the structure `task:label`, by its source task and class, never by name.
+- `missing`: its task never ran on this revision's line of segmentations, or a later run of another
+  task replaced its mask with a same-named one. `not_found`: it ran and kept nothing, or the kept
+  mask is empty.
+- `available` is false, with `reason`, for a candidate alias, a non-CT image, a sheared grid, or a
+  TotalSegmentator without the report's code. `reason` also names a required need not found.
+- `ready`: every required need is present, so a start is accepted.
+- `missing_tasks` are the recipe tasks with a missing need. `can_segment` is false, with
+  `segment_reason`, unless the revision is the case's active one, something is missing, no required
+  need was looked for and not found, the case is not the synthetic demo, and any license they need
+  is configured.
+
+**`POST .../reports/{report}`** takes `{}` and returns a `report` Job on the CPU lane. A queued,
+running or complete job for the same revision and key is returned instead of a new one. It is 400
+for a candidate alias, a report that is not `available`, or a required need not present.
+
+**`POST .../reports/{report}/segment`** takes `{inference_path?}` and returns one `segment` Job
+running the missing tasks in recipe order. Once it saves its revision, the report is queued on that
+revision. If a required structure was not found, no report is queued and the status says why; the
+segmentation still succeeds. It is 400 when `can_segment` is false.
+
+**`GET .../reports/{report}/{analysis_id}`** returns the result, and
+**`GET .../{analysis_id}/files/{name}`** a PNG it lists in `files`. Both are 404 for a job of
+another case, revision or report, before it completes, and when its saved files fail their check.
+
+The job's stages include `Measuring`, the worker's own steps and `Saving`. It fails with a plain
+sentence such as `The aortic annulus mask is empty near the aorta`. Its `result` is
+`{analysis_id, key, summary}`.
+
+The aorta result:
+
+```text
+{format: "scan3d-report-v1", notice, report: "aorta", analysis_id, case_id, revision_id, key, created_at,
+ engine: {name: "TotalSegmentator", version, report_version},
+ inputs: [{need, structure_id}],
+ contrast: {aorta_median_hu, native}, dissection,
+ landmarks: [{number, id, name, available, unavailable_reason, centre, normal, diameter_mm,
+              perpendicular_mm, area_cm2, ends, perpendicular_ends, outline,
+              true_lumen: {diameter_mm, perpendicular_mm, area_cm2}, false_lumen, picture}],
+ sections: [{id, name, available, length_mm, max_diameter_mm, volume_ml, true_lumen_volume_ml,
+             false_lumen_volume_ml}],
+ centreline, files, warnings,
+ summary: {max_diameter_mm, max_landmark, landmarks_available, landmarks_total: 11}}
+```
+
+- Points are patient RAS mm. `centreline` runs from the annulus on, about 1 mm apart.
+- All 11 landmarks are listed in order, from Annulus to Abdominal aorta above the bifurcation.
+  One that could not be measured has `available` false, null values and `unavailable_reason`.
+- `centre` is the landmark's centreline point and `normal` the unit normal of its plane, pointing
+  away from the heart. `ends` and `perpendicular_ends` are the measured diameter lines. `outline`
+  is the measured cross-section as a closed ring of 72 points.
+- Upstream rounds to 1 mm and 0.1 cm² or mL. It measures on a 0.8 mm grid and widens each
+  cross-section by one voxel before measuring, so a landmark's diameters and area and a section's
+  maximum diameter read wide: synthetic 16 mm and 32 mm tubes read 18 and 34 mm, with areas of 2.4
+  and 8.8 cm² against 2.0 and 8.0. Lengths and volumes do not.
+- `summary.max_diameter_mm` is the largest landmark `diameter_mm`, at `max_landmark`. A section's
+  `max_diameter_mm` is searched along its whole centreline, so it can be larger.
+- `contrast.native` is true when the median CT value inside the aorta mask is under 100 HU. Then,
+  as upstream does, the true and false lumens are not used. Otherwise the measured aorta is the
+  aorta mask together with the true and false lumen masks the revision has. `dissection` is true
+  when a false lumen was found and used; only then are `true_lumen`, `false_lumen` and the lumen
+  volumes set.
+- `files` holds `cpr.png`, the curved view with its diameter profile, and `plane-N.png` for each
+  measured landmark. `warnings` are upstream's warning lines.
+
+The result is saved in `cases/<case>/reports/<report>/<key>/`, keyed by the report and its code,
+the image, its grid, the masks used and the versions of TotalSegmentator and the numeric libraries.
+A later revision with the same masks reuses it, unless a picture there no longer matches.
 
 ## Exports
 

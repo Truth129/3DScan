@@ -195,6 +195,14 @@ class CoronaryInput(Input):
     lumen_width: Literal["ct", "mask"] = "ct"  # the lumen mask's widths corrected from the CT values, or as the mask draws them
 
 
+class ReportStart(Input):
+    """Empty: a report reads the revision's masks by their source task, so there is nothing to choose."""
+
+
+class ReportSegment(Input):
+    inference_path: str | None = Field(default=None, max_length=32, pattern=ID_PATTERN)
+
+
 class CaseRename(Input):
     label: str = Field(max_length=128)
 

@@ -226,6 +226,9 @@ class Service:
             except OSError as exc:
                 # One a `sudo` run left must not stop the service starting.
                 log.warning("Could not remove the Orthanc staging leftover %s (%s)", leftover.name, exc.strerror)
+        # A report run's scratch (reports._measure) that a hard stop left; for the same reason no run owns it.
+        for leftover in (self.settings.data_dir / "cases").glob("*/reports/*/work-*"):
+            shutil.rmtree(leftover, ignore_errors=True)
         self.stop_event.clear()
         self._running_lanes = len(lanes) + janitor
         self.threads = {lane: threading.Thread(target=self._loop, args=(lane,), daemon=True, name=f"scan3d-{lane}-worker") for lane in lanes}
@@ -385,8 +388,21 @@ class Service:
         return self.store.enqueue(case_id, "process", acquisition, **fields)
 
     def segment_case(
-        self, case_id, revision_id, task=None, robust_crop=False, body_seg=False, remove_small_blobs=False, high_order_resampling=False, inference_path=None
+        self,
+        case_id,
+        revision_id,
+        task=None,
+        robust_crop=False,
+        body_seg=False,
+        remove_small_blobs=False,
+        high_order_resampling=False,
+        inference_path=None,
+        *,
+        tasks=None,
+        report=None,
     ):
+        """Queue a segmentation of one task, or of `tasks` in order. With `report`, that report is queued
+        on the revision it saves (`reports.segment`)."""
         from .segmentation_options import default_task, normalize_options
 
         parent = self.store.revision(case_id, revision_id)
@@ -402,7 +418,7 @@ class Service:
         options = normalize_options(
             profile,
             dict(
-                tasks=[task or default_task(reference["modality"])],
+                tasks=list(tasks or [task or default_task(reference["modality"])]),
                 robust_crop=robust_crop,
                 body_seg=body_seg,
                 remove_small_blobs=remove_small_blobs,
@@ -412,7 +428,8 @@ class Service:
         )
         # Top-level and public, so the card is still named once a failure overwrites the stage.
         fields = {} if inference_path is None else {"inference_path": inference_paths.binding(inference_path)}
-        return self.store.enqueue(case_id, "segment", dict(revision_id=revision_id, options=options, reference_image_id=reference["id"]), **fields)
+        payload = dict(revision_id=revision_id, options=options, reference_image_id=reference["id"], **({"report": report} if report else {}))
+        return self.store.enqueue(case_id, "segment", payload, **fields)
 
     def include_all_outputs(self, case_id):
         """Restore saved model outputs omitted by the former anatomy filter."""
@@ -603,6 +620,12 @@ class Service:
                 # A research result beside the revision, never a new one, so it completes its own job.
                 run_coronary(self, job)
                 return
+            elif job["kind"] == "report":
+                from .reports import run as run_report
+
+                # As coronary analysis: a research result beside the revision.
+                run_report(self, job)
+                return
             elif job["kind"] == "refine":
                 revision = self._refine(job)
             elif job["kind"] == "grow_branch":
@@ -627,6 +650,8 @@ class Service:
             )
             review_guard = {key: job["payload"][key] for key in ("session_id", "generation")} if job["kind"] == "review_accept" else None
             self.store.commit_revision(revision, job, expected_active_revision_id=expected, review_guard=review_guard)
+            if job["kind"] == "segment" and job["payload"].get("report"):
+                self._queue_report(job, revision)
         except InterruptedError as exc:
             self.store.update_job(job["id"], status="cancelled", stage="Cancelled", error=str(exc))
             if job["kind"].startswith("review_"):
@@ -638,6 +663,19 @@ class Service:
             self.store.update_job(job["id"], status="failed", stage="Failed", error=error)
             if job["kind"].startswith("review_"):
                 self.reviews.get(job["case_id"], job["payload"]["session_id"])
+
+    def _queue_report(self, job, revision):
+        """The report a recipe segmentation was run for, on the revision it saved. A report that cannot
+        start there, say a required structure was not found, leaves the segmentation done: the report's
+        status says why."""
+        from .reports import start
+
+        try:
+            start(self, job["case_id"], revision["id"], job["payload"]["report"], requested_by=job.get("requested_by"))
+        except ValueError as exc:
+            log.info("Report %s not queued after job %s: %s", job["payload"]["report"], job["id"], exc)
+        except Exception:
+            log.exception("Report %s not queued after job %s", job["payload"]["report"], job["id"])
 
     def _process(self, job):
         from . import dicom
