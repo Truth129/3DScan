@@ -11,6 +11,8 @@ import { VTKCTPlane, type VTKCTPlaneState } from '../lib/vtk-ct-plane';
 import { VTKSurfaceScene, type NativeSurfaceLayerStatus } from '../lib/vtk-surface-scene';
 import { VTKCoronaryTube } from '../lib/vtk-coronary-tube';
 import { fadeUnderTube, type CoronaryTube } from '../lib/coronary';
+import { VTKReportOverlay } from '../lib/vtk-report-overlay';
+import type { ReportOverlay } from '../lib/reports';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib/volume-lighting';
 import type { CTVolumeSettings } from '../lib/volume-presets';
@@ -58,6 +60,8 @@ const props = defineProps<{
   reviewCompare?: boolean;
   /** The research centreline tube, or nothing. It never reaches a capture. */
   tube?: CoronaryTube;
+  /** A measurement report's rings, diameters and centreline, or nothing. It never reaches a capture either. */
+  reportOverlay?: ReportOverlay;
 }>();
 const emit = defineEmits<{
   ready: [value: boolean];
@@ -76,6 +80,7 @@ const emit = defineEmits<{
   ];
   surfaceLayerStatus: [status: NativeSurfaceLayerStatus];
   tubeError: [message: string];
+  reportError: [message: string];
 }>();
 const host = ref<HTMLDivElement>();
 const ready = ref(false),
@@ -109,6 +114,8 @@ let otherPlaneCut: { axis: 0 | 1 | 2; index: number } | undefined;
 let reviewInput: VTKReviewInput | undefined, reviewPlaneLayer: VTKReviewPlane | undefined;
 let tubeLayer: VTKCoronaryTube | undefined,
   tubeError = '',
+  reportLayer: VTKReportOverlay | undefined,
+  reportError = '',
   capturing = false;
 const LUMEN_UNDER_TUBE = 0.15;
 let reserveReviewFrames: ((bytes: number) => void) | undefined, reserveSurfaceLayers: ((bytes: number) => void) | undefined;
@@ -212,6 +219,11 @@ function disposeFeatures() {
     featureRenderer?.removeViewProp(tubeLayer.actor);
     tubeLayer.dispose();
     tubeLayer = undefined;
+  }
+  if (reportLayer) {
+    featureRenderer?.removeViewProp(reportLayer.actor);
+    reportLayer.dispose();
+    reportLayer = undefined;
   }
   reviewPlaneReady.value = false;
   reserveReviewFrames?.(0);
@@ -371,6 +383,7 @@ async function initialize() {
       colors: 0,
       colorTransport: 0,
       tube: 0,
+      report: 0,
     };
     const reserveFeature = (feature: keyof typeof featureBytes) => (bytes: number) => {
       const previous = featureBytes[feature];
@@ -407,6 +420,8 @@ async function initialize() {
     instance.nativeRenderer.addViewProp(reviewPlaneLayer.actor);
     tubeLayer = new VTKCoronaryTube(reserveFeature('tube'));
     instance.nativeRenderer.addViewProp(tubeLayer.actor);
+    reportLayer = new VTKReportOverlay(reserveFeature('report'));
+    instance.nativeRenderer.addViewProp(reportLayer.actor);
     reviewInput = new VTKReviewInput(host.value, instance.nativeViewport, {
       actors: () => surfaces?.actors ?? [],
       planes: () => [...otherPlaneLayers.values()].flatMap(layer => layer.shownRect() ?? []),
@@ -673,6 +688,7 @@ function syncPresentationNow(viewer: CornerstoneVolume3D) {
   }
   syncCut();
   syncSurfaces(viewer);
+  syncReport();
   syncReviewInput();
 }
 /** A plane refused here, by memory or its slice limit, hides only itself: the main plane and export stay as they were. */
@@ -725,6 +741,17 @@ function syncTube() {
   }
   if (message !== tubeError) emit('tubeError', (tubeError = message));
 }
+/** As the tube: a report drawing that cannot be drawn hides itself and nothing else. */
+function syncReport() {
+  let message = '';
+  try {
+    reportLayer?.setOverlay(props.reportOverlay);
+  } catch (reason) {
+    reportLayer?.setOverlay(undefined);
+    message = reason instanceof Error ? reason.message : 'The report drawing could not be drawn.';
+  }
+  if (message !== reportError) emit('reportError', (reportError = message));
+}
 /** Only while marking on the plane: shown edge-on in another mode, a cut would remove half the volume. */
 function syncCut() {
   const cut = props.reviewPlaneActive && props.review?.mode === 'plane' && !planeError.value && props.plane;
@@ -750,16 +777,19 @@ function syncOtherPlaneCut() {
   for (const layer of otherPlaneLayers.values()) layer.setCut(cut);
 }
 /**
- * The research tube stays out of every saved image, and the lumen it faded is drawn as set. The view
- * draws the tube and the fade again once the capture is read, whether or not it succeeded.
+ * The research tube and report drawings stay out of every saved image, and the lumen the tube faded
+ * is drawn as set. The view draws them and the fade again once the capture is read, whether or not it
+ * succeeded.
  */
 async function withoutTube(instance: CornerstoneVolume3D) {
-  const layer = tubeLayer;
-  if (!layer?.visible) return instance.capturePNG();
+  const layer = tubeLayer,
+    report = reportLayer,
+    capture = () => (report ? report.hideFor(() => instance.capturePNG()) : instance.capturePNG());
+  if (!layer?.visible && !report?.visible) return instance.capturePNG();
   capturing = true;
   try {
     syncSurfaces(instance);
-    return await layer.hideFor(() => instance.capturePNG());
+    return await (layer ? layer.hideFor(capture) : capture());
   } finally {
     capturing = false;
     if (!disposed && viewer === instance) syncSurfaces(instance);
@@ -923,6 +953,21 @@ watch(
     }
   },
 );
+// A new overlay object per result or selection, as the tube.
+watch(
+  () => props.reportOverlay,
+  async () => {
+    const instance = viewer,
+      id = generation;
+    if (!instance) return;
+    try {
+      syncReport();
+      await renderFeatures(instance, id);
+    } catch (reason) {
+      if (!disposed && id === generation && viewer === instance) fail(reason);
+    }
+  },
+);
 watch(() => props.review, syncReviewInput, { deep: true });
 // A mode change moves only the cut: a full presentation sync would wait for a plane frame that is not coming.
 watch(
@@ -1024,6 +1069,7 @@ defineExpose({
     reviewPlane: reviewPlaneLayer?.stats(),
     surfaces: surfaces?.stats(),
     tube: tubeLayer?.visible ?? false,
+    reportOverlay: reportLayer?.visible ?? false,
     surfaceLoading: surfaceLoading.value,
     surfaceError: surfaceError.value,
     planeError: planeError.value,

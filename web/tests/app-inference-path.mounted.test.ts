@@ -429,7 +429,7 @@ describe('the revision history', () => {
   });
 });
 
-describe('the Coronary FFR tab', () => {
+describe('the Analysis tab', () => {
   it('stays open under the 3D and Segments tabs opened from it, so the tube stays while the view is tuned', async () => {
     const lumen: Structure = {
       id: 'coronary_arteries:coronary_arteries',
@@ -448,13 +448,13 @@ describe('the Coronary FFR tab', () => {
     const root = await start();
     (viewport.attrs.onVolumeSettings as (state: object) => void)({ shown: true, error: false });
     await settled();
-    await press(root.button('Coronary FFR'));
+    await press(root.button('Analysis'));
     const panel = root.named('coronary-panel');
-    expect(panel).toBeDefined();
+    expect(panel, 'a lumen opens it on Coronary FFR').toBeDefined();
     await press(root.button('3D view'));
     expect(root.named('coronary-panel')).toBe(panel);
-    expect(panel!.style).toMatchObject({ display: 'none' });
-    await press(root.button('Coronary FFR'));
+    expect(root.named('analysis-panel')!.style).toMatchObject({ display: 'none' });
+    await press(root.button('Analysis'));
     expect(root.named('coronary-panel')).toBe(panel);
     expect(list).toHaveBeenCalledOnce();
     await press(root.button('Segments'));

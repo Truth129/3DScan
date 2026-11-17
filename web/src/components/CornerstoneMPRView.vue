@@ -16,6 +16,8 @@ import { sharedVolumeMemoryBudget, VolumeMemoryBudgetError } from '../lib/volume
 import { centreOnClick } from '../lib/centre-on-click';
 import { usePressedPane } from '../lib/use-pressed-pane';
 import CTReviewInput from './CTReviewInput.vue';
+import ReportSliceOverlay from './ReportSliceOverlay.vue';
+import type { ReportOverlay } from '../lib/reports';
 
 const props = withDefaults(
   defineProps<{
@@ -43,6 +45,8 @@ const props = withDefaults(
     stills?: Partial<Record<Plane, HTMLCanvasElement>>;
     /** A navigate click elsewhere, such as in 3D, asking the panes to centre on its point. */
     centreRequest?: { point: Point; serial: number };
+    /** A measurement report's selected landmark, projected onto each pane. */
+    reportOverlay?: ReportOverlay;
   }>(),
   { overlayOpacity: 0.4 },
 );
@@ -403,6 +407,7 @@ onBeforeUnmount(() => {
           @click="click(plane, $event)"
           @wheel="wheel(plane, $event)"
         >
+          <ReportSliceOverlay v-if="metas[plane] && reportOverlay" :meta="metas[plane]!" :overlay="reportOverlay" :slab="effectiveSlab !== 'mpr'" />
           <div v-if="metas[plane]" class="cornerstone-annotations" :style="{ clipPath: clips[plane] }">
             <CTReviewInput
               :meta="metas[plane]!"

@@ -17,7 +17,7 @@ export const outboundExportKinds = [
   'direct_view_export',
 ];
 /** Kinds a panel polls itself. None makes a revision, so the workspace never waits for one. */
-const ownPollerKinds = ['review_predict', 'coronary_analysis'];
+const ownPollerKinds = ['review_predict', 'coronary_analysis', 'report'];
 const active = (job: Job, caseId: string) =>
   job.case_id === caseId && ![...ownPollerKinds, ...outboundExportKinds].includes(job.kind) && ['queued', 'running'].includes(job.status);
 

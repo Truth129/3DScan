@@ -332,9 +332,9 @@ Icon buttons name themselves on hover. An arrow after a link means it opens in a
   mark.
 
 The side panel on the left shows one tab at a time: **Segments**, **3D**, **Refine** and
-**History**, with **FFR** last when the revision has a coronary lumen. At its widest, 480 px, the
-panel spells them out, such as **Revision history**, unless **FFR** shows. Your browser remembers
-the tab. The stage tiles the 3D view and **CT review**.
+**History**, with **Analysis** last on a saved CT revision. At its widest, 480 px, the panel
+spells them out, such as **Revision history**, while four tabs or fewer show. Your browser
+remembers the tab. The stage tiles the 3D view and **CT review**.
 
 Review's tools and the segmentation settings open at the top of the side panel, above the tabs, and
 change the viewers' size only to show a hidden side panel. They take at most about 60% of the
@@ -711,12 +711,68 @@ mask it took voxels from.
 - HD95 ignores the farthest 5% of the surface, so a small fix can show 0 mm while Dice is below 1.
 - Segments added by a reviewer are not compared.
 
+## Analysis
+
+The **Analysis** tab shows on any saved CT revision, a scan with no segments included. Choose
+**Coronary FFR** or **Aorta** at its top; your browser remembers the choice. Each analysis measures
+from the masks of the revision shown, so a corrected mask gives corrected numbers once you measure
+again.
+
+## Aorta report
+
+> **Research use only · not for diagnostic use.** These numbers are measured by TotalSegmentator's
+> aorta report from this revision's masks. They have not been checked here against hand
+> measurements.
+
+The report needs the aorta from **Whole body (TotalSegmentator)** and the aortic annulus from
+**Aorta annulus (TotalSegmentator)**. That task and the optional **Renal arteries** and **Aortic
+dissection** tasks need a [TotalSegmentator license](#totalsegmentator-license); Whole body
+does not. The panel lists the tasks it uses and any optional input the revision lacks.
+
+- **Segment and measure** runs the missing tasks, saves their masks as a new revision, then
+  measures that revision. It stays on offer beside **Measure** while an optional task has not run.
+  **Run on** chooses the GPU when there is more than one. When it cannot run, such as without a
+  needed license, the panel says why.
+- **Measure** measures a revision that already has every required mask.
+- **Measure again** repeats the measurement of a revision already measured, for example after a
+  software update.
+- After you correct a mask and save, open **Analysis** on the new revision and measure again.
+
+The measured aorta is the aorta mask together with the true and false lumen masks when present.
+The result lists 11 landmarks, from the annulus to above the bifurcation, with the largest
+diameter (**Max**), the diameter perpendicular to it (**Perp.**) and the cross-section area. A
+dash means the landmark was not measured, and the reason shows under its name. Below them, each
+section's length, largest diameter and volume. A non-contrast scan gets no true and false lumen.
+
+TotalSegmentator widens each cross-section by one 0.8 mm voxel before measuring, so diameters read
+about 2 mm wider than the mask: synthetic 16 mm and 32 mm tubes read 18 and 34 mm. Areas read
+larger to match. Lengths and volumes are not affected.
+
+A click on a landmark's name or row moves the crosshair to the landmark's centre, which the slices
+centre on while **Centre on click** is on, and opens its cross-section picture. The thumbnail
+below the tables is the curved view along the aorta; click it to open it large, or download it.
+
+The drawings use the swatch colours above **Max** and **Perp.**:
+
+- In the native 3D view, a ring marks each measured landmark, set just outside the measured
+  outline so it shows on the aorta's surface. The chosen landmark's ring is brighter, with its two
+  diameter lines, and a thin line follows the centreline. The rings show on the surface; the
+  diameter lines and the centreline lie inside the vessel, so they show when the CT volume is off
+  or the segments are see-through. The Three.js view (MR, sheared grids) shows no drawing.
+- On the slices, the chosen landmark's outline, diameter lines and centre. They are **solid** where
+  the slice shows the measured cross-section: its centre within 2 mm of the slice and the planes
+  within 15°. Elsewhere, and on a MIP or MinIP slab, they are **dashed** and dimmer: a projection
+  onto a slice that does not show the measured cross-section, shorter when seen at an angle. Review
+  leaves them off the slices.
+- The drawings show while the **Analysis** tab is open, or the **3D** or **Segments** tab opened
+  from it, and only over the revision measured. PNG and DICOM view exports leave them out.
+
 ## Coronary CT-FFR
 
 > **Research use only · not for diagnostic use.** CT-FFR here is an unvalidated research model.
 > Check the centrelines and diameters on the source images before reading any FFR.
 
-The **FFR** tab appears when the revision has **Coronary arteries** from ImageCAS-X
+**Coronary FFR**, under **Analysis**, needs **Coronary arteries** from ImageCAS-X
 (nnU-Net or CAS-Net) or TotalSegmentator. It traces centrelines in the lumen mask on its own grid,
 measures lumen area along them and solves steady hyperaemic pressure: Poiseuille resistance along
 the vessels, and Young–Tsai viscous and expansion losses across each narrowing.
@@ -776,8 +832,8 @@ nominal solve.
 In the native 3D view a centreline tube shows the result, sized to the lumen. Every coronary lumen
 segment fades behind it, or hides where surfaces are drawn solid. Colour by **FFR**: red at 0.75
 and below, amber at 0.80, blue from 0.90, grey where FFR is not reported. Or by **Diameter**, dark
-to light blue from 1 to 5 mm. The legend sits at the lower left. The tube shows while the **FFR**
-tab is open, or the **3D** or **Segments** tab opened from it.
+to light blue from 1 to 5 mm. The legend sits at the lower left. The tube shows while
+**Coronary FFR** is open under **Analysis**, or the **3D** or **Segments** tab opened from it.
 PNG and DICOM view exports leave the tube out and draw the lumens as set. The Three.js view (MR,
 sheared grids) shows the table only.
 

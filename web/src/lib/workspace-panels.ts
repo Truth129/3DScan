@@ -1,6 +1,6 @@
-/** The side panel shows one tab at a time. The 3D, Refine and FFR tabs show only when they apply. */
-export type SidebarTab = 'segments' | 'volume' | 'refine' | 'history' | 'coronary';
-const SIDEBAR_TABS: readonly SidebarTab[] = ['segments', 'volume', 'refine', 'history', 'coronary'];
+/** The side panel shows one tab at a time. The 3D, Refine and Analysis tabs show only when they apply. */
+export type SidebarTab = 'segments' | 'volume' | 'refine' | 'history' | 'analysis';
+const SIDEBAR_TABS: readonly SidebarTab[] = ['segments', 'volume', 'refine', 'history', 'analysis'];
 
 export interface WorkspacePanelsState {
   sidebar: boolean;
@@ -55,7 +55,8 @@ export function restoreWorkspacePanels(value: unknown): WorkspacePanelsState {
     }
     const sidebar = own('sidebar');
     state.sidebar = typeof sidebar === 'boolean' ? sidebar : own('anatomy') !== false || own('inspector') !== false;
-    const tab = own('tab');
+    // The FFR tab became the Analysis tab, which holds it.
+    const tab = own('tab') === 'coronary' ? 'analysis' : own('tab');
     if (SIDEBAR_TABS.includes(tab as SidebarTab)) state.tab = tab as SidebarTab;
     if (!state.model && !state.review) state.model = true;
     return state;

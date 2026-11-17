@@ -75,6 +75,7 @@ import {
 } from '../lib/dicom-view';
 import { apiFetch } from '../lib/api-fetch';
 import { NOT_REPORTED, tubeLegend, type CoronaryTube } from '../lib/coronary';
+import type { ReportOverlay } from '../lib/reports';
 const props = defineProps<{
   modelUrl?: string;
   manifestUrl?: string;
@@ -126,6 +127,8 @@ const props = defineProps<{
   volumeSettingsDock?: 'shown' | 'hidden';
   /** The research centreline tube. Only the native 3D view draws it. */
   coronaryTube?: CoronaryTube;
+  /** A measurement report's drawing. Only the native 3D view draws it, as the tube. */
+  reportOverlay?: ReportOverlay;
   /** The header's title and what follows it; without them it names the view and counts its structures. */
   heading?: string;
   headingDetail?: string;
@@ -360,6 +363,8 @@ watch(vtkSelected, active => emit('nativeView', active), { immediate: true });
 const tube = computed(() => (vtkSelected.value ? props.coronaryTube : undefined)),
   tubeError = ref(''),
   legend = computed(() => tube.value && tubeLegend(tube.value.colouring));
+const report = computed(() => (vtkSelected.value ? props.reportOverlay : undefined)),
+  reportError = ref('');
 const vtkPlane = computed(() => {
   if (!props.geometry || !props.point || !showPlane.value) return undefined;
   const native = nativeSliceFor(props.geometry, reviewPlane.value, props.point);
@@ -1877,7 +1882,7 @@ defineExpose({
       'viewport-expanded': expanded,
       'cornerstone-primary': vtkSelected,
       'has-plane-bar': planeBarShown,
-      'has-legend': !!legend,
+      'has-legend': !!legend || (!!report && !!reportError),
     }"
     :data-expanded="expanded"
     :role="expanded ? 'dialog' : undefined"
@@ -2073,6 +2078,7 @@ defineExpose({
       :review-overlay-count="planeRequest?.overlays.length ?? 0"
       :review-compare="compare"
       :tube="tube"
+      :report-overlay="report"
       @review-status="nativeReviewStatus = $event"
       @retry-plane="queueReviewPlane"
       @gesture="reviewGesture"
@@ -2087,6 +2093,7 @@ defineExpose({
       @color-status="nativeColorStatus = $event"
       @surface-layer-status="nativeSurfaceLayers = $event"
       @tube-error="tubeError = $event"
+      @report-error="reportError = $event"
     />
     <div v-if="legend" class="coronary-legend" role="img" :aria-label="`${legend.title} colour scale`">
       <span class="coronary-legend-title">{{ legend.title }}</span>
@@ -2096,6 +2103,9 @@ defineExpose({
       </span>
       <span v-if="legend.notReported" class="coronary-legend-grey"><i :style="{ background: NOT_REPORTED }"></i>Not reported</span>
       <span v-if="tubeError" class="coronary-legend-error" role="alert">Tube hidden: {{ tubeError }}</span>
+    </div>
+    <div v-if="report && reportError" class="coronary-legend report-overlay-error" role="alert">
+      <span class="coronary-legend-error">Report drawing hidden: {{ reportError }}</span>
     </div>
     <slot name="notice"></slot>
     <div v-if="vtkSelected && vtkComponentFailed" class="viewport-state error-state" role="alert">

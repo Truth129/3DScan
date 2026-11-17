@@ -30,11 +30,12 @@ describe('workspace panel preferences', () => {
   it('retains valid choices across storage, ignores unrelated or inherited fields, and repairs a layout hiding both viewers', () => {
     const inherited = Object.assign(Object.create({ sidebar: false, tab: 'history' }), { model: false, review: true, unrelated: true });
     expect(restoreWorkspacePanels(inherited)).toEqual({ sidebar: true, model: false, review: true, tab: 'segments' });
+    // The FFR tab became the Analysis tab.
     expect(restoreWorkspacePanels('{"sidebar":false,"review":false,"tab":"coronary"}')).toEqual({
       sidebar: false,
       model: true,
       review: false,
-      tab: 'coronary',
+      tab: 'analysis',
     });
     expect(restoreWorkspacePanels({ model: 'false', review: 0, sidebar: null, tab: 'selection' })).toEqual(defaultWorkspacePanels());
   });

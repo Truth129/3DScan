@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { RotateCcw } from '@lucide/vue';
 import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point, SliceMeta } from '../types';
 import CTReviewInput from './CTReviewInput.vue';
+import ReportSliceOverlay from './ReportSliceOverlay.vue';
+import type { ReportOverlay } from '../lib/reports';
 import { moveNativeSlice, nativeEdgeLabels, nativeSliceFor } from '../lib/interactive-review';
 import { createSliceWheel, stepSlice } from '../lib/slice-wheel';
 import { pixelToRas, planeAxis, rasToPixel, referenceGridKey } from '../lib/geometry';
@@ -37,6 +39,7 @@ const props = withDefaults(
     reviewInclude?: boolean;
     reviewRadius?: number;
     nativeReview?: boolean;
+    reportOverlay?: ReportOverlay;
   }>(),
   { overlayOpacity: 0.4 },
 );
@@ -434,6 +437,7 @@ onBeforeUnmount(() => {
         @wheel="wheel"
       >
         <canvas ref="overlay" class="cornerstone-overlay" aria-hidden="true"></canvas>
+        <ReportSliceOverlay v-if="displayMeta && reportOverlay" :meta="displayMeta" :overlay="reportOverlay" />
         <div v-if="displayMeta" class="cornerstone-annotations" :style="{ clipPath: annotationClip }">
           <CTReviewInput
             :meta="displayMeta"

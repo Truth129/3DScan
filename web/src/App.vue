@@ -32,8 +32,9 @@ import { readOrthancLaunch, withoutOrthancLaunch } from './lib/orthanc';
 import { archiveSourceFor, readArchiveLaunch, withoutArchiveLaunch } from './lib/archive';
 import RefinementPanel from './components/RefinementPanel.vue';
 import AgreementPanel from './components/AgreementPanel.vue';
-import CoronaryPanel from './components/CoronaryPanel.vue';
-import { hasCoronaryLumen, type CoronaryTube } from './lib/coronary';
+import AnalysisPanel from './components/AnalysisPanel.vue';
+import type { CoronaryTube } from './lib/coronary';
+import type { ReportOverlay } from './lib/reports';
 import { centreOnClick } from './lib/centre-on-click';
 import InteractiveReviewPanel from './components/InteractiveReviewPanel.vue';
 import SegmentationControls from './components/SegmentationControls.vue';
@@ -270,26 +271,35 @@ const sidebarTab = computed<SidebarTab>({
 });
 // The 3D view docks its volume settings in the 3D tab. It reports whether it has any, and errors.
 const volumeSettings = ref({ shown: false, error: false });
-// Research CT-FFR: the tab shows for a revision with a coronary lumen, and the panel owns the 3D tube.
-const coronaryAvailable = computed(() => !!revision.value && hasCoronaryLumen(revision.value.structures)),
+// Research analyses (CT-FFR and the measurement reports): the tab shows for any saved CT revision, a
+// scan alone included, and the panel owns what it draws: the FFR tube and a report's overlay.
+const analysisAvailable = computed(() => !!revision.value && activeModality.value === 'CT'),
   coronaryTube = shallowRef<CoronaryTube>(),
+  reportOverlay = shallowRef<ReportOverlay>(),
   nativeView = ref(false);
-// The volume settings and the segment list have their own tabs, so opening either from FFR keeps the
-// panel, its tube and its inputs while the view is tuned around the tube. Any other tab closes the
-// panel. A remembered FFR tab counts as opened.
-const coronaryKept = ref(false);
+// The volume settings and the segment list have their own tabs, so opening either from Analysis keeps
+// the panel, its drawing and its inputs while the view is tuned around them. Any other tab closes the
+// panel. A remembered Analysis tab counts as opened.
+const analysisKept = ref(false);
 watch(
   sidebarTab,
   tab => {
-    if (tab !== 'volume' && tab !== 'segments') coronaryKept.value = tab === 'coronary';
+    if (tab !== 'volume' && tab !== 'segments') analysisKept.value = tab === 'analysis';
   },
   { immediate: true },
 );
-watch(coronaryAvailable, available => {
+watch(analysisAvailable, available => {
   if (available) return;
-  coronaryKept.value = false;
-  if (sidebarTab.value === 'coronary') sidebarTab.value = 'segments';
+  analysisKept.value = false;
+  if (sidebarTab.value === 'analysis') sidebarTab.value = 'segments';
 });
+// A report's overlay belongs to the revision it measured.
+watch(
+  () => revision.value?.id,
+  () => {
+    reportOverlay.value = undefined;
+  },
+);
 if (!panels.value.model) mobilePanel.value = 'review';
 const modelPanelVisible = computed(() => panels.value.model && (workspaceMode.value !== 'review' || reviewFocus.value !== 'ct'));
 const reviewPanelVisible = computed(() => panels.value.review && (workspaceMode.value !== 'review' || reviewFocus.value !== 'model'));
@@ -408,7 +418,7 @@ const volumeTabShown = computed(() => volumeSettings.value.shown && fold.value !
  */
 const shownSidebarTab = computed<SidebarTab>(() => {
   const tab = sidebarTab.value;
-  return (tab === 'volume' && !volumeTabShown.value) || (tab === 'refine' && ctOnly.value) || (tab === 'coronary' && !coronaryAvailable.value)
+  return (tab === 'volume' && !volumeTabShown.value) || (tab === 'refine' && ctOnly.value) || (tab === 'analysis' && !analysisAvailable.value)
     ? 'segments'
     : tab;
 });
@@ -489,6 +499,14 @@ const busy = computed(() => busyJob.value || actionBusy.value || segImportBusy.v
 const base = computed(() => (activeCase.value && revision.value ? revisionUrl(activeCase.value.id, revision.value.id) : ''));
 const ctRevisionId = computed(() => reviewDisplayRevision(interactiveReview.value, interactiveCandidate.value) || revision.value?.id || '');
 const showingCandidate = computed(() => !!interactiveCandidate.value && !!reviewCandidateRevision(interactiveReview.value));
+// A report draws only over the revision it measured, as the FFR tube does. The slices leave it out in
+// review, where they show the marks being drawn.
+const modelReportOverlay = computed(() =>
+    before.value || reportOverlay.value?.result.revision_id !== shownRevision.value?.id ? undefined : reportOverlay.value,
+  ),
+  sliceReportOverlay = computed(() =>
+    workspaceMode.value === 'review' || reportOverlay.value?.result.revision_id !== ctRevisionId.value ? undefined : reportOverlay.value,
+  );
 // The CT header's review chip: what is being reviewed, and which mask the slices show.
 const ctReviewName = computed(() => {
   const id = interactiveReview.value?.structure_id ?? '';
@@ -757,8 +775,8 @@ async function loadRevision(id: string, rid: string, generation: number, preserv
   // A scan with no segments can be in review to add one, which a reload of the same revision keeps.
   if (changedRevision && (next.kind === 'ct' || !next.structures.length)) {
     workspaceMode.value = 'model';
-    // A scan alone has no Refine tab; the 3D tab still applies.
-    if (sidebarTab.value !== 'volume') sidebarTab.value = 'segments';
+    // A scan alone has no Refine tab; the 3D and Analysis tabs still apply.
+    if (sidebarTab.value !== 'volume' && sidebarTab.value !== 'analysis') sidebarTab.value = 'segments';
     ctExpanded.value = false;
   }
   const previous = display.value;
@@ -2089,12 +2107,12 @@ onBeforeUnmount(() => {
                   <span class="tab-long">Revision history</span><span class="tab-short" aria-hidden="true">History</span>
                   <span class="tab-count">{{ revisions.length }}</span></button
                 ><button
-                  v-if="coronaryAvailable"
-                  class="inspector-coronary-tab"
-                  :class="{ active: shownSidebarTab === 'coronary' }"
-                  @click="sidebarTab = 'coronary'"
+                  v-if="analysisAvailable"
+                  class="inspector-analysis-tab"
+                  :class="{ active: shownSidebarTab === 'analysis' }"
+                  @click="sidebarTab = 'analysis'"
                 >
-                  <span class="tab-long">Coronary FFR</span><span class="tab-short" aria-hidden="true">FFR</span></button
+                  Analysis</button
                 ><button
                   type="button"
                   class="panel-collapse-button"
@@ -2220,15 +2238,18 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
               </div>
-              <CoronaryPanel
-                v-if="coronaryAvailable && (shownSidebarTab === 'coronary' || coronaryKept)"
-                v-show="shownSidebarTab === 'coronary'"
+              <AnalysisPanel
+                v-if="analysisAvailable && (shownSidebarTab === 'analysis' || analysisKept)"
+                v-show="shownSidebarTab === 'analysis'"
                 :case-id="activeCase.id"
                 :revision="revision"
                 :point="point"
                 :native="nativeView"
+                :busy="busy"
                 @select="picked"
                 @tube="coronaryTube = $event"
+                @overlay="reportOverlay = $event"
+                @job="track"
               />
               <!-- Always rendered: the 3D view teleports its volume settings here once, when it mounts. -->
               <div id="workspace-volume-settings" v-show="shownSidebarTab === 'volume'" class="inspector-volume"></div>
@@ -2307,6 +2328,7 @@ onBeforeUnmount(() => {
                 :level="displayLevel"
                 :dicom-view-block-reason="viewCapturing ? 'Capturing the view…' : savedExportDisabledReason"
                 :coronary-tube="before || coronaryTube?.result.revision_id !== shownRevision.id ? undefined : coronaryTube"
+                :report-overlay="modelReportOverlay"
                 :heading="ctOnly ? `${sourceLabel} view` : '3D anatomy'"
                 :heading-detail="
                   ctOnly
@@ -2656,6 +2678,7 @@ onBeforeUnmount(() => {
                   :native-review="workspaceMode === 'review' && interactiveNative"
                   :centre-request="centreRequest"
                   :mpr="ctMPR"
+                  :report-overlay="sliceReportOverlay"
                   @point="setPoint"
                   @gesture="interactivePanel?.addGesture($event)"
                   @remove-mark="interactivePanel?.removeMark($event)"

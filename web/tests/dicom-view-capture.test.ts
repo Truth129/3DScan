@@ -28,7 +28,7 @@ vi.mock('../src/lib/cornerstone-volume-3d', () => ({
       fake.viewer = {
         options,
         camera: {},
-        nativeRenderer: { addViewProp() {}, removeViewProp() {} },
+        nativeRenderer: { addViewProp: vi.fn(), removeViewProp() {} },
         nativeViewport: {},
         sourceImageData: {},
         sourceVoxelValue: () => 0,
@@ -427,6 +427,27 @@ describe('Cornerstone export capture', () => {
     shown.state.colors = { ...colors, ids: ['liver'] };
     await settled();
     await expect(shown.exposed.capturePNG()).resolves.toBe('data:image/png;base64,frame+review');
+  });
+  it('keeps the tube and report drawing out of a capture that a presentation sync interrupts', async () => {
+    const shown = await view({
+      tube: { result: { analysis_id: 'a1', branches: [], inputs: {} }, colouring: 'ffr' },
+      reportOverlay: { result: { analysis_id: 'm1', landmarks: [], centreline: [] }, selected: undefined },
+    });
+    const [tube, report] = fake.viewer.nativeRenderer.addViewProp.mock.calls
+      .map(([actor]: [any]) => actor)
+      .filter((actor: any) => typeof actor.getVisibility === 'function');
+    const visible = () => [tube.getVisibility(), report.getVisibility()];
+    expect(visible()).toEqual([true, true]);
+    const frame = deferred<string>();
+    fake.viewer.capturePNG.mockReturnValueOnce(frame.promise);
+    const capture = shown.exposed.capturePNG();
+    await settled();
+    shown.state.display = { heart: { visible: true, opacity: 0.5 } };
+    await settled();
+    expect(visible(), 'hidden while the frame is drawn').toEqual([false, false]);
+    frame.resolve('data:image/png;base64,frame');
+    await capture;
+    expect(visible()).toEqual([true, true]);
   });
 });
 

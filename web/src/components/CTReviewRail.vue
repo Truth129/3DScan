@@ -8,6 +8,7 @@ import type { CTOverlaySelection } from '../lib/ct-overlays';
 import { hasCornerstoneShear } from '../lib/cornerstone-volume';
 import type { CornerstoneMPR } from '../lib/cornerstone-mpr';
 import { paneStill } from '../lib/pane-still';
+import type { ReportOverlay } from '../lib/reports';
 
 const props = withDefaults(
   defineProps<{
@@ -34,6 +35,8 @@ const props = withDefaults(
     nativeReview?: boolean;
     centreRequest?: { point: Point; serial: number };
     mpr: CTMPRSettings;
+    /** A measurement report's selected landmark, drawn on every pane. */
+    reportOverlay?: ReportOverlay;
   }>(),
   { active: true, overlayOpacity: 0.4 },
 );

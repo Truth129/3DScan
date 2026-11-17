@@ -868,7 +868,7 @@
     }
     /* If the strip still overflows, the words shorten before the chevron leaves it. Segments, the main
        tab, keeps its word. */
-    .workspace-sidebar .inspector-tabs > button:not(:first-child, .panel-collapse-button, .inspector-volume-tab, .inspector-coronary-tab) {
+    .workspace-sidebar .inspector-tabs > button:not(:first-child, .panel-collapse-button, .inspector-volume-tab, .inspector-analysis-tab) {
       flex: 0 1 auto;
       min-width: 0;
       overflow: hidden;
@@ -887,24 +887,29 @@
   .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) .tab-short {
     display: inline;
   }
-  /* Five tabs fit the default 280 px sidebar only closer together and without the revision count. */
+  /* With the Analysis tab the strip fits the default 280 px sidebar only closer together; five tabs
+     also lose the revision count. */
   @container workspace-sidebar (max-width: 339px) {
-    .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) {
-      gap: 4px;
+    .workspace-sidebar .inspector-tabs:has(> .inspector-analysis-tab) {
+      gap: 2px;
     }
-    .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) > button:not(.panel-collapse-button) {
-      padding-inline: 5px;
+    .workspace-sidebar .inspector-tabs:has(> .inspector-analysis-tab) > button:not(.panel-collapse-button) {
+      padding-inline: 3px;
     }
     .workspace-sidebar .inspector-tabs:has(> :nth-child(6)) .tab-count {
       display: none;
     }
   }
+  /* Below the default width the strip wraps to a second row rather than cutting words to slivers. */
   @container workspace-sidebar (max-width: 279px) {
     .workspace-sidebar .inspector-tabs > button:not(.panel-collapse-button) {
       padding-inline: 5px;
     }
     .workspace-sidebar .inspector-tabs {
+      flex-wrap: wrap;
       gap: 4px;
+      height: auto;
+      padding-block: 4px;
     }
   }
 

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch, type Component } fro
 import type { Geometry, InteractivePrompt, InteractiveTool, Plane, Point } from '../types';
 import type { LocalCTSession } from '../lib/ct-volume';
 import type { CTOverlaySelection } from '../lib/ct-overlays';
+import type { ReportOverlay } from '../lib/reports';
 const props = withDefaults(
   defineProps<{
     modality?: string;
@@ -26,6 +27,7 @@ const props = withDefaults(
     reviewInclude?: boolean;
     reviewRadius?: number;
     nativeReview?: boolean;
+    reportOverlay?: ReportOverlay;
   }>(),
   { overlayOpacity: 0.4 },
 );
