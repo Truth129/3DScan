@@ -1,35 +1,48 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId, watch } from 'vue';
 import { X } from '@lucide/vue';
 import { api, ApiError, dicomViewFileUrl } from '../lib/api';
 import {
-  DICOM_VIEW_FILE_KIND,
+  dicomExportIsFile,
   dicomViewAlreadySent,
   dicomViewExportSummary,
-  matchesDicomViewExport,
+  dicomViewFileReady,
+  isReportSource,
+  matchesDicomExport,
   pendingDicomViewExport,
   unfinishedEarlierDicomView,
+  type DicomExportSource,
   type DicomViewAvailability,
   type DicomViewExportJob,
   type DicomViewFileAvailability,
-  type ViewCapture,
 } from '../lib/dicom-view';
+import { reportDicomFileUrl, reportsApi } from '../lib/reports';
 import { startDownload } from '../lib/session';
 
 const props = defineProps<{
-  capture: ViewCapture;
+  /** A captured 3D view, or a report result whose images the server already holds. */
+  capture: DicomExportSource;
   job?: DicomViewExportJob;
   open: boolean;
   /** Functions, because how a request ended must reach someone even if this dialog has gone. */
-  follow: (job: DicomViewExportJob, capture: ViewCapture) => void;
+  follow: (job: DicomViewExportJob, capture: DicomExportSource) => void;
   observe: (job: DicomViewExportJob) => void;
-  report: (message: string, capture: ViewCapture) => void;
+  report: (message: string, capture: DicomExportSource) => void;
   /** The watcher's latest word on a job, because a listing stops being true as soon as it is read. */
   known: (id: string) => DicomViewExportJob | undefined;
 }>();
 const emit = defineEmits<{ close: [] }>();
 // Read once: App keys this dialog by capture, and nothing here may follow a live identity.
 const capture = props.capture;
+const reportSource = isReportSource(capture) ? capture : undefined,
+  viewSource = isReportSource(capture) ? undefined : capture;
+/** The word for what this dialog exports, in every text a view and a report share. */
+const noun = reportSource ? 'report' : 'view';
+// Per instance: a view dialog and a report dialog can be mounted together.
+const titleId = useId(),
+  descriptionId = useId();
+/** What the server recognises when a request is repeated: the captured image, or the report's own images. */
+const sameThing = reportSource ? 'this report' : 'this image';
 const dialog = ref<HTMLDialogElement>(),
   availability = shallowRef<DicomViewAvailability>(),
   fileAvailability = shallowRef<DicomViewFileAvailability>(),
@@ -38,7 +51,7 @@ const dialog = ref<HTMLDialogElement>(),
   submitting = ref(false),
   error = ref(''),
   statusError = ref('');
-const job = computed(() => (props.job && matchesDicomViewExport(props.job, capture.caseId, capture.revisionId) ? props.job : undefined));
+const job = computed(() => (props.job && matchesDicomExport(props.job, capture) ? props.job : undefined));
 const pending = computed(() => pendingDicomViewExport(job.value));
 const locked = computed(() => checking.value || submitting.value || pending.value);
 const orthancReady = computed(() => !!availability.value?.available);
@@ -55,9 +68,7 @@ const actionDisabled = computed(() => locked.value || !!statusError.value || !or
 const sendDisabled = computed(() => locked.value || !!statusError.value || (direct.value ? !direct.value.available : !orthancReady.value));
 const fileDisabled = computed(() => locked.value || !!statusError.value || !fileReady.value);
 /** A file of this capture that is ready to save again: only this dialog's own job holds this image. */
-const preparedFile = computed(() =>
-  job.value?.kind === DICOM_VIEW_FILE_KIND && job.value.status === 'completed' && job.value.result?.dicom_view?.file ? job.value : undefined,
-);
+const preparedFile = computed(() => (dicomViewFileReady(job.value) ? job.value : undefined));
 const target = computed(() => sendList.value.find(item => item.id === destination.value));
 const repeatDelivery = computed(() => !!target.value && dicomViewAlreadySent(job.value, target.value.id, target.value.key));
 const summary = computed(() => (job.value ? dicomViewExportSummary(job.value) : ''));
@@ -95,12 +106,18 @@ async function load() {
   try {
     const [archive, file] = await Promise.all([
       // An account without the archive is refused here, which leaves a file as its only choice.
-      api.dicomViewAvailability(capture.caseId, capture.revisionId, request.signal).catch((reason): DicomViewAvailability => {
+      (reportSource
+        ? reportsApi.dicomAvailability(capture.caseId, capture.revisionId, reportSource.report, reportSource.analysisId, request.signal)
+        : api.dicomViewAvailability(capture.caseId, capture.revisionId, request.signal)
+      ).catch((reason): DicomViewAvailability => {
         if (reason instanceof ApiError && reason.status === 403) return { available: false, reason: reason.message, destinations: [] };
         throw reason;
       }),
       // A server from before view files answers 404, and then offers only the archive.
-      api.dicomViewFileAvailability(capture.caseId, capture.revisionId, request.signal).catch((reason): DicomViewFileAvailability => {
+      (reportSource
+        ? reportsApi.dicomFileAvailability(capture.caseId, capture.revisionId, reportSource.report, reportSource.analysisId, request.signal)
+        : api.dicomViewFileAvailability(capture.caseId, capture.revisionId, request.signal)
+      ).catch((reason): DicomViewFileAvailability => {
         if (reason instanceof ApiError && reason.status === 404) return { available: false };
         throw reason;
       }),
@@ -124,16 +141,24 @@ async function start(chosen?: string, resend = false, file = false) {
   try {
     // Not aborted on close: a request the server has read still queues its job, and only this
     // response names that job. Abandoning it would leave a send that nothing is watching.
-    const image = { image: capture.image, referenceImageId: capture.referenceImageId };
-    const queued = file
-      ? await api.exportDicomViewFile(capture.caseId, capture.revisionId, image)
-      : await api.exportDicomView(capture.caseId, capture.revisionId, {
-          ...image,
-          ...(chosen ? { destination: chosen } : {}),
-          ...(resend ? { resend: true } : {}),
-          ...(sent ? { delivery: 'direct' as const } : {}),
-        });
-    if (!matchesDicomViewExport(queued, capture.caseId, capture.revisionId)) throw new ApiError(400, 'The export job does not match this capture.');
+    const delivery = {
+      ...(chosen ? { destination: chosen } : {}),
+      ...(resend ? { resend: true } : {}),
+      ...(sent ? { delivery: 'direct' as const } : {}),
+    };
+    let queued: DicomViewExportJob;
+    if (reportSource) {
+      const { report, analysisId } = reportSource;
+      queued = file
+        ? await reportsApi.exportDicomFile(capture.caseId, capture.revisionId, report, analysisId)
+        : await reportsApi.exportDicom(capture.caseId, capture.revisionId, report, analysisId, delivery);
+    } else {
+      const image = { image: viewSource!.image, referenceImageId: viewSource!.referenceImageId };
+      queued = file
+        ? await api.exportDicomViewFile(capture.caseId, capture.revisionId, image)
+        : await api.exportDicomView(capture.caseId, capture.revisionId, { ...image, ...delivery });
+    }
+    if (!matchesDicomExport(queued, capture)) throw new ApiError(400, `The export job does not match this ${reportSource ? 'report' : 'capture'}.`);
     props.follow(queued, capture);
     // Only a repeat of the lost request settles it: a file is a different request, even with no destination.
     if (!file && lost?.destination === chosen) lost = undefined;
@@ -143,14 +168,14 @@ async function start(chosen?: string, resend = false, file = false) {
       refused = reason instanceof ApiError && reason.status < 500;
     // A file leaves nothing outside this machine, so a lost answer needs no warning about a receiver.
     if (file) {
-      if (!gone) error.value = refused ? message : `${message} Repeating it is safe: the server recognises this image.`;
+      if (!gone) error.value = refused ? message : `${message} Repeating it is safe: the server recognises ${sameThing}.`;
     } else if (gone) props.report(refused ? message : unconfirmed(message, sent), capture);
     else {
       // No listing can say which image a job holds, so only the repeat can find this capture's
       // own job. The server answers it with that job, because the image and destination match.
       error.value = refused
         ? message
-        : `${message} The request may already have reached the workstation. Repeating it is safe: the server recognises this image and destination.`;
+        : `${message} The request may already have reached the workstation. Repeating it is safe: the server recognises ${sameThing} and destination.`;
       if (!refused) {
         lost = { message, destination: chosen, direct: sent };
         void load();
@@ -162,9 +187,12 @@ async function start(chosen?: string, resend = false, file = false) {
 }
 /** Preparing can outlast the dialog's attention, so saving is a second click rather than a surprise download. */
 function saveFile() {
-  const prepared = preparedFile.value?.result?.dicom_view;
+  const prepared = preparedFile.value?.result?.dicom_view ?? preparedFile.value?.result?.dicom_report;
   if (!prepared) return void start(undefined, false, true);
-  startDownload(dicomViewFileUrl(capture.caseId, capture.revisionId, prepared.export_id)).catch(reason => {
+  const url = reportSource
+    ? reportDicomFileUrl(capture.caseId, capture.revisionId, reportSource.report, reportSource.analysisId, prepared.export_id)
+    : dicomViewFileUrl(capture.caseId, capture.revisionId, prepared.export_id);
+  startDownload(url).catch(reason => {
     error.value = reason instanceof Error ? reason.message : 'The file could not be saved.';
   });
 }
@@ -172,7 +200,7 @@ async function present() {
   previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
   dialog.value?.showModal();
   await nextTick();
-  dialog.value?.querySelector<HTMLButtonElement>('[aria-label="Close DICOM view export"]')?.focus();
+  dialog.value?.querySelector<HTMLButtonElement>(`[aria-label="Close DICOM ${noun} export"]`)?.focus();
 }
 /** A click on this dialog's own padding also targets it, so only a point outside the box is the backdrop. */
 function backdrop(event: MouseEvent) {
@@ -205,20 +233,23 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <dialog
-    ref="dialog"
-    class="dicom-view-dialog"
-    aria-labelledby="dicom-view-title"
-    aria-describedby="dicom-view-description"
-    @cancel.prevent="close"
-    @click="backdrop"
-  >
+  <dialog ref="dialog" class="dicom-view-dialog" :aria-labelledby="titleId" :aria-describedby="descriptionId" @cancel.prevent="close" @click="backdrop">
     <header>
-      <span class="eyebrow">DICOM VIEW</span
-      ><button class="icon-button" type="button" aria-label="Close DICOM view export" title="Close DICOM view export" @click="close"><X /></button>
+      <span class="eyebrow">{{ reportSource ? 'DICOM REPORT' : 'DICOM VIEW' }}</span
+      ><button class="icon-button" type="button" :aria-label="`Close DICOM ${noun} export`" :title="`Close DICOM ${noun} export`" @click="close">
+        <X />
+      </button>
     </header>
-    <h2 id="dicom-view-title">Export this view.</h2>
-    <p id="dicom-view-description">
+    <h2 :id="titleId">Export this {{ noun }}.</h2>
+    <p v-if="reportSource" :id="descriptionId">
+      {{
+        showOrthanc
+          ? 'The report page and the curved view join the original study as one new series.'
+          : `Save the report page and the curved view as DICOM files, in one ZIP, in the original patient and study${sends ? ', or send them to a configured DICOM node' : ''}.`
+      }}
+      They are pictures: not calibrated, and not for measurement. Research use only.
+    </p>
+    <p v-else :id="descriptionId">
       {{
         showOrthanc
           ? 'This image joins the original study as a new series.'
@@ -226,12 +257,19 @@ onBeforeUnmount(() => {
       }}
       It is a picture: not calibrated, and not for measurement.
     </p>
-    <img class="view-preview" :src="capture.url" :alt="`Captured 3D view of ${capture.caseLabel}`" />
-    <p class="revision-scope">{{ capture.caseLabel }} · Revision {{ capture.revisionId.slice(0, 8) }} · {{ capture.width }} × {{ capture.height }} px</p>
+    <p v-if="reportSource" class="revision-scope">
+      {{ reportSource.caseLabel }} · Revision {{ reportSource.revisionId.slice(0, 8) }} · {{ reportSource.title }} report
+    </p>
+    <template v-else-if="viewSource">
+      <img class="view-preview" :src="viewSource.url" :alt="`Captured 3D view of ${viewSource.caseLabel}`" />
+      <p class="revision-scope">
+        {{ viewSource.caseLabel }} · Revision {{ viewSource.revisionId.slice(0, 8) }} · {{ viewSource.width }} × {{ viewSource.height }} px
+      </p>
+    </template>
 
     <p v-if="checking" role="status">Checking export availability…</p>
     <p v-if="availability && !orthancReady && (showOrthanc || !fileReady)" class="export-error" role="status">
-      {{ (!fileReady && fileAvailability?.reason) || availability.reason || 'DICOM view export is unavailable for this saved revision.' }}
+      {{ (!fileReady && fileAvailability?.reason) || availability.reason || `DICOM ${noun} export is unavailable for this saved revision.` }}
     </p>
     <p v-else-if="availability?.reason && !orthancReady" class="help" role="status">
       {{ archiveName ? 'Archiving is unavailable.' : direct ? 'Archiving in Orthanc is unavailable.' : 'Archive and send are unavailable.' }}
@@ -240,12 +278,14 @@ onBeforeUnmount(() => {
     <p v-if="earlier" class="help" role="status">
       {{
         pendingDicomViewExport(earlier)
-          ? 'An earlier export of this revision is still in progress.'
-          : 'An earlier export of this revision did not finish, and it may still have reached the receiver. This capture makes a new series unless it is the same image.'
+          ? `An earlier export of this ${reportSource ? 'report' : 'revision'} is still in progress.`
+          : reportSource
+            ? 'An earlier export of this report did not finish, and it may still have reached the receiver. Exporting it again reuses that series.'
+            : 'An earlier export of this revision did not finish, and it may still have reached the receiver. This capture makes a new series unless it is the same image.'
       }}
     </p>
 
-    <p v-if="earlierOutcome" class="help" role="status">An earlier export of this revision finished. {{ earlierOutcome }}</p>
+    <p v-if="earlierOutcome" class="help" role="status">An earlier export of this {{ reportSource ? 'report' : 'revision' }} finished. {{ earlierOutcome }}</p>
 
     <p v-if="direct && !direct.available" class="help" role="status">Sending is unavailable. {{ direct.reason }}</p>
     <fieldset v-if="sends" :disabled="locked || (!direct && !orthancReady)">
@@ -264,20 +304,29 @@ onBeforeUnmount(() => {
       <template v-if="pending"
         ><span class="spinner"></span>
         <div>
-          <strong>{{ job.status === 'queued' ? 'Export queued' : 'Exporting DICOM view' }}</strong>
+          <strong>{{ job.status === 'queued' ? 'Export queued' : `Exporting DICOM ${noun}` }}</strong>
           <p>{{ job.stage }}</p>
         </div></template
       >
       <template v-else-if="job.status === 'completed'">{{ summary }}</template>
       <template v-else-if="job.status === 'failed'">
-        {{ job.error || 'The export failed.' }} Retry from this dialog reuses the same image. A capture of a different image makes a new series.
+        {{ job.error || 'The export failed.' }}
+        {{
+          reportSource
+            ? 'Retry from this dialog reuses the same images and series.'
+            : 'Retry from this dialog reuses the same image. A capture of a different image makes a new series.'
+        }}
       </template>
       <template v-else>Export cancelled.</template>
     </div>
-    <p v-if="pending && job?.kind !== DICOM_VIEW_FILE_KIND" class="help">
-      You may close this panel. Closing does not cancel an archive or send already in progress.
+    <p v-if="pending && !dicomExportIsFile(job)" class="help">You may close this panel. Closing does not cancel an archive or send already in progress.</p>
+    <p v-else-if="repeatDelivery" class="help">
+      {{
+        reportSource
+          ? 'This report has already been sent there. Send again starts a new delivery of the same DICOM instances.'
+          : 'This image has already been sent there. Send again starts a new delivery of the same DICOM instance.'
+      }}
     </p>
-    <p v-else-if="repeatDelivery" class="help">This image has already been sent there. Send again starts a new delivery of the same DICOM instance.</p>
     <p v-if="fileReady" class="help">A saved file carries the CT's patient details, so handle it like the study.</p>
     <p v-if="error" class="export-error" role="alert">{{ error }}</p>
     <p v-if="statusError" class="export-error" role="alert">{{ statusError }}</p>

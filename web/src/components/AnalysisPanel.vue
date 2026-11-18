@@ -5,6 +5,7 @@ import ReportPanel from './ReportPanel.vue';
 import AortaReport from './AortaReport.vue';
 import { hasCoronaryLumen, type CoronaryTube } from '../lib/coronary';
 import { ANALYSIS_STORAGE_KEY, type AortaResult, type ReportOverlay } from '../lib/reports';
+import type { ReportExportRequest } from '../lib/dicom-view';
 import type { Job, Point, Revision } from '../types';
 
 /** The side panel's Analysis tab: one chooser, then the chosen analysis. A later report adds one entry here. */
@@ -14,6 +15,7 @@ const emit = defineEmits<{
   tube: [tube: CoronaryTube | undefined];
   overlay: [overlay: ReportOverlay | undefined];
   job: [job: Job];
+  dicom: [request: ReportExportRequest];
 }>();
 
 const ANALYSES = [
@@ -87,6 +89,7 @@ onBeforeUnmount(() => {
           :result="result as AortaResult"
           @select="(id, at) => emit('select', id, at)"
           @overlay="emit('overlay', $event)"
+          @dicom="emit('dicom', $event)"
         />
       </template>
     </ReportPanel>

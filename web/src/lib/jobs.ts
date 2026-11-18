@@ -15,6 +15,10 @@ export const outboundExportKinds = [
   'archive_view_export',
   'direct_seg_export',
   'direct_view_export',
+  'orthanc_report_export',
+  'report_file_export',
+  'archive_report_export',
+  'direct_report_export',
 ];
 /** Kinds a panel polls itself. None makes a revision, so the workspace never waits for one. */
 const ownPollerKinds = ['review_predict', 'coronary_analysis', 'report'];

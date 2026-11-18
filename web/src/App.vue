@@ -74,6 +74,7 @@ import { caseIsGone, jobIsGone, outboundExportKinds, recoverCaseJob } from './li
 import { trashMessage } from './lib/library';
 import { savedRevisionExportBlockReason } from './lib/dicom-seg';
 import {
+  freezeReportSource,
   freezeViewCapture,
   dicomViewFileReady,
   pendingDicomViewExport,
@@ -81,7 +82,10 @@ import {
   VIEW_NOT_READY_MESSAGE,
   viewExportScopeHeld,
   viewExportScopeReady,
+  type DicomExportSource,
   type DicomViewExportJob,
+  type ReportExportRequest,
+  type ReportExportSource,
   type ViewCapture,
   type ViewCaptureRequest,
   type ViewExportScope,
@@ -443,6 +447,10 @@ const viewCapture = shallowRef<ViewCapture>(),
   viewExportOpen = ref(false),
   viewCapturing = ref(false),
   viewJobId = ref('');
+// A report's export dialog, held the same way: the server holds its images, so only the result is frozen.
+const reportExport = shallowRef<ReportExportSource>(),
+  reportExportOpen = ref(false),
+  reportJobId = ref('');
 const interactivePanel = ref<InstanceType<typeof InteractiveReviewPanel>>();
 const catalogGate = new SourceRequestGate();
 let revisionRequest = 0;
@@ -649,12 +657,13 @@ const viewJobs = useDicomViewJobs({
   // Not activeCase, which stays on the old case while the next one loads and nothing shows it.
   activeCaseId: () => revision.value?.case_id,
   caseLabel: id => cases.value.find(item => item.id === id)?.label,
-  showing: id => viewExportOpen.value && viewJobId.value === id,
-  held: id => !!viewCapture.value && viewJobId.value === id,
+  showing: id => (viewExportOpen.value && viewJobId.value === id) || (reportExportOpen.value && reportJobId.value === id),
+  held: id => (!!viewCapture.value && viewJobId.value === id) || (!!reportExport.value && reportJobId.value === id),
   success: toast,
   failure: alertViewExport,
 });
 const viewJob = computed(() => (viewJobId.value ? viewJobs.job(viewJobId.value) : undefined));
+const reportJob = computed(() => (reportJobId.value ? viewJobs.job(reportJobId.value) : undefined));
 function viewExportScope(): ViewExportScope {
   return {
     caseId: activeCase.value?.id,
@@ -713,12 +722,13 @@ async function exportView() {
     viewCapturing.value = false;
   }
 }
-function followViewJob(next: DicomViewExportJob, capture: ViewCapture) {
-  const held = viewCapture.value === capture;
-  if (held) viewJobId.value = next.id;
+function followViewJob(next: DicomViewExportJob, capture: DicomExportSource) {
+  const held = viewCapture.value === capture || reportExport.value === capture;
+  if (viewCapture.value === capture) viewJobId.value = next.id;
+  if (reportExport.value === capture) reportJobId.value = next.id;
   viewJobs.follow(next, !held);
 }
-function reportViewExport(message: string, capture: ViewCapture) {
+function reportViewExport(message: string, capture: DicomExportSource) {
   alertViewExport(capture.caseId === revision.value?.case_id ? message : `${capture.caseLabel}: ${message}`);
   // With no answer the job may exist anyway, and the dialog that could have found it has gone.
   void viewJobs.seed(capture.caseId);
@@ -727,10 +737,47 @@ function closeViewExport() {
   viewExportOpen.value = false;
   if (!pendingDicomViewExport(viewJob.value)) dropViewCapture();
 }
-watch(() => `${activeCase.value?.id}:${revision.value?.id}`, dropViewCapture);
+watch(
+  () => `${activeCase.value?.id}:${revision.value?.id}`,
+  () => {
+    dropViewCapture();
+    dropReportExport();
+  },
+);
 // A closed dialog only stays to be reopened while its job runs, or once, to save a file that finished meanwhile.
 watch(viewJob, next => {
   if (viewCapture.value && !viewExportOpen.value && !pendingDicomViewExport(next) && !dicomViewFileReady(next)) dropViewCapture();
+});
+function dropReportExport() {
+  reportExport.value = undefined;
+  reportExportOpen.value = false;
+  reportJobId.value = '';
+}
+/** The same result reopens its held dialog while its export runs or its file waits; anything else starts afresh. */
+function openReportExport(request: ReportExportRequest) {
+  const held = reportExport.value;
+  if (
+    held &&
+    held.caseId === request.caseId &&
+    held.revisionId === request.revisionId &&
+    held.report === request.report &&
+    held.analysisId === request.analysisId &&
+    (pendingDicomViewExport(reportJob.value) || dicomViewFileReady(reportJob.value))
+  ) {
+    reportExportOpen.value = true;
+    return;
+  }
+  if (request.caseId !== activeCase.value?.id || request.revisionId !== revision.value?.id) return;
+  dropReportExport();
+  reportExport.value = freezeReportSource(request, activeCase.value?.label ?? '');
+  reportExportOpen.value = true;
+}
+function closeReportExport() {
+  reportExportOpen.value = false;
+  if (!pendingDicomViewExport(reportJob.value)) dropReportExport();
+}
+watch(reportJob, next => {
+  if (reportExport.value && !reportExportOpen.value && !pendingDicomViewExport(next) && !dicomViewFileReady(next)) dropReportExport();
 });
 let casesRequest = 0;
 async function refreshCases() {
@@ -2250,6 +2297,7 @@ onBeforeUnmount(() => {
                 @tube="coronaryTube = $event"
                 @overlay="reportOverlay = $event"
                 @job="track"
+                @dicom="openReportExport"
               />
               <!-- Always rendered: the 3D view teleports its volume settings here once, when it mounts. -->
               <div id="workspace-volume-settings" v-show="shownSidebarTab === 'volume'" class="inspector-volume"></div>
@@ -2796,6 +2844,18 @@ onBeforeUnmount(() => {
       :report="reportViewExport"
       :known="viewJobs.job"
       @close="closeViewExport"
+    />
+    <DicomViewExport
+      v-if="reportExport"
+      :key="reportExport.id"
+      :capture="reportExport"
+      :job="reportJob"
+      :open="reportExportOpen"
+      :follow="followViewJob"
+      :observe="viewJobs.follow"
+      :report="reportViewExport"
+      :known="viewJobs.job"
+      @close="closeReportExport"
     />
   </div>
 </template>

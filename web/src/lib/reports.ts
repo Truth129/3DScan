@@ -1,6 +1,7 @@
 import type { Job, Point, SliceMeta } from '../types';
 import { request, revisionUrl } from './api';
 import { apiFetch } from './api-fetch';
+import type { DicomReportExportRequest, DicomViewAvailability, DicomViewExportJob, DicomViewFileAvailability } from './dicom-view';
 import { pixelToRas, rasToPixel } from './geometry';
 
 /**
@@ -122,6 +123,10 @@ export const reportsUrl = (id: string, rid: string) => `${revisionUrl(id, rid)}/
 export const reportUrl = (id: string, rid: string, report: string) => `${reportsUrl(id, rid)}/${encodeURIComponent(report)}`;
 export const reportFileUrl = (id: string, rid: string, report: string, analysisId: string, name: string) =>
   `${reportUrl(id, rid, report)}/${encodeURIComponent(analysisId)}/files/${encodeURIComponent(name)}`;
+const analysisUrl = (id: string, rid: string, report: string, analysisId: string) => `${reportUrl(id, rid, report)}/${encodeURIComponent(analysisId)}`;
+/** The prepared DICOM series of a report: one ZIP, since a report is more than one image. */
+export const reportDicomFileUrl = (id: string, rid: string, report: string, analysisId: string, exportId: string) =>
+  `${analysisUrl(id, rid, report, analysisId)}/dicom-file/${encodeURIComponent(exportId)}/report.zip`;
 export const reportsApi = {
   detail: (id: string, rid: string, report: string, signal?: AbortSignal) =>
     request<{ report: ReportStatus; analyses: ReportAnalysis[] }>(reportUrl(id, rid, report), { signal }),
@@ -129,7 +134,15 @@ export const reportsApi = {
   segment: (id: string, rid: string, report: string, inferencePath: string | null, signal?: AbortSignal) =>
     request<Job>(`${reportUrl(id, rid, report)}/segment`, { ...json('POST', { inference_path: inferencePath }), signal }),
   result: <T extends ReportResult = ReportResult>(id: string, rid: string, report: string, analysisId: string, signal?: AbortSignal) =>
-    request<T>(`${reportUrl(id, rid, report)}/${encodeURIComponent(analysisId)}`, { signal }),
+    request<T>(analysisUrl(id, rid, report, analysisId), { signal }),
+  dicomAvailability: (id: string, rid: string, report: string, analysisId: string, signal?: AbortSignal) =>
+    request<DicomViewAvailability>(`${analysisUrl(id, rid, report, analysisId)}/dicom`, { signal }),
+  exportDicom: (id: string, rid: string, report: string, analysisId: string, value: DicomReportExportRequest, signal?: AbortSignal) =>
+    request<DicomViewExportJob>(`${analysisUrl(id, rid, report, analysisId)}/dicom`, { ...json('POST', value), signal }),
+  dicomFileAvailability: (id: string, rid: string, report: string, analysisId: string, signal?: AbortSignal) =>
+    request<DicomViewFileAvailability>(`${analysisUrl(id, rid, report, analysisId)}/dicom-file`, { signal }),
+  exportDicomFile: (id: string, rid: string, report: string, analysisId: string, signal?: AbortSignal) =>
+    request<DicomViewExportJob>(`${analysisUrl(id, rid, report, analysisId)}/dicom-file`, { ...json('POST', {}), signal }),
   /** A picture comes through apiFetch, so an ended session waits for sign-in as every other request does. */
   async picture(id: string, rid: string, report: string, analysisId: string, name: string, signal?: AbortSignal) {
     const response = await apiFetch(reportFileUrl(id, rid, report, analysisId, name), { signal });

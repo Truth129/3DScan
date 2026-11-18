@@ -10,6 +10,16 @@ export const DICOM_ARCHIVE_VIEW_KIND = 'archive_view_export';
 export const DICOM_DIRECT_VIEW_KIND = 'direct_view_export';
 /** The kinds that deliver a view somewhere, which a file does not. */
 export const DELIVERED_VIEW_KINDS = [DICOM_VIEW_KIND, DICOM_ARCHIVE_VIEW_KIND, DICOM_DIRECT_VIEW_KIND];
+/**
+ * A measurement report as DICOM images: the report page and its curved view, in one series. Its
+ * kinds are its own, so the 3D view's listings never show one.
+ */
+export const DICOM_REPORT_KIND = 'orthanc_report_export';
+export const DICOM_REPORT_FILE_KIND = 'report_file_export';
+export const DICOM_ARCHIVE_REPORT_KIND = 'archive_report_export';
+export const DICOM_DIRECT_REPORT_KIND = 'direct_report_export';
+export const DELIVERED_REPORT_KINDS = [DICOM_REPORT_KIND, DICOM_ARCHIVE_REPORT_KIND, DICOM_DIRECT_REPORT_KIND];
+const FILE_KINDS = [DICOM_VIEW_FILE_KIND, DICOM_REPORT_FILE_KIND];
 /** Mirrors the server's limit, so an oversized image stops before its upload starts. */
 export const DICOM_VIEW_MAX_BYTES = 128 * 1024 ** 2;
 export const VIEW_CHANGED_MESSAGE = 'The view changed during capture. Try again.';
@@ -32,7 +42,8 @@ export interface DicomViewExportResult {
   archive?: string;
 }
 export interface DicomViewExportJob extends Job {
-  result?: { dicom_view?: DicomViewExportResult };
+  /** A report export answers under its own key, with the same fields. */
+  result?: { dicom_view?: DicomViewExportResult; dicom_report?: DicomViewExportResult };
 }
 export interface DicomViewAvailability {
   encoding_version?: number;
@@ -54,6 +65,13 @@ export interface DicomViewFileAvailability {
 export interface DicomViewExportRequest {
   image: Blob;
   referenceImageId: string;
+  destination?: string;
+  resend?: boolean;
+  delivery?: 'direct';
+}
+
+/** A report export sends the server's own images, so the request is the result's identity alone. */
+export interface DicomReportExportRequest {
   destination?: string;
   resend?: boolean;
   delivery?: 'direct';
@@ -85,6 +103,27 @@ export interface ViewCapture extends Readonly<ViewCaptureRequest> {
   readonly width: number;
   readonly height: number;
 }
+
+/** The complete report result to export. The server reads its images itself, so there is nothing to capture. */
+export interface ReportExportRequest {
+  kind: 'report';
+  caseId: string;
+  revisionId: string;
+  report: string;
+  analysisId: string;
+  title: string;
+}
+export interface ReportExportSource extends Readonly<ReportExportRequest> {
+  readonly id: string;
+  readonly caseLabel: string;
+}
+/** What the export dialog exports: a captured 3D view, or a report result. */
+export type DicomExportSource = ViewCapture | ReportExportSource;
+export const isReportSource = (source: DicomExportSource): source is ReportExportSource => 'kind' in source && source.kind === 'report';
+let reportSources = 0;
+/** Frozen for the same reason as a capture: the dialog must not follow the workspace to another result. */
+export const freezeReportSource = (request: ReportExportRequest, caseLabel: string): ReportExportSource =>
+  Object.freeze({ ...request, id: `report-source-${++reportSources}`, caseLabel });
 
 const PNG_DATA_URL = 'data:image/png;base64,';
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -147,34 +186,49 @@ export const viewExportScopeHeld = (frozen: ViewExportScope, current: ViewExport
   viewExportScopeReady(current) && current.caseId === frozen.caseId && current.revisionId === frozen.revisionId && current.generation === frozen.generation;
 
 export const pendingDicomViewExport = (job?: Job) => !!job && ['queued', 'running'].includes(job.status);
+const isReportJob = (job: Job) => [...DELIVERED_REPORT_KINDS, DICOM_REPORT_FILE_KIND].includes(job.kind);
+/** The result of either a view or a report export, which differ only in their key. */
+const exportResult = (job?: DicomViewExportJob) => job?.result?.dicom_view ?? job?.result?.dicom_report;
 /** A prepared file waits for its Download click, which only a dialog holding its capture can offer. */
 export const dicomViewFileReady = (job?: DicomViewExportJob) =>
-  job?.kind === DICOM_VIEW_FILE_KIND && job.status === 'completed' && job.result?.dicom_view?.file === true;
+  !!job && FILE_KINDS.includes(job.kind) && job.status === 'completed' && exportResult(job)?.file === true;
+export const dicomExportIsFile = (job?: Job) => !!job && FILE_KINDS.includes(job.kind);
 export const matchesDicomViewExport = (job: Job, caseId: string, revisionId: string) =>
   [...DELIVERED_VIEW_KINDS, DICOM_VIEW_FILE_KIND].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId;
+export const matchesDicomReportExport = (job: Job, caseId: string, revisionId: string) =>
+  isReportJob(job) && job.case_id === caseId && job.revision_id === revisionId;
+/** A job of the source's own kind, case and revision: a view job never answers for a report, nor the reverse. */
+export const matchesDicomExport = (job: Job, source: DicomExportSource) =>
+  (isReportSource(source) ? matchesDicomReportExport : matchesDicomViewExport)(job, source.caseId, source.revisionId);
 
 /** A second delivery needs its own click. Only this capture's own job can offer one: another capture is a different image. */
-export const dicomViewAlreadySent = (job: DicomViewExportJob | undefined, destination: string, key?: string) =>
-  job?.status === 'completed' &&
-  job.result?.dicom_view?.sent === true &&
-  (key ? job.result.dicom_view.destination_key === key : job.result.dicom_view.destination_id === destination);
+export const dicomViewAlreadySent = (job: DicomViewExportJob | undefined, destination: string, key?: string) => {
+  const result = exportResult(job);
+  return job?.status === 'completed' && result?.sent === true && (key ? result.destination_key === key : result.destination_id === destination);
+};
 
-/** The newest export of this revision, when it may still affect what a receiver holds. */
+/** The newest export of this revision, when it may still affect what a receiver holds. A listing holds one family of kinds. */
 export function unfinishedEarlierDicomView(jobs: DicomViewExportJob[], caseId: string, revisionId: string, current?: DicomViewExportJob) {
-  const latest = jobs.find(job => DELIVERED_VIEW_KINDS.includes(job.kind) && matchesDicomViewExport(job, caseId, revisionId));
+  const latest = jobs.find(
+    job => [...DELIVERED_VIEW_KINDS, ...DELIVERED_REPORT_KINDS].includes(job.kind) && job.case_id === caseId && job.revision_id === revisionId,
+  );
   return latest && latest.id !== current?.id && (pendingDicomViewExport(latest) || latest.status === 'failed') ? latest : undefined;
 }
 
 /** Finished is not the same as delivered: only these flags say where the image went. */
-export const dicomViewDelivered = (job: DicomViewExportJob) =>
-  job.status === 'completed' && (job.result?.dicom_view?.sent === true || job.result?.dicom_view?.archived === true || job.result?.dicom_view?.file === true);
+export const dicomViewDelivered = (job: DicomViewExportJob) => {
+  const result = exportResult(job);
+  return job.status === 'completed' && (result?.sent === true || result?.archived === true || result?.file === true);
+};
 
 export function dicomViewExportSummary(job: DicomViewExportJob): string {
-  const result = job.result?.dicom_view;
+  const result = exportResult(job),
+    report = isReportJob(job);
   if (job.status !== 'completed' || !result) return '';
-  if (result.file) return 'View ready as a DICOM file. Nothing was archived or sent.';
+  if (result.file)
+    return report ? 'Report ready as a ZIP of DICOM files. Nothing was archived or sent.' : 'View ready as a DICOM file. Nothing was archived or sent.';
   if (result.sent)
-    return `View sent to ${result.destination || 'the configured destination'} · ${result.instance_count} DICOM ${result.instance_count === 1 ? 'instance' : 'instances'}.`;
-  if (result.archived) return `View archived in ${result.archive ?? 'Orthanc'}. Nothing was sent to another viewer.`;
+    return `${report ? 'Report' : 'View'} sent to ${result.destination || 'the configured destination'} · ${result.instance_count} DICOM ${result.instance_count === 1 ? 'instance' : 'instances'}.`;
+  if (result.archived) return `${report ? 'Report' : 'View'} archived in ${result.archive ?? 'Orthanc'}. Nothing was sent to another viewer.`;
   return 'Export finished. Delivery has not been confirmed.';
 }

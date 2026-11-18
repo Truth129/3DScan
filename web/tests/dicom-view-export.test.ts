@@ -7,6 +7,7 @@ import {
   dicomViewAlreadySent,
   dicomViewDelivered,
   dicomViewExportSummary,
+  freezeReportSource,
   freezeViewCapture,
   pngSize,
   unfinishedEarlierDicomView,
@@ -226,6 +227,64 @@ describe('the upload', () => {
     expect(url).toBe('/api/cases/case%2Fa/revisions/revision%20b/dicom-view');
     expect(init.method).toBe('POST');
     expect([...init.body.keys()]).toEqual(['image', 'reference_image_id']);
+  });
+});
+
+describe('a report source', () => {
+  it('posts JSON to the report route, with no upload, and saves its series as report.zip', async () => {
+    const source = freezeReportSource(
+        { kind: 'report', caseId: 'case-a', revisionId: 'revision-a', report: 'aorta', analysisId: 'analysis-a', title: 'Aorta' },
+        'Synthetic A',
+      ),
+      base = '/api/cases/case-a/revisions/revision-a/reports/aorta/analysis-a',
+      calls: { url: string; method: string; body: unknown }[] = [],
+      viewRoutes = [vi.spyOn(api, 'dicomViewAvailability'), vi.spyOn(api, 'exportDicomView'), vi.spyOn(api, 'exportDicomViewFile')];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit = {}) => {
+        calls.push({ url, method: init.method ?? 'GET', body: init.body });
+        if (url === '/api/session') return Response.json({ mode: 'off', user: { id: 'local' }, setup_required: false });
+        if (init.method === 'POST') return Response.json(job('queued', { kind: 'orthanc_report_export' }));
+        return Response.json(url.endsWith('/dicom-file') ? { available: true, exports: [] } : availability());
+      }),
+    );
+    const view = await dialog({ capture: source });
+    expect(view.text()).toContain('Export this report.');
+    expect(view.text()).toContain('Synthetic A · Revision revision · Aorta report');
+    expect(view.all(element => element.tagName === 'IMG')).toEqual([]);
+    expect(calls.map(call => call.url).sort()).toEqual([`${base}/dicom`, `${base}/dicom-file`]);
+    await view.choose('osirix');
+    click(view.button('Send to OsiriX'));
+    await settled();
+    const posted = calls.filter(call => call.method === 'POST');
+    expect(posted.map(call => call.url)).toEqual([`${base}/dicom`]);
+    expect(JSON.parse(posted[0].body as string)).toEqual({ destination: 'osirix' });
+    expect(view.state.follow).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'orthanc_report_export' }), source);
+    viewRoutes.forEach(route => expect(route).not.toHaveBeenCalled());
+
+    view.state.job = job('completed', {
+      id: 'file',
+      kind: 'report_file_export',
+      result: { dicom_report: { export_id: 'report-a', archived: false, sent: false, file: true, instance_count: 2 } },
+    });
+    await settled();
+    expect(view.text()).toContain('Report ready as a ZIP of DICOM files. Nothing was archived or sent.');
+    const links: string[] = [],
+      create = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
+      const element = create(tag) as unknown as HTMLAnchorElement;
+      if (tag === 'a') {
+        element.click = () => void links.push(element.href);
+        element.remove = () => undefined;
+      }
+      return element;
+    }) as typeof document.createElement);
+    const body = document.body as unknown as { append?: unknown };
+    body.append = () => undefined;
+    click(view.button('Download file'));
+    await settled();
+    delete body.append;
+    expect(links).toEqual([expect.stringContaining(`${base}/dicom-file/report-a/report.zip`)]);
   });
 });
 

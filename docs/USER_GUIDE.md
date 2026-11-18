@@ -758,6 +758,11 @@ below the tables is the curved view along the aorta; click it to open it large, 
 **Copy table** copies both tables with the engine and research line: tab-separated for a
 spreadsheet, and as a table for a document. Values not measured are empty cells.
 
+**DICOM…** under the curved view archives or sends the report as a new series in the original
+study, to the same places as the 3D view's **DICOM**, or saves it as a ZIP of DICOM files. The
+series holds two images: a page with the tables and the curved view. They are pictures for
+research use only: not calibrated, and not for measurement. It needs a CT prepared from DICOM.
+
 The drawings use the swatch colours above **Max** and **Perp.**:
 
 - In the native 3D view, a ring marks each measured landmark, set just outside the measured

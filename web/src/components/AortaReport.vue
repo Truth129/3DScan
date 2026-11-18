@@ -13,10 +13,16 @@ import {
   type AortaResult,
   type ReportOverlay,
 } from '../lib/reports';
+import type { ReportExportRequest } from '../lib/dicom-view';
 import type { Point } from '../types';
 
 const props = defineProps<{ caseId: string; result: AortaResult }>();
-const emit = defineEmits<{ select: [id: string, point: Point]; overlay: [overlay: ReportOverlay | undefined] }>();
+const emit = defineEmits<{
+  select: [id: string, point: Point];
+  overlay: [overlay: ReportOverlay | undefined];
+  /** App owns the export dialog, so it outlives this panel and follows the export to its end. */
+  dicom: [request: ReportExportRequest];
+}>();
 
 const CPR = 'cpr.png';
 const selected = ref<number>(),
@@ -58,6 +64,25 @@ async function picture(name: string) {
     failed.value = { ...failed.value, [name]: true };
   }
 }
+/**
+ * Why DICOM… cannot export this result, such as a CT not prepared from DICOM. A file is the least any
+ * account can have, so only its refusal disables the button; the dialog explains the rest.
+ */
+const dicomReason = ref('');
+async function checkDicom() {
+  const signal = controller.signal,
+    { revision_id, analysis_id } = props.result;
+  try {
+    const file = await reportsApi.dicomFileAvailability(props.caseId, revision_id, 'aorta', analysis_id, signal);
+    if (!signal.aborted) dicomReason.value = file.available ? '' : file.reason || 'DICOM report export is unavailable for this saved revision.';
+  } catch {
+    // The button stays on offer, and the dialog says what went wrong.
+  }
+}
+function exportDicom() {
+  const { revision_id, analysis_id } = props.result;
+  emit('dicom', { kind: 'report', caseId: props.caseId, revisionId: revision_id, report: 'aorta', analysisId: analysis_id, title: 'Aorta' });
+}
 function release() {
   controller.abort();
   controller = new AbortController();
@@ -65,6 +90,7 @@ function release() {
   Object.values(urls.value).forEach(url => URL.revokeObjectURL(url));
   urls.value = {};
   failed.value = {};
+  dicomReason.value = '';
 }
 watch(
   () => props.result,
@@ -72,6 +98,7 @@ watch(
     release();
     selected.value = undefined;
     void picture(CPR);
+    void checkDicom();
   },
   { immediate: true },
 );
@@ -281,7 +308,19 @@ onBeforeUnmount(() => {
       <!-- prettier-ignore -->
       <p v-else-if="failed[CPR]" class="help">The curved view could not be loaded. <button type="button" class="text-button" @click="picture(CPR)">Retry</button></p>
       <p v-else class="help">Loading the curved view…</p>
-      <a v-if="urls[CPR]" class="text-button" :href="urls[CPR]" download="aorta-curved-view.png">Download PNG</a>
+      <div class="aorta-cpr-actions">
+        <a v-if="urls[CPR]" class="text-button" :href="urls[CPR]" download="aorta-curved-view.png">Download PNG</a>
+        <button
+          type="button"
+          class="text-button"
+          :disabled="!!dicomReason"
+          :title="dicomReason || 'Archive or send the report page and this curved view as DICOM, or save them as a ZIP'"
+          @click="exportDicom"
+        >
+          DICOM…
+        </button>
+      </div>
+      <p v-if="dicomReason" class="help">{{ dicomReason }}</p>
     </div>
     <dialog ref="large" class="aorta-large" aria-label="Curved view along the aorta">
       <img v-if="urls[CPR]" :src="urls[CPR]" alt="Curved view along the aorta" />
@@ -471,6 +510,11 @@ tbody th button:disabled {
   align-items: flex-start;
   gap: 6px;
   margin-top: 12px;
+}
+.aorta-cpr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
 }
 .aorta-thumb {
   width: 100%;

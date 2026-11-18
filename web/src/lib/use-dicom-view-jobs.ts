@@ -2,10 +2,12 @@ import { onScopeDispose, shallowReactive } from 'vue';
 import { api, ApiError } from './api';
 import { caseIsGone } from './jobs';
 import {
+  DELIVERED_REPORT_KINDS,
   DELIVERED_VIEW_KINDS,
   dicomViewDelivered,
   dicomViewExportSummary,
   dicomViewFileReady,
+  DICOM_REPORT_FILE_KIND,
   pendingDicomViewExport,
   type DicomViewExportJob,
 } from './dicom-view';
@@ -24,8 +26,10 @@ const POLL_MS = 1400;
 /** A case in Trash can come back from any tab or device, and nothing here would hear of it. */
 const PARKED_MS = 30_000;
 
+const reportJob = (job: DicomViewExportJob) => DELIVERED_REPORT_KINDS.includes(job.kind) || job.kind === DICOM_REPORT_FILE_KIND;
+
 /**
- * Follows every view export to its end, whatever the workspace does meanwhile. A send can
+ * Follows every view and report export to its end, whatever the workspace does meanwhile. A send can
  * fail long after its dialog closed and the case changed, and the capture is gone by then.
  * This lives above the keyed views, so nothing that follows a case can stop it.
  */
@@ -44,6 +48,7 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
     parked.delete(job.id);
     jobs.set(job.id, job);
     if (options.showing(job.id)) return;
+    if (reportJob(job)) return settleReport(job);
     // A file is saved from its dialog, so say where that is, or that it went with a dialog nobody can reopen.
     if (dicomViewFileReady(job))
       options.success(
@@ -64,6 +69,28 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
             : dicomViewExportSummary(job) || 'The DICOM view export finished without confirming delivery.';
       // Nothing can retry now, because the image went with the dialog. A capture is all that is left.
       options.failure(named(`${reason} A capture of the same image reuses this export, and a different image makes a new series.`, job.case_id));
+    }
+  }
+  /** A report's images stay on the server, so trying again needs no capture: the report's DICOM… button repeats it. */
+  function settleReport(job: DicomViewExportJob) {
+    if (dicomViewFileReady(job))
+      options.success(
+        named(
+          options.held(job.id)
+            ? `${dicomViewExportSummary(job)} Choose DICOM… in the report to save it.`
+            : 'A DICOM report file was prepared after its dialog closed. Choose DICOM… in the report and prepare it again to save it.',
+          job.case_id,
+        ),
+      );
+    else if (dicomViewDelivered(job)) options.success(named(dicomViewExportSummary(job), job.case_id));
+    else {
+      const reason =
+        job.status === 'failed'
+          ? job.error || 'The DICOM report export failed.'
+          : job.status === 'cancelled'
+            ? 'The DICOM report export was cancelled.'
+            : dicomViewExportSummary(job) || 'The DICOM report export finished without confirming delivery.';
+      options.failure(named(`${reason} Choose DICOM… in the report to try again; it reuses this export.`, job.case_id));
     }
   }
   function schedule(id: string, delay = POLL_MS) {
@@ -101,7 +128,7 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
           ...job,
           status: 'failed',
           stage: 'Unknown',
-          error: 'This DICOM view export can no longer be followed. Check Orthanc before exporting it again.',
+          error: `This DICOM ${reportJob(job) ? 'report' : 'view'} export can no longer be followed. Check Orthanc before exporting it again.`,
         });
     } catch (reason) {
       if (disposed || !followed.has(id)) return;
@@ -142,7 +169,14 @@ export function useDicomViewJobs(options: DicomViewJobOptions) {
       }
       // A person hears how their own sends ended.
       for (const job of listed)
-        if (DELIVERED_VIEW_KINDS.includes(job.kind) && job.case_id === caseId && pendingDicomViewExport(job) && !job.started_by && !disposed) follow(job);
+        if (
+          [...DELIVERED_VIEW_KINDS, ...DELIVERED_REPORT_KINDS].includes(job.kind) &&
+          job.case_id === caseId &&
+          pendingDicomViewExport(job) &&
+          !job.started_by &&
+          !disposed
+        )
+          follow(job);
     } catch {
       /* The next opening of the case looks again. */
     }
