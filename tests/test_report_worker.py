@@ -1,6 +1,7 @@
 """TotalSegmentator's aorta report measuring a synthetic aorta of known width, on a straight and an oblique grid."""
 
 import json
+import re
 from pathlib import Path
 
 import nibabel as nib
@@ -64,13 +65,13 @@ def rotation(x, z):
     return turn @ tilt
 
 
-def run(folder, turn, needs=NEEDS):
-    """The worker on the phantom under `turn`, with the phantom's frame placed by it in RAS."""
+def run(folder, turn, needs=NEEDS, extra=None):
+    """The worker on the phantom under `turn`, with the phantom's frame placed by it in RAS, and `extra` masks by name."""
     affine = np.eye(4)
     affine[:3, :3] = turn
     affine[:3, 3] = turn @ LOW + (12.0, -30.0, 40.0)
     # A true lumen 20 mm across, wider than the aorta mask, as one model's edge can lie outside another's.
-    masks = {**phantom(), "aorta_true_lumen": phantom(RADIUS + 2)["aorta"]}
+    masks = {**phantom(), "aorta_true_lumen": phantom(RADIUS + 2)["aorta"], **(extra or {})}
 
     def save(name, values):
         image = nib.Nifti1Image(values, affine)
@@ -155,3 +156,15 @@ def test_a_true_lumen_without_a_false_lumen_is_measured_as_upstream_does(tmp_pat
     assert upstream(request, tmp_path / "upstream", monkeypatch) == raw["upstream"]
     # The true lumen joins the measured aorta, and no false lumen means no dissection.
     assert raw["upstream"]["landmarks"]["6"]["diameter"] * 10 > 2 * RADIUS + 2.5 and raw["dissection"] is False
+
+
+@pytest.mark.parametrize(("bottom", "dissection"), [(20, False), (-100, True)], ids=["small", "large"])
+def test_a_false_lumen_counts_as_a_dissection_only_from_5_ml(tmp_path, bottom, dissection):
+    # Half of the descending aorta from 30 mm down: 11 mm of it holds about 1 ml, 131 mm about 12 ml.
+    x, y, z = np.meshgrid(*(LOW[i] + np.arange(SHAPE[i]) for i in range(3)), indexing="ij")
+    false_lumen = (x > 0) & (x**2 + (y + ARCH) ** 2 <= RADIUS**2) & (z >= bottom) & (z <= 30)
+    lumens = {"aorta_true_lumen": "aorta_true_lumen", "aorta_false_lumen": "aorta_false_lumen"}
+    raw, _, _ = run(tmp_path, np.eye(3), {**NEEDS, **lumens}, {"aorta_false_lumen": false_lumen})
+    sentence = r"A false lumen of [\d.]+ ml was found, too small to count as a dissection \(under 5 ml\)\."
+    small = [line for line in raw["warnings"] if re.fullmatch(sentence, line)]
+    assert raw["dissection"] is dissection and len(small) == (0 if dissection else 1), raw["warnings"]

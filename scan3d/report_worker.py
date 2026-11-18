@@ -26,6 +26,7 @@ from .fileio import atomic_json
 from .imaging import _binary, _image
 
 NATIVE_HU = 100  # median CT value in the aorta below which the scan counts as native, as no contrast reached it
+FALSE_LUMEN_ML = 5.0  # the dissection model leaves stray false lumen under 1 ml on normal aortas; a real one is far larger
 MARGIN_MM = 30.0  # kept around the aorta; upstream crops its own grid to the aorta plus 20 mm
 RING = 72  # angle bins of a cross-section's outline
 # Upstream's file names, and the folder each is read from.
@@ -331,12 +332,17 @@ def aorta(request, progress):
             geometry[number]["picture"] = f"plane-{number}.png"
             files.append(f"plane-{number}.png")
     results = prepare_results(dict(sorted(landmarks.items())), section_stats, {})
+    # The false lumen upstream keeps, which is empty on a native scan or without lumen masks.
+    false_lumen = float(np.count_nonzero(data["false_lumen"]) * np.prod(data["spacing"]) / 1000)
+    if 0 < false_lumen < FALSE_LUMEN_ML:
+        line = f"A false lumen of {false_lumen:.2g} ml was found, too small to count as a dissection (under {FALSE_LUMEN_ML:g} ml)."
+        if line not in warnings.lines:
+            warnings.lines.append(line)
     return {
         "engine_version": metadata.version("TotalSegmentator"),
         "report_version": VERSION,
         "contrast": {"aorta_median_hu": round(median, 1), "native": native},
-        # The false lumen upstream keeps, which is empty on a native scan or without lumen masks.
-        "dissection": bool(np.any(data["false_lumen"])),
+        "dissection": false_lumen >= FALSE_LUMEN_ML,
         "upstream": _plain({"landmarks": results["landmarks"], "section_stats": results["section_stats"]}),
         "geometry": {str(number): value for number, value in geometry.items()},
         "missing": {str(number): value for number, value in missing.items()},

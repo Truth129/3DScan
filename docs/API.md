@@ -1251,10 +1251,11 @@ The aorta result:
 - `contrast.native` is true when the median CT value inside the aorta mask is under 100 HU. Then,
   as upstream does, the true and false lumens are not used. Otherwise the measured aorta is the
   aorta mask together with the true and false lumen masks the revision has. `dissection` is true
-  when a false lumen was found and used; only then are `true_lumen`, `false_lumen` and the lumen
-  volumes set.
+  when a false lumen of at least 5 ml was found and used; only then are `true_lumen`, `false_lumen`
+  and the lumen volumes set. A smaller false lumen is named in `warnings`.
 - `files` holds `cpr.png`, the curved view with its diameter profile, and `plane-N.png` for each
-  measured landmark. `warnings` are upstream's warning lines.
+  measured landmark. `warnings` are upstream's warning lines, and a line for a false lumen under
+  5 ml.
 
 The result is saved in `cases/<case>/reports/<report>/<key>/`, keyed by the report and its code,
 the image, its grid, the masks used and the versions of TotalSegmentator and the numeric libraries.

@@ -743,6 +743,7 @@ The result lists 11 landmarks, from the annulus to above the bifurcation, with t
 diameter (**Max**), the diameter perpendicular to it (**Perp.**) and the cross-section area. A
 dash means the landmark was not measured, and the reason shows under its name. Below them, each
 section's length, largest diameter and volume. A non-contrast scan gets no true and false lumen.
+A false lumen under 5 ml is not reported as a dissection, and the report says so.
 
 TotalSegmentator widens each cross-section by one 0.8 mm voxel before measuring, so diameters read
 about 2 mm wider than the mask: synthetic 16 mm and 32 mm tubes read 18 and 34 mm. Areas read
