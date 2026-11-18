@@ -1,6 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { AORTA_COLOURS, DASH, formatOne, formatWhole, reportsApi, type AortaLandmark, type AortaResult, type ReportOverlay } from '../lib/reports';
+import {
+  AORTA_COLOURS,
+  aortaTable,
+  DASH,
+  formatOne,
+  formatWhole,
+  nonContrastNote,
+  REPORT_LABELS_STORAGE_KEY,
+  reportsApi,
+  type AortaLandmark,
+  type AortaResult,
+  type ReportOverlay,
+} from '../lib/reports';
 import type { Point } from '../types';
 
 const props = defineProps<{ caseId: string; result: AortaResult }>();
@@ -74,9 +86,77 @@ function openLarge() {
   large.value?.showModal();
 }
 
-watch([() => props.result, selected], () => emit('overlay', { result: props.result, selected: selected.value }), { immediate: true });
+function rememberedLabels() {
+  try {
+    return localStorage.getItem(REPORT_LABELS_STORAGE_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+const labels = ref(rememberedLabels());
+function setLabels(event: Event) {
+  labels.value = (event.target as HTMLInputElement).checked;
+  try {
+    localStorage.setItem(REPORT_LABELS_STORAGE_KEY, labels.value ? 'on' : 'off');
+  } catch {
+    /* The choice still holds for this page. */
+  }
+}
+
+const copied = ref(false),
+  copyError = ref('');
+let copyTimer: ReturnType<typeof setTimeout> | undefined;
+/** The textarea route for a browser, or a page served over plain HTTP, that has no async clipboard. */
+function copyThroughSelection(text: string) {
+  const field = document.createElement('textarea');
+  field.value = text;
+  field.setAttribute('readonly', '');
+  field.style.cssText = 'position: fixed; top: 0; left: 0; opacity: 0;';
+  document.body.appendChild(field);
+  try {
+    field.select();
+    return document.execCommand('copy');
+  } finally {
+    document.body.removeChild(field);
+  }
+}
+/** Rich HTML where the browser takes it, so a document gets a table; plain text otherwise. */
+async function copyTable() {
+  const { text, html } = aortaTable(props.result),
+    clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
+  let done = false;
+  try {
+    if (!clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('No rich clipboard.');
+    await clipboard.write([
+      new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) }),
+    ]);
+    done = true;
+  } catch {
+    try {
+      if (!clipboard?.writeText) throw new Error('No clipboard.');
+      await clipboard.writeText(text);
+      done = true;
+    } catch {
+      try {
+        done = copyThroughSelection(text);
+      } catch {
+        /* Nothing left to try; the message below says so. */
+      }
+    }
+  }
+  clearTimeout(copyTimer);
+  copied.value = done;
+  copyError.value = done ? '' : 'Copying is blocked in this browser.';
+  // The error stays until the next try; Copied goes back to the button's name.
+  if (done) copyTimer = setTimeout(() => (copied.value = false), 2000);
+}
+
+watch([() => props.result, selected, labels], () => emit('overlay', { result: props.result, selected: selected.value, labels: labels.value }), {
+  immediate: true,
+});
 onBeforeUnmount(() => {
   release();
+  clearTimeout(copyTimer);
   emit('overlay', undefined);
 });
 </script>
@@ -84,9 +164,13 @@ onBeforeUnmount(() => {
 <template>
   <div class="aorta-report">
     <p class="aorta-summary">{{ summary }}</p>
-    <p v-if="result.contrast.native" class="aorta-note">
-      Non-contrast scan (aorta median {{ Math.round(result.contrast.aorta_median_hu) }} HU): true and false lumen not measured.
-    </p>
+    <div class="aorta-tools">
+      <!-- prettier-ignore -->
+      <label title="Number and largest diameter beside each ring in the native 3D view"><input type="checkbox" :checked="labels" @change="setLabels" /> Labels in 3D</label>
+      <button type="button" class="text-button" @click="copyTable">{{ copied ? 'Copied' : 'Copy table' }}</button>
+      <p class="aorta-copy-status" :class="{ 'sr-only': !copyError }" role="status">{{ copyError || (copied ? 'Copied' : '') }}</p>
+    </div>
+    <p v-if="result.contrast.native" class="aorta-note">{{ nonContrastNote(result) }}</p>
 
     <div class="aorta-table aorta-landmarks" role="region" aria-label="Aorta landmarks" tabindex="0">
       <table>
@@ -218,6 +302,33 @@ onBeforeUnmount(() => {
   margin: 10px 0 0;
   font: 10px var(--mono);
   color: var(--text-secondary);
+}
+/* Wraps rather than scrolling at the narrowest side panel. */
+.aorta-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.aorta-tools label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.aorta-tools input {
+  margin: 0;
+}
+.aorta-tools .text-button {
+  font-size: 10px;
+}
+.aorta-copy-status {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--warning);
 }
 .aorta-note {
   margin: 6px 0 0;

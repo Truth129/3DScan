@@ -105,11 +105,17 @@ export interface AortaResult extends ReportResult {
   centreline: Point[];
   summary: { max_diameter_mm: number | null; max_landmark: number | null; landmarks_available: number; landmarks_total: number };
 }
-/** What the 3D view and slices draw for a shown aorta result; `selected` is a landmark number. */
+/**
+ * What the 3D view and slices draw for a shown aorta result; `selected` is a landmark number. `labels`
+ * adds the text labels beside the rings in the native 3D view and changes nothing else.
+ */
 export interface ReportOverlay {
   result: AortaResult;
   selected: number | undefined;
+  labels: boolean;
 }
+/** Whether the 3D view labels the rings, per browser. */
+export const REPORT_LABELS_STORAGE_KEY = 'scan3d-report-labels-v1';
 
 const json = (method: string, value: unknown): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
 export const reportsUrl = (id: string, rid: string) => `${revisionUrl(id, rid)}/reports`;
@@ -138,6 +144,10 @@ export const DASH = '—';
 export const formatWhole = (value: number | null | undefined) => (finite(value) ? String(Math.round(value)) : DASH);
 /** Areas in cm² and volumes in ml, to one decimal. */
 export const formatOne = (value: number | null | undefined) => (finite(value) ? value.toFixed(1) : DASH);
+
+/** The panel's line for a scan without contrast, also carried into a copied table. */
+export const nonContrastNote = (result: AortaResult) =>
+  `Non-contrast scan (aorta median ${Math.round(result.contrast.aorta_median_hu)} HU): true and false lumen not measured.`;
 
 /** Required inputs that are not there, and optional ones whose absence the result will show. */
 export const missingNeeds = (status: ReportStatus) => status.needs.filter(need => need.required && need.state !== 'present');
@@ -244,4 +254,124 @@ export function landmarkOnSlice(meta: SliceMeta, landmark: AortaLandmark | undef
       perpendicular: pair(landmark.perpendicular_ends),
     };
   return [drawing.centre, ...drawing.outline, ...(drawing.max ?? []), ...(drawing.perpendicular ?? [])].flat().every(Number.isFinite) ? drawing : undefined;
+}
+
+export interface ReportLabelPart {
+  text: string;
+  colour?: string;
+}
+/** A label beside a ring in the 3D view: its box starts at `x` and centres on `y`, in canvas pixels. */
+export interface ReportLabel {
+  number: number;
+  selected: boolean;
+  x: number;
+  y: number;
+  lines: ReportLabelPart[][];
+}
+/** The label's gap from its ring, and the estimate of its box at the label font, for keeping labels apart. */
+export const LABEL_GAP_PX = 6;
+const LABEL_CHAR_PX = 6.2,
+  LABEL_LINE_PX = 13,
+  LABEL_PAD_PX = 2;
+
+function labelLines(mark: AortaLandmark, selected: boolean): ReportLabelPart[][] {
+  const max = formatWhole(mark.diameter_mm);
+  if (!selected) return [[{ text: max === DASH ? String(mark.number) : `${mark.number} · ${max} mm` }]];
+  return [
+    [{ text: `${mark.number} · ${mark.name}` }],
+    [
+      { text: 'Max', colour: AORTA_COLOURS.max },
+      { text: ` ${max} · ` },
+      { text: 'Perp.', colour: AORTA_COLOURS.perpendicular },
+      { text: ` ${formatWhole(mark.perpendicular_mm)} mm · ${formatOne(mark.area_cm2)} cm²` },
+    ],
+  ];
+}
+
+/**
+ * The labels the 3D view places beside each drawn ring, at the ring's rightmost point on screen. The
+ * selected landmark goes first, then by number; a label that would cover one already placed is left
+ * out, since the table carries every number. `project` gives a RAS point's canvas pixels.
+ */
+export function aortaLabels(
+  overlay: ReportOverlay,
+  project: (ras: Point) => readonly [number, number] | undefined,
+  canvas: { width: number; height: number },
+): ReportLabel[] {
+  const chosen = (mark: AortaLandmark) => mark.number === overlay.selected;
+  const marks = overlay.result.landmarks
+    .filter(mark => mark.available && mark.centre && mark.outline && mark.outline.length >= 3)
+    .sort((a, b) => Number(chosen(b)) - Number(chosen(a)) || a.number - b.number);
+  const boxes: { left: number; top: number; right: number; bottom: number }[] = [],
+    labels: ReportLabel[] = [];
+  for (const mark of marks) {
+    let anchor: readonly [number, number] | undefined;
+    for (const point of offsetRing(mark.outline!, mark.centre!, mark.normal)) {
+      const at = project(point);
+      if (at && Number.isFinite(at[0]) && Number.isFinite(at[1]) && (!anchor || at[0] > anchor[0])) anchor = at;
+    }
+    if (!anchor || anchor[0] < 0 || anchor[1] < 0 || anchor[0] > canvas.width || anchor[1] > canvas.height) continue;
+    const selected = chosen(mark),
+      lines = labelLines(mark, selected),
+      x = anchor[0] + LABEL_GAP_PX,
+      y = anchor[1],
+      width = Math.max(...lines.map(line => line.reduce((sum, part) => sum + part.text.length, 0))) * LABEL_CHAR_PX + 2 * LABEL_PAD_PX,
+      height = lines.length * LABEL_LINE_PX + 2 * LABEL_PAD_PX,
+      box = { left: x, top: y - height / 2, right: x + width, bottom: y + height / 2 };
+    if (boxes.some(other => box.left < other.right && other.left < box.right && box.top < other.bottom && other.top < box.bottom)) continue;
+    boxes.push(box);
+    labels.push({ number: mark.number, selected, x, y, lines });
+  }
+  return labels;
+}
+
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
+/** A spreadsheet reads an empty cell as no value, where a dash would turn the column into text. */
+const value = (text: string) => (text === DASH ? '' : text);
+const oneLine = (text: string) => text.replace(/[\t\r\n]+/g, ' ');
+
+/**
+ * Both tables as the panel shows them, tab-separated for a spreadsheet and as HTML for a document,
+ * under the engine and research line. Nothing that names the case or the patient.
+ */
+export function aortaTable(result: AortaResult): { text: string; html: string } {
+  const { engine, dissection } = result;
+  const notes = [`Aorta · ${engine.name} ${engine.version}, aorta report ${engine.report_version}. ${REPORT_NOTICE}`];
+  if (result.contrast.native) notes.push(nonContrastNote(result));
+  const landmarks = {
+    head: ['#', 'Landmark', 'Max (mm)', 'Perp. (mm)', 'Area (cm²)', ...(dissection ? ['TL max (mm)', 'FL max (mm)'] : []), 'Note'],
+    rows: result.landmarks.map(mark => {
+      const values = [formatWhole(mark.diameter_mm), formatWhole(mark.perpendicular_mm), formatOne(mark.area_cm2)];
+      if (dissection) values.push(formatWhole(mark.true_lumen?.diameter_mm), formatWhole(mark.false_lumen?.diameter_mm));
+      return [
+        String(mark.number),
+        mark.name,
+        ...values.map(text => (mark.available ? value(text) : '')),
+        mark.available ? '' : mark.unavailable_reason || 'Not measured.',
+      ];
+    }),
+  };
+  const sections = {
+    head: ['Section', 'Length (mm)', 'Max (mm)', 'Volume (ml)', ...(dissection ? ['TL volume (ml)', 'FL volume (ml)'] : [])],
+    rows: result.sections.map(section => {
+      const values = [formatWhole(section.length_mm), formatWhole(section.max_diameter_mm), formatOne(section.volume_ml)];
+      if (dissection) values.push(formatOne(section.true_lumen_volume_ml), formatOne(section.false_lumen_volume_ml));
+      return [section.name, ...values.map(text => (section.available ? value(text) : ''))];
+    }),
+  };
+  const tables = [landmarks, sections],
+    warnings = result.warnings.map(oneLine);
+  const text = [
+    ...notes,
+    ...tables.flatMap(table => ['', ...[table.head, ...table.rows].map(row => row.map(oneLine).join('\t'))]),
+    ...(warnings.length ? ['', 'Warnings', ...warnings] : []),
+  ].join('\n');
+  const paragraph = (line: string) => `<p>${escapeHtml(line)}</p>`,
+    cells = (row: string[], tag: 'th' | 'td') => `<tr>${row.map(cell => `<${tag}>${escapeHtml(cell)}</${tag}>`).join('')}</tr>`;
+  const html = [
+    ...notes.map(paragraph),
+    ...tables.map(table => `<table><thead>${cells(table.head, 'th')}</thead><tbody>${table.rows.map(row => cells(row, 'td')).join('')}</tbody></table>`),
+    ...(warnings.length ? ['Warnings', ...warnings].map(paragraph) : []),
+  ].join('');
+  return { text, html };
 }

@@ -4,7 +4,7 @@ import AnalysisPanel from '../src/components/AnalysisPanel.vue';
 import AortaReport from '../src/components/AortaReport.vue';
 import { api } from '../src/lib/api';
 import { coronaryApi } from '../src/lib/coronary';
-import { reportsApi, type AortaLandmark, type AortaResult, type ReportAnalysis, type ReportStatus } from '../src/lib/reports';
+import { aortaTable, reportsApi, type AortaLandmark, type AortaResult, type ReportAnalysis, type ReportStatus } from '../src/lib/reports';
 import type { Job, Revision, SegmentationCatalog, Structure } from '../src/types';
 import { click, mount, settled, type MountedElement } from './mounted';
 
@@ -116,13 +116,17 @@ async function afterPoll() {
 
 beforeEach(() => {
   localStorage.removeItem('scan3d-analysis-choice-v1');
+  localStorage.removeItem('scan3d-report-labels-v1');
   vi.spyOn(coronaryApi, 'list').mockResolvedValue([]);
   vi.spyOn(api, 'segmentationOptions').mockResolvedValue({ inference_paths: [] } as unknown as SegmentationCatalog);
   vi.spyOn(reportsApi, 'picture').mockResolvedValue(new Blob(['png']));
   vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:picture');
   vi.spyOn(URL, 'revokeObjectURL').mockReturnValue();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe('Analysis panel', () => {
   it('opens on Aorta without a coronary lumen, and Coronary FFR then says what it needs', async () => {
@@ -258,9 +262,36 @@ describe('Aorta report', () => {
     click(view.labelled('Show Landmark 1'));
     await settled();
     expect(onSelect).toHaveBeenCalledWith('total:aorta', [1, 2, 3]);
-    expect(onOverlay).toHaveBeenLastCalledWith({ result, selected: 1 });
+    expect(onOverlay).toHaveBeenLastCalledWith({ result, selected: 1, labels: true });
     expect(reportsApi.picture).toHaveBeenCalledWith('c1', 'r2', 'aorta', 'm1', 'plane-1.png', expect.anything());
     expect(view.text()).not.toContain('TL');
+  });
+  it('copies both tables as text and HTML, and switches the 3D labels off for this browser', async () => {
+    const written: Record<string, Blob>[] = [];
+    vi.stubGlobal(
+      'ClipboardItem',
+      class {
+        constructor(readonly items: Record<string, Blob>) {}
+      },
+    );
+    vi.stubGlobal('navigator', { clipboard: { write: vi.fn(async (items: { items: Record<string, Blob> }[]) => void written.push(items[0].items)) } });
+    const onOverlay = vi.fn();
+    const view = mount(AortaReport, () => ({ caseId: 'c1', result, onOverlay }));
+    await settled();
+    click(view.button('Copy table'));
+    await settled();
+    expect(await written[0]['text/plain'].text()).toBe(aortaTable(result).text);
+    expect(await written[0]['text/html'].text()).toContain('<table>');
+    expect(view.button('Copied')).toBeDefined();
+    expect(view.all(element => element.getAttribute('role') === 'status')[0].textContent).toBe('Copied');
+
+    expect(onOverlay).toHaveBeenLastCalledWith({ result, selected: undefined, labels: true });
+    const box = view.all(element => element.tagName === 'INPUT' && element.getAttribute('type') === 'checkbox')[0] as unknown as HTMLInputElement;
+    box.checked = false;
+    box.dispatchEvent(new Event('change'));
+    await settled();
+    expect(onOverlay).toHaveBeenLastCalledWith({ result, selected: undefined, labels: false });
+    expect(localStorage.getItem('scan3d-report-labels-v1')).toBe('off');
   });
   it('asks again for a picture that failed to load', async () => {
     let fail = true;

@@ -755,6 +755,9 @@ A click on a landmark's name or row moves the crosshair to the landmark's centre
 centre on while **Centre on click** is on, and opens its cross-section picture. The thumbnail
 below the tables is the curved view along the aorta; click it to open it large, or download it.
 
+**Copy table** copies both tables with the engine and research line: tab-separated for a
+spreadsheet, and as a table for a document. Values not measured are empty cells.
+
 The drawings use the swatch colours above **Max** and **Perp.**:
 
 - In the native 3D view, a ring marks each measured landmark, set just outside the measured
@@ -762,6 +765,9 @@ The drawings use the swatch colours above **Max** and **Perp.**:
   diameter lines, and a thin line follows the centreline. The rings show on the surface; the
   diameter lines and the centreline lie inside the vessel, so they show when the CT volume is off
   or the segments are see-through. The Three.js view (MR, sheared grids) shows no drawing.
+- In the native 3D view, a label beside each ring gives its number and largest diameter, and the
+  chosen landmark's label gives all three values. Labels that would overlap are left out. Untick
+  **Labels in 3D** to hide them; your browser remembers the choice.
 - On the slices, the chosen landmark's outline, diameter lines and centre. They are **solid** where
   the slice shows the measured cross-section: its centre within 2 mm of the slice and the planes
   within 15°. Elsewhere, and on a MIP or MinIP slab, they are **dashed** and dimmer: a projection

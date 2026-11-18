@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { CornerstoneVolume3D, type CornerstoneVolumeCameraRAS } from '../lib/cornerstone-volume-3d';
 import { acquireCornerstoneSource, type CornerstoneSourceLease } from '../lib/cornerstone-session';
 import { isVolumeDisplayUnion, type GPUOverlaySourceProvider, type RenderCTSession } from '../lib/gpu-volume-data';
@@ -12,7 +12,7 @@ import { VTKSurfaceScene, type NativeSurfaceLayerStatus } from '../lib/vtk-surfa
 import { VTKCoronaryTube } from '../lib/vtk-coronary-tube';
 import { fadeUnderTube, type CoronaryTube } from '../lib/coronary';
 import { VTKReportOverlay } from '../lib/vtk-report-overlay';
-import type { ReportOverlay } from '../lib/reports';
+import { AORTA_COLOURS, aortaLabels, type ReportLabel, type ReportOverlay } from '../lib/reports';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib/volume-lighting';
 import type { CTVolumeSettings } from '../lib/volume-presets';
@@ -82,7 +82,11 @@ const emit = defineEmits<{
   tubeError: [message: string];
   reportError: [message: string];
 }>();
-const host = ref<HTMLDivElement>();
+const host = ref<HTMLDivElement>(),
+  labelLayer = ref<HTMLDivElement>();
+/** The report's text labels, in the label layer's pixels. HTML, so no capture reads them. */
+const reportLabels = shallowRef<ReportLabel[]>([]);
+let labelFrame = 0;
 const ready = ref(false),
   error = ref(''),
   planeError = ref(''),
@@ -225,6 +229,7 @@ function disposeFeatures() {
     reportLayer.dispose();
     reportLayer = undefined;
   }
+  reportLabels.value = [];
   reviewPlaneReady.value = false;
   reserveReviewFrames?.(0);
   reserveReviewFrames = undefined;
@@ -326,6 +331,7 @@ async function initialize() {
         if (otherPlaneCut) syncOtherPlaneCut();
         emit('camera', camera);
         reviewInput?.updateOverlay();
+        queueLabels();
       },
       onError: reason => {
         if (!disposed && id === generation) fail(reason);
@@ -452,6 +458,7 @@ async function initialize() {
     ready.value = true;
     emit('ready', true);
     syncReviewInput();
+    queueLabels();
     void loadMask();
     void loadColors();
     void loadSurfaces();
@@ -751,6 +758,41 @@ function syncReport() {
     message = reason instanceof Error ? reason.message : 'The report drawing could not be drawn.';
   }
   if (message !== reportError) emit('reportError', (reportError = message));
+  queueLabels();
+}
+/** Camera moves, resizes and overlay changes in one frame place the labels once. */
+function queueLabels() {
+  if (labelFrame || disposed) return;
+  labelFrame = requestAnimationFrame(() => {
+    labelFrame = 0;
+    placeLabels();
+  });
+}
+/** Labels go with the drawing: none while it is absent, failed or switched off, or the viewer is not ready. */
+function placeLabels() {
+  const overlay = props.reportOverlay,
+    instance = viewer,
+    layer = labelLayer.value;
+  let labels: ReportLabel[] = [];
+  if (overlay?.labels && instance && ready.value && reportLayer?.visible && layer) {
+    try {
+      // The canvas can sit offset inside the host, so labels are placed from its own box.
+      const viewport = instance.nativeViewport,
+        canvas = viewport.canvas.getBoundingClientRect(),
+        frame = layer.getBoundingClientRect();
+      if (canvas.width > 0 && canvas.height > 0) {
+        labels = aortaLabels(overlay, ras => viewport.worldToCanvas(rasToLps(ras)) as [number, number], canvas).map(label => ({
+          ...label,
+          x: label.x + canvas.left - frame.left,
+          y: label.y + canvas.top - frame.top,
+        }));
+      }
+    } catch {
+      // A viewport mid-teardown has no camera to project with; the next frame places them again.
+      labels = [];
+    }
+  }
+  reportLabels.value = labels;
 }
 /** Only while marking on the plane: shown edge-on in another mode, a cut would remove half the volume. */
 function syncCut() {
@@ -959,7 +1001,7 @@ watch(
   async () => {
     const instance = viewer,
       id = generation;
-    if (!instance) return;
+    if (!instance) return queueLabels();
     try {
       syncReport();
       await renderFeatures(instance, id);
@@ -1041,6 +1083,7 @@ onMounted(() => {
       try {
         instance.resize();
         reviewInput?.updateOverlay();
+        queueLabels();
         void renderFeatures(instance, id).catch(reason => {
           if (!disposed && id === generation && viewer === instance) fail(reason);
         });
@@ -1056,6 +1099,7 @@ onBeforeUnmount(() => {
   disposed = true;
   observer?.disconnect();
   cancelAnimationFrame(resizeFrame);
+  cancelAnimationFrame(labelFrame);
   release();
   localMasks.dispose();
   localColors.dispose();
@@ -1121,6 +1165,20 @@ defineExpose({
     :data-native-surface-layers="JSON.stringify(surfaceLayerStatus)"
   >
     <div ref="host" class="cornerstone-volume-canvas"></div>
+    <!-- The table carries the same numbers, so screen readers skip these. -->
+    <div ref="labelLayer" class="report-labels" aria-hidden="true">
+      <div
+        v-for="label in ready ? reportLabels : []"
+        :key="label.number"
+        class="report-label"
+        :class="{ selected: label.selected }"
+        :style="{ left: `${label.x}px`, top: `${label.y}px`, borderColor: AORTA_COLOURS.ring }"
+      >
+        <div v-for="(line, index) in label.lines" :key="index">
+          <span v-for="(part, at) in line" :key="at" :style="part.colour ? { color: part.colour } : undefined">{{ part.text }}</span>
+        </div>
+      </div>
+    </div>
     <div v-if="!ready" class="cornerstone-volume-status" :role="error ? 'alert' : 'status'">
       <p>
         {{ error || (!session ? 'Waiting for the full CT to finish loading…' : 'Preparing Cornerstone3D…') }}
@@ -1153,6 +1211,27 @@ defineExpose({
 }
 .cornerstone-volume-canvas {
   touch-action: none;
+}
+.report-labels {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* Dark and outlined, so the text reads on grey CT and on the red aorta surface alike. */
+.report-label {
+  position: absolute;
+  transform: translateY(-50%);
+  padding: 0 2px;
+  border: 1px solid;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 72%);
+  color: #eef2f4;
+  font: 10px/13px var(--mono);
+  white-space: nowrap;
+}
+.report-label:not(.selected) {
+  opacity: 0.85;
 }
 .cornerstone-volume-status {
   position: absolute;
