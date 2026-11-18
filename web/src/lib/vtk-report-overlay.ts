@@ -6,7 +6,7 @@ import vtkPolyData from '@kitware/vtk.js/Common/DataModel/PolyData';
 import vtkDataArray from '@kitware/vtk.js/Common/Core/DataArray';
 import type { Point } from '../types';
 import { rasToLps } from './cornerstone-frame';
-import { AORTA_COLOURS, offsetRing, type ReportOverlay } from './reports';
+import { REPORT_COLOURS, offsetRing, type ReportOverlay } from './reports';
 
 // vtk.js keeps an expanded position, normal and colour record per triangle vertex on the GPU.
 const GPU_BYTES_PER_TRIANGLE = 3 * (6 * Float32Array.BYTES_PER_ELEMENT + 4);
@@ -31,13 +31,15 @@ const unit = (a: Vec): Vec | undefined => {
 const perpendicular = (tangent: Vec): Vec => unit(cross(tangent, Math.abs(tangent[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]))!;
 
 /**
- * What the 3D view draws for a shown aorta result: every measured landmark's ring, set just outside
- * its outline so it shows on an opaque aorta surface; the selected one brighter and thicker with its
- * two diameters, which reach that ring; and the centreline. Never a measurement.
+ * What the 3D view draws for a shown report result: every measured landmark's ring, set just outside
+ * its outline so it shows on an opaque vessel surface; the selected one brighter and thicker with its
+ * two diameters, which reach that ring; and the centreline, for a report that has one. Never a
+ * measurement.
  */
-export function aortaOverlayLines({ result, selected }: ReportOverlay): OverlayLine[] {
+export function reportOverlayLines({ result, selected }: ReportOverlay): OverlayLine[] {
   const lines: OverlayLine[] = [];
-  if (result.centreline.length > 1) lines.push({ points: result.centreline, closed: false, radius: 0.35, colour: rgb(AORTA_COLOURS.centreline, 0.85) });
+  if (result.centreline && result.centreline.length > 1)
+    lines.push({ points: result.centreline, closed: false, radius: 0.35, colour: rgb(REPORT_COLOURS.centreline, 0.85) });
   for (const mark of result.landmarks) {
     if (!mark.available || !mark.centre || !mark.outline || mark.outline.length < 3) continue;
     const chosen = mark.number === selected;
@@ -45,13 +47,13 @@ export function aortaOverlayLines({ result, selected }: ReportOverlay): OverlayL
       points: offsetRing(mark.outline, mark.centre, mark.normal),
       closed: true,
       radius: chosen ? 0.9 : 0.45,
-      colour: rgb(AORTA_COLOURS.ring, chosen ? 1 : 0.6),
+      colour: rgb(REPORT_COLOURS.ring, chosen ? 1 : 0.6),
     });
     if (!chosen) continue;
     const centre = mark.centre;
     for (const [ends, colour] of [
-      [mark.ends, AORTA_COLOURS.max],
-      [mark.perpendicular_ends, AORTA_COLOURS.perpendicular],
+      [mark.ends, REPORT_COLOURS.max],
+      [mark.perpendicular_ends, REPORT_COLOURS.perpendicular],
     ] as const)
       if (ends) lines.push({ points: offsetRing(ends, centre, mark.normal), closed: false, radius: 0.6, colour: rgb(colour) });
   }
@@ -156,7 +158,7 @@ export class VTKReportOverlay {
     return this.shown;
   }
   private replace(overlay: ReportOverlay | undefined) {
-    const geometry = overlay && overlayGeometry(aortaOverlayLines(overlay));
+    const geometry = overlay && overlayGeometry(reportOverlayLines(overlay));
     this.reserveMemory?.(
       geometry
         ? geometry.positions.byteLength +

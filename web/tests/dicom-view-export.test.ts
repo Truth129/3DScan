@@ -233,7 +233,7 @@ describe('the upload', () => {
 describe('a report source', () => {
   it('posts JSON to the report route, with no upload, and saves its series as report.zip', async () => {
     const source = freezeReportSource(
-        { kind: 'report', caseId: 'case-a', revisionId: 'revision-a', report: 'aorta', analysisId: 'analysis-a', title: 'Aorta' },
+        { kind: 'report', caseId: 'case-a', revisionId: 'revision-a', report: 'aorta', analysisId: 'analysis-a', title: 'Aorta', curvedView: true },
         'Synthetic A',
       ),
       base = '/api/cases/case-a/revisions/revision-a/reports/aorta/analysis-a',
@@ -250,6 +250,7 @@ describe('a report source', () => {
     );
     const view = await dialog({ capture: source });
     expect(view.text()).toContain('Export this report.');
+    expect(view.text()).toContain('The report page and the curved view join the original study as one new series.');
     expect(view.text()).toContain('Synthetic A · Revision revision · Aorta report');
     expect(view.all(element => element.tagName === 'IMG')).toEqual([]);
     expect(calls.map(call => call.url).sort()).toEqual([`${base}/dicom`, `${base}/dicom-file`]);
@@ -285,6 +286,31 @@ describe('a report source', () => {
     await settled();
     delete body.append;
     expect(links).toEqual([expect.stringContaining(`${base}/dicom-file/report-a/report.zip`)]);
+  });
+
+  it('describes a report with no curved view as its page alone', async () => {
+    const source = freezeReportSource(
+      {
+        kind: 'report',
+        caseId: 'case-a',
+        revisionId: 'revision-a',
+        report: 'pulmonary',
+        analysisId: 'analysis-p',
+        title: 'Pulmonary arteries',
+        curvedView: false,
+      },
+      'Synthetic A',
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/session') return Response.json({ mode: 'off', user: { id: 'local' }, setup_required: false });
+        return Response.json(url.endsWith('/dicom-file') ? { available: true, exports: [] } : availability());
+      }),
+    );
+    const view = await dialog({ capture: source });
+    expect(view.text()).toContain('The report page joins the original study as a new series.');
+    expect(view.text()).not.toContain('curved view');
   });
 });
 

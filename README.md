@@ -28,7 +28,8 @@ other service.
 - **Library:** one library for everyone signed in, with search, rename, Trash with undo, and
   Delete forever. An administrator adds people with a link.
 - **Viewer:** linked slices and 3D volume rendering.
-- **Measurements:** mask volumes, AI-agreement metrics, and research CT-FFR and aorta diameter reports.
+- **Measurements:** mask volumes, AI-agreement metrics, research CT-FFR, and aorta and pulmonary
+  artery diameter reports.
 - **Exchange:** DICOM SEG import and export, native OsiriX ROIs, 3D views as new DICOM series,
   archiving by DICOMweb, direct DICOM sends, 3D Slicer, PNG and portable offline HTML.
 

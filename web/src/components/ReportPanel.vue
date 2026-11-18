@@ -305,10 +305,12 @@ onBeforeUnmount(() => {
       <template v-if="status!.missing_tasks.length">
         <p class="help">Segment and measure runs {{ taskList }}, saves the masks as a new revision, then measures it.</p>
         <template v-if="status!.can_segment">
-          <!-- The Task dialog's own warning: this is a segmentation, and it merges the same way. -->
+          <!-- A report's segmentation merges like the Task dialog's, except that a segment from another
+               task or drawn by hand is spared when it only shares a name with a mask the report does
+               not read. -->
           <p class="help">
-            The new revision replaces these tasks’ segments and existing segments with matching anatomical names, including manual corrections. Unrelated
-            segments stay; earlier revisions remain available.
+            The new revision replaces these tasks’ segments, including manual corrections. Other segments stay unless they share a name with a mask this report
+            reads; earlier revisions remain available.
           </p>
           <label v-if="paths.length > 1" class="field report-path"
             >Run on<select :value="path" :disabled="starting" aria-label="Run on" @change="choosePath">

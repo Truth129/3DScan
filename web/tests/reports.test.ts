@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   absentOptional,
-  aortaLabels,
-  aortaTable,
   formatOne,
   formatWhole,
+  landmarkLabels,
+  landmarkTable,
   missingNeeds,
   reportFileUrl,
   reportView,
   type AortaLandmark,
   type AortaResult,
+  type PulmonaryResult,
   type ReportAnalysis,
   type ReportStatus,
 } from '../src/lib/reports';
@@ -137,7 +138,7 @@ const front = (ras: Point): [number, number] => [100 + ras[0], 400 - ras[2]];
 
 describe('aorta labels', () => {
   it('labels each measured ring at its rightmost point, the selected one with all three values', () => {
-    const labels = aortaLabels({ result: aorta(), selected: 3, labels: true }, front, { width: 800, height: 600 });
+    const labels = landmarkLabels({ result: aorta(), selected: 3, labels: true }, front, { width: 800, height: 600 });
     expect(
       labels.map(label => label.number),
       'selected first; landmark 2 was not measured',
@@ -151,15 +152,15 @@ describe('aorta labels', () => {
   });
   it('leaves out a label that would cover one already placed, and one whose ring is off the canvas', () => {
     const close = aorta({ landmarks: [landmark(1), landmark(2, { centre: [0, 0, 40], outline: landmark(2).outline!.map(([x, y]) => [x, y, 40] as Point) })] });
-    expect(aortaLabels({ result: close, selected: 2, labels: true }, front, { width: 800, height: 600 }).map(label => label.number)).toEqual([2]);
-    expect(aortaLabels({ result: aorta(), selected: undefined, labels: true }, front, { width: 800, height: 350 }).map(label => label.number)).toEqual([3]);
-    expect(aortaLabels({ result: aorta(), selected: undefined, labels: true }, () => [Number.NaN, 0], { width: 800, height: 600 })).toEqual([]);
+    expect(landmarkLabels({ result: close, selected: 2, labels: true }, front, { width: 800, height: 600 }).map(label => label.number)).toEqual([2]);
+    expect(landmarkLabels({ result: aorta(), selected: undefined, labels: true }, front, { width: 800, height: 350 }).map(label => label.number)).toEqual([3]);
+    expect(landmarkLabels({ result: aorta(), selected: undefined, labels: true }, () => [Number.NaN, 0], { width: 800, height: 600 })).toEqual([]);
   });
 });
 
 describe('aorta table copy', () => {
   it('writes both tables tab-separated, with empty cells and the reason for what was not measured', () => {
-    const { text } = aortaTable(aorta({ warnings: ['Arch not found.'] }));
+    const { text } = landmarkTable(aorta({ warnings: ['Arch not found.'] }), 'Aorta');
     expect(text.split('\n')).toEqual([
       'Aorta · TotalSegmentator 2.18.0, aorta report 1. Research use only. Not for diagnostic use.',
       '',
@@ -181,12 +182,53 @@ describe('aorta table copy', () => {
       dissection: true,
       landmarks: [landmark(1, { name: 'Arch <A&B>', true_lumen: { diameter_mm: 20.2, perpendicular_mm: null, area_cm2: null } })],
     });
-    const { text, html } = aortaTable(result);
+    const { text, html } = landmarkTable(result, 'Aorta');
     expect(text).toContain('#\tLandmark\tMax (mm)\tPerp. (mm)\tArea (cm²)\tTL max (mm)\tFL max (mm)\tNote');
     expect(text).toContain('1\tArch <A&B>\t31\t29\t7.0\t20\t\t');
     expect(text).toContain('Section\tLength (mm)\tMax (mm)\tVolume (ml)\tTL volume (ml)\tFL volume (ml)');
     expect(html).toContain('<td>Arch &lt;A&amp;B&gt;</td>');
     expect(html.match(/<table>/g)).toHaveLength(2);
     expect(html).toContain('<th>TL max (mm)</th>');
+  });
+});
+
+// Five landmarks and no sections, contrast or lumens; the bifurcation was not found.
+const pulmonary = (): PulmonaryResult => ({
+  format: 'scan3d-report-v1',
+  report: 'pulmonary',
+  analysis_id: 'p1',
+  revision_id: 'r2',
+  key: 'k',
+  engine: { name: 'TotalSegmentator', version: '2.18.0', report_version: '1' },
+  inputs: [],
+  files: [],
+  warnings: ['Bifurcation not found.'],
+  landmarks: [1, 2, 3, 4, 5].map(number =>
+    number === 3 ? landmark(3, { available: false, unavailable_reason: 'The Pulmonary bifurcation was not found.', diameter_mm: null }) : landmark(number),
+  ),
+  summary: { max_diameter_mm: 35.4, max_landmark: 5, landmarks_available: 4, landmarks_total: 5 },
+});
+
+describe('pulmonary report', () => {
+  it('copies the landmarks alone, with no lumen columns or sections table', () => {
+    const { text, html } = landmarkTable(pulmonary(), 'Pulmonary arteries');
+    expect(text.split('\n')).toEqual([
+      'Pulmonary arteries · TotalSegmentator 2.18.0, pulmonary report 1. Research use only. Not for diagnostic use.',
+      '',
+      '#\tLandmark\tMax (mm)\tPerp. (mm)\tArea (cm²)\tNote',
+      '1\tLandmark 1\t31\t29\t7.0\t',
+      '2\tLandmark 2\t32\t29\t7.0\t',
+      '3\tLandmark 3\t\t\t\tThe Pulmonary bifurcation was not found.',
+      '4\tLandmark 4\t34\t29\t7.0\t',
+      '5\tLandmark 5\t35\t29\t7.0\t',
+      '',
+      'Warnings',
+      'Bifurcation not found.',
+    ]);
+    expect(html.match(/<table>/g)).toHaveLength(1);
+  });
+  it('labels its rings in the 3D view', () => {
+    const labels = landmarkLabels({ result: pulmonary(), selected: 5, labels: true }, front, { width: 800, height: 600 });
+    expect(labels.map(label => label.number)).toEqual([5, 1, 2, 4]);
   });
 });

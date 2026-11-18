@@ -1,10 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reactive } from 'vue';
 import AnalysisPanel from '../src/components/AnalysisPanel.vue';
-import AortaReport from '../src/components/AortaReport.vue';
+import LandmarkReport from '../src/components/LandmarkReport.vue';
 import { api } from '../src/lib/api';
 import { coronaryApi } from '../src/lib/coronary';
-import { aortaTable, reportsApi, type AortaLandmark, type AortaResult, type ReportAnalysis, type ReportStatus } from '../src/lib/reports';
+import {
+  landmarkTable,
+  reportsApi,
+  type AortaLandmark,
+  type AortaResult,
+  type PulmonaryResult,
+  type ReportAnalysis,
+  type ReportStatus,
+} from '../src/lib/reports';
 import type { Job, Revision, SegmentationCatalog, Structure } from '../src/types';
 import { click, mount, settled, type MountedElement } from './mounted';
 
@@ -102,6 +110,27 @@ const result: AortaResult = {
   warnings: [],
   summary: { max_diameter_mm: 41.4, max_landmark: 11, landmarks_available: 10, landmarks_total: 11 },
 };
+// Five landmarks and no sections or curved view; the bifurcation was not found.
+const pulmonary: PulmonaryResult = {
+  format: 'scan3d-report-v1',
+  report: 'pulmonary',
+  analysis_id: 'p1',
+  revision_id: 'r2',
+  key: 'k',
+  engine: result.engine,
+  warnings: [],
+  inputs: [
+    { need: 'pulmonary_artery', structure_id: 'heartchambers_highres:pulmonary_artery' },
+    { need: 'pul_annulus', structure_id: 'pulmonary_artery_landmarks:pul_annulus' },
+  ],
+  landmarks: [1, 2, 3, 4, 5].map(number =>
+    number === 3
+      ? landmark(3, { available: false, unavailable_reason: 'The Pulmonary bifurcation was not found.', centre: null, diameter_mm: null, picture: null })
+      : landmark(number),
+  ),
+  files: ['plane-1.png'],
+  summary: { max_diameter_mm: 35.4, max_landmark: 5, landmarks_available: 4, landmarks_total: 5 },
+};
 const segmenting: Job = { id: 'seg', case_id: 'c1', kind: 'segment', status: 'queued', stage: 'Queued', created_at: '' };
 const measuring: Job = { id: 'm1', case_id: 'c1', kind: 'report', status: 'queued', stage: 'Queued', created_at: '' };
 const choose = (select: MountedElement | undefined, value: string) => {
@@ -139,6 +168,17 @@ describe('Analysis panel', () => {
     await settled();
     expect(view.text()).toContain('Coronary FFR needs a coronary artery segment from a coronary model in the Task list.');
     expect(localStorage.getItem('scan3d-analysis-choice-v1')).toBe('coronary');
+  });
+  it('offers the pulmonary arteries report, which asks the server for its own status', async () => {
+    const detail = vi.spyOn(reportsApi, 'detail').mockResolvedValue({ report: status({ id: 'pulmonary', title: 'Pulmonary arteries' }), analyses: [] });
+    const view = mount(AnalysisPanel, () => ({ caseId: 'c1', revision: scanAlone, native: true }));
+    await settled();
+    choose(view.labelled('Choose analysis'), 'pulmonary');
+    await settled();
+    expect(detail).toHaveBeenLastCalledWith('c1', 'r1', 'pulmonary', expect.anything());
+    expect(view.text()).toContain('Pulmonary arteries');
+    expect(view.button('Measure')).toBeDefined();
+    expect(localStorage.getItem('scan3d-analysis-choice-v1')).toBe('pulmonary');
   });
   it('opens on Coronary FFR where there is a lumen', async () => {
     const view = mount(AnalysisPanel, () => ({ caseId: 'c1', revision: withLumen, native: true }));
@@ -239,17 +279,17 @@ describe('Report panel', () => {
     expect(view.button('Measure')).toBeDefined();
     expect(view.button('Segment and measure')).toBeDefined();
     expect(view.text()).toContain('Segment and measure runs Renal arteries (needs the TotalSegmentator license)');
-    expect(view.text()).toContain('existing segments with matching anatomical names, including manual corrections');
+    expect(view.text()).toContain('Other segments stay unless they share a name with a mask this report reads');
     expect(view.text()).not.toContain('This revision has no');
     expect(view.text()).toContain('the result will go without: True lumen.');
   });
 });
 
-describe('Aorta report', () => {
+describe('Landmark report', () => {
   it('shows a dash and the reason for an unavailable landmark, and Show centres on a landmark', async () => {
     const onSelect = vi.fn(),
       onOverlay = vi.fn();
-    const view = mount(AortaReport, () => ({ caseId: 'c1', result, onSelect, onOverlay }));
+    const view = mount(LandmarkReport, () => ({ caseId: 'c1', result, title: 'Aorta', onSelect, onOverlay }));
     await settled();
     const rows = view.all(element => element.tagName === 'TR' && (element.parentNode as HTMLElement | null)?.tagName === 'TBODY');
     const second = rows.find(element => element.textContent.includes('Landmark 2'))!;
@@ -276,11 +316,11 @@ describe('Aorta report', () => {
     );
     vi.stubGlobal('navigator', { clipboard: { write: vi.fn(async (items: { items: Record<string, Blob> }[]) => void written.push(items[0].items)) } });
     const onOverlay = vi.fn();
-    const view = mount(AortaReport, () => ({ caseId: 'c1', result, onOverlay }));
+    const view = mount(LandmarkReport, () => ({ caseId: 'c1', result, title: 'Aorta', onOverlay }));
     await settled();
     click(view.button('Copy table'));
     await settled();
-    expect(await written[0]['text/plain'].text()).toBe(aortaTable(result).text);
+    expect(await written[0]['text/plain'].text()).toBe(landmarkTable(result, 'Aorta').text);
     expect(await written[0]['text/html'].text()).toContain('<table>');
     expect(view.button('Copied')).toBeDefined();
     expect(view.all(element => element.getAttribute('role') === 'status')[0].textContent).toBe('Copied');
@@ -302,7 +342,7 @@ describe('Aorta report', () => {
       }
       return new Blob(['png']);
     });
-    const view = mount(AortaReport, () => ({ caseId: 'c1', result }));
+    const view = mount(LandmarkReport, () => ({ caseId: 'c1', result, title: 'Aorta' }));
     await settled();
     click(view.labelled('Show Landmark 1'));
     await settled();
@@ -311,5 +351,45 @@ describe('Aorta report', () => {
     await settled();
     expect(view.text()).not.toContain('could not be loaded');
     expect(picture.mock.calls.filter(call => call[4] === 'plane-1.png')).toHaveLength(2);
+  });
+  it('shows a pulmonary result without sections, curved view or lumens, and centres on the pulmonary artery', async () => {
+    const onSelect = vi.fn();
+    const view = mount(LandmarkReport, () => ({ caseId: 'c1', result: pulmonary, title: 'Pulmonary arteries', onSelect }));
+    await settled();
+    expect(view.text()).toContain('Largest landmark diameter 35 mm, at 5 Landmark 5 · 4 of 5 landmarks measured');
+    expect(view.labelled('Pulmonary arteries landmarks')).toBeDefined();
+    expect(view.labelled('Pulmonary arteries sections')).toBeUndefined();
+    expect(view.text()).not.toContain('curved view');
+    expect(view.text()).toContain('Diameters in mm, areas in cm².');
+    const rows = view.all(element => element.tagName === 'TR' && (element.parentNode as HTMLElement | null)?.tagName === 'TBODY');
+    expect(rows).toHaveLength(5);
+    expect(rows[2].children[1].textContent).toContain('The Pulmonary bifurcation was not found.');
+    expect(rows[0].children).toHaveLength(5);
+    click(view.labelled('Show Landmark 1'));
+    await settled();
+    expect(onSelect).toHaveBeenCalledWith('heartchambers_highres:pulmonary_artery', [1, 2, 3]);
+    expect(reportsApi.picture).toHaveBeenCalledWith('c1', 'r2', 'pulmonary', 'p1', 'plane-1.png', expect.anything());
+  });
+  it('offers Labels in 3D, Copy table and DICOM… for a pulmonary result, with no curved view to sit under', async () => {
+    vi.spyOn(reportsApi, 'dicomFileAvailability').mockResolvedValue({ available: true });
+    const onDicom = vi.fn(),
+      onOverlay = vi.fn();
+    const view = mount(LandmarkReport, () => ({ caseId: 'c1', result: pulmonary, title: 'Pulmonary arteries', onDicom, onOverlay }));
+    await settled();
+    expect(view.text()).toContain('Labels in 3D');
+    expect(view.button('Copy table')).toBeDefined();
+    expect(view.all(element => element.tagName === 'BUTTON' && element.textContent.trim() === 'DICOM…')).toHaveLength(1);
+    expect(onOverlay).toHaveBeenLastCalledWith({ result: pulmonary, selected: undefined, labels: true });
+    click(view.button('DICOM…'));
+    await settled();
+    expect(onDicom).toHaveBeenCalledWith({
+      kind: 'report',
+      caseId: 'c1',
+      revisionId: 'r2',
+      report: 'pulmonary',
+      analysisId: 'p1',
+      title: 'Pulmonary arteries',
+      curvedView: false,
+    });
   });
 });

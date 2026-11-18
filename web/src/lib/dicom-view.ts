@@ -112,6 +112,8 @@ export interface ReportExportRequest {
   report: string;
   analysisId: string;
   title: string;
+  /** Whether the series holds the result's curved view after the report page. */
+  curvedView: boolean;
 }
 export interface ReportExportSource extends Readonly<ReportExportRequest> {
   readonly id: string;

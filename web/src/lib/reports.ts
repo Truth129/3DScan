@@ -69,7 +69,8 @@ export interface LumenMeasure {
   perpendicular_mm: number | null;
   area_cm2: number | null;
 }
-export interface AortaLandmark extends LumenMeasure {
+/** One landmark plane of a report, in either report's result. */
+export interface ReportLandmark extends LumenMeasure {
   number: number;
   id: string;
   name: string;
@@ -81,9 +82,11 @@ export interface AortaLandmark extends LumenMeasure {
   perpendicular_ends: [Point, Point] | null;
   /** Closed ring of the measured cross-section, at most 72 points. */
   outline: Point[] | null;
+  picture: string | null;
+}
+export interface AortaLandmark extends ReportLandmark {
   true_lumen: LumenMeasure | null;
   false_lumen: LumenMeasure | null;
-  picture: string | null;
 }
 export interface AortaSection {
   id: string;
@@ -104,14 +107,27 @@ export interface AortaResult extends ReportResult {
   sections: AortaSection[];
   /** About 1 mm apart, from the annulus onward. */
   centreline: Point[];
-  summary: { max_diameter_mm: number | null; max_landmark: number | null; landmarks_available: number; landmarks_total: number };
+  summary: LandmarkSummary;
+}
+export interface LandmarkSummary {
+  max_diameter_mm: number | null;
+  max_landmark: number | null;
+  landmarks_available: number;
+  landmarks_total: number;
+}
+/** Five landmark planes on the pulmonary trunk and its two branches; no sections, centreline or lumens. */
+export interface PulmonaryResult extends ReportResult {
+  report: 'pulmonary';
+  landmarks: ReportLandmark[];
+  summary: LandmarkSummary;
 }
 /**
- * What the 3D view and slices draw for a shown aorta result; `selected` is a landmark number. `labels`
- * adds the text labels beside the rings in the native 3D view and changes nothing else.
+ * What the 3D view and slices draw for a shown report result; `selected` is a landmark number. Only
+ * the drawn fields are named, so any landmark report draws, and one without a centreline draws none.
+ * `labels` adds the text labels beside the rings in the native 3D view and changes nothing else.
  */
 export interface ReportOverlay {
-  result: AortaResult;
+  result: { analysis_id: string; revision_id: string; landmarks: readonly ReportLandmark[]; centreline?: readonly Point[] };
   selected: number | undefined;
   labels: boolean;
 }
@@ -184,12 +200,12 @@ export function reportView(status: ReportStatus | undefined, analyses: readonly 
 }
 
 /**
- * Data colours for the aorta drawings, shared by the 3D view, the slices and the table's column
- * swatches. Cyan, magenta and amber read on grey CT and on the red aorta surface, and stay apart from
+ * Data colours for the report drawings, shared by the 3D view, the slices and the table's column
+ * swatches. Cyan, magenta and amber read on grey CT and on the red vessel surfaces, and stay apart from
  * the yellow bones and the sky-blue mask outlines.
  */
-export const AORTA_COLOURS = { ring: '#4fe3ff', max: '#ff4fd8', perpendicular: '#ffb020', centreline: '#eef2f4' } as const;
-/** How far the 3D ring sits outside the measured outline, so an opaque aorta surface does not cover it. */
+export const REPORT_COLOURS = { ring: '#4fe3ff', max: '#ff4fd8', perpendicular: '#ffb020', centreline: '#eef2f4' } as const;
+/** How far the 3D ring sits outside the measured outline, so an opaque vessel surface does not cover it. */
 export const RING_OFFSET_MM = 1.5;
 /** A slice shows the measured cross-section when its centre is this close and the planes this near parallel. */
 export const IN_PLANE_MM = 2;
@@ -255,7 +271,7 @@ export function projectToPane(meta: SliceMeta, ras: Point): PanePoint {
   return [x + 0.5, y + 0.5];
 }
 /** The selected landmark as one pane draws it, or nothing when it was not measured. */
-export function landmarkOnSlice(meta: SliceMeta, landmark: AortaLandmark | undefined): SliceLandmarkDrawing | undefined {
+export function landmarkOnSlice(meta: SliceMeta, landmark: ReportLandmark | undefined): SliceLandmarkDrawing | undefined {
   if (!landmark?.available || !landmark.centre) return undefined;
   const project = (ras: Point) => projectToPane(meta, ras),
     pair = (ends: [Point, Point] | null) => (ends ? (ends.map(project) as [PanePoint, PanePoint]) : undefined),
@@ -287,15 +303,15 @@ const LABEL_CHAR_PX = 6.2,
   LABEL_LINE_PX = 13,
   LABEL_PAD_PX = 2;
 
-function labelLines(mark: AortaLandmark, selected: boolean): ReportLabelPart[][] {
+function labelLines(mark: ReportLandmark, selected: boolean): ReportLabelPart[][] {
   const max = formatWhole(mark.diameter_mm);
   if (!selected) return [[{ text: max === DASH ? String(mark.number) : `${mark.number} · ${max} mm` }]];
   return [
     [{ text: `${mark.number} · ${mark.name}` }],
     [
-      { text: 'Max', colour: AORTA_COLOURS.max },
+      { text: 'Max', colour: REPORT_COLOURS.max },
       { text: ` ${max} · ` },
-      { text: 'Perp.', colour: AORTA_COLOURS.perpendicular },
+      { text: 'Perp.', colour: REPORT_COLOURS.perpendicular },
       { text: ` ${formatWhole(mark.perpendicular_mm)} mm · ${formatOne(mark.area_cm2)} cm²` },
     ],
   ];
@@ -306,12 +322,12 @@ function labelLines(mark: AortaLandmark, selected: boolean): ReportLabelPart[][]
  * selected landmark goes first, then by number; a label that would cover one already placed is left
  * out, since the table carries every number. `project` gives a RAS point's canvas pixels.
  */
-export function aortaLabels(
+export function landmarkLabels(
   overlay: ReportOverlay,
   project: (ras: Point) => readonly [number, number] | undefined,
   canvas: { width: number; height: number },
 ): ReportLabel[] {
-  const chosen = (mark: AortaLandmark) => mark.number === overlay.selected;
+  const chosen = (mark: ReportLandmark) => mark.number === overlay.selected;
   const marks = overlay.result.landmarks
     .filter(mark => mark.available && mark.centre && mark.outline && mark.outline.length >= 3)
     .sort((a, b) => Number(chosen(b)) - Number(chosen(a)) || a.number - b.number);
@@ -344,16 +360,19 @@ const value = (text: string) => (text === DASH ? '' : text);
 const oneLine = (text: string) => text.replace(/[\t\r\n]+/g, ' ');
 
 /**
- * Both tables as the panel shows them, tab-separated for a spreadsheet and as HTML for a document,
- * under the engine and research line. Nothing that names the case or the patient.
+ * The report's tables as the panel shows them (landmarks, and the aorta's sections), tab-separated for a
+ * spreadsheet and as HTML for a document, under the engine and research line. `title` is the report's
+ * name in the Analysis tab. Nothing that names the case or the patient.
  */
-export function aortaTable(result: AortaResult): { text: string; html: string } {
-  const { engine, dissection } = result;
-  const notes = [`Aorta · ${engine.name} ${engine.version}, aorta report ${engine.report_version}. ${REPORT_NOTICE}`];
-  if (result.contrast.native) notes.push(nonContrastNote(result));
+export function landmarkTable(result: AortaResult | PulmonaryResult, title: string): { text: string; html: string } {
+  const { engine } = result,
+    aorta = result.report === 'aorta' ? result : undefined,
+    dissection = !!aorta?.dissection;
+  const notes = [`${title} · ${engine.name} ${engine.version}, ${result.report} report ${engine.report_version}. ${REPORT_NOTICE}`];
+  if (aorta?.contrast.native) notes.push(nonContrastNote(aorta));
   const landmarks = {
     head: ['#', 'Landmark', 'Max (mm)', 'Perp. (mm)', 'Area (cm²)', ...(dissection ? ['TL max (mm)', 'FL max (mm)'] : []), 'Note'],
-    rows: result.landmarks.map(mark => {
+    rows: (result.landmarks as readonly (ReportLandmark & Partial<AortaLandmark>)[]).map(mark => {
       const values = [formatWhole(mark.diameter_mm), formatWhole(mark.perpendicular_mm), formatOne(mark.area_cm2)];
       if (dissection) values.push(formatWhole(mark.true_lumen?.diameter_mm), formatWhole(mark.false_lumen?.diameter_mm));
       return [
@@ -364,16 +383,17 @@ export function aortaTable(result: AortaResult): { text: string; html: string } 
       ];
     }),
   };
-  const sections = {
-    head: ['Section', 'Length (mm)', 'Max (mm)', 'Volume (ml)', ...(dissection ? ['TL volume (ml)', 'FL volume (ml)'] : [])],
-    rows: result.sections.map(section => {
-      const values = [formatWhole(section.length_mm), formatWhole(section.max_diameter_mm), formatOne(section.volume_ml)];
-      if (dissection) values.push(formatOne(section.true_lumen_volume_ml), formatOne(section.false_lumen_volume_ml));
-      return [section.name, ...values.map(text => (section.available ? value(text) : ''))];
-    }),
-  };
-  const tables = [landmarks, sections],
-    warnings = result.warnings.map(oneLine);
+  const tables = [landmarks];
+  if (aorta)
+    tables.push({
+      head: ['Section', 'Length (mm)', 'Max (mm)', 'Volume (ml)', ...(dissection ? ['TL volume (ml)', 'FL volume (ml)'] : [])],
+      rows: aorta.sections.map(section => {
+        const values = [formatWhole(section.length_mm), formatWhole(section.max_diameter_mm), formatOne(section.volume_ml)];
+        if (dissection) values.push(formatOne(section.true_lumen_volume_ml), formatOne(section.false_lumen_volume_ml));
+        return [section.name, ...values.map(text => (section.available ? value(text) : ''))];
+      }),
+    });
+  const warnings = result.warnings.map(oneLine);
   const text = [
     ...notes,
     ...tables.flatMap(table => ['', ...[table.head, ...table.rows].map(row => row.map(oneLine).join('\t'))]),

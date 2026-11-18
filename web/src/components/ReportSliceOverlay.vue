@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { AORTA_COLOURS, landmarkOnSlice, type ReportOverlay } from '../lib/reports';
+import { REPORT_COLOURS, landmarkOnSlice, type ReportOverlay } from '../lib/reports';
 import type { SliceMeta } from '../types';
 /**
  * The selected landmark's measured cross-section on one slice pane. It is solid where the pane shows
@@ -25,8 +25,8 @@ const outline = computed(() => drawing.value?.outline.map(point => point.join(',
 const lines = computed(() =>
   drawing.value
     ? [
-        { id: 'max', ends: drawing.value.max, colour: AORTA_COLOURS.max },
-        { id: 'perpendicular', ends: drawing.value.perpendicular, colour: AORTA_COLOURS.perpendicular },
+        { id: 'max', ends: drawing.value.max, colour: REPORT_COLOURS.max },
+        { id: 'perpendicular', ends: drawing.value.perpendicular, colour: REPORT_COLOURS.perpendicular },
       ].filter(line => line.ends)
     : [],
 );
@@ -54,7 +54,7 @@ const lines = computed(() =>
         vector-effect="non-scaling-stroke"
       />
     </g>
-    <polygon v-if="drawing.outline.length > 2" class="ring" :points="outline" :stroke="AORTA_COLOURS.ring" vector-effect="non-scaling-stroke" />
+    <polygon v-if="drawing.outline.length > 2" class="ring" :points="outline" :stroke="REPORT_COLOURS.ring" vector-effect="non-scaling-stroke" />
     <line
       v-for="line in lines"
       :key="line.id"
@@ -66,7 +66,7 @@ const lines = computed(() =>
       :stroke="line.colour"
       vector-effect="non-scaling-stroke"
     />
-    <circle class="centre" :cx="drawing.centre[0]" :cy="drawing.centre[1]" r="2.5" :fill="AORTA_COLOURS.ring" />
+    <circle class="centre" :cx="drawing.centre[0]" :cy="drawing.centre[1]" r="2.5" :fill="REPORT_COLOURS.ring" />
   </svg>
 </template>
 

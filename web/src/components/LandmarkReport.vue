@@ -1,22 +1,28 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import {
-  AORTA_COLOURS,
-  aortaTable,
   DASH,
+  REPORT_COLOURS,
+  REPORT_LABELS_STORAGE_KEY,
   formatOne,
   formatWhole,
+  landmarkTable,
   nonContrastNote,
-  REPORT_LABELS_STORAGE_KEY,
   reportsApi,
   type AortaLandmark,
   type AortaResult,
+  type PulmonaryResult,
+  type ReportLandmark,
   type ReportOverlay,
 } from '../lib/reports';
 import type { ReportExportRequest } from '../lib/dicom-view';
 import type { Point } from '../types';
 
-const props = defineProps<{ caseId: string; result: AortaResult }>();
+/**
+ * A landmark report's result: the landmark table, the chosen landmark's picture, and what only some
+ * reports have (the aorta's sections, curved view, contrast note and true and false lumen).
+ */
+const props = defineProps<{ caseId: string; result: AortaResult | PulmonaryResult; title: string }>();
 const emit = defineEmits<{
   select: [id: string, point: Point];
   overlay: [overlay: ReportOverlay | undefined];
@@ -29,19 +35,26 @@ const selected = ref<number>(),
   urls = ref<Record<string, string>>({}),
   failed = ref<Record<string, boolean>>({}),
   large = ref<HTMLDialogElement>();
-const selectedMark = computed(() => props.result.landmarks.find(mark => mark.number === selected.value));
-const largest = computed(() => props.result.landmarks.find(mark => mark.number === props.result.summary.max_landmark));
+const aorta = computed(() => (props.result.report === 'aorta' ? props.result : undefined));
+const dissection = computed(() => !!aorta.value?.dissection);
+const landmarks = computed<readonly (ReportLandmark & Partial<AortaLandmark>)[]>(() => props.result.landmarks);
+const selectedMark = computed(() => landmarks.value.find(mark => mark.number === selected.value));
+const largest = computed(() => landmarks.value.find(mark => mark.number === props.result.summary.max_landmark));
 const summary = computed(() => {
   const { max_diameter_mm, landmarks_available, landmarks_total } = props.result.summary,
     where = largest.value ? `, at ${largest.value.number} ${largest.value.name}` : '';
   const count = `${landmarks_available} of ${landmarks_total} landmarks measured`;
   return max_diameter_mm === null ? count : `Largest landmark diameter ${formatWhole(max_diameter_mm)} mm${where} · ${count}`;
 });
-const columns = computed(() => (props.result.dissection ? 7 : 5));
-/** The slice planes centre on the aorta mask the report measured. */
-const structureId = computed(() => (props.result.inputs.find(input => input.need === 'aorta') ?? props.result.inputs[0])?.structure_id ?? '');
-const cell = (mark: AortaLandmark, value: string) => (mark.available ? value : DASH);
-const unavailableText = (mark: AortaLandmark) => (mark.available ? undefined : mark.unavailable_reason || 'Not measured.');
+const columns = computed(() => (dissection.value ? 7 : 5));
+/** The slice planes centre on the vessel the report measured, its first input. */
+const structureId = computed(() => props.result.inputs[0]?.structure_id ?? '');
+const vessel = computed(() => props.title.toLowerCase());
+/** The aorta's curved view carries the DICOM… button; a report without one has it in the tools row. */
+const hasCurvedView = computed(() => props.result.files.includes(CPR));
+const download = computed(() => `${vessel.value.replace(/[^a-z0-9]+/g, '-')}-curved-view.png`);
+const cell = (mark: ReportLandmark, value: string) => (mark.available ? value : DASH);
+const unavailableText = (mark: ReportLandmark) => (mark.available ? undefined : mark.unavailable_reason || 'Not measured.');
 
 let controller = new AbortController();
 const asked = new Set<string>();
@@ -51,9 +64,9 @@ async function picture(name: string) {
   asked.add(name);
   if (failed.value[name]) failed.value = { ...failed.value, [name]: false };
   const signal = controller.signal,
-    { revision_id, analysis_id } = props.result;
+    { revision_id, analysis_id, report } = props.result;
   try {
-    const blob = await reportsApi.picture(props.caseId, revision_id, 'aorta', analysis_id, name, signal);
+    const blob = await reportsApi.picture(props.caseId, revision_id, report, analysis_id, name, signal);
     if (signal.aborted) return;
     urls.value = { ...urls.value, [name]: URL.createObjectURL(blob) };
   } catch {
@@ -71,17 +84,25 @@ async function picture(name: string) {
 const dicomReason = ref('');
 async function checkDicom() {
   const signal = controller.signal,
-    { revision_id, analysis_id } = props.result;
+    { revision_id, analysis_id, report } = props.result;
   try {
-    const file = await reportsApi.dicomFileAvailability(props.caseId, revision_id, 'aorta', analysis_id, signal);
+    const file = await reportsApi.dicomFileAvailability(props.caseId, revision_id, report, analysis_id, signal);
     if (!signal.aborted) dicomReason.value = file.available ? '' : file.reason || 'DICOM report export is unavailable for this saved revision.';
   } catch {
     // The button stays on offer, and the dialog says what went wrong.
   }
 }
 function exportDicom() {
-  const { revision_id, analysis_id } = props.result;
-  emit('dicom', { kind: 'report', caseId: props.caseId, revisionId: revision_id, report: 'aorta', analysisId: analysis_id, title: 'Aorta' });
+  const { revision_id, analysis_id, report } = props.result;
+  emit('dicom', {
+    kind: 'report',
+    caseId: props.caseId,
+    revisionId: revision_id,
+    report,
+    analysisId: analysis_id,
+    title: props.title,
+    curvedView: hasCurvedView.value,
+  });
 }
 function release() {
   controller.abort();
@@ -103,7 +124,7 @@ watch(
   { immediate: true },
 );
 
-function choose(mark: AortaLandmark) {
+function choose(mark: ReportLandmark) {
   if (!mark.available || !mark.centre) return;
   selected.value = mark.number;
   emit('select', structureId.value, [...mark.centre] as Point);
@@ -149,7 +170,7 @@ function copyThroughSelection(text: string) {
 }
 /** Rich HTML where the browser takes it, so a document gets a table; plain text otherwise. */
 async function copyTable() {
-  const { text, html } = aortaTable(props.result),
+  const { text, html } = landmarkTable(props.result, props.title),
     clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
   let done = false;
   try {
@@ -189,35 +210,44 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="aorta-report">
-    <p class="aorta-summary">{{ summary }}</p>
-    <div class="aorta-tools">
+  <div class="landmark-report">
+    <p class="landmark-summary">{{ summary }}</p>
+    <div class="landmark-tools">
       <!-- prettier-ignore -->
       <label title="Number and largest diameter beside each ring in the native 3D view"><input type="checkbox" :checked="labels" @change="setLabels" /> Labels in 3D</label>
       <button type="button" class="text-button" @click="copyTable">{{ copied ? 'Copied' : 'Copy table' }}</button>
-      <p class="aorta-copy-status" :class="{ 'sr-only': !copyError }" role="status">{{ copyError || (copied ? 'Copied' : '') }}</p>
+      <button
+        v-if="!hasCurvedView"
+        type="button"
+        class="text-button"
+        :disabled="!!dicomReason"
+        :title="dicomReason || 'Archive or send the report page as DICOM, or save it as a ZIP'"
+        @click="exportDicom"
+      >
+        DICOM…
+      </button>
+      <p class="landmark-copy-status" :class="{ 'sr-only': !copyError }" role="status">{{ copyError || (copied ? 'Copied' : '') }}</p>
     </div>
-    <p v-if="result.contrast.native" class="aorta-note">{{ nonContrastNote(result) }}</p>
+    <p v-if="!hasCurvedView && dicomReason" class="help">{{ dicomReason }}</p>
+    <p v-if="aorta?.contrast.native" class="landmark-note">{{ nonContrastNote(aorta) }}</p>
 
-    <div class="aorta-table aorta-landmarks" role="region" aria-label="Aorta landmarks" tabindex="0">
+    <div class="landmark-table landmark-rows" role="region" :aria-label="`${title} landmarks`" tabindex="0">
       <table>
-        <caption class="sr-only">
-          Research aortic diameters at each landmark, in millimetres, and the cross-section area in square centimetres. Select a row to move the crosshair
-          there.
-        </caption>
+        <!-- prettier-ignore -->
+        <caption class="sr-only">{{ title }}: research diameters at each landmark, in millimetres, and the cross-section area in square centimetres. Select a row to move the crosshair there.</caption>
         <thead>
           <tr>
             <th scope="col">#</th>
             <th scope="col">Landmark</th>
             <!-- The swatches are the colours of the two diameter lines in the 3D view and on the slices. -->
             <th scope="col">
-              <i class="line-swatch" :style="{ background: AORTA_COLOURS.max }"></i><abbr title="Largest diameter of the cross-section, mm">Max</abbr>
+              <i class="line-swatch" :style="{ background: REPORT_COLOURS.max }"></i><abbr title="Largest diameter of the cross-section, mm">Max</abbr>
             </th>
             <th scope="col">
-              <i class="line-swatch" :style="{ background: AORTA_COLOURS.perpendicular }"></i><abbr title="Diameter perpendicular to Max, mm">Perp.</abbr>
+              <i class="line-swatch" :style="{ background: REPORT_COLOURS.perpendicular }"></i><abbr title="Diameter perpendicular to Max, mm">Perp.</abbr>
             </th>
             <th scope="col"><abbr title="Cross-section area, cm²">Area</abbr></th>
-            <template v-if="result.dissection">
+            <template v-if="dissection">
               <th scope="col"><abbr title="True lumen, largest diameter, mm">TL</abbr></th>
               <th scope="col"><abbr title="False lumen, largest diameter, mm">FL</abbr></th>
             </template>
@@ -225,7 +255,7 @@ onBeforeUnmount(() => {
         </thead>
         <tbody>
           <tr
-            v-for="mark in result.landmarks"
+            v-for="mark in landmarks"
             :key="mark.number"
             :class="{ selected: mark.number === selected, unavailable: !mark.available }"
             :title="unavailableText(mark)"
@@ -243,12 +273,12 @@ onBeforeUnmount(() => {
               >
                 {{ mark.name }}
               </button>
-              <small v-if="!mark.available" class="aorta-reason">{{ unavailableText(mark) }}</small>
+              <small v-if="!mark.available" class="landmark-reason">{{ unavailableText(mark) }}</small>
             </th>
             <td>{{ cell(mark, formatWhole(mark.diameter_mm)) }}</td>
             <td>{{ cell(mark, formatWhole(mark.perpendicular_mm)) }}</td>
             <td>{{ cell(mark, formatOne(mark.area_cm2)) }}</td>
-            <template v-if="result.dissection">
+            <template v-if="dissection">
               <td>{{ cell(mark, formatWhole(mark.true_lumen?.diameter_mm)) }}</td>
               <td>{{ cell(mark, formatWhole(mark.false_lumen?.diameter_mm)) }}</td>
             </template>
@@ -262,36 +292,35 @@ onBeforeUnmount(() => {
       </table>
     </div>
 
-    <figure v-if="selectedMark?.picture" class="aorta-picture">
+    <figure v-if="selectedMark?.picture" class="landmark-picture">
       <img v-if="urls[selectedMark.picture]" :src="urls[selectedMark.picture]" :alt="`Cross-section at ${selectedMark.name}`" />
       <p v-else class="help">{{ failed[selectedMark.picture] ? 'The picture could not be loaded.' : 'Loading the picture…' }}</p>
       <figcaption>{{ selectedMark.number }} · {{ selectedMark.name }}</figcaption>
     </figure>
 
-    <div class="aorta-table aorta-sections" role="region" aria-label="Aorta sections" tabindex="0">
+    <div v-if="aorta" class="landmark-table landmark-sections" role="region" :aria-label="`${title} sections`" tabindex="0">
       <table>
-        <caption class="sr-only">
-          Research length, largest diameter and volume of each aortic section.
-        </caption>
+        <!-- prettier-ignore -->
+        <caption class="sr-only">{{ title }}: research length, largest diameter and volume of each section.</caption>
         <thead>
           <tr>
             <th scope="col">Section</th>
             <th scope="col"><abbr title="Centreline length, mm">Length</abbr></th>
             <th scope="col"><abbr title="Largest diameter, mm">Max</abbr></th>
             <th scope="col"><abbr title="Volume, ml">Volume</abbr></th>
-            <template v-if="result.dissection">
+            <template v-if="dissection">
               <th scope="col"><abbr title="True lumen volume, ml">TL</abbr></th>
               <th scope="col"><abbr title="False lumen volume, ml">FL</abbr></th>
             </template>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="section in result.sections" :key="section.id" :class="{ unavailable: !section.available }">
+          <tr v-for="section in aorta.sections" :key="section.id" :class="{ unavailable: !section.available }">
             <th scope="row">{{ section.name }}</th>
             <td>{{ section.available ? formatWhole(section.length_mm) : DASH }}</td>
             <td>{{ section.available ? formatWhole(section.max_diameter_mm) : DASH }}</td>
             <td>{{ section.available ? formatOne(section.volume_ml) : DASH }}</td>
-            <template v-if="result.dissection">
+            <template v-if="dissection">
               <td>{{ section.available ? formatOne(section.true_lumen_volume_ml) : DASH }}</td>
               <td>{{ section.available ? formatOne(section.false_lumen_volume_ml) : DASH }}</td>
             </template>
@@ -299,17 +328,17 @@ onBeforeUnmount(() => {
         </tbody>
       </table>
     </div>
-    <p class="help">Diameters and lengths in mm, areas in cm², volumes in ml.</p>
+    <p class="help">{{ aorta ? 'Diameters and lengths in mm, areas in cm², volumes in ml.' : 'Diameters in mm, areas in cm².' }}</p>
 
-    <div v-if="result.files.includes(CPR)" class="aorta-cpr">
-      <button v-if="urls[CPR]" type="button" class="aorta-thumb" aria-label="Open the curved view large" @click="openLarge">
-        <img :src="urls[CPR]" alt="Curved view along the aorta" />
+    <div v-if="hasCurvedView" class="landmark-cpr">
+      <button v-if="urls[CPR]" type="button" class="landmark-thumb" aria-label="Open the curved view large" @click="openLarge">
+        <img :src="urls[CPR]" :alt="`Curved view along the ${vessel}`" />
       </button>
       <!-- prettier-ignore -->
       <p v-else-if="failed[CPR]" class="help">The curved view could not be loaded. <button type="button" class="text-button" @click="picture(CPR)">Retry</button></p>
       <p v-else class="help">Loading the curved view…</p>
-      <div class="aorta-cpr-actions">
-        <a v-if="urls[CPR]" class="text-button" :href="urls[CPR]" download="aorta-curved-view.png">Download PNG</a>
+      <div class="landmark-cpr-actions">
+        <a v-if="urls[CPR]" class="text-button" :href="urls[CPR]" :download="download">Download PNG</a>
         <button
           type="button"
           class="text-button"
@@ -322,12 +351,12 @@ onBeforeUnmount(() => {
       </div>
       <p v-if="dicomReason" class="help">{{ dicomReason }}</p>
     </div>
-    <dialog ref="large" class="aorta-large" aria-label="Curved view along the aorta">
-      <img v-if="urls[CPR]" :src="urls[CPR]" alt="Curved view along the aorta" />
+    <dialog ref="large" class="landmark-large" :aria-label="`Curved view along the ${vessel}`">
+      <img v-if="urls[CPR]" :src="urls[CPR]" :alt="`Curved view along the ${vessel}`" />
       <form method="dialog"><button class="button compact">Close</button></form>
     </dialog>
 
-    <details v-if="result.warnings.length" class="aorta-warnings">
+    <details v-if="result.warnings.length" class="landmark-warnings">
       <summary>{{ result.warnings.length }} {{ result.warnings.length === 1 ? 'warning' : 'warnings' }}</summary>
       <ul>
         <li v-for="(warning, index) in result.warnings" :key="index">{{ warning }}</li>
@@ -337,13 +366,13 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.aorta-summary {
+.landmark-summary {
   margin: 10px 0 0;
   font: 10px var(--mono);
   color: var(--text-secondary);
 }
 /* Wraps rather than scrolling at the narrowest side panel. */
-.aorta-tools {
+.landmark-tools {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -352,29 +381,29 @@ onBeforeUnmount(() => {
   font-size: 10px;
   color: var(--text-secondary);
 }
-.aorta-tools label {
+.landmark-tools label {
   display: flex;
   align-items: center;
   gap: 5px;
   cursor: pointer;
 }
-.aorta-tools input {
+.landmark-tools input {
   margin: 0;
 }
-.aorta-tools .text-button {
+.landmark-tools .text-button {
   font-size: 10px;
 }
-.aorta-copy-status {
+.landmark-copy-status {
   flex-basis: 100%;
   margin: 0;
   color: var(--warning);
 }
-.aorta-note {
+.landmark-note {
   margin: 6px 0 0;
   font-size: 10px;
   color: var(--warning);
 }
-.aorta-table {
+.landmark-table {
   margin-top: 10px;
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -383,7 +412,7 @@ onBeforeUnmount(() => {
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
-.aorta-table:focus-visible {
+.landmark-table:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -413,8 +442,8 @@ thead th {
 }
 /* The name wraps, so the value columns always fit. */
 tbody th,
-.aorta-landmarks thead th:nth-child(2),
-.aorta-sections thead th:first-child {
+.landmark-rows thead th:nth-child(2),
+.landmark-sections thead th:first-child {
   text-align: left;
   white-space: normal;
 }
@@ -422,16 +451,16 @@ tbody th {
   font-weight: 400;
   color: var(--white);
 }
-.aorta-landmarks tbody tr {
+.landmark-rows tbody tr {
   cursor: pointer;
 }
-.aorta-reason {
+.landmark-reason {
   display: block;
   margin-top: 2px;
   font-size: 9px;
   color: var(--muted);
 }
-.aorta-landmarks tbody tr:hover {
+.landmark-rows tbody tr:hover {
   background: var(--surface-hover);
 }
 tbody tr.selected {
@@ -440,7 +469,7 @@ tbody tr.selected {
 tbody tr.selected th {
   color: var(--accent);
 }
-.aorta-landmarks tbody tr.unavailable {
+.landmark-rows tbody tr.unavailable {
   cursor: help;
 }
 tbody tr.unavailable th,
@@ -488,35 +517,35 @@ tbody th button:disabled {
   text-decoration: none;
   cursor: help;
 }
-.aorta-picture {
+.landmark-picture {
   margin: 10px 0 0;
 }
-.aorta-picture img,
-.aorta-thumb img {
+.landmark-picture img,
+.landmark-thumb img {
   display: block;
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--bg);
 }
-.aorta-picture figcaption {
+.landmark-picture figcaption {
   margin-top: 4px;
   font: 9px var(--mono);
   color: var(--muted);
 }
-.aorta-cpr {
+.landmark-cpr {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
   margin-top: 12px;
 }
-.aorta-cpr-actions {
+.landmark-cpr-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 2px 12px;
 }
-.aorta-thumb {
+.landmark-thumb {
   width: 100%;
   max-height: 180px;
   overflow: hidden;
@@ -525,11 +554,11 @@ tbody th button:disabled {
   background: none;
   cursor: zoom-in;
 }
-.aorta-thumb img {
+.landmark-thumb img {
   height: 180px;
   object-fit: cover;
 }
-.aorta-large {
+.landmark-large {
   max-width: min(96vw, 1200px);
   max-height: 94vh;
   padding: 10px;
@@ -538,33 +567,33 @@ tbody th button:disabled {
   background: var(--panel);
   color: var(--text-secondary);
 }
-.aorta-large::backdrop {
+.landmark-large::backdrop {
   background: color-mix(in srgb, var(--bg) 80%, transparent);
 }
-.aorta-large img {
+.landmark-large img {
   display: block;
   max-width: 100%;
   max-height: calc(94vh - 70px);
   margin: 0 auto 8px;
 }
-.aorta-large form {
+.landmark-large form {
   display: flex;
   justify-content: flex-end;
 }
-.aorta-warnings {
+.landmark-warnings {
   margin-top: 10px;
   font-size: 10px;
   color: var(--warning);
 }
-.aorta-warnings summary {
+.landmark-warnings summary {
   cursor: pointer;
 }
-.aorta-warnings ul {
+.landmark-warnings ul {
   margin: 4px 0 0;
   padding-left: 16px;
   line-height: 1.5;
 }
-.aorta-report .help {
+.landmark-report .help {
   margin: 8px 0 0;
   font-size: 10px;
 }

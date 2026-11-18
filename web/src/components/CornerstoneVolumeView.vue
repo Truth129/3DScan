@@ -12,7 +12,7 @@ import { VTKSurfaceScene, type NativeSurfaceLayerStatus } from '../lib/vtk-surfa
 import { VTKCoronaryTube } from '../lib/vtk-coronary-tube';
 import { fadeUnderTube, type CoronaryTube } from '../lib/coronary';
 import { VTKReportOverlay } from '../lib/vtk-report-overlay';
-import { AORTA_COLOURS, aortaLabels, type ReportLabel, type ReportOverlay } from '../lib/reports';
+import { REPORT_COLOURS, landmarkLabels, type ReportLabel, type ReportOverlay } from '../lib/reports';
 import type { vtkRenderer } from '@kitware/vtk.js/Rendering/Core/Renderer';
 import type { NativeVolumeLightingSettings, NativeVolumeLightPose } from '../lib/volume-lighting';
 import type { CTVolumeSettings } from '../lib/volume-presets';
@@ -781,7 +781,7 @@ function placeLabels() {
         canvas = viewport.canvas.getBoundingClientRect(),
         frame = layer.getBoundingClientRect();
       if (canvas.width > 0 && canvas.height > 0) {
-        labels = aortaLabels(overlay, ras => viewport.worldToCanvas(rasToLps(ras)) as [number, number], canvas).map(label => ({
+        labels = landmarkLabels(overlay, ras => viewport.worldToCanvas(rasToLps(ras)) as [number, number], canvas).map(label => ({
           ...label,
           x: label.x + canvas.left - frame.left,
           y: label.y + canvas.top - frame.top,
@@ -1172,7 +1172,7 @@ defineExpose({
         :key="label.number"
         class="report-label"
         :class="{ selected: label.selected }"
-        :style="{ left: `${label.x}px`, top: `${label.y}px`, borderColor: AORTA_COLOURS.ring }"
+        :style="{ left: `${label.x}px`, top: `${label.y}px`, borderColor: REPORT_COLOURS.ring }"
       >
         <div v-for="(line, index) in label.lines" :key="index">
           <span v-for="(part, at) in line" :key="at" :style="part.colour ? { color: part.colour } : undefined">{{ part.text }}</span>
@@ -1218,7 +1218,7 @@ defineExpose({
   overflow: hidden;
   pointer-events: none;
 }
-/* Dark and outlined, so the text reads on grey CT and on the red aorta surface alike. */
+/* Dark and outlined, so the text reads on grey CT and on the red vessel surfaces alike. */
 .report-label {
   position: absolute;
   transform: translateY(-50%);

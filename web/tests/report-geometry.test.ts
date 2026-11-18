@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { landmarkOnSlice, measuredInPlane, offsetRing, projectToPane, type AortaLandmark } from '../src/lib/reports';
+import { landmarkOnSlice, measuredInPlane, offsetRing, projectToPane, type ReportLandmark } from '../src/lib/reports';
 import type { Point, SliceMeta } from '../src/types';
 
 const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -60,7 +60,7 @@ describe('report geometry', () => {
     const [x, y] = projectToPane(oblique, point);
     expect(x).toBeCloseTo(12.5, 6);
     expect(y).toBeCloseTo(7.5, 6);
-    const mark: AortaLandmark = {
+    const mark: ReportLandmark = {
       number: 4,
       id: 'mid_ascending',
       name: 'Mid ascending aorta',
@@ -74,8 +74,6 @@ describe('report geometry', () => {
       ends: [along(point, [-15, right]), along(point, [15, right])],
       perpendicular_ends: [along(point, [-14, up]), along(point, [14, up])],
       outline: [along(point, [15, right]), along(point, [14, up]), along(point, [-15, right])],
-      true_lumen: null,
-      false_lumen: null,
       picture: null,
     };
     // Five millimetres off the pane: projected, so dashed.

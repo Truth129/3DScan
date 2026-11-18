@@ -2,9 +2,9 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import CoronaryPanel from './CoronaryPanel.vue';
 import ReportPanel from './ReportPanel.vue';
-import AortaReport from './AortaReport.vue';
+import LandmarkReport from './LandmarkReport.vue';
 import { hasCoronaryLumen, type CoronaryTube } from '../lib/coronary';
-import { ANALYSIS_STORAGE_KEY, type AortaResult, type ReportOverlay } from '../lib/reports';
+import { ANALYSIS_STORAGE_KEY, type AortaResult, type PulmonaryResult, type ReportOverlay, type ReportResult } from '../lib/reports';
 import type { ReportExportRequest } from '../lib/dicom-view';
 import type { Job, Point, Revision } from '../types';
 
@@ -21,6 +21,7 @@ const emit = defineEmits<{
 const ANALYSES = [
   { id: 'coronary', label: 'Coronary FFR' },
   { id: 'aorta', label: 'Aorta' },
+  { id: 'pulmonary', label: 'Pulmonary arteries' },
 ] as const;
 type AnalysisId = (typeof ANALYSES)[number]['id'];
 
@@ -36,6 +37,10 @@ const lumen = computed(() => hasCoronaryLumen(props.revision.structures));
 // Until someone chooses, the default follows the revision: FFR where there is a lumen to analyse.
 const stored = ref(remembered());
 const choice = computed<AnalysisId>(() => stored.value ?? (lumen.value ? 'coronary' : 'aorta'));
+/** Every analysis but Coronary FFR is a measurement report, drawn with the one landmark view under its chooser label. */
+const report = computed(() => (choice.value === 'coronary' ? undefined : ANALYSES.find(item => item.id === choice.value)));
+// The panel checks the result's report before drawing it, so it is that report's own shape.
+const landmarkResult = (result: ReportResult) => result as AortaResult | PulmonaryResult;
 function choose(event: Event) {
   const id = ANALYSES.find(item => item.id === (event.target as HTMLSelectElement).value)?.id;
   if (!id) return;
@@ -50,7 +55,7 @@ function choose(event: Event) {
 // chosen and a run being followed. Its tube draws only while it is the analysis on screen.
 const coronaryOpened = ref(choice.value === 'coronary'),
   tube = shallowRef<CoronaryTube>();
-// Leaving the aorta report takes its drawing with it.
+// Leaving a report takes its drawing with it.
 watch(choice, id => {
   if (id === 'coronary') coronaryOpened.value = true;
   else emit('overlay', undefined);
@@ -81,12 +86,23 @@ onBeforeUnmount(() => {
       @tube="tube = $event"
     />
     <p v-else-if="choice === 'coronary'" class="help analysis-needs">Coronary FFR needs a coronary artery segment from a coronary model in the Task list.</p>
-    <ReportPanel v-if="choice === 'aorta'" :case-id="caseId" :revision="revision" report="aorta" title="Aorta" :busy="busy" @job="emit('job', $event)">
+    <!-- Keyed by report, so a switch between reports starts from that report's own state. -->
+    <ReportPanel
+      v-if="report"
+      :key="report.id"
+      :case-id="caseId"
+      :revision="revision"
+      :report="report.id"
+      :title="report.label"
+      :busy="busy"
+      @job="emit('job', $event)"
+    >
       <template #default="{ result }">
-        <AortaReport
-          v-if="result.report === 'aorta'"
+        <LandmarkReport
+          v-if="result.report === report.id"
           :case-id="caseId"
-          :result="result as AortaResult"
+          :result="landmarkResult(result)"
+          :title="report.label"
           @select="(id, at) => emit('select', id, at)"
           @overlay="emit('overlay', $event)"
           @dicom="emit('dicom', $event)"

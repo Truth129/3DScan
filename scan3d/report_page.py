@@ -2,7 +2,7 @@
 
 Research use only. The page carries only what the result holds, never a case name or patient
 detail, and the same result always draws the same bytes: no clock, no PNG metadata. Its tables
-match the panel's Copy table (web/src/lib/reports.ts aortaTable), column for column.
+match the panel's Copy table (web/src/lib/reports.ts landmarkTable), column for column.
 """
 
 from __future__ import annotations

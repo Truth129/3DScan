@@ -714,9 +714,9 @@ mask it took voxels from.
 ## Analysis
 
 The **Analysis** tab shows on any saved CT revision, a scan with no segments included. Choose
-**Coronary FFR** or **Aorta** at its top; your browser remembers the choice. Each analysis measures
-from the masks of the revision shown, so a corrected mask gives corrected numbers once you measure
-again.
+**Coronary FFR**, **Aorta** or **Pulmonary arteries** at its top; your browser remembers the
+choice. Each analysis measures from the masks of the revision shown, so a corrected mask gives
+corrected numbers once you measure again.
 
 ## Aorta report
 
@@ -730,11 +730,12 @@ dissection** tasks need a [TotalSegmentator license](#totalsegmentator-license);
 does not. The panel lists the tasks it uses and any optional input the revision lacks.
 
 - **Segment and measure** runs the missing tasks, saves their masks as a new revision, then
-  measures that revision. As with any task run, the new revision replaces segments with matching
-  anatomical names, manual corrections included; earlier revisions stay in History. It stays on
-  offer beside **Measure** while an optional task has not run.
+  measures that revision. It stays on offer beside **Measure** while an optional task has not run.
   **Run on** chooses the GPU when there is more than one. When it cannot run, such as without a
   needed license, the panel says why.
+- The new revision replaces these tasks' own segments, manual corrections included. A segment from
+  another task or drawn by hand is replaced only if it shares its name with a mask the report reads
+  or with a segment of these tasks that the run makes again. Earlier revisions stay in History.
 - **Measure** measures a revision that already has every required mask.
 - **Measure again** repeats the measurement of a revision already measured, for example after a
   software update.
@@ -780,6 +781,37 @@ The drawings use the swatch colours above **Max** and **Perp.**:
   leaves them off the slices.
 - The drawings show while the **Analysis** tab is open, or the **3D** or **Segments** tab opened
   from it, and only over the revision measured. PNG and DICOM view exports leave them out.
+
+## Pulmonary arteries report
+
+> **Research use only · not for diagnostic use.** These numbers are measured by TotalSegmentator's
+> pulmonary artery report from this revision's masks. They have not been checked here against hand
+> measurements.
+
+The report needs the pulmonary artery from **Heart chambers, high resolution (TotalSegmentator)**
+and at least one landmark from **Pulmonary artery landmarks (TotalSegmentator)**. Both tasks need a
+[TotalSegmentator license](#totalsegmentator-license). **Segment and measure**, **Measure** and
+**Measure again** work as for the aorta.
+
+The two tasks also mark an aorta and an aortic sinotubular junction. **Segment and measure** leaves
+these out where the revision already has them from another task.
+
+The result lists five landmarks: the proximal main pulmonary artery (at the valve annulus), the
+sinotubular junction, the bifurcation, and the start of the left and right pulmonary arteries.
+Each has **Max**, **Perp.** and the area, and a landmark that was not measured shows a dash with
+the reason. There are no sections, curved view, centreline or true and false lumen. Clicking a
+landmark and the drawings work as for the aorta, without the centreline line.
+
+**Labels in 3D**, **Copy table** and **DICOM…** work as for the aorta. **DICOM…** sits beside
+**Copy table**, and its series holds the report page only.
+
+Where the artery is cut (sinotubular junction, bifurcation, left and right pulmonary artery),
+diameters read about 2 mm wider than the mask, as the aorta's do: a synthetic 24 mm trunk reads
+26 mm and 16 mm branches read 18 mm.
+
+The proximal main pulmonary artery is measured on the landmark model's own valve-plane mask. On
+five public scans that mask lay 1 to 3 mm inside the contrast edge all round, so this landmark can
+read 2 to 5 mm narrow.
 
 ## Coronary CT-FFR
 
