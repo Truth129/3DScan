@@ -205,7 +205,7 @@ def create_app(settings: Settings | None = None):
             or redeem
             or request.url.path == "/api/totalsegmentator/license"
             or request.url.path.startswith(("/api/orthanc/", "/api/archive/"))
-            or request.url.path.endswith(("/dicom-seg", "/segment.dcm", "/view.dcm"))
+            or request.url.path.endswith(("/dicom-seg", "/segment.dcm", "/view.dcm", "/dicom", "/dicom-file", "/report.zip"))
             or view_export
             or _is_purge_path(request)
             # A People answer can carry a link's code.

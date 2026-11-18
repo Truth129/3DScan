@@ -57,6 +57,8 @@ _UNSUPPORTED = "The captured view must be a still 8-bit RGB or RGBA PNG. Capture
 _TOO_LARGE = "The captured view has too many pixels. Make the pane smaller and capture again."
 _BLANK = "The captured view is blank. Capture the view again."
 _COMMENTS = "Rendered 3D view from 3DScan. Not calibrated: do not measure. No orientation labels. Research use only."
+# One instance per picture, all in one series, so a report and its curved view stay together.
+_MAX_IMAGES = 2
 
 # A maximum-size decode peaks at several hundred MiB, and each request runs on
 # its own server thread alongside the job worker.
@@ -65,6 +67,35 @@ _DECODE_SLOT = threading.BoundedSemaphore(1)
 
 class DicomViewError(ValueError):
     """A constant, public-safe explanation without clinical paths or tags."""
+
+
+@dataclass(frozen=True, slots=True)
+class ImageText:
+    """What a series says about itself. `derivation` names its origin, and the source series UID is appended."""
+
+    series_number: int
+    series_description: str
+    model_name: str
+    comments: str
+    derivation: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExportedImage:
+    sop_instance_uid: str
+    rows: int
+    columns: int
+    path: Path
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class ImagesExportResult:
+    revision_id: str
+    series_instance_uid: str
+    study_instance_uid: str
+    images: tuple[ExportedImage, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +243,7 @@ def _source_headers(paths, cancelled):
     return reference, burned_in, stamps
 
 
-def _encode(reference, pixels, *, revision_id, burned_in):
+def _encode(reference, pixels, *, text, series_uid, instance_number, moment, burned_in):
     try:
         import highdicom as hd
     except ImportError:
@@ -223,24 +254,21 @@ def _encode(reference, pixels, *, revision_id, burned_in):
     for keyword in _COPIED:
         if keyword in template:
             del template[keyword]
-    # highdicom refuses a series time later than its own content time, which
-    # it reads from the clock inside the constructor.
-    moment = datetime.now()
     result = hd.sc.SCImage.from_ref_dataset(
         ref_dataset=template,
         pixel_array=pixels,
         photometric_interpretation="RGB",
         bits_allocated=8,
         coordinate_system="PATIENT",
-        series_instance_uid=generate_uid(),
-        series_number=501,
+        series_instance_uid=series_uid,
+        series_number=text.series_number,
         sop_instance_uid=generate_uid(),
-        instance_number=1,
+        instance_number=instance_number,
         manufacturer="3DScan",
         patient_orientation=("L", "F"),
         transfer_syntax_uid=ExplicitVRLittleEndian,
-        series_description=f"3DScan view {revision_id[:8]}",
-        manufacturer_model_name="Rendered view export",
+        series_description=text.series_description,
+        manufacturer_model_name=text.model_name,
         software_versions=__version__,
         device_serial_number="3DScan",
         series_date=moment.date(),
@@ -260,51 +288,66 @@ def _encode(reference, pixels, *, revision_id, burned_in):
     result.ConversionType = "WSD"
     # The render can show source pixels, so their burned-in text survives into it.
     result.BurnedInAnnotation = "YES" if burned_in else "NO"
-    result.ImageComments = _COMMENTS
-    result.DerivationDescription = f"Rendered 3D view of 3DScan revision {revision_id} from source series {reference.SeriesInstanceUID}"
+    result.ImageComments = text.comments
+    result.DerivationDescription = f"{text.derivation} from source series {reference.SeriesInstanceUID}"
     return result
 
 
-def _export_view(source_paths, png_path, output_dir, *, revision_id, cancelled=None) -> ViewExportResult:
+def _export_images(source_paths, png_paths, output_dir, *, revision_id, text, cancelled=None) -> ImagesExportResult:
     if not isinstance(revision_id, str) or not revision_id:
         raise DicomViewError("DICOM view export requires a saved revision")
     _check_cancelled(cancelled)
     paths = tuple(Path(path) for path in source_paths)
-    png_path, output_dir = Path(png_path), Path(output_dir)
+    pngs, output_dir = tuple(Path(path) for path in png_paths), Path(output_dir)
+    if not 1 <= len(pngs) <= _MAX_IMAGES:
+        raise DicomViewError("A DICOM export holds one or two pictures")
     if output_dir.exists() or output_dir.is_symlink():
         raise DicomViewError("Use a new DICOM view export directory; existing exports are immutable")
-    png_stamp = _stamp(png_path)
+    png_stamps = [(png, _stamp(png)) for png in pngs]
     reference, burned_in, stamps = _source_headers(paths, cancelled)
-    stamps.append((png_path, png_stamp))
-    pixels = read_view_png(png_path)
-    _check_cancelled(cancelled)
-    image = _encode(reference, pixels, revision_id=revision_id, burned_in=burned_in)
-    _check_cancelled(cancelled)
+    stamps.extend(png_stamps)
+    # highdicom refuses a series time later than its own content time, which
+    # it reads from the clock inside the constructor.
+    moment, series_uid, images = datetime.now(), generate_uid(), []
+    for number, png in enumerate(pngs, 1):
+        pixels = read_view_png(png)
+        _check_cancelled(cancelled)
+        images.append(_encode(reference, pixels, text=text, series_uid=series_uid, instance_number=number, moment=moment, burned_in=burned_in))
+        _check_cancelled(cancelled)
     output_dir.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    name = "view-0001.dcm"
     with tempfile.TemporaryDirectory(prefix=".dicom-view-", dir=output_dir.parent) as temporary:
-        staging = Path(temporary)
-        destination = staging / name
-        image.save_as(destination, enforce_file_format=True)
-        destination.chmod(0o600)
-        result = ViewExportResult(
-            revision_id,
-            str(image.SeriesInstanceUID),
-            str(image.StudyInstanceUID),
-            str(image.SOPInstanceUID),
-            int(image.Rows),
-            int(image.Columns),
-            output_dir / name,
-            hash_file(destination),
-            destination.stat().st_size,
-        )
+        staging, written = Path(temporary), []
+        for number, image in enumerate(images, 1):
+            name = f"view-{number:04d}.dcm"
+            destination = staging / name
+            image.save_as(destination, enforce_file_format=True)
+            destination.chmod(0o600)
+            written.append(
+                ExportedImage(
+                    str(image.SOPInstanceUID), int(image.Rows), int(image.Columns), output_dir / name, hash_file(destination), destination.stat().st_size
+                )
+            )
         _check_cancelled(cancelled)
         if any(_stamp(path) != before for path, before in stamps):
             raise DicomViewError("An original CT or the captured view changed during DICOM view export")
         if output_dir.exists():
             raise DicomViewError("The DICOM view export destination is already occupied")
         staging.replace(output_dir)
-    return result
+    return ImagesExportResult(revision_id, str(images[0].SeriesInstanceUID), str(images[0].StudyInstanceUID), tuple(written))
+
+
+def export_images(source_paths, png_paths, output_dir, *, revision_id, text, cancelled=None) -> ImagesExportResult:
+    """Atomically publish one new series of one or two pictures, in order; never overwrite an export.
+
+    The caller binds source paths and the pictures to the saved revision. This
+    adapter proves one patient, study and series, and reads the pixels itself.
+    """
+    try:
+        return _export_images(source_paths, png_paths, output_dir, revision_id=revision_id, text=text, cancelled=cancelled)
+    except (DicomViewError, InterruptedError):
+        raise
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError, KeyError, EOFError):
+        raise DicomViewError("The DICOM view could not be encoded from these inputs. Check the original CT.") from None
 
 
 def export_view(source_paths, png_path, output_dir, *, revision_id, cancelled=None) -> ViewExportResult:
@@ -313,9 +356,19 @@ def export_view(source_paths, png_path, output_dir, *, revision_id, cancelled=No
     The caller binds source paths and the capture to the saved revision. This
     adapter proves one patient, study and series, and reads the pixels itself.
     """
-    try:
-        return _export_view(source_paths, png_path, output_dir, revision_id=revision_id, cancelled=cancelled)
-    except (DicomViewError, InterruptedError):
-        raise
-    except (OSError, ValueError, TypeError, AttributeError, OverflowError, KeyError, EOFError):
-        raise DicomViewError("The DICOM view could not be encoded from these inputs. Check the original CT.") from None
+    if not isinstance(revision_id, str) or not revision_id:
+        raise DicomViewError("DICOM view export requires a saved revision")
+    text = ImageText(501, f"3DScan view {revision_id[:8]}", "Rendered view export", _COMMENTS, f"Rendered 3D view of 3DScan revision {revision_id}")
+    result = export_images(source_paths, [png_path], output_dir, revision_id=revision_id, text=text, cancelled=cancelled)
+    (image,) = result.images
+    return ViewExportResult(
+        revision_id,
+        result.series_instance_uid,
+        result.study_instance_uid,
+        image.sop_instance_uid,
+        image.rows,
+        image.columns,
+        image.path,
+        image.sha256,
+        image.size,
+    )

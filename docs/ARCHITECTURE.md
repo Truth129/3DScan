@@ -128,6 +128,7 @@ cases/<case>/
   revisions/<id>/        revision.json, model.glb and on-demand exports
   refinements/, corrections/, reviews/, seg-imports/, dicom-exports/, grow-branch/
   dicom-view-captures/   Retained 3D view captures, each named by its SHA-256
+  dicom-report-images/   Retained report pages and curved views, each named by its SHA-256
   coronary/<key>/        Coronary analysis: result.json, then complete.json
   reports/<report>/<key>/ Measurement report: pictures, result.json, then complete.json
   uploads/               Slicer corrections as received
@@ -583,7 +584,7 @@ fails before allocating, and the viewer explains it and offers Retry.
 | CT worker's copy                  | 512 MiB, or 128 MiB with 2 GiB of RAM or less |
 | Source preview                    | 192 voxels per dimension                      |
 | Selected masks in the worker      | 64 MiB for preview, 192 MiB for full          |
-| Native CT plane, mask, label crop | 8 MiB each; a mask adds 1 MiB of bits           |
+| Native CT plane, mask, label crop | 8 MiB each; a mask adds 1 MiB of bits         |
 | Three.js CT and mask atlas        | 512 MiB                                       |
 | MIP and MinIP slab                | 200 mm                                        |
 | Native **Color segments**         | 64 structures                                 |
@@ -620,6 +621,9 @@ return every stored instance on read-back ([ORTHANC.md](ORTHANC.md#send-a-saved-
 **View export** turns one capture of the 3D view into a Secondary Capture series in the source
 study. `orthanc_view_exports.py` subclasses the SEG manager. The instance is a picture with no frame
 of reference, and nothing measures from it.
+
+**Report export** puts a measurement report's page, drawn by `report_page.py`, and its curved view
+into one such series of two images, by the view's delivery (`report_exports.py`).
 
 **OsiriX ROI export** is a second format of SEG export, through Orthanc only. `osirix_roi.py` writes
 one native brush report per source slice that a selected mask touches, and `osirix_roi_exports.py`
@@ -696,7 +700,8 @@ fails the request. The actions are:
   `case.purge_password_failed`, and `case.trash`, `case.restore` and `case.purge`, each written with
   the change
 - Archive and export: `archive.query`, `archive.launch`, `export.slicer`, `export.html`,
-  `export.seg`, `export.seg_file`, `export.view`, `export.view_file`
+  `export.seg`, `export.seg_file`, `export.view`, `export.view_file`, `export.report`,
+  `export.report_file`
 
 **Network.** 3DScan runs no DICOM listener and sends no scan to a model or license host. It makes
 only these outbound connections:

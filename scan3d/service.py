@@ -56,6 +56,7 @@ class Service:
         self._archive_view_exports = None
         self._direct_seg_exports = None
         self._direct_view_exports = None
+        self._report_exports = {}
         self._lane_guard = threading.Lock()
         self._running_lanes = 0
         self._preparation_slots = None
@@ -157,6 +158,29 @@ class Service:
             self._direct_view_exports = DirectViewExports(self)
         return self._direct_view_exports
 
+    def _report_exporter(self, name):
+        if name not in self._report_exports:
+            from . import report_exports
+
+            self._report_exports[name] = getattr(report_exports, name)(self)
+        return self._report_exports[name]
+
+    @property
+    def orthanc_report_exports(self):
+        return self._report_exporter("OrthancReportExports")
+
+    @property
+    def report_file_exports(self):
+        return self._report_exporter("ReportFileExports")
+
+    @property
+    def archive_report_exports(self):
+        return self._report_exporter("ArchiveReportExports")
+
+    @property
+    def direct_report_exports(self):
+        return self._report_exporter("DirectReportExports")
+
     def import_kind(self, case_id):
         """Where a case's images came from: "orthanc", "dicomweb", or None for a folder or ZIP."""
         return (self.store.get("cases", case_id).get("import_source") or {}).get("kind")
@@ -175,6 +199,10 @@ class Service:
             "archive_view_export": self.archive_view_exports,
             "direct_seg_export": self.direct_seg_exports,
             "direct_view_export": self.direct_view_exports,
+            "orthanc_report_export": self.orthanc_report_exports,
+            "report_file_export": self.report_file_exports,
+            "archive_report_export": self.archive_report_exports,
+            "direct_report_export": self.direct_report_exports,
         }[kind]
 
     def _interactive(self):
@@ -219,6 +247,10 @@ class Service:
         self.archive_view_exports.recover()
         self.direct_seg_exports.recover()
         self.direct_view_exports.recover()
+        self.orthanc_report_exports.recover()
+        self.report_file_exports.recover()
+        self.archive_report_exports.recover()
+        self.direct_report_exports.recover()
         # Only a lane writes here, and none runs yet, so what is left came from a hard stop. It names no case.
         for leftover in (self.settings.data_dir / "orthanc-staging").glob("transfer-*"):
             try:

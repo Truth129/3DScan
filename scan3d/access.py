@@ -37,6 +37,7 @@ class Rule:
 
 
 _REVISION = "/api/cases/{case_id}/revisions/{revision_id}"
+_REPORT = f"{_REVISION}/reports/{{report_id}}/{{analysis_id}}"
 _LICENSE = "/api/totalsegmentator/license"
 # Every route without {case_id}, by method and template. A {case_id} route needs an entry for an audit action or another kind.
 RULES = {
@@ -111,6 +112,12 @@ RULES = {
     ("GET", f"{_REVISION}/dicom-view-file"): Rule("case"),
     ("POST", f"{_REVISION}/dicom-view-file"): Rule("case", "export.view"),
     ("GET", f"{_REVISION}/dicom-view-file/{{export_id}}/view.dcm"): Rule("case", "export.view_file"),
+    # A report's DICOM series follows the view's rules: the archive for a delivery, the case for a file.
+    ("GET", f"{_REPORT}/dicom"): Rule("case_archive"),
+    ("POST", f"{_REPORT}/dicom"): Rule("case_archive", "export.report"),
+    ("GET", f"{_REPORT}/dicom-file"): Rule("case"),
+    ("POST", f"{_REPORT}/dicom-file"): Rule("case", "export.report"),
+    ("GET", f"{_REPORT}/dicom-file/{{export_id}}/report.zip"): Rule("case", "export.report_file"),
 }
 # These exist only in some configurations: FastAPI's pages with sign-in off, the build notice with no viewer built,
 # and People only with sign-in on.

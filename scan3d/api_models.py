@@ -199,6 +199,13 @@ class ReportStart(Input):
     """Empty: a report reads the revision's masks by their source task, so there is nothing to choose."""
 
 
+class ReportDicomExport(Input):
+    destination: str | None = Field(None, strict=True, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    resend: bool = Field(False, strict=True)
+    # "orthanc" archives or sends through the case's archive; "direct" sends with C-STORE from here.
+    delivery: Literal["orthanc", "direct"] = "orthanc"
+
+
 class ReportSegment(Input):
     inference_path: str | None = Field(default=None, max_length=32, pattern=ID_PATTERN)
 

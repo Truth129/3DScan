@@ -49,7 +49,8 @@ so a key, password or link code is never echoed.
   `SCAN3D_ALLOWED_HOSTS`.
 - **Private responses.** `/api/session`, `/api/session/redeem`, `/api/people`, `/api/people/*`,
   `/api/orthanc/*`, `/api/archive/*`, the license route, Delete forever, `.../dicom-seg`,
-  `.../dicom-view`, `.../dicom-view-file` and a prepared `segment.dcm` or `view.dcm` use
+  `.../dicom-view`, `.../dicom-view-file`, a report's `.../dicom` and `.../dicom-file`, and a
+  prepared `segment.dcm`, `view.dcm` or `report.zip` use
   `Cache-Control: no-store`, errors included. Any other `/api/` response without its own header
   uses `private, no-store`.
 - **Viewer data.** Volume chunks are gzip, keyed by content. Chunks, surfaces and `model.glb` use
@@ -114,7 +115,7 @@ the 401, and a signed-in one the other.
 | Admin            | `POST /api/cases/import-local`, `GET /api/storage`, `POST /api/storage/clear-caches`, `PUT`, `DELETE /api/totalsegmentator/license`, the [People routes](#people-routes) | 401, 403 `Administrator access is required`                          |
 | Archive          | `/api/orthanc/*` and `/api/archive/*`                                                                                                                                    | 401, 403 `This account cannot use the archive`                       |
 | Case             | Every route with a case ID in its path, for a case not in Trash                                                                                                          | 401, 404 `Case not found`                                            |
-| Case and archive | `GET`, `POST` of `/api/cases/{id}/orthanc-series`, `.../archive-series` and `.../dicom-view`                                                                             | 401, 404 `Case not found`, 403 `This account cannot use the archive` |
+| Case and archive | `GET`, `POST` of `/api/cases/{id}/orthanc-series`, `.../archive-series`, `.../dicom-view` and a report's `.../dicom`                                                     | 401, 404 `Case not found`, 403 `This account cannot use the archive` |
 | Trashed          | `POST /api/trash/{id}/restore`                                                                                                                                           | 401, 404 `Case not found`                                            |
 | Admin, in Trash  | `POST /api/trash/{id}/purge`                                                                                                                                             | 401, 403 `Administrator access is required`, 404 `Case not found`    |
 | Job              | `GET /api/jobs/{id}`, `GET .../measurements`, `POST .../cancel`                                                                                                          | 401, 404 `Job not found`                                             |
@@ -274,8 +275,10 @@ null for an empty mask. DICOM SEG structures also carry a `dicom_seg` provenance
   `scan3d include-all`), `review_predict`, `review_accept`, `orthanc_import`, `archive_import`
   (DICOMweb), `orthanc_export` (Orthanc SEG exports and every SEG file), `orthanc_roi_export`
   (OsiriX ROIs), `orthanc_view_export`, `view_file_export`, `archive_seg_export`,
-  `archive_view_export` (DICOMweb), `direct_seg_export`, `direct_view_export` (C-STORE),
-  `dicom_seg_import`, `coronary_analysis` or `report`.
+  `archive_view_export` (DICOMweb), `direct_seg_export`, `direct_view_export` (C-STORE), the
+  [report exports](#report-dicom-export) `orthanc_report_export`, `report_file_export`,
+  `archive_report_export` and `direct_report_export`, `dicom_seg_import`, `coronary_analysis` or
+  `report`.
   [ARCHITECTURE.md](ARCHITECTURE.md#jobs-and-lanes) lists the lanes.
 - `revision_id`: the new revision once committed, the exported one for an export, or the analysed
   one for a [coronary analysis](#coronary-analysis) or a [report](#measurement-reports), which
@@ -347,32 +350,35 @@ relationship}`.
 
 Revision routes below are relative to `/api/cases/{id}/revisions/{rid}`:
 
-| Method and path                                       | Purpose                                           | Candidate alias |
-| ----------------------------------------------------- | ------------------------------------------------- | --------------- |
-| `GET .../image-volume`, `.../{key}/chunks/{index}`    | Scalar descriptor and chunks (legacy `ct-volume`) | Yes             |
-| `GET .../mask-volume`, `.../{key}/chunks/{index}`     | Cropped mask and parent                           | Yes             |
-| `GET .../volume-mask`, `.../{key}/chunks/{index}`     | Display union                                     | Yes             |
-| `GET .../volume-labels`, `.../{key}/chunks/{index}`   | Display label union                               | Yes             |
-| `GET .../review-frame`                                | Exact slice with binary overlays                  | Yes             |
-| `GET .../probe`                                       | Voxel value at a RAS point                        | Yes             |
-| `GET .../model-manifest`                              | Per-structure surface URLs                        | If prepared     |
-| `GET .../surfaces/{key}.glb`                          | One structure's surface                           | If prepared     |
-| `GET .../model.glb`                                   | Combined surface model                            | No              |
-| `GET .../agreement`                                   | Agreement with model outputs                      | No              |
-| `GET`, `POST .../coronary-analysis`                   | Coronary analysis runs and start                  | No              |
-| `GET .../coronary-analysis/{analysis_id}`             | One coronary analysis result                      | No              |
-| `GET .../reports`, `GET`, `POST .../reports/{report}` | Measurement reports: status, runs and start       | No              |
-| `POST .../reports/{report}/segment`                   | Segment the tasks a report still needs            | No              |
-| `GET .../reports/{report}/{analysis_id}`              | One report result                                 | No              |
-| `GET .../reports/{report}/{analysis_id}/files/{name}` | One picture of a report result                    | No              |
-| `GET .../cinematic-reference`                         | Cardiac HU references                             | No              |
-| `GET .../slicer.zip`                                  | Slicer bundle                                     | No              |
-| `GET`, `POST .../export.html`                         | Offline HTML viewer                               | No              |
-| `GET`, `POST .../dicom-seg`                           | SEG and OsiriX ROI export                         | No              |
-| `GET .../dicom-seg/{export_id}/segment.dcm`           | Prepared SEG file                                 | No              |
-| `GET`, `POST .../dicom-view`                          | 3D view export status and start                   | No              |
-| `GET`, `POST .../dicom-view-file`                     | 3D view file status and start                     | No              |
-| `GET .../dicom-view-file/{export_id}/view.dcm`        | Prepared 3D view file                             | No              |
+| Method and path                                             | Purpose                                           | Candidate alias |
+| ----------------------------------------------------------- | ------------------------------------------------- | --------------- |
+| `GET .../image-volume`, `.../{key}/chunks/{index}`          | Scalar descriptor and chunks (legacy `ct-volume`) | Yes             |
+| `GET .../mask-volume`, `.../{key}/chunks/{index}`           | Cropped mask and parent                           | Yes             |
+| `GET .../volume-mask`, `.../{key}/chunks/{index}`           | Display union                                     | Yes             |
+| `GET .../volume-labels`, `.../{key}/chunks/{index}`         | Display label union                               | Yes             |
+| `GET .../review-frame`                                      | Exact slice with binary overlays                  | Yes             |
+| `GET .../probe`                                             | Voxel value at a RAS point                        | Yes             |
+| `GET .../model-manifest`                                    | Per-structure surface URLs                        | If prepared     |
+| `GET .../surfaces/{key}.glb`                                | One structure's surface                           | If prepared     |
+| `GET .../model.glb`                                         | Combined surface model                            | No              |
+| `GET .../agreement`                                         | Agreement with model outputs                      | No              |
+| `GET`, `POST .../coronary-analysis`                         | Coronary analysis runs and start                  | No              |
+| `GET .../coronary-analysis/{analysis_id}`                   | One coronary analysis result                      | No              |
+| `GET .../reports`, `GET`, `POST .../reports/{report}`       | Measurement reports: status, runs and start       | No              |
+| `POST .../reports/{report}/segment`                         | Segment the tasks a report still needs            | No              |
+| `GET .../reports/{report}/{analysis_id}`                    | One report result                                 | No              |
+| `GET .../reports/{report}/{analysis_id}/files/{name}`       | One picture of a report result                    | No              |
+| `GET .../cinematic-reference`                               | Cardiac HU references                             | No              |
+| `GET .../slicer.zip`                                        | Slicer bundle                                     | No              |
+| `GET`, `POST .../export.html`                               | Offline HTML viewer                               | No              |
+| `GET`, `POST .../dicom-seg`                                 | SEG and OsiriX ROI export                         | No              |
+| `GET .../dicom-seg/{export_id}/segment.dcm`                 | Prepared SEG file                                 | No              |
+| `GET`, `POST .../dicom-view`                                | 3D view export status and start                   | No              |
+| `GET`, `POST .../dicom-view-file`                           | 3D view file status and start                     | No              |
+| `GET .../dicom-view-file/{export_id}/view.dcm`              | Prepared 3D view file                             | No              |
+| `GET`, `POST .../reports/{report}/{analysis_id}/dicom`      | Report DICOM export status and start              | No              |
+| `GET`, `POST .../reports/{report}/{analysis_id}/dicom-file` | Report DICOM file status and start                | No              |
+| `GET .../{analysis_id}/dicom-file/{export_id}/report.zip`   | Prepared report DICOM file                        | No              |
 
 ## System routes
 
@@ -1515,6 +1521,28 @@ access, and works for any CT or classic MR prepared from DICOM, folder and ZIP i
 - **`GET .../dicom-view-file/{export_id}/view.dcm`** serves a completed file's verified bytes, or 404.
 - The encoding and identity rules are the ones above, with no archive checks. `result.dicom_view`
   adds `file: true`.
+
+### Report DICOM export
+
+A complete [report](#measurement-reports) run becomes a new series in the original study: image 1 a
+page of the result, image 2 its curved view (`cpr.png`) when the result lists one. The server draws
+the page and holds both images, so there is no upload and any retry reuses them. Routes are relative
+to `.../reports/{report}/{analysis_id}`, and each is 404 for a candidate alias or a run that is not
+complete.
+
+- **`GET .../dicom`** and **`POST .../dicom`** follow `dicom-view`, with a JSON body
+  `{destination?, resend?, delivery?: "direct"}`. They return an `orthanc_report_export`,
+  `archive_report_export` (DICOMweb case) or `direct_report_export` job, and list only this run's.
+- **`GET .../dicom-file`** and **`POST .../dicom-file`** (body `{}`) follow `dicom-view-file` and
+  return a `report_file_export` job.
+- **`GET .../dicom-file/{export_id}/report.zip`** serves a stored ZIP of `<report>-report-1.dcm` and
+  `-2.dcm`, each checked against its export, or 404.
+
+The page shows the result's tables as the panel's Copy table does, the notice, the engine and the
+revision, and no case name or patient detail. The instances follow the view's encoding with
+`SeriesNumber` 502, `SeriesDescription` `3DScan <report> report <rev8>` and `InstanceNumber` 1 and 2.
+The export is keyed on the result's key and both PNG hashes. `result.dicom_report` has the view's
+fields, with `instance_count` 2.
 
 ## DICOMweb archive export
 

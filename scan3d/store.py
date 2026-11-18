@@ -24,12 +24,12 @@ LANES = ("gpu", "cpu")
 # A reviewer is waiting on these; every other kind is queued batch work.
 INTERACTIVE_KINDS = frozenset({"review_predict", "review_accept"})
 # A send of these that Orthanc has started runs to its end, whatever happens here.
-OUTBOUND_KINDS = frozenset({"orthanc_export", "orthanc_view_export", "orthanc_roi_export"})
+OUTBOUND_KINDS = frozenset({"orthanc_export", "orthanc_view_export", "orthanc_roi_export", "orthanc_report_export"})
 # C-STORE from this workstation. A send that has begun runs to its end within its job.
-DIRECT_KINDS = frozenset({"direct_seg_export", "direct_view_export"})
+DIRECT_KINDS = frozenset({"direct_seg_export", "direct_view_export", "direct_report_export"})
 # Every kind an export manager runs and cancels. A file export sends nothing; an archive export
 # or a direct send finishes within its own job, so nothing continues after it stops.
-EXPORT_KINDS = OUTBOUND_KINDS | DIRECT_KINDS | {"view_file_export", "archive_seg_export", "archive_view_export"}
+EXPORT_KINDS = OUTBOUND_KINDS | DIRECT_KINDS | {"view_file_export", "archive_seg_export", "archive_view_export", "report_file_export", "archive_report_export"}
 
 
 def job_lane(job):
