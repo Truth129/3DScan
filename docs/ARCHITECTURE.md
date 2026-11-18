@@ -59,7 +59,7 @@ and complements a diagnostic viewer rather than replacing one.
 | `scan3d/agreement.py`, `portable_export.py`, `slicer_io.py`             | Agreement metrics, offline HTML, Slicer exchange        |
 | `scan3d/coronary.py`, `vessel_geometry.py`, `ffr_physics.py`            | Research CT-FFR job, centrelines and areas, pressure    |
 | `scan3d/lumen_ct.py`                                                    | Lumen mask widths corrected from the CT values          |
-| `scan3d/reports.py`, `aorta_report.py`, `report_worker.py`              | Measurement reports, their definitions and worker       |
+| `scan3d/reports.py`, `*_report.py`, `report_worker.py`                  | Measurement reports, their definitions and worker       |
 | `scan3d/orthanc*.py`, `dicom_*.py`, `osirix_roi*.py`                    | Orthanc connector, DICOM SEG and view, OsiriX ROIs      |
 | `scan3d/archive/`                                                       | DICOMweb client, imports, STOW exports, C-STORE sends   |
 | `web/src/App.vue`, `web/src/components/`, `web/src/lib/use-*.ts`        | Workspace shell, panels and composables                 |
@@ -449,30 +449,38 @@ Limits:
 Research use only. A report (`scan3d/reports.py`) is a recipe of TotalSegmentator tasks and a
 `report` job on the CPU lane that measures a saved revision's masks with TotalSegmentator's own
 report code. A corrected mask therefore gives corrected numbers. Adding a report is one
-`Definition` and one function in `report_worker.WORKERS`.
+`Definition` in its own module, registered in `reports._definitions`, and one function in
+`report_worker.WORKERS`. The reports are the aorta and the pulmonary arteries.
 
 1. A definition names its needs, each a structure `task:label` with whether it is required, and its
    recipe tasks. A need is present, missing (its task never ran on this revision's line of
-   `segmentation_runs`) or not found.
+   `segmentation_runs`, or a same-named segment of a task run after it may have replaced its mask)
+   or not found. `any_of` names needs of which one is enough; all of them count as required until
+   one is present.
 2. `POST .../segment` queues one `segment` job of the missing tasks. When it commits its revision,
    `Service._queue_report` queues the report there; a refusal leaves the segmentation done.
+   `reports.spare` first leaves out new structures the report does not read whose name another
+   task's segment already has, unless the revision holds their ID, so a recipe keeps other tasks'
+   masks, corrected ones included, that it does not measure.
 3. The job runs `python -P -m scan3d.report_worker` with `MPLBACKEND=Agg`, so the API process never
    imports upstream's report code or the PyTorch it pulls in. Its scratch is `work-<job>/` beside the
    result folders and goes when the job ends, or at the next start after a hard stop. Cancelling
    stops the child.
-4. The aorta worker crops the CT and masks to the aorta plus 30 mm on the CT's own voxel lattice and
-   writes them under upstream's file names, with empty masks for names the revision lacks. It then
-   calls upstream's functions in upstream's order, from loading the data through the curved view,
-   so the numbers are upstream's for the same masks. A test runs upstream's own generator on the
-   same folders and compares.
+4. Each worker crops the CT and masks to the measured vessel (the aorta or the pulmonary artery)
+   plus 30 mm on the CT's own voxel lattice and writes them under upstream's file names, with empty
+   masks for names the revision lacks. It then calls upstream's functions in upstream's order, so
+   the numbers are upstream's for the same masks. A test runs upstream's own generator on the same
+   folders and compares, for each report.
 5. Differences from upstream's command: no contrast phase model (it needs xgboost); a median
    aorta value under 100 HU counts as native. No 3D previews, HTML page or page frame around the
-   curved view, which need a display server and wkhtmltoimage. No usage statistics are sent.
+   curved view, which need a display server and wkhtmltoimage. The pulmonary report likewise
+   skips its 3D previews and HTML page. No usage statistics are sent.
 6. Upstream's landmark points are mapped through its grid's affine to RAS mm. Each landmark's outline
    is its cut plane's voxels projected into the plane, filled and cut by 72 rays from the centre.
 
 Sheared grids are refused, because upstream measures with per-axis voxel spacings. The folder's key
-covers the report code, the image, its grid, the masks and the versions of TotalSegmentator and the
+covers the report code (`reports.py`, `report_worker.py` and the report's own module), the image,
+its grid, the masks and the versions of TotalSegmentator and the
 numeric libraries. It sits in
 the case folder, so Trash, Delete forever and backups treat it as they treat coronary results, and
 Clear caches does not remove it. [API.md](API.md#measurement-reports) has the routes and the result.
@@ -623,7 +631,7 @@ study. `orthanc_view_exports.py` subclasses the SEG manager. The instance is a p
 of reference, and nothing measures from it.
 
 **Report export** puts a measurement report's page, drawn by `report_page.py`, and its curved view
-into one such series of two images, by the view's delivery (`report_exports.py`).
+when it has one into one such series, by the view's delivery (`report_exports.py`).
 
 **OsiriX ROI export** is a second format of SEG export, through Orthanc only. `osirix_roi.py` writes
 one native brush report per source slice that a selected mask touches, and `osirix_roi_exports.py`

@@ -6,7 +6,7 @@ this module says which masks it needs and turns upstream's centimetre values int
 
 from __future__ import annotations
 
-from .reports import Definition, Need
+from .reports import Definition, Need, area as _area, landmark, landmark_summary, mm as _mm, point as _point
 
 LANDMARKS = (
     (1, "annulus", "Annulus"),
@@ -30,25 +30,12 @@ SECTIONS = (
 )
 
 
-def _mm(cm):
-    # Upstream rounds centimetres to one decimal, so millimetres are whole: no precision is added.
-    return None if cm is None else float(round(cm * 10))
-
-
-def _area(cm2):
-    return None if cm2 is None else round(float(cm2), 1)
-
-
-def _lumen(landmark, suffix):
+def _lumen(upstream, suffix):
     return {
-        "diameter_mm": _mm(landmark[f"diameter_{suffix}"]),
-        "perpendicular_mm": _mm(landmark[f"diameter_{suffix}_pd"]),
-        "area_cm2": _area(landmark[f"area_{suffix}"]),
+        "diameter_mm": _mm(upstream[f"diameter_{suffix}"]),
+        "perpendicular_mm": _mm(upstream[f"diameter_{suffix}_pd"]),
+        "area_cm2": _area(upstream[f"area_{suffix}"]),
     }
-
-
-def _point(values):
-    return None if values is None else [round(float(value), 2) for value in values]
 
 
 def shape(raw):
@@ -56,31 +43,10 @@ def shape(raw):
     dissection = bool(raw["dissection"])
     landmarks = []
     for number, identifier, name in LANDMARKS:
-        upstream = raw["upstream"]["landmarks"][str(number)]
-        geometry = raw["geometry"].get(str(number))
-        entry = {"number": number, "id": identifier, "name": name, "available": False, "unavailable_reason": None}
-        entry.update(dict.fromkeys(("centre", "normal", "diameter_mm", "perpendicular_mm", "area_cm2", "ends", "perpendicular_ends", "outline")))
-        entry.update(true_lumen=None, false_lumen=None, picture=None)
-        if geometry is None:
-            missing = raw["missing"].get(str(number)) or []
-            entry["unavailable_reason"] = f"Not measured: {' and '.join(missing)}" if missing else "Could not be placed on the centreline"
-        elif upstream.get("start") is None or not upstream.get("diameter"):
-            entry["unavailable_reason"] = "No cross-section of the aorta was found here"
-        else:
-            entry.update(
-                available=True,
-                centre=_point(geometry["centre"]),
-                normal=[round(float(value), 4) for value in geometry["normal"]],
-                diameter_mm=_mm(upstream["diameter"]),
-                perpendicular_mm=_mm(upstream["diameter_pd"]),
-                area_cm2=_area(upstream["area"]),
-                ends=[_point(upstream["start"]), _point(upstream["end"])],
-                perpendicular_ends=[_point(upstream["start_pd"]), _point(upstream["end_pd"])] if upstream.get("start_pd") else None,
-                outline=[_point(point) for point in geometry["outline"]],
-                picture=geometry.get("picture"),
-            )
-            if dissection:
-                entry.update(true_lumen=_lumen(upstream, "tl"), false_lumen=_lumen(upstream, "fl"))
+        entry = {**landmark(number, identifier, name, raw, "aorta"), "true_lumen": None, "false_lumen": None}
+        if entry["available"] and dissection:
+            upstream = raw["upstream"]["landmarks"][str(number)]
+            entry.update(true_lumen=_lumen(upstream, "tl"), false_lumen=_lumen(upstream, "fl"))
         landmarks.append(entry)
     sections = []
     for identifier, name in SECTIONS:
@@ -109,14 +75,7 @@ def shape(raw):
 
 
 def summary(result):
-    measured = [entry for entry in result["landmarks"] if entry["available"]]
-    widest = max(measured, key=lambda entry: entry["diameter_mm"], default=None)
-    return {
-        "max_diameter_mm": widest and widest["diameter_mm"],
-        "max_landmark": widest and widest["number"],
-        "landmarks_available": len(measured),
-        "landmarks_total": len(LANDMARKS),
-    }
+    return landmark_summary(result, len(LANDMARKS))
 
 
 DEFINITION = Definition(

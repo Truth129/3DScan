@@ -27,7 +27,7 @@ from .imaging import _binary, _image
 
 NATIVE_HU = 100  # median CT value in the aorta below which the scan counts as native, as no contrast reached it
 FALSE_LUMEN_ML = 5.0  # the dissection model leaves stray false lumen under 1 ml on normal aortas; a real one is far larger
-MARGIN_MM = 30.0  # kept around the aorta; upstream crops its own grid to the aorta plus 20 mm
+MARGIN_MM = 30.0  # kept around the measured vessel; upstream crops its own grid to it plus 20 mm
 RING = 72  # angle bins of a cross-section's outline
 # Upstream's file names, and the folder each is read from.
 _TOTALSEG = ("aorta", "brachiocephalic_trunk", "subclavian_artery_left", "celiac_trunk", "vertebrae_T12", "iliac_artery_right")
@@ -43,6 +43,15 @@ _STRUCTURES = {
     "celiac": "celiac trunk",
     "iliac": "right iliac artery",
 }
+# The pulmonary report's landmark masks by upstream's file name, in its landmark order, as a reason names them.
+_PULMONARY = {
+    "pul_annulus": "pulmonary valve annulus",
+    "pul_sinotubular_junction": "pulmonary sinotubular junction",
+    "pul_bifurcation": "pulmonary bifurcation",
+    "pul_left_start": "start of the left pulmonary artery",
+    "pul_right_start": "start of the right pulmonary artery",
+}
+NO_LANDMARKS = "None of the five pulmonary landmarks was found"
 # Upstream's errors, said as what the reader can act on.
 _FAILURES = {
     "annulus mask is empty": "The aortic annulus mask is empty near the aorta",
@@ -141,22 +150,25 @@ def _ring(points, centre, normal, voxel):
     return np.array(ring)
 
 
-def _inputs(request, work):
-    """Upstream's two mask folders and the CT, cropped from the CT's own grid around the aorta.
+def _crop(request, work, anchor, empty):
+    """The CT cropped from its own grid to the `anchor` need's mask plus MARGIN_MM, saved as
+    `work/ct.nii.gz`, with the cropped CT values, the anchor's mask on the crop and a writer that
+    saves a mask by upstream's name on the same crop.
 
     The crop keeps the CT's voxel lattice, so upstream resamples onto the same points it would from
-    the whole scan; it only saves reading and filtering the rest of the body.
+    the whole scan; it only saves reading and filtering the rest of the body. A name the request
+    lacks is written as an empty mask, since upstream reads a file for every name.
     """
     image, affine = _image(Path(request["ct"]))
     masks = request["masks"]
-    aorta, _, _ = _binary(Path(masks["aorta"]["path"]), image, affine)
-    if not aorta.any():
-        raise Failure("The aorta mask is empty")
+    vessel, _, _ = _binary(Path(masks[anchor]["path"]), image, affine)
+    if not vessel.any():
+        raise Failure(empty)
     spacing = np.linalg.norm(affine[:3, :3], axis=0)
     margin = np.ceil(MARGIN_MM / spacing).astype(int) + 1
-    found = np.argwhere(aorta)
+    found = np.argwhere(vessel)
     low = np.maximum(found.min(0) - margin, 0)
-    high = np.minimum(found.max(0) + margin + 1, aorta.shape)
+    high = np.minimum(found.max(0) + margin + 1, vessel.shape)
     window = tuple(slice(int(a), int(b)) for a, b in zip(low, high))
     cropped = affine.copy()
     cropped[:3, 3] = _points(affine, [low])[0]
@@ -167,37 +179,60 @@ def _inputs(request, work):
         nib.save(output, path)
         return path
 
-    totalseg, details, scratch = work / "totalseg", work / "details", work / "scratch"
-    for folder in (totalseg, details, scratch):
-        folder.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
     ct = np.asarray(image.dataobj[window], dtype=np.float64)
     whole = np.array_equal(ct, np.round(ct)) and ct.min() >= -32768 and ct.max() <= 32767
     ct_path = save(ct.astype(np.int16 if whole else np.float32), work / "ct.nii.gz")
-    median = float(np.median(ct[aorta[window]]))
-    del ct
 
     labels = {need["label"]: Path(need["path"]) for need in masks.values()}
+    stand_in = None
+
+    def write(name, target):
+        nonlocal stand_in
+        if name in labels:
+            values = vessel if name == masks[anchor]["label"] else _binary(labels[name], image, affine)[0]
+            save(np.asarray(values[window], dtype=np.uint8), target)
+        elif stand_in is None:
+            stand_in = save(np.zeros(tuple(high - low), dtype=np.uint8), target)
+        else:
+            try:
+                os.link(stand_in, target)
+            except OSError:
+                shutil.copyfile(stand_in, target)
+
+    return ct_path, ct, vessel[window], write
+
+
+def _inputs(request, work):
+    """Upstream's two mask folders and the CT, cropped from the CT's own grid around the aorta."""
+    ct_path, ct, aorta, write = _crop(request, work, "aorta", "The aorta mask is empty")
+    median = float(np.median(ct[aorta]))
+    del ct
+    totalseg, details, scratch = work / "totalseg", work / "details", work / "scratch"
+    for folder in (totalseg, details, scratch):
+        folder.mkdir(parents=True, exist_ok=True)
+
+    labels = {need["label"] for need in request["masks"].values()}
     # A revision holds no empty mask, so one lumen can come without the other. Upstream's own run
-    # always has both files, so the absent one is written empty below.
+    # always has both files, so the absent one is written empty.
     names = [*_TOTALSEG, *_DETAILS, *(_LUMENS if any(name in labels for name in _LUMENS) else ())]
     from totalsegmentator.aorta_report.constants import VESSELS_TO_PLOT
 
     # Upstream reads the vessels it draws in previews we never make; empty masks stand in for them.
     names += [name for name in VESSELS_TO_PLOT if name not in names]
-    empty = None
     for name in names:
-        target = (details if name in _DETAILS or name in _LUMENS else totalseg) / f"{name}.nii.gz"
-        if name in labels:
-            values = aorta if name == "aorta" else _binary(labels[name], image, affine)[0]
-            save(np.asarray(values[window], dtype=np.uint8), target)
-        elif empty is None:
-            empty = save(np.zeros(tuple(high - low), dtype=np.uint8), target)
-        else:
-            try:
-                os.link(empty, target)
-            except OSError:
-                shutil.copyfile(empty, target)
+        write(name, (details if name in _DETAILS or name in _LUMENS else totalseg) / f"{name}.nii.gz")
     return ct_path, totalseg, details, scratch, median
+
+
+def _logger(name):
+    """Upstream's logger for one run, its WARNING lines collected and everything else in the log."""
+    warnings = _Warnings()
+    logger = logging.getLogger(f"scan3d.report_worker.{name}")
+    logger.handlers[:] = [warnings, logging.StreamHandler(sys.stderr)]
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    return logger, warnings
 
 
 def aorta(request, progress):
@@ -208,11 +243,7 @@ def aorta(request, progress):
     ct_path, totalseg, details, scratch, median = _inputs(request, work)
     native = median < NATIVE_HU
 
-    warnings = _Warnings()
-    logger = logging.getLogger("scan3d.report_worker.aorta")
-    logger.handlers[:] = [warnings, logging.StreamHandler(sys.stderr)]
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
+    logger, warnings = _logger("aorta")
     try:
         from totalsegmentator.aorta_report import VERSION, plotting
         from totalsegmentator.aorta_report.constants import LANDMARK_DEPENDENCIES, STRUCTURE_DEFINITIONS
@@ -352,7 +383,96 @@ def aorta(request, progress):
     }
 
 
-WORKERS = {"aorta": aorta}
+def pulmonary(request, progress):
+    """TotalSegmentator's pulmonary artery report from "Loading data" through its results, in upstream's
+    order, without the 3D previews and HTML page, which change no number."""
+    work, output = Path(request["work"]), Path(request["output"])
+    output.mkdir(parents=True, exist_ok=True)
+    given = {need["label"] for need in request["masks"].values()}
+    if not given & set(_PULMONARY):
+        raise Failure(NO_LANDMARKS)
+    progress("Cropping the scan")
+    ct_path, ct, _, write = _crop(request, work, "pulmonary_artery", "The pulmonary artery mask is empty")
+    del ct
+    totalseg, details, scratch = work / "totalseg", work / "details", work / "scratch"
+    for folder in (totalseg, details, scratch):
+        folder.mkdir(parents=True, exist_ok=True)
+    write("pulmonary_artery", totalseg / "pulmonary_artery.nii.gz")
+    # Upstream wants all five landmark files; one the revision lacks is written empty, which it reads
+    # as an empty landmark.
+    for name in _PULMONARY:
+        write(name, details / f"{name}.nii.gz")
+
+    logger, warnings = _logger("pulmonary")
+    try:
+        from totalsegmentator.aorta_report.geometry import find_center, find_mask_normal
+        from totalsegmentator.pulmonary_report import VERSION
+        from totalsegmentator.pulmonary_report.measurements import create_landmark_planes, measure_landmarks
+        from totalsegmentator.pulmonary_report.pipeline import _load_report_data
+        from totalsegmentator.pulmonary_report.rendering import prepare_results
+    except ImportError as error:
+        raise Failure(f"TotalSegmentator's pulmonary artery report could not load: {error}") from error
+
+    with redirect_stdout(_Tee(sys.stdout, warnings)):
+        progress("Loading masks")
+        data = _load_report_data(ct_path, totalseg, details, "pulmonary_artery.nii.gz", scratch, logger, False)
+        landmarks = data["landmarks"]
+        # Read before the planes, which also mark empty a landmark whose plane misses the artery.
+        unread = {number for number, landmark in landmarks.items() if landmark["empty"]}
+        progress("Measuring landmarks")
+        max_diameter = create_landmark_planes(landmarks, data["pulmonary_artery"], data["spacing"], logger)
+        measure_landmarks(landmarks, data["ct_img"], data["affine"], max_diameter, scratch, logger, False)
+
+    progress("Saving")
+    affine = np.asarray(data["affine"], dtype=float)
+    # Normals point away from the pulmonary valve, as the aorta's point away from the heart: from the
+    # annulus landmark's centre when it has a mask, else from the artery mask's centre, which leaves
+    # the trunk's normals a fixed but arbitrary sign. The annulus's own normal points into the artery.
+    artery = _points(affine, [find_center(data["pulmonary_artery"])])[0]
+    valve = artery if 1 in unread else _points(affine, [find_center(landmarks[1]["data"])])[0]
+    files, geometry, missing = [], {}, {}
+    for number, landmark in sorted(landmarks.items()):
+        name = landmark["name"]
+        if landmark["empty"]:
+            if name not in given:
+                missing[number] = [f"the {_PULMONARY[name]} was not found"]
+            elif number in unread:
+                missing[number] = [f"the {_PULMONARY[name]} mask is empty near the pulmonary artery"]
+            else:
+                missing[number] = ["no cross-section of the pulmonary artery was found there"]
+            continue
+        centre = _points(affine, [landmark["cl_point"]])[0]
+        # The normal upstream cut the artery with; landmark 1's plane is its own mask, whose normal is the same.
+        normal = affine[:3, :3] @ np.asarray(find_mask_normal(landmark["data"]), dtype=float)
+        normal /= np.linalg.norm(normal)
+        if normal @ (artery - centre if number == 1 else centre - valve) < 0:
+            normal = -normal
+        voxels = np.argwhere(landmark["roi"])
+        outline = _ring(_points(affine, voxels), centre, normal, float(min(data["spacing"])))
+        geometry[number] = {"centre": centre.tolist(), "normal": normal.tolist(), "outline": outline.tolist()}
+        picture = Path(landmark.get("plane_img") or "")
+        if picture.is_file():
+            shutil.copyfile(picture, output / f"plane-{number}.png")
+            geometry[number]["picture"] = f"plane-{number}.png"
+            files.append(f"plane-{number}.png")
+    results = prepare_results(landmarks, {})
+    return {
+        "engine_version": metadata.version("TotalSegmentator"),
+        "report_version": VERSION,
+        # A landmark whose plane missed the artery keeps its empty plane array; only the numbers are wanted.
+        "upstream": _plain({"landmarks": {number: _numbers(landmark) for number, landmark in results["landmarks"].items()}}),
+        "geometry": {str(number): value for number, value in geometry.items()},
+        "missing": {str(number): value for number, value in missing.items()},
+        "warnings": warnings.lines,
+        "files": files,
+    }
+
+
+def _numbers(landmark):
+    return {key: value for key, value in landmark.items() if key != "roi"}
+
+
+WORKERS = {"aorta": aorta, "pulmonary": pulmonary}
 
 
 def run(request):

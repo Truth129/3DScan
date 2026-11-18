@@ -18,12 +18,15 @@ from scan3d.store import identifier
 SHAPE = (16, 16, 16)
 GRID = np.diag([1.5, 1.5, 2.0, 1.0])
 GRID[:3, 3] = (-10.0, 20.0, -30.0)
-# What each recipe task marks on the fake engine: the aortic dissection model finds no lumens.
+# What each recipe task marks on the fake engine: the aortic dissection model finds no lumens, and
+# the pulmonary landmarks model finds nothing unless a test says otherwise.
 OUTPUTS = {
     "total": {"aorta": (2, 9), "brachiocephalic_trunk": (9, 11), "subclavian_artery_left": (9, 12), "vertebrae_T12": (12, 14), "iliac_artery_right": (1, 3)},
     "aorta_annulus": {"annulus_proper": (4, 5), "sinotubular_junction": (6, 7)},
     "renal_arteries": {"celiac_trunk": (5, 6)},
     "aortic_dissection": {},
+    "heartchambers_highres": {"pulmonary_artery": (2, 12)},
+    "pulmonary_artery_landmarks": {},
 }
 PNG = b"\x89PNG\r\n\x1a\n synthetic"
 
@@ -50,6 +53,38 @@ def canned(request):
         "centreline": [[16, 0, 0], [16, 0, -1]],
         "warnings": ["Sinotub. junc. is empty!"],
         "files": ["cpr.png", "plane-1.png"],
+    }
+
+
+def canned_pulmonary(request):
+    """The pulmonary worker's output for one measured landmark, the bifurcation, and four it could not measure."""
+    out = Path(request["output"])
+    out.mkdir(parents=True)
+    (out / "plane-3.png").write_bytes(PNG)
+    measured = {
+        "name": "bifurcation",
+        "diameter": 2.6,
+        "diameter_pd": 2.5,
+        "area": 5.0,
+        "start": [0, 0, 0],
+        "end": [26, 0, 0],
+        "start_pd": [13, -12.5, 0],
+        "end_pd": [13, 12.5, 0],
+    }
+    empty = dict.fromkeys(("area", "diameter", "diameter_pd", "start", "end", "start_pd", "end_pd"))
+    return {
+        "engine_version": "2.18.0",
+        "report_version": "0.2.1",
+        "upstream": {"landmarks": {**{str(n): empty for n in (1, 2, 4, 5)}, "3": measured}},
+        "geometry": {"3": {"centre": [13, 0, 0], "normal": [0, 0, 1], "outline": [[0, 0, 0], [26, 0, 0], [13, 13, 0]], "picture": "plane-3.png"}},
+        "missing": {
+            "1": ["the pulmonary valve annulus was not found"],
+            "2": ["the pulmonary sinotubular junction was not found"],
+            "4": ["no cross-section of the pulmonary artery was found there"],
+            "5": ["the start of the right pulmonary artery was not found"],
+        },
+        "warnings": ["pul_annulus is empty!"],
+        "files": ["plane-3.png"],
     }
 
 
@@ -81,7 +116,7 @@ def rig(tmp_path, monkeypatch):
 
     def launch(service, job, request, work):
         launched.append(request)
-        return canned(request)
+        return {"aorta": canned, "pulmonary": canned_pulmonary}[request["report"]](request)
 
     monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
     monkeypatch.setattr(segmentation, "segment", segment)
@@ -98,6 +133,19 @@ def rig(tmp_path, monkeypatch):
     return TestClient(app, base_url="http://127.0.0.1"), service, case["id"], image["id"], launched
 
 
+def new_image(service, title):
+    """Another image-only CT case on the rig's service."""
+    case = service.new_case(title)
+    source = service.store.case_dir(case["id"]) / "converted"
+    source.mkdir()
+    ct = nib.Nifti1Image(np.full(SHAPE, 40, np.int16), GRID)
+    ct.header.set_xyzt_units("mm")
+    nib.save(ct, source / "reference.nii.gz")
+    image = service.build_ct_revision(case["id"], source / "reference.nii.gz")
+    service.store.commit_revision(image)
+    return case, image
+
+
 def run(service, job_id, lane):
     claimed = service.store.claim(lane)
     assert claimed and claimed["id"] == job_id
@@ -110,7 +158,9 @@ def run(service, job_id, lane):
 def test_the_recipe_segments_then_measures_and_reuses_the_run(rig):
     http, service, case_id, image_id, launched = rig
     base = f"/api/cases/{case_id}/revisions/{image_id}/reports"
-    (status,) = http.get(base).json()["reports"]
+    statuses = http.get(base).json()["reports"]
+    assert [status["id"] for status in statuses] == ["aorta", "pulmonary"]
+    status = statuses[0]
     assert (status["id"], status["available"], status["ready"], status["can_segment"]) == ("aorta", True, False, True)
     assert {need["state"] for need in status["needs"]} == {"missing"}
     assert [task["id"] for task in status["missing_tasks"]] == ["total", "aorta_annulus", "renal_arteries", "aortic_dissection"]
@@ -214,6 +264,9 @@ def test_a_lost_aorta_offers_no_segmentation_and_a_replaced_one_is_segmented_aga
     monkeypatch.setitem(OUTPUTS, "heartchambers_highres", {"aorta": (2, 9)})
     revision_id = run(service, service.segment_case(case_id, revision_id, tasks=list(reports.definition("aorta").recipe))["id"], "gpu")["revision_id"]
     revision_id = run(service, service.segment_case(case_id, revision_id, task="heartchambers_highres")["id"], "gpu")["revision_id"]
+    revision = service.store.revision(case_id, revision_id)
+    ids = {structure["id"] for structure in revision["structures"]}
+    assert "total:aorta" not in ids and "heartchambers_highres:aorta" in ids and "spared" not in revision["operation"]
     status = http.get(f"{base}/{revision_id}/reports/aorta").json()["report"]
     assert {need["id"]: need["state"] for need in status["needs"]}["aorta"] == "missing"
     assert [task["id"] for task in status["missing_tasks"]] == ["total"] and status["can_segment"]
@@ -246,3 +299,152 @@ def test_a_sheared_grid_is_not_measured(rig):
     assert not status["can_segment"]
     with pytest.raises(ValueError, match="sheared"):
         reports.start(service, case["id"], image["id"], "aorta")
+
+
+def test_the_pulmonary_report_needs_one_landmark(rig, monkeypatch):
+    http, service, case_id, image_id, launched = rig
+    base = f"/api/cases/{case_id}/revisions"
+    status = http.get(f"{base}/{image_id}/reports/pulmonary").json()["report"]
+    assert (status["available"], status["ready"], status["can_segment"], status["reason"]) == (True, False, True, None)
+    # Until a landmark is present, each of the five is required.
+    assert [(need["id"], need["required"], need["state"]) for need in status["needs"]] == [
+        (need.id, True, "missing") for need in reports.definition("pulmonary").needs
+    ]
+    assert [(task["id"], task["license_required"]) for task in status["missing_tasks"]] == [
+        ("heartchambers_highres", True),
+        ("pulmonary_artery_landmarks", True),
+    ]
+
+    # The landmarks model ran and found none: the segmentation is saved, and no report follows.
+    revision_id = run(service, http.post(f"{base}/{image_id}/reports/pulmonary/segment", json={}).json()["id"], "gpu")["revision_id"]
+    assert not [job for job in service.store.list("jobs", case_id) if job["kind"] == "report"]
+    status = http.get(f"{base}/{revision_id}/reports/pulmonary").json()["report"]
+    assert not status["ready"] and not status["can_segment"] and status["reason"] == "None of the five pulmonary landmarks was found"
+    refused = http.post(f"{base}/{revision_id}/reports/pulmonary", json={})
+    assert refused.status_code == 400 and refused.json()["detail"] == "None of the five pulmonary landmarks was found"
+
+    # One landmark is enough, and the rest are no longer required.
+    monkeypatch.setitem(OUTPUTS, "pulmonary_artery_landmarks", {"pul_bifurcation": (6, 7)})
+    revision_id = run(service, service.segment_case(case_id, revision_id, task="pulmonary_artery_landmarks")["id"], "gpu")["revision_id"]
+    status = http.get(f"{base}/{revision_id}/reports/pulmonary").json()["report"]
+    assert status["ready"] and status["reason"] is None
+    assert {need["id"]: (need["required"], need["state"]) for need in status["needs"]} == {
+        "pulmonary_artery": (True, "present"),
+        "pul_annulus": (False, "not_found"),
+        "pul_sinotubular_junction": (False, "not_found"),
+        "pul_bifurcation": (False, "present"),
+        "pul_left_start": (False, "not_found"),
+        "pul_right_start": (False, "not_found"),
+    }
+    job = http.post(f"{base}/{revision_id}/reports/pulmonary", json={}).json()
+    run(service, job["id"], "cpu")
+    assert sorted(launched[0]["masks"]) == ["pul_bifurcation", "pulmonary_artery"]
+
+    (row,) = http.get(f"{base}/{revision_id}/reports/pulmonary").json()["analyses"]
+    assert row["summary"] == {"max_diameter_mm": 26.0, "max_landmark": 3, "landmarks_available": 1, "landmarks_total": 5}
+    result = http.get(f"{base}/{revision_id}/reports/pulmonary/{job['id']}").json()
+    assert (result["report"], result["files"], result["warnings"]) == ("pulmonary", ["plane-3.png"], ["pul_annulus is empty!"])
+    assert not {"sections", "centreline", "contrast", "dissection"} & set(result)
+    fields = ["number", "id", "name", "available", "unavailable_reason", "centre", "normal", "diameter_mm", "perpendicular_mm", "area_cm2"]
+    fields += ["ends", "perpendicular_ends", "outline", "picture"]
+    assert all(sorted(landmark) == sorted(fields) for landmark in result["landmarks"])
+    assert [landmark["id"] for landmark in result["landmarks"]] == ["proximal_main", "sinotubular_junction", "bifurcation", "left", "right"]
+    annulus, _, bifurcation, left, _ = result["landmarks"]
+    assert (bifurcation["diameter_mm"], bifurcation["perpendicular_mm"], bifurcation["area_cm2"], bifurcation["picture"]) == (26.0, 25.0, 5.0, "plane-3.png")
+    assert bifurcation["ends"] == [[0, 0, 0], [26, 0, 0]] and bifurcation["normal"] == [0, 0, 1]
+    assert annulus["unavailable_reason"] == "Not measured: the pulmonary valve annulus was not found" and annulus["diameter_mm"] is None
+    assert not left["available"] and left["unavailable_reason"] == "Not measured: no cross-section of the pulmonary artery was found there"
+    assert http.get(f"{base}/{revision_id}/reports/pulmonary/{job['id']}/files/plane-3.png").content == PNG
+
+
+def test_a_reports_segmentation_spares_segments_it_does_not_read(rig, monkeypatch):
+    http, service, case_id, image_id, _ = rig
+    # TotalSegmentator's own class names: both pulmonary tasks also mark an aorta structure.
+    heart = ("heart_myocardium", "heart_atrium_left", "heart_ventricle_left", "heart_atrium_right", "heart_ventricle_right")
+    monkeypatch.setitem(OUTPUTS, "heartchambers_highres", {**dict.fromkeys(heart, (4, 6)), "aorta": (3, 8), "pulmonary_artery": (2, 12)})
+    landmarks = ("annulus", "sinotubular_junction", "pul_annulus", "pul_sinotubular_junction", "pul_bifurcation", "pul_left_start", "pul_right_start")
+    monkeypatch.setitem(OUTPUTS, "pulmonary_artery_landmarks", dict.fromkeys(landmarks, (6, 7)))
+
+    def segment_for(case, revision_id, report_id):
+        job = http.post(f"/api/cases/{case}/revisions/{revision_id}/reports/{report_id}/segment", json={}).json()
+        return service.store.revision(case, run(service, job["id"], "gpu")["revision_id"])
+
+    def state(case, revision_id, report_id):
+        return http.get(f"/api/cases/{case}/revisions/{revision_id}/reports/{report_id}").json()["report"]
+
+    def masks(revision, *ids):
+        structures = {structure["id"]: structure for structure in revision["structures"]}
+        return [hashlib.sha256(Path(structures[sid]["mask_file"]).read_bytes()).hexdigest() for sid in ids]
+
+    # The aorta's recipe, then the pulmonary arteries': the aorta report keeps its masks.
+    first = segment_for(case_id, image_id, "aorta")
+    second = segment_for(case_id, first["id"], "pulmonary")
+    ids = {structure["id"] for structure in second["structures"]}
+    assert "heartchambers_highres:aorta" not in ids and {f"heartchambers_highres:{label}" for label in heart} <= ids
+    assert second["operation"]["spared"] == ["heartchambers_highres:aorta", "pulmonary_artery_landmarks:sinotubular_junction"]
+    kept = ("total:aorta", "aorta_annulus:sinotubular_junction")
+    assert masks(second, *kept) == masks(first, *kept)
+    assert state(case_id, second["id"], "aorta")["ready"] and state(case_id, second["id"], "pulmonary")["ready"]
+
+    # The other order: the aorta's recipe reads total:aorta, which replaces the heart chambers' aorta as before.
+    case, image = new_image(service, "Synthetic reports in the other order")
+    first = segment_for(case["id"], image["id"], "pulmonary")
+    second = segment_for(case["id"], first["id"], "aorta")
+    assert "heartchambers_highres:aorta" not in {structure["id"] for structure in second["structures"]} and "spared" not in second["operation"]
+    assert state(case["id"], second["id"], "aorta")["ready"] and state(case["id"], second["id"], "pulmonary")["ready"]
+
+
+def test_a_need_whose_task_found_nothing_is_offered_at_most_once(rig, monkeypatch):
+    http, service, case_id, image_id, _ = rig
+    monkeypatch.setitem(OUTPUTS, "aorta_annulus", {"annulus_proper": (4, 5)})
+    monkeypatch.setitem(OUTPUTS, "pulmonary_artery_landmarks", {"sinotubular_junction": (6, 7)})
+
+    def segment_for(case, revision_id, report_id):
+        job = http.post(f"/api/cases/{case}/revisions/{revision_id}/reports/{report_id}/segment", json={}).json()
+        return run(service, job["id"], "gpu")["revision_id"]
+
+    def junction(case, revision_id):
+        status = http.get(f"/api/cases/{case}/revisions/{revision_id}/reports/aorta").json()["report"]
+        return {need["id"]: need["state"] for need in status["needs"]}["sinotubular_junction"], [task["id"] for task in status["missing_tasks"]]
+
+    # The pulmonary landmarks' junction, made after Aortic annulus found none, may have taken its mask: offered once.
+    revision_id = segment_for(case_id, segment_for(case_id, image_id, "aorta"), "pulmonary")
+    assert junction(case_id, revision_id) == ("missing", ["aorta_annulus"])
+    # Aortic annulus ran last and found none again.
+    assert junction(case_id, segment_for(case_id, revision_id, "aorta")) == ("not_found", [])
+
+    # The other order: Aortic annulus ran after the landmarks and found none.
+    case, image = new_image(service, "Synthetic junction in the other order")
+    assert junction(case["id"], segment_for(case["id"], segment_for(case["id"], image["id"], "pulmonary"), "aorta")) == ("not_found", [])
+
+
+def test_a_reports_segmentation_keeps_a_task_output_beside_a_hand_drawn_namesake(rig, monkeypatch):
+    http, service, case_id, image_id, _ = rig
+    monkeypatch.setitem(OUTPUTS, "total", {**OUTPUTS["total"], "liver": (1, 3)})
+    monkeypatch.setitem(OUTPUTS, "heartchambers_highres", {"aorta": (2, 9)})
+    first = service.store.revision(case_id, run(service, service.segment_case(case_id, image_id, task="total")["id"], "gpu")["revision_id"])
+    liver = next(structure for structure in first["structures"] if structure["id"] == "total:liver")
+    drawn = service.build_revision(
+        case_id,
+        Path(first["ct_file"]),
+        [*first["structures"], {**liver, "id": "custom:liver", "task": "custom", "name": "Liver"}],
+        source="interactive_correction",
+        parent=first["id"],
+        acquisition=first["acquisition"],
+        inference_manifest=first["inference_manifest"],
+    )
+    service.store.commit_revision(drawn)
+    # An ordinary Heart chambers run takes total:aorta, so the aorta's recipe runs Whole body again.
+    revision_id = run(service, service.segment_case(case_id, drawn["id"], task="heartchambers_highres")["id"], "gpu")["revision_id"]
+    job = http.post(f"/api/cases/{case_id}/revisions/{revision_id}/reports/aorta/segment", json={}).json()
+    revision = service.store.revision(case_id, run(service, job["id"], "gpu")["revision_id"])
+    ids = {structure["id"] for structure in revision["structures"]}
+    assert {"total:liver", "total:aorta"} <= ids and "total:liver" not in revision["operation"].get("spared", [])
+
+
+def test_each_reports_key_covers_its_own_definition_module():
+    def digests(*names):
+        return [hashlib.sha256((Path(reports.__file__).parent / name).read_bytes()).hexdigest() for name in names]
+
+    assert reports._code("aorta") == digests("reports.py", "report_worker.py", "aorta_report.py")
+    assert reports._code("pulmonary") == digests("reports.py", "report_worker.py", "pulmonary_report.py")

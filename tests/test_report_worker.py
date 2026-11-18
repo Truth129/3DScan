@@ -1,16 +1,21 @@
-"""TotalSegmentator's aorta report measuring a synthetic aorta of known width, on a straight and an oblique grid."""
+"""TotalSegmentator's aorta and pulmonary artery reports measuring synthetic vessels of known width, on a
+straight and an oblique grid."""
 
+import contextlib
 import json
 import re
 from pathlib import Path
+import sys
+import types
 
 import nibabel as nib
 import numpy as np
 import pytest
 
 pytest.importorskip("totalsegmentator.aorta_report.pipeline")
+pytest.importorskip("totalsegmentator.pulmonary_report.pipeline")
 
-from scan3d import report_worker  # noqa: E402
+from scan3d import pulmonary_report, report_worker  # noqa: E402
 
 RADIUS = 8.0  # mm; the tube is 16 mm across everywhere
 # Upstream dilates each cut plane by one 0.8 mm voxel before measuring and rounds to 1 mm, so its
@@ -168,3 +173,122 @@ def test_a_false_lumen_counts_as_a_dissection_only_from_5_ml(tmp_path, bottom, d
     sentence = r"A false lumen of [\d.]+ ml was found, too small to count as a dissection \(under 5 ml\)\."
     small = [line for line in raw["warnings"] if re.fullmatch(sentence, line)]
     assert raw["dissection"] is dissection and len(small) == (0 if dissection else 1), raw["warnings"]
+
+
+# The pulmonary phantom, in its own 1 mm frame: x left-right, y front-back, z up. A trunk rises from
+# the valve at z = 0 into a crossbar at z = 50 whose two halves are the left (+x) and right branches.
+TRUNK, BRANCH, CROSSBAR = 12.0, 8.0, 50.0  # mm: the trunk is 24 mm across, each branch 16 mm
+PA_LOW, PA_SHAPE = np.array([-70.0, -25.0, -10.0]), (141, 51, 81)
+# Each landmark mask is a disc 3 mm thick across the vessel: its centre, its axis and the vessel's
+# radius there. The annulus is the vessel's own width, as upstream measures that landmark on the
+# mask itself; the others are 1 mm wider than the vessel, which upstream cuts.
+DISCS = {
+    "pul_annulus": ((0, 0, 1), 2, TRUNK),
+    "pul_sinotubular_junction": ((0, 0, 17), 2, TRUNK),
+    "pul_bifurcation": ((0, 0, 35), 2, TRUNK),
+    "pul_left_start": ((27, 0, CROSSBAR), 0, BRANCH),
+    "pul_right_start": ((-27, 0, CROSSBAR), 0, BRANCH),
+}
+PA_NEEDS = {"pulmonary_artery": "pulmonary_artery", **{name: name for name in DISCS}}
+
+
+def pulmonary_phantom():
+    x, y, z = np.meshgrid(*(PA_LOW[i] + np.arange(PA_SHAPE[i]) for i in range(3)), indexing="ij")
+    local = np.stack((x, y, z), axis=-1)
+    masks = {"pulmonary_artery": ((x**2 + y**2 <= TRUNK**2) & (z >= 0) & (z <= CROSSBAR)) | ((y**2 + (z - CROSSBAR) ** 2 <= BRANCH**2) & (np.abs(x) <= 60))}
+    for name, (centre, along, radius) in DISCS.items():
+        offset = local - centre
+        across = np.delete(offset, along, axis=-1)
+        masks[name] = (np.abs(offset[..., along]) <= 1) & (np.linalg.norm(across, axis=-1) <= radius + (name != "pul_annulus"))
+    return masks
+
+
+def run_pulmonary(folder, turn, needs=PA_NEEDS):
+    """The pulmonary worker on the phantom under `turn`, and the map from RAS back to the phantom's frame."""
+    affine = np.eye(4)
+    affine[:3, :3] = turn
+    affine[:3, 3] = turn @ PA_LOW + (5.0, 10.0, 60.0)
+    masks = pulmonary_phantom()
+
+    def save(name, values):
+        image = nib.Nifti1Image(values, affine)
+        image.header.set_xyzt_units("mm")
+        nib.save(image, folder / f"{name}.nii.gz")
+        return str(folder / f"{name}.nii.gz")
+
+    request = {
+        "report": "pulmonary",
+        "ct": save("ct", np.where(masks["pulmonary_artery"], 300, 0).astype(np.int16)),
+        "masks": {need: {"path": save(label, masks[label].astype(np.uint8)), "label": label} for need, label in needs.items()},
+        "work": str(folder / "work"),
+        "output": str(folder / "out"),
+    }
+    return report_worker.run(request), request, lambda point: turn.T @ (np.asarray(point) - affine[:3, 3]) + PA_LOW
+
+
+@pytest.fixture(scope="module", params=[np.eye(3), rotation(np.radians(25), np.radians(20))], ids=["straight", "oblique"])
+def pulmonary(request, tmp_path_factory):
+    return run_pulmonary(tmp_path_factory.mktemp("pulmonary"), request.param)
+
+
+def test_every_pulmonary_landmark_measures_the_vessel(pulmonary):
+    raw, request, local = pulmonary
+    landmarks = raw["upstream"]["landmarks"]
+    assert sorted(raw["geometry"], key=int) == ["1", "2", "3", "4", "5"] and raw["missing"] == {}, raw["missing"]
+    # Read alike on the straight and the oblique grid: at the annulus, measured on its own mask, the
+    # 24 mm trunk reads 25 mm (24 perpendicular, 4.4 cm2 against 4.5). Where upstream cuts the artery,
+    # widening the cut by a voxel, the trunk reads 26 mm (26, 5.0 cm2) and the 16 mm branches 18 mm
+    # (17, 2.4 cm2 against 2.0), as the aorta's tubes do.
+    for (centre, along, radius), number in zip(DISCS.values(), sorted(raw["geometry"], key=int)):
+        landmark, shape = landmarks[number], raw["geometry"][number]
+        diameter = landmark["diameter"] * 10
+        assert 2 * radius - 1 <= diameter <= 2 * radius + 2.5, number
+        assert 2 * radius - 2 <= landmark["diameter_pd"] * 10 <= diameter, number
+        assert 0.95 * np.pi * radius**2 / 100 <= landmark["area"] <= np.pi * (radius + 1.5) ** 2 / 100, number
+        start, end = np.array(landmark["start"]), np.array(landmark["end"])
+        assert np.linalg.norm(end - start) == pytest.approx(diameter, abs=1), number
+        start_pd, end_pd = np.array(landmark["start_pd"]), np.array(landmark["end_pd"])
+        assert np.linalg.norm(end_pd - start_pd) == pytest.approx(landmark["diameter_pd"] * 10, abs=1), number
+        # Every end lies on the vessel's wall in the landmark's plane.
+        for point in (start, end, start_pd, end_pd):
+            offset = local(point) - centre
+            assert abs(offset[along]) <= 1.5 and radius - 1.5 <= np.linalg.norm(np.delete(offset, along)) <= radius + 2, number
+        assert np.linalg.norm(local(shape["centre"]) - centre) < 1.5, number
+        # The normal lies along the vessel, pointing away from the valve.
+        axis = np.eye(3)[along] * (np.sign(centre[0]) if along == 0 else 1)
+        assert local(shape["normal"]) - local(np.zeros(3)) == pytest.approx(axis, abs=0.05), number
+        assert len(shape["outline"]) == report_worker.RING
+        assert all(radius - 2 <= np.linalg.norm(np.delete(local(point) - centre, along)) <= radius + 2 for point in shape["outline"]), number
+        assert (Path(request["output"]) / shape["picture"]).is_file()
+    assert raw["files"] == [f"plane-{number}.png" for number in range(1, 6)]
+    assert [landmarks[str(number)]["diameter"] for number in range(1, 6)] == [2.5, 2.6, 2.6, 1.8, 1.8]
+
+
+def upstream_pulmonary(request, tmp_path, monkeypatch):
+    """Upstream's own generator on the folders the worker wrote, without its display server and pictures."""
+    from totalsegmentator.pulmonary_report import pipeline
+
+    monkeypatch.setitem(sys.modules, "xvfbwrapper", types.SimpleNamespace(Xvfb=contextlib.nullcontext))
+    for name in ("plot_pulmonary_seg", "render_report_image", "cleanup_workdir"):
+        monkeypatch.setattr(pipeline, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, "serialize_outputs", lambda *args: (None, None))
+    work = Path(request["work"])
+    *_, done = pipeline.create_pulmonary_report(work / "ct.nii.gz", work / "totalseg", work / "details", {}, tmp_path, None, delete_tmp=False)
+    landmarks = {number: report_worker._numbers(landmark) for number, landmark in done["report_json"]["landmarks"].items()}
+    return json.loads(json.dumps(report_worker._plain({"landmarks": landmarks})))
+
+
+def test_upstreams_own_pulmonary_generator_gives_the_same_numbers(pulmonary, tmp_path, monkeypatch):
+    raw, request, _ = pulmonary
+    assert upstream_pulmonary(request, tmp_path, monkeypatch) == raw["upstream"]
+
+
+def test_a_pulmonary_landmark_the_revision_lacks_is_not_measured(tmp_path):
+    needs = {need: label for need, label in PA_NEEDS.items() if label != "pul_bifurcation"}
+    raw, request, _ = run_pulmonary(tmp_path, np.eye(3), needs)
+    stand_in = Path(request["work"]) / "details" / "pul_bifurcation.nii.gz"
+    assert stand_in.is_file() and not nib.load(stand_in).get_fdata().any()
+    assert sorted(raw["geometry"]) == ["1", "2", "4", "5"] and raw["missing"] == {"3": ["the pulmonary bifurcation was not found"]}
+    landmarks = pulmonary_report.shape(raw)["landmarks"]
+    assert [entry["available"] for entry in landmarks] == [True, True, False, True, True]
+    assert landmarks[2]["unavailable_reason"] == "Not measured: the pulmonary bifurcation was not found" and landmarks[2]["diameter_mm"] is None

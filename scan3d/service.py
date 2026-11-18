@@ -912,8 +912,16 @@ class Service:
         self.stage(job, "Checking masks and generating surfaces")
         from .segmentation_merge import merge_task_outputs
 
+        spared = []
+        if job["payload"].get("report"):
+            from .reports import spare
+
+            # A report's segmentation keeps other tasks' segments it does not read; the cache above keeps every output.
+            structures, spared = spare(job["payload"]["report"], parent["structures"], structures, options["tasks"])
         merged, replacement = merge_task_outputs(parent["structures"], structures, options["tasks"], reference_image_id=reference["id"])
         operation = {"type": "segment", "input_revision_id": parent["id"], "options": options, **replacement}
+        if spared:
+            operation["spared"] = spared
         if bound := job.get("inference_path"):
             operation["runtime"] = self._run_record(bound, run_manifest, reused)
         result = self.build_revision(

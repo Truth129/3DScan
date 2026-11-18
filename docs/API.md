@@ -1184,26 +1184,31 @@ A later revision with the same masks reuses it.
 
 Research use only, not for diagnostic use. A report measures a saved revision's masks with
 TotalSegmentator's own report code. Its masks come from a recipe of TotalSegmentator tasks saved
-as a normal revision, so a corrected mask gives corrected numbers. Only `aorta` exists so far,
-TotalSegmentator 2.18.0's aorta report. Routes are relative to `.../revisions/{rid}/reports`.
+as a normal revision, so a corrected mask gives corrected numbers. There are two, from
+TotalSegmentator 2.18.0: `aorta` and `pulmonary` (pulmonary arteries). Routes are relative to
+`.../revisions/{rid}/reports`.
 
 **`GET .../reports`** returns `{reports: [ReportStatus]}`, and **`GET .../reports/{report}`**
 returns `{report: ReportStatus, analyses: [...]}`, this revision's runs newest first, each
 `{analysis_id, state, stage, created_at, finished_at, error, summary}`.
 
 ```text
-{id: "aorta", title, engine, available, reason, ready,
+{id: "aorta" | "pulmonary", title, engine, available, reason, ready,
  needs: [{id, title, task, task_title, required, state: "present" | "missing" | "not_found", structure_id}],
  missing_tasks: [{id, title, license_required}], can_segment, segment_reason}
 ```
 
 - A need matches the structure `task:label`, by its source task and class, never by name.
-- `missing`: its task never ran on this revision's line of segmentations, or a later run of another
-  task replaced its mask with a same-named one. `not_found`: it ran and kept nothing, or the kept
-  mask is empty.
+- `missing`: its task never ran on this revision's line of segmentations, or a same-named segment
+  of another task that ran after it may have replaced its mask. Where `segmentation_runs` does not
+  give the order, any same-named segment of another task counts. `not_found`: it ran and kept
+  nothing, or the kept mask is empty.
 - `available` is false, with `reason`, for a candidate alias, a non-CT image, a sheared grid, or a
   TotalSegmentator without the report's code. `reason` also names a required need not found.
 - `ready`: every required need is present, so a start is accepted.
+- `pulmonary` needs the pulmonary artery and at least one of its five landmarks. Until one landmark
+  is present, all five have `required` true. When its task ran and found none, `reason` is
+  `None of the five pulmonary landmarks was found`.
 - `missing_tasks` are the recipe tasks with a missing need. `can_segment` is false, with
   `segment_reason`, unless the revision is the case's active one, something is missing, no required
   need was looked for and not found, the case is not the synthetic demo, and any license they need
@@ -1217,6 +1222,13 @@ for a candidate alias, a report that is not `available`, or a required need not 
 running the missing tasks in recipe order. Once it saves its revision, the report is queued on that
 revision. If a required structure was not found, no report is queued and the status says why; the
 segmentation still succeeds. It is 400 when `can_segment` is false.
+
+- Unlike `POST /api/cases/{id}/segment`, it leaves out a new structure the report does not read
+  when a segment of a task outside this run has the same anatomical name, so the pulmonary
+  recipe keeps `total:aorta`. A structure the report reads, one whose ID the revision already has
+  (a re-run's own output), or one in a relationship merges as usual.
+- The revision's `operation.spared` lists the structure IDs left out, sorted, and is absent when
+  none were. The inference cache keeps every output.
 
 **`GET .../reports/{report}/{analysis_id}`** returns the result, and
 **`GET .../{analysis_id}/files/{name}`** a PNG it lists in `files`. Both are 404 for a job of
@@ -1262,6 +1274,29 @@ The aorta result:
 - `files` holds `cpr.png`, the curved view with its diameter profile, and `plane-N.png` for each
   measured landmark. `warnings` are upstream's warning lines, and a line for a false lumen under
   5 ml.
+
+The pulmonary result:
+
+```text
+{format: "scan3d-report-v1", notice, report: "pulmonary", analysis_id, case_id, revision_id, key,
+ created_at, engine: {name: "TotalSegmentator", version, report_version}, inputs: [{need, structure_id}],
+ landmarks: [{number, id, name, available, unavailable_reason, centre, normal, diameter_mm,
+              perpendicular_mm, area_cm2, ends, perpendicular_ends, outline, picture}],
+ files, warnings,
+ summary: {max_diameter_mm, max_landmark, landmarks_available, landmarks_total: 5}}
+```
+
+- The five landmarks, in order: `proximal_main` (at the valve annulus), `sinotubular_junction`,
+  `bifurcation`, `left` and `right` (the start of each branch). Fields, units and rounding are the
+  aorta's. There are no sections, centreline, curved view, contrast or lumens.
+- Landmark 1 is measured on the annulus mask itself; the others cut the pulmonary artery mask
+  across their landmark mask. A landmark the revision lacks has `unavailable_reason`.
+- `centre` is the centre of the landmark mask. `normal` points away from the annulus landmark's
+  centre, and landmark 1's into the artery. Without the annulus landmark, normals point away from
+  the artery mask's centre, so the trunk's have a fixed sign that does not mean anything.
+- On a synthetic phantom a 24 mm trunk reads 25 mm at the annulus and 26 mm where the artery is
+  cut, and 16 mm branches read 18 mm.
+- `files` holds `plane-N.png` for each measured landmark.
 
 The result is saved in `cases/<case>/reports/<report>/<key>/`, keyed by the report and its code,
 the image, its grid, the masks used and the versions of TotalSegmentator and the numeric libraries.
@@ -1526,7 +1561,7 @@ access, and works for any CT or classic MR prepared from DICOM, folder and ZIP i
 
 A complete [report](#measurement-reports) run becomes a new series in the original study: image 1 a
 page of the result, image 2 its curved view (`cpr.png`) when the result lists one. The server draws
-the page and holds both images, so there is no upload and any retry reuses them. Routes are relative
+the page and holds the images, so there is no upload and any retry reuses them. Routes are relative
 to `.../reports/{report}/{analysis_id}`, and each is 404 for a candidate alias or a run that is not
 complete.
 
@@ -1535,14 +1570,14 @@ complete.
   `archive_report_export` (DICOMweb case) or `direct_report_export` job, and list only this run's.
 - **`GET .../dicom-file`** and **`POST .../dicom-file`** (body `{}`) follow `dicom-view-file` and
   return a `report_file_export` job.
-- **`GET .../dicom-file/{export_id}/report.zip`** serves a stored ZIP of `<report>-report-1.dcm` and
-  `-2.dcm`, each checked against its export, or 404.
+- **`GET .../dicom-file/{export_id}/report.zip`** serves a stored ZIP of `<report>-report-1.dcm`
+  and, with a curved view, `-2.dcm`, each checked against its export, or 404.
 
 The page shows the result's tables as the panel's Copy table does, the notice, the engine and the
 revision, and no case name or patient detail. The instances follow the view's encoding with
-`SeriesNumber` 502, `SeriesDescription` `3DScan <report> report <rev8>` and `InstanceNumber` 1 and 2.
-The export is keyed on the result's key and both PNG hashes. `result.dicom_report` has the view's
-fields, with `instance_count` 2.
+`SeriesNumber` 502, `SeriesDescription` `3DScan <report> report <rev8>` and `InstanceNumber` from 1.
+The export is keyed on the result's key and each PNG's hash. `result.dicom_report` has the view's
+fields, with `instance_count` 2, or 1 without a curved view.
 
 ## DICOMweb archive export
 

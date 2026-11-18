@@ -10,7 +10,7 @@ from PIL import Image
 import pydicom
 import pytest
 
-from scan3d import aorta_report, report_page, reports
+from scan3d import aorta_report, pulmonary_report, report_page, reports
 from scan3d.dicom_view import DicomViewError, ImageText, export_images, export_view
 from scan3d.store import identifier, now
 from test_dicom_seg import fixture  # noqa: F401
@@ -38,30 +38,41 @@ def raw(dissection=True):
     }
 
 
-def report_result(case_id="synthetic-case", revision_id=REVISION, key="ab" * 32, analysis_id="synthetic-analysis", dissection=True):
+def pulmonary_raw():
+    """What the worker hands back for the pulmonary report: four landmarks measured, and the bifurcation not placed."""
+    measured = dict(diameter=2.6, diameter_pd=2.4, area=5.1, start=[0, 0, 0], end=[26, 0, 0], start_pd=[13, -12, 0], end_pd=[13, 12, 0])
+    return {
+        "upstream": {"landmarks": {str(n): measured for n in range(1, 6)}},
+        "geometry": {str(n): {"centre": [13, 0, -n], "normal": [0, 0, 1], "outline": [[0, 0, 0]]} for n in range(1, 6) if n != 3},
+        "missing": {},
+        "warnings": [],
+    }
+
+
+def report_result(case_id="synthetic-case", revision_id=REVISION, key="ab" * 32, analysis_id="synthetic-analysis", dissection=True, report="aorta"):
     engine = {"name": "TotalSegmentator", "version": "2.18.0", "report_version": "0.1.2"}
-    fields = {"format": reports.FORMAT, "notice": reports.NOTICE, "report": "aorta", "analysis_id": analysis_id, "case_id": case_id}
+    fields = {"format": reports.FORMAT, "notice": reports.NOTICE, "report": report, "analysis_id": analysis_id, "case_id": case_id}
     fields.update(revision_id=revision_id, key=key, created_at="2026-11-18T00:00:00+00:00", engine=engine, inputs=[])
+    if report == "pulmonary":
+        return {**fields, **pulmonary_report.shape(pulmonary_raw()), "files": [], "summary": {}}
     return {**fields, **aorta_report.shape(raw(dissection)), "files": ["cpr.png"], "summary": {}}
 
 
-def fake_report(service, case_id, revision_id):
-    """A complete aorta run of this revision, as `reports.run` leaves it, with no worker."""
+def fake_report(service, case_id, revision_id, report="aorta"):
+    """A complete run of this revision, as `reports.run` leaves it, with no worker; only the aorta has a curved view."""
     analysis_id, key = identifier(), hashlib.sha256(revision_id.encode()).hexdigest()
-    folder = reports._folder(service, case_id, reports.definition("aorta"), key)
+    folder = reports._folder(service, case_id, reports.definition(report), key)
     folder.mkdir(parents=True)
-    (folder / "cpr.png").write_bytes(CURVED)
-    body = json.dumps(report_result(case_id, revision_id, key, analysis_id))
+    files = {}
+    if report == "aorta":
+        (folder / "cpr.png").write_bytes(CURVED)
+        files["cpr.png"] = hashlib.sha256(CURVED).hexdigest()
+    body = json.dumps(report_result(case_id, revision_id, key, analysis_id, report=report))
     (folder / "result.json").write_text(body)
-    marker = {
-        "format": reports.FORMAT,
-        "key": key,
-        "result_sha256": hashlib.sha256(body.encode()).hexdigest(),
-        "files": {"cpr.png": hashlib.sha256(CURVED).hexdigest()},
-    }
+    marker = {"format": reports.FORMAT, "key": key, "result_sha256": hashlib.sha256(body.encode()).hexdigest(), "files": files}
     (folder / "complete.json").write_text(json.dumps(marker))
     job = dict(id=analysis_id, case_id=case_id, kind="report", status="completed", stage="Complete", error=None, revision_id=revision_id, created_at=now())
-    job.update(payload={"report": "aorta", "key": key, "inputs": {}}, cancel_requested=False, result={"analysis_id": analysis_id, "key": key, "summary": {}})
+    job.update(payload={"report": report, "key": key, "inputs": {}}, cancel_requested=False, result={"analysis_id": analysis_id, "key": key, "summary": {}})
     service.store.save("jobs", job)
     return analysis_id
 
@@ -142,6 +153,27 @@ def test_a_folder_case_saves_its_report_as_a_two_image_zip(tmp_path, fixture):  
     assert folder.http.get(f"{url}/{result['export_id']}/report.zip").status_code == 404
     assert folder.http.get(url.replace(revision_id, f"review-{revision_id}")).status_code == 404
     assert folder.http.post(url.replace(analysis, identifier()), json={}).status_code == 404
+    folder.http.close()
+
+
+def test_a_pulmonary_report_saves_its_page_alone(tmp_path, fixture):  # noqa: F811
+    result = report_result(report="pulmonary")
+    assert len(result["landmarks"]) == 5 and [mark["available"] for mark in result["landmarks"]].count(False) == 1
+    with Image.open(BytesIO(report_page.render(result, "Pulmonary arteries"))) as image:
+        assert image.width == 1600
+    folder = make_rig(tmp_path, fixture)
+    case_id, revision_id = folder.case["id"], folder.saved["id"]
+    analysis = fake_report(folder.service, case_id, revision_id, report="pulmonary")
+    url = f"/api/cases/{case_id}/revisions/{revision_id}/reports/pulmonary/{analysis}/dicom-file"
+    assert folder.http.get(url).json()["available"] is True
+    finished = execute(folder, folder.http.post(url, json={}).json())
+    assert finished["status"] == "completed", finished["error"]
+    exported = finished["result"]["dicom_report"]
+    assert exported["instance_count"] == 1
+    with zipfile.ZipFile(BytesIO(folder.http.get(f"{url}/{exported['export_id']}/report.zip").content)) as archive:
+        assert archive.namelist() == ["pulmonary-report-1.dcm"]
+        page = pydicom.dcmread(BytesIO(archive.read("pulmonary-report-1.dcm")))
+    assert page.SeriesDescription == f"3DScan pulmonary report {revision_id[:8]}" and page.Columns == 1600
     folder.http.close()
 
 

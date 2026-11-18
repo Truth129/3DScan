@@ -8,7 +8,8 @@ measures with TotalSegmentator's own report code, and never makes a revision. It
 key covers the code, the image and the masks, so a later revision with the same masks reuses the
 folder, and every read checks the folder again.
 
-Adding a report is one `Definition` here and one function in `report_worker.WORKERS`.
+Adding a report is one `Definition` in its own module, registered here, and one function in
+`report_worker.WORKERS`.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from functools import cache
 import hashlib
 from importlib import metadata, util
+import inspect
 import json
 import logging
 import os
@@ -45,8 +47,6 @@ NOTICE = "Research use only. Not for diagnostic use."
 _KEY = re.compile(r"[0-9a-f]{64}")
 _FILE = re.compile(r"(cpr|plane-\d{1,2})\.png")
 _LOG_TAIL = 4000  # bytes of a failed worker's log kept in the service log
-# In the key, as coronary._CODE is: a saved result never outlives the code that measured or shaped it.
-_CODE = [hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest() for name in ("reports.py", "report_worker.py", "aorta_report.py")]
 # Upstream's report code measures with these; one that is absent (CI installs TotalSegmentator without
 # its dependencies) reads as None.
 _LIBRARIES = ("TotalSegmentator", "numpy", "scipy", "scikit-image", "nibabel", "networkx")
@@ -74,13 +74,76 @@ class Definition:
     recipe: tuple[str, ...]  # the segmentation tasks that make the needs, in the order they run
     shape: Callable[[dict], dict]  # the worker's output as the result's report fields
     summary: Callable[[dict], dict]  # a result's summary for the list of runs
+    any_of: tuple[str, ...] = ()  # need ids of which at least one must be present; all are required until one is
+    any_of_reason: str = ""  # said when the task ran and found none of `any_of`
 
 
 @cache
 def _definitions():
-    from . import aorta_report
+    from . import aorta_report, pulmonary_report
 
-    return {definition.id: definition for definition in (aorta_report.DEFINITION,)}
+    return {definition.id: definition for definition in (aorta_report.DEFINITION, pulmonary_report.DEFINITION)}
+
+
+@cache
+def _code(report_id):
+    """In the key, as coronary._CODE is: a saved result never outlives the code that measured or shaped it,
+    which is this module, the worker and the report's own definition module."""
+    files = [Path(__file__).with_name(name) for name in ("reports.py", "report_worker.py")]
+    files.append(Path(inspect.getfile(definition(report_id).shape)))
+    return [hashlib.sha256(path.read_bytes()).hexdigest() for path in files]
+
+
+def mm(cm):
+    # Upstream rounds centimetres to one decimal, so millimetres are whole: no precision is added.
+    return None if cm is None else float(round(cm * 10))
+
+
+def area(cm2):
+    return None if cm2 is None else round(float(cm2), 1)
+
+
+def point(values):
+    return None if values is None else [round(float(value), 2) for value in values]
+
+
+def landmark(number, identifier, name, raw, vessel):
+    """One landmark of a result from the worker's output: upstream's numbers in mm and its geometry in RAS mm,
+    or why it is not measured. `vessel` names what a missing cross-section is of."""
+    upstream = raw["upstream"]["landmarks"][str(number)]
+    geometry = raw["geometry"].get(str(number))
+    entry = {"number": number, "id": identifier, "name": name, "available": False, "unavailable_reason": None}
+    entry.update(dict.fromkeys(("centre", "normal", "diameter_mm", "perpendicular_mm", "area_cm2", "ends", "perpendicular_ends", "outline", "picture")))
+    if geometry is None:
+        missing = raw["missing"].get(str(number)) or []
+        entry["unavailable_reason"] = f"Not measured: {' and '.join(missing)}" if missing else "Could not be placed on the centreline"
+    elif upstream.get("start") is None or not upstream.get("diameter"):
+        entry["unavailable_reason"] = f"No cross-section of the {vessel} was found here"
+    else:
+        entry.update(
+            available=True,
+            centre=point(geometry["centre"]),
+            normal=[round(float(value), 4) for value in geometry["normal"]],
+            diameter_mm=mm(upstream["diameter"]),
+            perpendicular_mm=mm(upstream["diameter_pd"]),
+            area_cm2=area(upstream["area"]),
+            ends=[point(upstream["start"]), point(upstream["end"])],
+            perpendicular_ends=[point(upstream["start_pd"]), point(upstream["end_pd"])] if upstream.get("start_pd") else None,
+            outline=[point(value) for value in geometry["outline"]],
+            picture=geometry.get("picture"),
+        )
+    return entry
+
+
+def landmark_summary(result, total):
+    measured = [entry for entry in result["landmarks"] if entry["available"]]
+    widest = max(measured, key=lambda entry: entry["diameter_mm"], default=None)
+    return {
+        "max_diameter_mm": widest and widest["diameter_mm"],
+        "max_landmark": widest and widest["number"],
+        "landmarks_available": len(measured),
+        "landmarks_total": total,
+    }
 
 
 def definition(report_id):
@@ -113,9 +176,15 @@ def status(service, case_id, revision_id, report_id):
     revision = service.store.revision(case_id, revision_id)
     unavailable = reason = _unavailable(service, revision, report)
     needs = _needs(revision, report)
-    lost = [need for need in needs if need["required"] and need["state"] == "not_found"]
+    # A need of `any_of` is lost only once none of them can still come.
+    gone = all(need["state"] == "not_found" for need in needs if need["id"] in report.any_of)
+    lost = [need for need in needs if need["required"] and need["state"] == "not_found" and (need["id"] not in report.any_of or gone)]
     if reason is None and lost:
-        reason = f"The {' and the '.join(need['title'].lower() for need in lost)} {'were' if len(lost) > 1 else 'was'} looked for and not found"
+        named = [need for need in lost if need["id"] not in report.any_of]
+        parts = [report.any_of_reason] if len(named) < len(lost) else []
+        if named:
+            parts.insert(0, f"The {' and the '.join(need['title'].lower() for need in named)} {'were' if len(named) > 1 else 'was'} looked for and not found")
+        reason = ". ".join(parts)
     ready = reason is None and all(need["state"] == "present" for need in needs if need["required"])
 
     missing = [task for task in report.recipe if any(need["task"] == task and need["state"] == "missing" for need in needs)]
@@ -161,6 +230,36 @@ def segment(service, case_id, revision_id, report_id, inference_path=None):
         raise ValueError(state["segment_reason"])
     tasks = [task["id"] for task in state["missing_tasks"]]
     return service.segment_case(case_id, revision_id, tasks=tasks, inference_path=inference_path, report=report_id)
+
+
+def spare(report_id, previous, incoming, tasks):
+    """The incoming structures a report's segmentation merges, and the ids of those it leaves out.
+
+    A recipe task can also mark a structure the report does not read, say heartchambers_highres's
+    aorta, and segmentation_merge would let it take the same-named segment of another task, which
+    another report may read and someone may have corrected. Such a structure is left out; one the
+    report reads still replaces as in any segmentation, and so does one in a relationship or one
+    whose id the previous revision holds, a re-run's own earlier output, which the merge removes."""
+    from .segmentation_merge import _identity
+
+    def name(entry):
+        try:
+            return _identity(entry)
+        except ValueError:
+            return None
+
+    read = {f"{need.task}:{need.label}" for need in definition(report_id).needs}
+    kept = {name(entry) for entry in previous if entry.get("task") not in tasks} - {None}
+    # Ids that replace as in any segmentation: those the report reads, a re-run's own earlier outputs
+    # (left out, the merge would still remove the old one) and the peers of a relationship.
+    replaces = read | {entry.get("id") for entry in previous}
+    for entry in incoming:
+        value = entry.get("relationship")
+        if isinstance(value, dict):
+            peers = value.get("exclusive_with")
+            replaces.update(peer for peer in [value.get("parent_id"), *(peers if isinstance(peers, list) else ())] if isinstance(peer, str))
+    left = {entry["id"] for entry in incoming if entry["id"] not in replaces and entry.get("relationship") is None and name(entry) in kept}
+    return [entry for entry in incoming if entry["id"] not in left], sorted(left)
 
 
 def start(service, case_id, revision_id, report_id, requested_by=None):
@@ -405,24 +504,36 @@ def _unavailable(service, revision, report):
 
 
 def _needs(revision, report):
-    """Each need's state on this revision: present, missing (its task never ran on this line, or a later
-    run of another task replaced its mask) or not_found."""
+    """Each need's state on this revision: present, missing (its task never ran on this line, or a run of
+    another task after its last run may have replaced its mask) or not_found."""
     from .segmentation_merge import _identity
 
     structures = {structure["id"]: structure for structure in revision["structures"]}
-    # The tasks run on this revision's line of segmentations; a structure kept from a task shows it ran
-    # on revisions from before runs were recorded.
-    ran = {task for run in revision.get("segmentation_runs") or () for task in run.get("tasks") or ()}
-    ran |= {structure.get("task") for structure in revision["structures"]}
+    # The tasks run on this revision's line of segmentations, with the index of each one's last run; a
+    # structure kept from a task shows it ran on revisions from before runs were recorded.
+    last = {}
+    for index, run in enumerate(revision.get("segmentation_runs") or ()):
+        for task in run.get("tasks") or ():
+            last[task] = index
+    ran = set(last) | {structure.get("task") for structure in revision["structures"]}
     # A later run of another task takes a same-named structure (segmentation_merge), which is not this
     # task finding nothing: running the task again brings the structure back. A hand-drawn one is not.
-    taken = set()
+    taken = {}
     for structure in revision["structures"]:
         if structure.get("task") not in (None, "custom"):
             try:
-                taken.add(_identity(structure))
+                taken.setdefault(_identity(structure), set()).add(structure["task"])
             except ValueError:
                 pass
+
+    def replaced(task, holders):
+        # Only a holder that ran after the need's task can have taken its mask. When the need's task ran
+        # last, or in the same run, it found nothing itself, and offering it again would find nothing
+        # again. Without a recorded order (revisions from before runs were recorded) it may have been.
+        if task not in last:
+            return bool(holders)
+        return any(holder not in last or last[holder] > last[task] for holder in holders)
+
     needs = []
     for need in report.needs:
         key = f"{need.task}:{need.label}"
@@ -431,7 +542,7 @@ def _needs(revision, report):
             structure = None
         if structure is not None and structure.get("voxel_count", 1):
             state = "present"
-        elif structure is None and _identity({"id": key, "task": need.task}) in taken:
+        elif structure is None and replaced(need.task, taken.get(_identity({"id": key, "task": need.task}), ())):
             state = "missing"
         else:
             state = "not_found" if structure is not None or need.task in ran else "missing"
@@ -446,6 +557,11 @@ def _needs(revision, report):
                 "structure_id": structure["id"] if state == "present" else None,
             }
         )
+    # Until one of `any_of` is present, each is required: the report cannot run without one.
+    if report.any_of and not any(need["state"] == "present" for need in needs if need["id"] in report.any_of):
+        for need in needs:
+            if need["id"] in report.any_of:
+                need["required"] = True
     return needs
 
 
@@ -458,6 +574,8 @@ def _prepare(service, case_id, revision_id, report):
         raise ValueError(reason)
     needs = _needs(revision, report)
     lost = [need["title"].lower() for need in needs if need["required"] and need["state"] != "present"]
+    if report.any_of and all(need["state"] == "not_found" for need in needs if need["id"] in report.any_of):
+        raise ValueError(report.any_of_reason)
     if lost:
         raise ValueError(f"The {' and the '.join(lost)} {'are' if len(lost) > 1 else 'is'} not in this revision. Run the missing segmentation first.")
     inputs = {need["id"]: need["structure_id"] for need in needs if need["state"] == "present"}
@@ -476,7 +594,7 @@ def _prepare(service, case_id, revision_id, report):
         "shape": list(geometry["shape"]),
         "affine": geometry["affine_ras"],
         "masks": masks,
-        "code": _CODE,
+        "code": _code(report.id),
         "libraries": {name: _version(name) for name in _LIBRARIES},
     }
     key = hashlib.sha256(json.dumps(basis, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
