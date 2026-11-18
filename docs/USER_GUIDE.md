@@ -730,7 +730,9 @@ dissection** tasks need a [TotalSegmentator license](#totalsegmentator-license);
 does not. The panel lists the tasks it uses and any optional input the revision lacks.
 
 - **Segment and measure** runs the missing tasks, saves their masks as a new revision, then
-  measures that revision. It stays on offer beside **Measure** while an optional task has not run.
+  measures that revision. As with any task run, the new revision replaces segments with matching
+  anatomical names, manual corrections included; earlier revisions stay in History. It stays on
+  offer beside **Measure** while an optional task has not run.
   **Run on** chooses the GPU when there is more than one. When it cannot run, such as without a
   needed license, the panel says why.
 - **Measure** measures a revision that already has every required mask.

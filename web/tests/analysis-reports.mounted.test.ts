@@ -235,6 +235,7 @@ describe('Report panel', () => {
     expect(view.button('Measure')).toBeDefined();
     expect(view.button('Segment and measure')).toBeDefined();
     expect(view.text()).toContain('Segment and measure runs Renal arteries (needs the TotalSegmentator license)');
+    expect(view.text()).toContain('existing segments with matching anatomical names, including manual corrections');
     expect(view.text()).not.toContain('This revision has no');
     expect(view.text()).toContain('the result will go without: True lumen.');
   });
