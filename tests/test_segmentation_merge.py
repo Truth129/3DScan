@@ -27,7 +27,7 @@ def test_cross_task_replacement_uses_exact_anatomical_names_and_preserves_unmatc
     merged, operation = merge_task_outputs(previous, incoming, ["total_v3"])
     assert {entry["id"] for entry in merged} == {"total:spleen", "total:vertebrae_S1", "total_v3:LIVER", "total_v3:vertebrae_L6"}
     assert operation == {
-        "replacement_policy": "same_task_or_exact_name_within_model_v2",
+        "replacement_policy": "same_task_or_exact_name_within_model_v3",
         "replaced_structure_ids": ["total:liver"],
         "replacement_id_map": {"total:liver": "total_v3:LIVER"},
     }
@@ -47,6 +47,17 @@ def test_a_comparison_model_stays_beside_other_models_and_replaces_only_itself()
     merged, operation = merge_task_outputs([compared, structure("mrsegmentator", "spleen"), total], [compared], ["mrsegmentator"])
     assert {entry["id"] for entry in merged} == {"total:liver", "mrsegmentator:liver"}
     assert operation["replaced_structure_ids"] == ["mrsegmentator:liver", "mrsegmentator:spleen"]
+
+
+def test_a_vertebral_body_stays_beside_its_whole_vertebra_and_body_tasks_replace_each_other():
+    vertebra, body = structure("total", "vertebrae_L1"), structure("vertebrae_pp_refined", "vertebrae_L1")
+    for previous, incoming, task in (([vertebra], [body], "vertebrae_pp_refined"), ([body], [vertebra], "total")):
+        merged, operation = merge_task_outputs(previous, incoming, [task])
+        assert {entry["id"] for entry in merged} == {"total:vertebrae_L1", "vertebrae_pp_refined:vertebrae_L1"}
+        assert operation["replaced_structure_ids"] == []
+    merged, operation = merge_task_outputs([vertebra, body], [structure("vertebrae_pp", "vertebrae_L1")], ["vertebrae_pp"])
+    assert {entry["id"] for entry in merged} == {"total:vertebrae_L1", "vertebrae_pp:vertebrae_L1"}
+    assert operation["replacement_id_map"] == {"vertebrae_pp_refined:vertebrae_L1": "vertebrae_pp:vertebrae_L1"}
 
 
 def test_installed_total_and_v3_catalogs_replace_all_116_common_labels():

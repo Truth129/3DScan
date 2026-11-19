@@ -1,8 +1,8 @@
-"""A measurement report's result drawn as one page, for a DICOM series beside its curved view.
+"""A measurement report's result drawn as one page, for a DICOM series beside its overview picture.
 
 Research use only. The page carries only what the result holds, never a case name or patient
 detail, and the same result always draws the same bytes: no clock, no PNG metadata. Its tables
-match the panel's Copy table (web/src/lib/reports.ts landmarkTable), column for column.
+match the panel's Copy table (web/src/lib/reports.ts landmarkTable and spineTable), column for column.
 """
 
 from __future__ import annotations
@@ -21,7 +21,11 @@ _CONTENT = WIDTH - 2 * _MARGIN
 _PAD = 12
 _INK, _MUTED, _WARNING, _RULE, _STRIPE = (26, 26, 26), (85, 85, 85), (180, 35, 24), (200, 200, 200), (242, 244, 245)
 _WIDER = "Diameters read about 2 mm wider than the mask, as TotalSegmentator measures them."
-_SECOND = "Image 2 of this series: the curved view along the aorta and its diameter profile."
+# The second image of the series, by the picture the result holds.
+_SECOND = {
+    "cpr.png": "Image 2 of this series: the curved view along the aorta and its diameter profile.",
+    "spine.png": "Image 2 of this series: the spine picture with the measured heights.",
+}
 
 
 @cache
@@ -101,6 +105,24 @@ def _sections(result):
     return head, rows, set(range(1, len(head)))
 
 
+def _vertebrae(result):
+    head = ["Vertebra", "Posterior (mm)", "Middle (mm)", "Anterior (mm)", "Difference (%)", "Volume (ml)", "Median (HU)", "Note"]
+    rows = []
+    for body in result["vertebrae"]:
+        if not body["available"]:
+            rows.append([body["name"], *[""] * 6, body.get("unavailable_reason") or "Not measured."])
+            continue
+        notes = [note for flag, note in ((body["height_flag"], "Height difference over 20%"), (body["small_body"], "Body under 2 ml")) if flag]
+        heights = [_one(height["mm"]) for height in body["heights"]]
+        rows.append([body["name"], *heights, _whole(body["height_difference_percent"]), _one(body["volume_ml"]), _whole(body["median_hu"]), "; ".join(notes)])
+    return head, rows, set(range(1, len(head) - 1))
+
+
+def _thresholds(result):
+    native, arterial, venous = (_whole(result["density_thresholds_hu"][phase]) for phase in ("native", "arterial", "portal_venous"))
+    return f"TotalSegmentator reads L1 to L5 as low density under {native} HU without contrast, {arterial} HU arterial and {venous} HU portal venous."
+
+
 class _Page:
     def __init__(self, draw):
         self.draw, self.y = draw, _MARGIN
@@ -160,13 +182,17 @@ def _layout(draw, result, title):
         head, rows, right = _sections(result)
         page.table(head, rows, right)
         page.text(_WIDER, colour=_MUTED, gap=24)
+    if result.get("vertebrae"):
+        head, rows, right = _vertebrae(result)
+        page.table(head, rows, right, wrap_last=True)
+        page.text(_thresholds(result), colour=_MUTED, gap=24)
     if warnings := result.get("warnings"):
         page.text("Warnings", size=28, gap=4)
         for warning in warnings:
             page.text(" ".join(str(warning).split()), gap=2)
         page.y += 22
-    if "cpr.png" in (result.get("files") or ()):
-        page.text(_SECOND, colour=_MUTED)
+    if second := next((line for name, line in _SECOND.items() if name in (result.get("files") or ())), None):
+        page.text(second, colour=_MUTED)
     return page.y + _MARGIN
 
 

@@ -10,7 +10,7 @@ import nibabel as nib
 import numpy as np
 import pytest
 
-from scan3d import imaging, reports, segmentation, segmentation_options
+from scan3d import imaging, reports, segmentation, segmentation_merge, segmentation_options, spine_report
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.store import identifier
@@ -27,6 +27,7 @@ OUTPUTS = {
     "aortic_dissection": {},
     "heartchambers_highres": {"pulmonary_artery": (2, 12)},
     "pulmonary_artery_landmarks": {},
+    "vertebrae_pp_refined": {},
 }
 PNG = b"\x89PNG\r\n\x1a\n synthetic"
 
@@ -88,6 +89,39 @@ def canned_pulmonary(request):
     }
 
 
+def canned_spine(request):
+    """The spine worker's output for L1 measured, flagged and with an empty eroded body, and L2 at the scan's edge."""
+    out = Path(request["output"])
+    out.mkdir(parents=True)
+    (out / "spine.png").write_bytes(PNG)
+    upstream = {f"vertebrae_L1_height_{name}_mm": value for name, value in (("posterior", 25.46), ("middle", 0), ("anterior", 19.62))}
+    upstream.update(
+        vertebrae_L1_height_difference=0.23, vertebrae_L1_volume_ml=1.94, vertebrae_L1_intensity=0.0, vertebrae_L1_intensity_median=0.0, LWS_max=0.23
+    )
+    ends = {"posterior": [[0, -10, 0], [0, -10, 25.46]], "anterior": [[0, 10, 0], [0, 10, 19.62]]}
+    heights = {"posterior": 25.4596, "anterior": 19.6204}
+    return {
+        "engine_version": "2.18.0",
+        "report_version": "0.1.0",
+        "upstream": upstream,
+        "geometry": {
+            "vertebrae_L1": {
+                "centre": [0, 0, 10],
+                "normal": [1, 0, 0],
+                "ends": ends,
+                "heights": heights,
+                "outline": [[0, -15, 0]],
+                "height_flag": True,
+                "small_body": True,
+            }
+        },
+        "unavailable": {"vertebrae_L2": "Its body touches the edge of the scan"},
+        "thresholds": {"native": 90.25, "arterial": 110.25, "portal_venous": 105.0},
+        "warnings": ["Nothing was left inside L1."],
+        "files": ["spine.png"],
+    }
+
+
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
     """An image-only CT case whose segment jobs use a fake engine, and a report worker that hands back `canned`."""
@@ -116,7 +150,7 @@ def rig(tmp_path, monkeypatch):
 
     def launch(service, job, request, work):
         launched.append(request)
-        return {"aorta": canned, "pulmonary": canned_pulmonary}[request["report"]](request)
+        return {"aorta": canned, "pulmonary": canned_pulmonary, "spine": canned_spine}[request["report"]](request)
 
     monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
     monkeypatch.setattr(segmentation, "segment", segment)
@@ -159,7 +193,7 @@ def test_the_recipe_segments_then_measures_and_reuses_the_run(rig):
     http, service, case_id, image_id, launched = rig
     base = f"/api/cases/{case_id}/revisions/{image_id}/reports"
     statuses = http.get(base).json()["reports"]
-    assert [status["id"] for status in statuses] == ["aorta", "pulmonary"]
+    assert [status["id"] for status in statuses] == ["aorta", "pulmonary", "spine"]
     status = statuses[0]
     assert (status["id"], status["available"], status["ready"], status["can_segment"]) == ("aorta", True, False, True)
     assert {need["state"] for need in status["needs"]} == {"missing"}
@@ -448,3 +482,145 @@ def test_each_reports_key_covers_its_own_definition_module():
 
     assert reports._code("aorta") == digests("reports.py", "report_worker.py", "aorta_report.py")
     assert reports._code("pulmonary") == digests("reports.py", "report_worker.py", "pulmonary_report.py")
+    assert reports._code("spine") == digests("reports.py", "report_worker.py", "spine_report.py")
+
+
+def test_the_spine_report_shows_its_bodies_as_one_input_row(rig, monkeypatch):
+    http, service, case_id, image_id, launched = rig
+    base = f"/api/cases/{case_id}/revisions"
+    # A revision that holds a mask, so a run that finds no body still saves one.
+    image_id = run(service, service.segment_case(case_id, image_id, task="total")["id"], "gpu")["revision_id"]
+
+    def row(revision_id):
+        status = http.get(f"{base}/{revision_id}/reports/spine").json()["report"]
+        (need,) = status["needs"]
+        return status, need
+
+    status, need = row(image_id)
+    assert need == {
+        "id": "any_of",
+        "title": "Vertebral bodies",
+        "task": "vertebrae_pp_refined",
+        "task_title": "Vertebrae C1–L5, body-refined (TotalSegmentator)",
+        "required": True,
+        "state": "missing",
+        "structure_id": None,
+    }
+    assert [(task["id"], task["license_required"]) for task in status["missing_tasks"]] == [("vertebrae_pp_refined", False)] and status["can_segment"]
+    refused = http.post(f"{base}/{image_id}/reports/spine", json={})
+    assert refused.json()["detail"] == "The vertebral bodies are not in this revision. Run the missing segmentation first."
+
+    # The task ran and found no body.
+    revision_id = run(service, http.post(f"{base}/{image_id}/reports/spine/segment", json={}).json()["id"], "gpu")["revision_id"]
+    status, need = row(revision_id)
+    assert need["state"] == "not_found" and status["reason"] == "No vertebral body was found" and not status["can_segment"]
+
+    # Two bodies are enough; the internals still read each one.
+    monkeypatch.setitem(OUTPUTS, "vertebrae_pp_refined", {"vertebrae_L1": (6, 8), "vertebrae_T12": (3, 5)})
+    revision_id = run(service, service.segment_case(case_id, revision_id, task="vertebrae_pp_refined")["id"], "gpu")["revision_id"]
+    status, need = row(revision_id)
+    assert need["state"] == "present" and status["ready"]
+    # Each body sits beside Whole body's vertebra of its level.
+    ids = {structure["id"] for structure in service.store.revision(case_id, revision_id)["structures"]}
+    assert {"total:vertebrae_T12", "vertebrae_pp_refined:vertebrae_T12"} <= ids
+    job = http.post(f"{base}/{revision_id}/reports/spine", json={}).json()
+    run(service, job["id"], "cpu")
+    assert sorted(launched[0]["masks"]) == ["vertebrae_L1", "vertebrae_T12"]
+    (analysis,) = http.get(f"{base}/{revision_id}/reports/spine").json()["analyses"]
+    assert analysis["summary"] == {
+        "vertebrae_measured": 1,
+        "vertebrae_total": 2,
+        "flagged": ["L1"],
+        "max_difference_percent": 23,
+        "max_vertebra": "L1",
+        "lumbar_max_difference_percent": 23,
+    }
+    result = http.get(f"{base}/{revision_id}/reports/spine/{job['id']}").json()
+    assert http.get(f"{base}/{revision_id}/reports/spine/{job['id']}/files/spine.png").content == PNG and result["files"] == ["spine.png"]
+
+
+def test_spine_shape_and_summary_from_upstreams_numbers(tmp_path):
+    raw = canned_spine({"output": str(tmp_path / "out")})
+    result = spine_report.shape(raw)
+    l1, l2 = result["vertebrae"]
+    assert l1 == {
+        "number": 20,
+        "id": "vertebrae_L1",
+        "name": "L1",
+        "available": True,
+        "unavailable_reason": None,
+        "heights": [
+            {"id": "posterior", "mm": 25.5, "ends": [[0, -10, 0], [0, -10, 25.46]]},
+            {"id": "middle", "mm": None, "ends": None},
+            {"id": "anterior", "mm": 19.6, "ends": [[0, 10, 0], [0, 10, 19.62]]},
+        ],
+        "height_difference_percent": 23,
+        "height_flag": True,
+        "volume_ml": 1.9,
+        "small_body": True,
+        # Upstream's 0.0 and 0.0 for an empty eroded body are not CT values.
+        "mean_hu": None,
+        "median_hu": None,
+        "centre": [0, 0, 10],
+        "normal": [1, 0, 0],
+        "outline": [[0, -15, 0]],
+    }
+    assert l2["available"] is False and l2["unavailable_reason"] == "Its body touches the edge of the scan"
+    assert [height["mm"] for height in l2["heights"]] == [None] * 3 and l2["volume_ml"] is None and l2["outline"] is None
+    assert result["lumbar_max_difference_percent"] == 23 and result["density_thresholds_hu"]["arterial"] == 110.25
+    assert spine_report.summary(result)["flagged"] == ["L1"]
+
+    # One line across a body is no height difference, though upstream gives 0 for it.
+    del raw["geometry"]["vertebrae_L1"]["heights"]["anterior"], raw["geometry"]["vertebrae_L1"]["ends"]["anterior"]
+    raw["geometry"]["vertebrae_L1"]["height_flag"] = False
+    one = spine_report.shape(raw)
+    assert one["vertebrae"][0]["height_difference_percent"] is None and not one["vertebrae"][0]["height_flag"]
+    assert spine_report.summary(one) == {
+        "vertebrae_measured": 1,
+        "vertebrae_total": 2,
+        "flagged": [],
+        "max_difference_percent": None,
+        "max_vertebra": None,
+        "lumbar_max_difference_percent": 23,
+    }
+
+
+def test_a_body_or_vertebra_taken_under_the_old_merge_rule_is_offered_again(rig, monkeypatch):
+    http, service, case_id, image_id, _ = rig
+    monkeypatch.setitem(OUTPUTS, "vertebrae_pp_refined", {"vertebrae_T12": (12, 14)})
+
+    def old_rule(entry):
+        # Before the vertebral-body family, a body and the whole vertebra of its level took each other's mask.
+        return entry.get("task") if entry.get("task") in segmentation_merge.MODELS else None, segmentation_merge._anatomical_name(entry)
+
+    def status(order, report_id):
+        case, image = new_image(service, f"Synthetic {' then '.join(order)}")
+        revision_id = image["id"]
+        with monkeypatch.context() as patch:
+            patch.setattr(segmentation_merge, "_identity", old_rule)
+            for task in order:
+                revision_id = run(service, service.segment_case(case["id"], revision_id, task=task)["id"], "gpu")["revision_id"]
+        # Runs merged before the family recorded no merge rule.
+        revision = service.store.revision(case["id"], revision_id)
+        assert all(entry.pop("replacement_policy") == segmentation_merge.REPLACEMENT_POLICY for entry in revision["segmentation_runs"])
+        service.store.save("revisions", revision)
+        return http.get(f"/api/cases/{case['id']}/revisions/{revision_id}/reports/{report_id}").json()["report"]
+
+    # The body took Whole body's T12, which the aorta reads.
+    aorta = status(("total", "vertebrae_pp_refined"), "aorta")
+    assert {need["id"]: need["state"] for need in aorta["needs"]}["vertebrae_T12"] == "missing" and "total" in [task["id"] for task in aorta["missing_tasks"]]
+    # Whole body took the body, the only one the spine report had.
+    spine = status(("vertebrae_pp_refined", "total"), "spine")
+    assert [need["state"] for need in spine["needs"]] == ["missing"] and [task["id"] for task in spine["missing_tasks"]] == ["vertebrae_pp_refined"]
+    assert spine["can_segment"]
+
+    # Under today's rule Whole body's L5 is its own mask, not a body it took: the body task found no L5.
+    monkeypatch.setitem(OUTPUTS, "total", {**OUTPUTS["total"], "vertebrae_L5": (1, 3)})
+    case, image = new_image(service, "Synthetic body, then whole body")
+    revision_id = image["id"]
+    for task in ("vertebrae_pp_refined", "total"):
+        revision_id = run(service, service.segment_case(case["id"], revision_id, task=task)["id"], "gpu")["revision_id"]
+    needs = reports._needs(service.store.revision(case["id"], revision_id), reports.definition("spine"))
+    assert {need["id"]: need["state"] for need in needs}["vertebrae_L5"] == "not_found"
+    spine = http.get(f"/api/cases/{case['id']}/revisions/{revision_id}/reports/spine").json()["report"]
+    assert spine["missing_tasks"] == [] and spine["ready"]

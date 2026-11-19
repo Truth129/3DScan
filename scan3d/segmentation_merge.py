@@ -3,8 +3,9 @@
 Inference IDs retain their task prefix for provenance. Matching ignores only
 case, underscores and whitespace, so similarly named structures and left/right
 counterparts remain separate. A nnU-Net model's outputs match only that model's,
-so its masks stay beside another model's for comparison. Previous revisions and
-their metadata are inputs, never mutable working state.
+so its masks stay beside another model's for comparison. The two vertebral-body
+tasks match only each other, so a body stays beside its whole vertebra. Previous
+revisions and their metadata are inputs, never mutable working state.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ from .nnunet_models import MODELS
 from .relationships import INDEPENDENT, normalize_relationship
 
 
-REPLACEMENT_POLICY = "same_task_or_exact_name_within_model_v2"
+REPLACEMENT_POLICY = "same_task_or_exact_name_within_model_v3"
+# Their vertebrae_L1 is a vertebral body, which shares its label with Whole body's whole vertebra.
+_BODIES = frozenset(("vertebrae_pp", "vertebrae_pp_refined"))
 
 
 def _anatomical_name(entry):
@@ -35,9 +38,12 @@ def _anatomical_name(entry):
     return name
 
 
+def _family(task):
+    return "vertebral bodies" if task in _BODIES else task if task in MODELS else None
+
+
 def _identity(entry):
-    task = entry.get("task")
-    return task if task in MODELS else None, _anatomical_name(entry)
+    return _family(entry.get("task")), _anatomical_name(entry)
 
 
 def _ids(entries):

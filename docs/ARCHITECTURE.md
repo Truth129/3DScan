@@ -128,7 +128,7 @@ cases/<case>/
   revisions/<id>/        revision.json, model.glb and on-demand exports
   refinements/, corrections/, reviews/, seg-imports/, dicom-exports/, grow-branch/
   dicom-view-captures/   Retained 3D view captures, each named by its SHA-256
-  dicom-report-images/   Retained report pages and curved views, each named by its SHA-256
+  dicom-report-images/   Retained report pages and pictures, each named by its SHA-256
   coronary/<key>/        Coronary analysis: result.json, then complete.json
   reports/<report>/<key>/ Measurement report: pictures, result.json, then complete.json
   uploads/               Slicer corrections as received
@@ -156,6 +156,9 @@ record is committed only after its files are complete. Records store absolute pa
   structure, reviewer-added or not, whose anatomical name matches ignoring case, underscores and
   whitespace, so `total_v3:liver` replaces `total:liver`. Voxels are never subtracted. A
   conflicting result fails before anything is published.
+- **Vertebral bodies.** `vertebrae_pp` and `vertebrae_pp_refined` mark bodies under Whole body's
+  vertebra labels. Their outputs match only each other's, so `vertebrae_pp_refined:vertebrae_L1`,
+  named `Vertebral body L1`, stays beside `total:vertebrae_L1`.
 - **Comparing models.** A pinned nnU-Net model's structures match only that model's, so
   `mrsegmentator:liver` and `total:liver` stay side by side. Its run has the source `nnunet_model`.
   A pinned model can run another first in the same worker: FLAMeS runs HD-BET and sets every voxel
@@ -450,13 +453,13 @@ Research use only. A report (`scan3d/reports.py`) is a recipe of TotalSegmentato
 `report` job on the CPU lane that measures a saved revision's masks with TotalSegmentator's own
 report code. A corrected mask therefore gives corrected numbers. Adding a report is one
 `Definition` in its own module, registered in `reports._definitions`, and one function in
-`report_worker.WORKERS`. The reports are the aorta and the pulmonary arteries.
+`report_worker.WORKERS`. The reports are the aorta, the pulmonary arteries and spine fractures.
 
 1. A definition names its needs, each a structure `task:label` with whether it is required, and its
    recipe tasks. A need is present, missing (its task never ran on this revision's line of
    `segmentation_runs`, or a same-named segment of a task run after it may have replaced its mask)
    or not found. `any_of` names needs of which one is enough; all of them count as required until
-   one is present.
+   one is present. With `any_of_title`, the status shows them as one row, as the spine's 24 bodies.
 2. `POST .../segment` queues one `segment` job of the missing tasks. When it commits its revision,
    `Service._queue_report` queues the report there; a refusal leaves the segmentation done.
    `reports.spare` first leaves out new structures the report does not read whose name another
@@ -470,11 +473,18 @@ report code. A corrected mask therefore gives corrected numbers. Adding a report
    plus 30 mm on the CT's own voxel lattice and writes them under upstream's file names, with empty
    masks for names the revision lacks. It then calls upstream's functions in upstream's order, so
    the numbers are upstream's for the same masks. A test runs upstream's own generator on the same
-   folders and compares, for each report.
+   folders and compares, for each report. The spine worker instead crops to the bodies plus 45 mm
+   front-back and head-foot and 10 mm left-right, builds upstream's label volume in memory and
+   calls `VertebraeProcessor` as its command does; its test compares with upstream's
+   `get_verte_height` on the uncropped scan. A body touching the scan's edge still touches the crop's,
+   and each crop edge sits an even number of voxels inside the scan's, as upstream rounds a half
+   slice to the even one.
 5. Differences from upstream's command: no contrast phase model (it needs xgboost); a median
    aorta value under 100 HU counts as native. No 3D previews, HTML page or page frame around the
    curved view, which need a display server and wkhtmltoimage. The pulmonary report likewise
-   skips its 3D previews and HTML page. No usage statistics are sent.
+   skips its 3D previews and HTML page. The spine report has no contrast phase model, so the result
+   carries all three density thresholds, and no front page; its picture is drawn at 200 dpi, not
+   600, with upstream's slice numbers of the whole scan. No usage statistics are sent.
 6. Upstream's landmark points are mapped through its grid's affine to RAS mm. Each landmark's outline
    is its cut plane's voxels projected into the plane, filled and cut by 72 rays from the centre.
 
@@ -631,7 +641,7 @@ study. `orthanc_view_exports.py` subclasses the SEG manager. The instance is a p
 of reference, and nothing measures from it.
 
 **Report export** puts a measurement report's page, drawn by `report_page.py`, and its curved view
-when it has one into one such series, by the view's delivery (`report_exports.py`).
+or spine picture when it has one into one such series, by the view's delivery (`report_exports.py`).
 
 **OsiriX ROI export** is a second format of SEG export, through Orthanc only. `osirix_roi.py` writes
 one native brush report per source slice that a selected mask touches, and `osirix_roi_exports.py`

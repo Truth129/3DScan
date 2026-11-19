@@ -910,7 +910,7 @@ class Service:
             run_manifest = json.loads((inference / "inference.json").read_text())
             atomic_text(cached, json.dumps({"structures": structures, "model_fingerprint": run_manifest["model_fingerprint"], "manifest": run_manifest}))
         self.stage(job, "Checking masks and generating surfaces")
-        from .segmentation_merge import merge_task_outputs
+        from .segmentation_merge import REPLACEMENT_POLICY, merge_task_outputs
 
         spared = []
         if job["payload"].get("report"):
@@ -945,6 +945,7 @@ class Service:
                 "input_revision_id": parent["id"],
                 **{key: run_manifest[key] for key in ("run_id", "engine_version", "started_at", "finished_at") if key in run_manifest},
                 "model_fingerprint_digest": run_manifest.get("model_fingerprint", {}).get("digest"),
+                "replacement_policy": REPLACEMENT_POLICY,
             },
         ]
         atomic_json(Path(result["directory"]) / "revision.json", result)

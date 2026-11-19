@@ -490,6 +490,9 @@ See [Choosing a path](#choosing-a-path).
 - A pinned nnU-Net model runs alone, with no crop or small-blob options, and needs its weights
   installed. Its structures match only that model's. `imagecasx_cas_net` is pinned the same way,
   though it is not an nnU-Net, and its run's source is also `nnunet_model`.
+- `vertebrae_pp` and `vertebrae_pp_refined` mark vertebral bodies, named `Vertebral body L1
+  (TotalSegmentator)`. They match only each other's outputs, so a body stays beside Whole body's
+  whole vertebra of the same level.
 - `operation` records `replacement_policy`, `replaced_structure_ids` and `replacement_id_map`, plus
   [`runtime`](#what-a-run-records) if the run named a path.
 
@@ -1184,8 +1187,9 @@ A later revision with the same masks reuses it.
 
 Research use only, not for diagnostic use. A report measures a saved revision's masks with
 TotalSegmentator's own report code. Its masks come from a recipe of TotalSegmentator tasks saved
-as a normal revision, so a corrected mask gives corrected numbers. There are two, from
-TotalSegmentator 2.18.0: `aorta` and `pulmonary` (pulmonary arteries). Routes are relative to
+as a normal revision, so a corrected mask gives corrected numbers. There are three, from
+TotalSegmentator 2.18.0: `aorta`, `pulmonary` (pulmonary arteries) and `spine` (spine fractures).
+Routes are relative to
 `.../revisions/{rid}/reports`.
 
 **`GET .../reports`** returns `{reports: [ReportStatus]}`, and **`GET .../reports/{report}`**
@@ -1193,7 +1197,7 @@ returns `{report: ReportStatus, analyses: [...]}`, this revision's runs newest f
 `{analysis_id, state, stage, created_at, finished_at, error, summary}`.
 
 ```text
-{id: "aorta" | "pulmonary", title, engine, available, reason, ready,
+{id: "aorta" | "pulmonary" | "spine", title, engine, available, reason, ready,
  needs: [{id, title, task, task_title, required, state: "present" | "missing" | "not_found", structure_id}],
  missing_tasks: [{id, title, license_required}], can_segment, segment_reason}
 ```
@@ -1201,14 +1205,20 @@ returns `{report: ReportStatus, analyses: [...]}`, this revision's runs newest f
 - A need matches the structure `task:label`, by its source task and class, never by name.
 - `missing`: its task never ran on this revision's line of segmentations, or a same-named segment
   of another task that ran after it may have replaced its mask. Where `segmentation_runs` does not
-  give the order, any same-named segment of another task counts. `not_found`: it ran and kept
-  nothing, or the kept mask is empty.
+  give the order, any same-named segment of another task counts. A vertebral body and the whole
+  vertebra of its level count as same-named only through runs from before body masks were kept
+  apart, which swapped them. `not_found`: it ran and
+  kept nothing, or the kept mask is empty.
 - `available` is false, with `reason`, for a candidate alias, a non-CT image, a sheared grid, or a
   TotalSegmentator without the report's code. `reason` also names a required need not found.
 - `ready`: every required need is present, so a start is accepted.
 - `pulmonary` needs the pulmonary artery and at least one of its five landmarks. Until one landmark
   is present, all five have `required` true. When its task ran and found none, `reason` is
   `None of the five pulmonary landmarks was found`.
+- `spine` needs at least one of the 24 vertebral bodies C1 to L5 of `vertebrae_pp_refined`, shown as
+  one need `{id: "any_of", title: "Vertebral bodies", required: true, structure_id: null}`: `present`
+  once any body is, `not_found` once the task ran and found none (`reason` is `No vertebral body was
+  found`), else `missing`.
 - `missing_tasks` are the recipe tasks with a missing need. `can_segment` is false, with
   `segment_reason`, unless the revision is the case's active one, something is missing, no required
   need was looked for and not found, the case is not the synthetic demo, and any license they need
@@ -1220,8 +1230,10 @@ for a candidate alias, a report that is not `available`, or a required need not 
 
 **`POST .../reports/{report}/segment`** takes `{inference_path?}` and returns one `segment` Job
 running the missing tasks in recipe order. Once it saves its revision, the report is queued on that
-revision. If a required structure was not found, no report is queued and the status says why; the
-segmentation still succeeds. It is 400 when `can_segment` is false.
+revision. If a required structure was not found, no report is queued and the status says why. A run
+that keeps no mask, as the spine's when it finds no body, fails with the engine's `No nonempty
+structures were found in the requested task outputs` and saves no revision, as any segmentation does.
+It is 400 when `can_segment` is false.
 
 - Unlike `POST /api/cases/{id}/segment`, it leaves out a new structure the report does not read
   when a segment of a task outside this run has the same anatomical name, so the pulmonary
@@ -1297,6 +1309,40 @@ The pulmonary result:
 - On a synthetic phantom a 24 mm trunk reads 25 mm at the annulus and 26 mm where the artery is
   cut, and 16 mm branches read 18 mm.
 - `files` holds `plane-N.png` for each measured landmark.
+
+The spine result:
+
+```text
+{format: "scan3d-report-v1", notice, report: "spine", analysis_id, case_id, revision_id, key,
+ created_at, engine: {name: "TotalSegmentator", version, report_version}, inputs: [{need, structure_id}],
+ vertebrae: [{number, id, name, available, unavailable_reason,
+              heights: [{id: "posterior" | "middle" | "anterior", mm, ends}],
+              height_difference_percent, height_flag, volume_ml, small_body, mean_hu, median_hu,
+              centre, normal, outline}],
+ lumbar_max_difference_percent, density_thresholds_hu: {native, arterial, portal_venous},
+ files, warnings,
+ summary: {vertebrae_measured, vertebrae_total, flagged, max_difference_percent, max_vertebra,
+           lumbar_max_difference_percent}}
+```
+
+- `vertebrae` lists the bodies the revision has, C1 to L5. `number` is upstream's label, C1 1 to
+  L5 24. A body touching the scan's edge, which upstream skips, has `available` false and null values.
+- Upstream reads three heights on one sagittal slice of the scan's own grid, the one where they
+  differ most, along the line between the neighbouring bodies' centres. `mm` is null, with no
+  `ends`, where it found no line. A body with no body on either side is measured along the scan's
+  own axis, and a warning names it.
+- `mm` is upstream's height rounded once to 0.1 mm, as its picture prints it.
+- `height_difference_percent` is upstream's whole percent between the smallest and largest height,
+  null with fewer than two heights; `height_flag` is true when the smallest is under 80% of the
+  largest. `small_body`: under 2 ml.
+- `mean_hu` and `median_hu` are read 4 mm inside the body's edge, one decimal, and null when nothing
+  is left there. `density_thresholds_hu` are upstream's 90.25, 110.25 and 105 HU for L1 to L5.
+- `centre` is the body's centre on the measured slice, `normal` that slice's unit normal toward the
+  patient's right, and `outline` the body on it, at most 72 points.
+- `lumbar_max_difference_percent` is the largest of L1 to L5, or null. The summary's
+  `max_difference_percent` and `max_vertebra` are null when no body has a difference.
+- `files` holds `spine.png`, upstream's sagittal picture of the measured slices, or is empty when
+  upstream drew none (no measured body has a voxel on its slice).
 
 The result is saved in `cases/<case>/reports/<report>/<key>/`, keyed by the report and its code,
 the image, its grid, the masks used and the versions of TotalSegmentator and the numeric libraries.
@@ -1560,7 +1606,8 @@ access, and works for any CT or classic MR prepared from DICOM, folder and ZIP i
 ### Report DICOM export
 
 A complete [report](#measurement-reports) run becomes a new series in the original study: image 1 a
-page of the result, image 2 its curved view (`cpr.png`) when the result lists one. The server draws
+page of the result, image 2 its curved view (`cpr.png`) or spine picture (`spine.png`) when the
+result lists one. The server draws
 the page and holds the images, so there is no upload and any retry reuses them. Routes are relative
 to `.../reports/{report}/{analysis_id}`, and each is 404 for a candidate alias or a run that is not
 complete.
@@ -1571,13 +1618,13 @@ complete.
 - **`GET .../dicom-file`** and **`POST .../dicom-file`** (body `{}`) follow `dicom-view-file` and
   return a `report_file_export` job.
 - **`GET .../dicom-file/{export_id}/report.zip`** serves a stored ZIP of `<report>-report-1.dcm`
-  and, with a curved view, `-2.dcm`, each checked against its export, or 404.
+  and, with a second picture, `-2.dcm`, each checked against its export, or 404.
 
 The page shows the result's tables as the panel's Copy table does, the notice, the engine and the
 revision, and no case name or patient detail. The instances follow the view's encoding with
 `SeriesNumber` 502, `SeriesDescription` `3DScan <report> report <rev8>` and `InstanceNumber` from 1.
 The export is keyed on the result's key and each PNG's hash. `result.dicom_report` has the view's
-fields, with `instance_count` 2, or 1 without a curved view.
+fields, with `instance_count` 2, or 1 without a second picture.
 
 ## DICOMweb archive export
 

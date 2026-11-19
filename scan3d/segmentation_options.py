@@ -50,8 +50,8 @@ def _label(task: str) -> str:
 
 _DESCRIPTIONS = {
     "body": "Body outline, trunk, extremities and skin. Body and skin are derived from the predicted masks.",
-    "vertebrae_pp": "Per-vertebra C1–L5 labels with postprocessing.",
-    "vertebrae_pp_refined": "Per-vertebra C1–L5 labels refined with the vertebral-body mask.",
+    "vertebrae_pp": "Per-vertebra C1–L5 vertebral bodies with postprocessing.",
+    "vertebrae_pp_refined": "Per-vertebra C1–L5 vertebral bodies refined with the vertebral-body mask.",
     "vertebrae_body": "Vertebral bodies without the vertebral arches, plus intervertebral discs.",
     "ventricle_parts": "Twelve regions of the brain ventricles.",
     "renal_arteries": "Renal arteries, celiac trunk and superior mesenteric artery.",

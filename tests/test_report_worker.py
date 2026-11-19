@@ -1,5 +1,5 @@
 """TotalSegmentator's aorta and pulmonary artery reports measuring synthetic vessels of known width, on a
-straight and an oblique grid."""
+straight and an oblique grid, and its spine report measuring synthetic vertebral bodies of known height."""
 
 import contextlib
 import json
@@ -15,7 +15,7 @@ import pytest
 pytest.importorskip("totalsegmentator.aorta_report.pipeline")
 pytest.importorskip("totalsegmentator.pulmonary_report.pipeline")
 
-from scan3d import pulmonary_report, report_worker  # noqa: E402
+from scan3d import pulmonary_report, report_worker, spine_report  # noqa: E402
 
 RADIUS = 8.0  # mm; the tube is 16 mm across everywhere
 # Upstream dilates each cut plane by one 0.8 mm voxel before measuring and rounds to 1 mm, so its
@@ -292,3 +292,206 @@ def test_a_pulmonary_landmark_the_revision_lacks_is_not_measured(tmp_path):
     landmarks = pulmonary_report.shape(raw)["landmarks"]
     assert [entry["available"] for entry in landmarks] == [True, True, False, True, True]
     assert landmarks[2]["unavailable_reason"] == "Not measured: the pulmonary bifurcation was not found" and landmarks[2]["diameter_mm"] is None
+
+
+# The spine phantom, in RAS mm: block-shaped vertebral bodies 41 mm wide (x), 31 mm deep (y, front
+# +) and 12 voxels or 24 mm high (z) on a 1 x 1 x 2 mm grid, 8 mm apart. L1 is a wedge whose front is
+# 60% of its back, and T11 runs off the top of the scan. The scan is larger than the worker's crop.
+BODY_HEIGHT, BODY_TOPS = 24.0, {"T11": 41.0, "T12": 7.0, "L1": -25.0, "L2": -57.0, "L3": -89.0}
+SPINE_X, SPINE_Y, SPINE_Z = np.arange(-60.0, 61.0), np.arange(-70.0, 71.0), np.arange(-200.0, 40.0, 2.0)
+
+
+def spine_phantom(coordinates, back=None):
+    """Each body's mask at the voxels' RAS `coordinates`, a body named in `back` moved that far back."""
+    x, y, z = coordinates
+    masks = {}
+    for name, top in BODY_TOPS.items():
+        # The wedge's top falls from the back to 60% of the height at the front.
+        height = BODY_HEIGHT * (1 - 0.4 * np.clip((y + 15) / 30, 0, 1)) if name == "L1" else BODY_HEIGHT
+        bottom = top - BODY_HEIGHT
+        masks[f"vertebrae_{name}"] = (np.abs(x) <= 20) & (np.abs(y + (back or {}).get(name, 0)) <= 15) & (z > bottom) & (z < bottom + height)
+    return masks
+
+
+def spine_grid(flipped):
+    """The phantom's grid, straight or with its first two axes reversed, as an LPS-ordered scan's."""
+    affine = np.diag([1.0, 1.0, 2.0, 1.0])
+    affine[:3, 3] = (SPINE_X[0], SPINE_Y[0], SPINE_Z[0])
+    if flipped:
+        affine[:2, :2] = -np.eye(2)
+        affine[:2, 3] = (SPINE_X[-1], SPINE_Y[-1])
+    return affine
+
+
+@contextlib.contextmanager
+def picture_texts():
+    """The texts drawn on matplotlib axes while open, which include upstream's slice numbers, and the shape
+    of each image drawn, which shows the margins it had around the bodies."""
+    import matplotlib.axes
+
+    texts, text, imshow = [], matplotlib.axes.Axes.text, matplotlib.axes.Axes.imshow
+
+    def record(self, x, y, s, *args, **kwargs):
+        texts.append(str(s))
+        return text(self, x, y, s, *args, **kwargs)
+
+    def image(self, values, *args, **kwargs):
+        texts.append(np.shape(values))
+        return imshow(self, values, *args, **kwargs)
+
+    matplotlib.axes.Axes.text, matplotlib.axes.Axes.imshow = record, image
+    try:
+        yield texts
+    finally:
+        matplotlib.axes.Axes.text, matplotlib.axes.Axes.imshow = text, imshow
+
+
+def run_spine(folder, flipped, names=None, back=None, edit=None, value=200):
+    """The worker on the phantom's bodies in `names` (all by default), with the texts on its picture. `edit`
+    changes the masks by name first; `value` is the CT inside the bodies, 0 outside."""
+    affine = spine_grid(flipped)
+    shape = (len(SPINE_X), len(SPINE_Y), len(SPINE_Z))
+    voxels = np.stack(np.meshgrid(*(np.arange(n) for n in shape), indexing="ij"), axis=-1).reshape(-1, 3)
+    masks = spine_phantom((voxels @ affine[:3, :3].T + affine[:3, 3]).T, back)
+    masks = {name: values.reshape(shape) for name, values in masks.items() if names is None or name.removeprefix("vertebrae_") in names}
+    if edit:
+        edit(masks)
+
+    def save(name, values):
+        image = nib.Nifti1Image(values, affine)
+        image.header.set_xyzt_units("mm")
+        nib.save(image, folder / f"{name}.nii.gz")
+        return str(folder / f"{name}.nii.gz")
+
+    request = {
+        "report": "spine",
+        "ct": save("ct", np.where(np.any(list(masks.values()), axis=0), value, 0).astype(np.int16 if value == int(value) else np.float64)),
+        "masks": {name: {"path": save(name, values.astype(np.uint8)), "label": name} for name, values in masks.items()},
+        "work": str(folder / "work"),
+        "output": str(folder / "out"),
+    }
+    with picture_texts() as texts:
+        raw = report_worker.run(request)
+    return raw, request, masks, affine, texts
+
+
+def upstream_spine(request, masks, affine, folder, monkeypatch):
+    """Upstream's own measurement and picture texts on the whole scan, with all 24 labels as its command reads
+    them. The picture is drawn but not saved, which changes no text."""
+    from totalsegmentator.map_to_binary import class_map
+    from totalsegmentator.spine_report import measure_verte_height
+
+    labels = np.zeros(next(iter(masks.values())).shape, dtype=np.uint8)
+    for number, name in spine_report.LEVELS:
+        if f"vertebrae_{name}" in masks:
+            labels[masks[f"vertebrae_{name}"]] = number
+    ct = nib.as_closest_canonical(nib.load(request["ct"]))
+    verte = nib.as_closest_canonical(nib.Nifti1Image(labels, affine))
+    label_map = class_map["vertebrae_pp"]
+    monkeypatch.setattr(measure_verte_height.plt, "savefig", lambda *args, **kwargs: None)
+    folder.mkdir(exist_ok=True)
+    with picture_texts() as texts:
+        measure_verte_height.get_verte_height(
+            ct, verte, label_map, verte, {}, None, folder / "spine.png", folder / "heights.json", False, horizontal_mask_type="raw", spine_range="all"
+        )
+    return json.loads((folder / "heights.json").read_text()), texts
+
+
+@pytest.fixture(scope="module", params=[False, True], ids=["straight", "flipped"])
+def spine(request, tmp_path_factory):
+    pytest.importorskip("totalsegmentator.spine_report.measure_verte_height")
+    return run_spine(tmp_path_factory.mktemp("spine"), request.param)
+
+
+def test_every_spine_body_is_measured_at_its_known_height(spine):
+    from totalsegmentator.spine_report import measure_verte_height
+
+    raw, request, masks, affine, _ = spine
+    result = spine_report.shape(raw)
+    assert raw["unavailable"] == {"vertebrae_T11": "Its body touches the edge of the scan"}
+    assert [entry["name"] for entry in result["vertebrae"]] == ["T11", "T12", "L1", "L2", "L3"]
+    t11, *bodies = result["vertebrae"]
+    assert not t11["available"] and t11["heights"][0] == {"id": "posterior", "mm": None, "ends": None} and t11["centre"] is None
+    for entry in bodies:
+        heights = {height["id"]: height for height in entry["heights"]}
+        # The three lines run up the body's back, middle and front, on its measured slice.
+        assert [heights[key]["ends"][0][1] for key in ("posterior", "middle", "anterior")] == sorted(heights[key]["ends"][0][1] for key in heights)
+        assert all(abs(height["ends"][0][0] - entry["centre"][0]) < 1e-6 for height in entry["heights"])
+        assert entry["normal"] == [1.0, 0.0, 0.0] and len(entry["outline"]) == report_worker.RING
+        assert all(abs(x - entry["centre"][0]) < 1e-6 and abs(y) <= 16 for x, y, _ in entry["outline"])
+        # The outline spans the body on its slice, front to back and head to foot, on a grid whose slice
+        # spacing is twice its pixel spacing, and no point of it stays at the centre.
+        index = int(round((np.linalg.inv(affine) @ [*entry["centre"], 1.0])[0]))
+        section = np.argwhere(masks[entry["id"]][index])
+        section = np.column_stack((np.full(len(section), index), section)) @ affine[:3, :3].T + affine[:3, 3]
+        outline = np.array(entry["outline"])
+        for axis, step in ((1, 1.0), (2, 2.0)):
+            assert abs(outline[:, axis].min() - section[:, axis].min()) <= 1.5 * step, (entry["name"], axis)
+            assert abs(outline[:, axis].max() - section[:, axis].max()) <= 1.5 * step, (entry["name"], axis)
+        assert np.linalg.norm(outline - entry["centre"], axis=1).min() > 5
+        assert entry["volume_ml"] == pytest.approx(41 * 31 * BODY_HEIGHT / 1000 * (0.8 if entry["name"] == "L1" else 1), rel=0.06)
+        assert (entry["mean_hu"], entry["median_hu"], entry["small_body"]) == (200.0, 200.0, False)
+        # Upstream's own rule on the unrounded heights: the smallest under 80% of the largest.
+        heights_mm = {key: {"height_mm": value} for key, value in raw["geometry"][entry["id"]]["heights"].items()}
+        assert entry["height_flag"] == measure_verte_height.detect_potential_fracture(heights_mm)["is_fracture"]
+        if entry["name"] == "L1":
+            # 15% and 85% of the way across a body whose front is 60% of its back.
+            assert heights["posterior"]["mm"] == pytest.approx(BODY_HEIGHT * 0.94, abs=2.5)
+            assert heights["anterior"]["mm"] == pytest.approx(BODY_HEIGHT * 0.66, abs=2.5)
+            assert entry["height_flag"] and 20 < entry["height_difference_percent"] < 40
+        else:
+            assert all(height["mm"] == pytest.approx(BODY_HEIGHT, abs=2.5) for height in entry["heights"]), entry["name"]
+            assert not entry["height_flag"] and entry["height_difference_percent"] < 10
+    assert result["lumbar_max_difference_percent"] == bodies[1]["height_difference_percent"]
+    assert result["density_thresholds_hu"] == {"native": 90.25, "arterial": 110.25, "portal_venous": 105.0} and result["warnings"] == []
+    assert raw["files"] == ["spine.png"]
+    from PIL import Image
+
+    with Image.open(Path(request["output"]) / "spine.png") as picture:
+        assert max(picture.size) < 3000
+
+
+def test_upstreams_own_spine_measurement_gives_the_same_numbers(spine, tmp_path, monkeypatch):
+    raw, request, masks, affine, texts = spine
+    heights, upstream_texts = upstream_spine(request, masks, affine, tmp_path, monkeypatch)
+    assert heights == raw["upstream"]
+    # The picture's texts include each body's slice number, counted on the whole scan, not the crop.
+    assert texts == upstream_texts and texts
+
+
+def test_a_body_beside_a_gap_is_measured_as_upstreams_command_does(tmp_path, monkeypatch):
+    # T12's height axis runs from T11's centre, moved back, not on to L2's; L2 has no body on either side.
+    # T11 reaches down into T12, which keeps the voxels they share, and the CT is not whole numbers.
+    pytest.importorskip("totalsegmentator.spine_report.measure_verte_height")
+
+    def reach(masks):
+        masks["vertebrae_T11"][..., 102:109] = masks["vertebrae_T11"][..., [109]]
+        assert (masks["vertebrae_T11"] & masks["vertebrae_T12"]).any()
+
+    raw, request, masks, affine, texts = run_spine(tmp_path, False, ("T11", "T12", "L2"), {"T11": 3.0}, reach, 200.5)
+    assert list(raw["geometry"]) == ["vertebrae_T12", "vertebrae_L2"] and raw["unavailable"] == {"vertebrae_T11": report_worker.SPINE_EDGE}
+    assert (raw["upstream"], texts) == upstream_spine(request, masks, affine, tmp_path / "upstream", monkeypatch)
+    assert raw["warnings"] == ["L2 has no neighbouring body, so its height runs along the scan's own axis and its front and back may be swapped."]
+    # T12's heights sit just under a tie (23.6513): upstream's two-decimal JSON rounds them up again, and
+    # the result reads as the picture, which rounds the height once.
+    t12 = spine_report.shape(raw)["vertebrae"][1]
+    (text,) = (text for text in texts if isinstance(text, str) and text.startswith("T12:"))
+    assert [f"{height['mm']:.1f}" for height in reversed(t12["heights"])] == text.split(": ")[1].split(" (")[0].split(" - ")
+    assert round(raw["upstream"]["vertebrae_T12_height_middle_mm"], 1) != t12["heights"][1]["mm"]
+
+
+def test_a_body_with_nothing_on_its_slice_draws_no_picture(tmp_path, monkeypatch):
+    # L2 in two thin pieces left and right of the midline: upstream measures it on the empty slice between
+    # them and draws nothing, it holds under 2 ml, and nothing is left 4 mm inside it.
+    pytest.importorskip("totalsegmentator.spine_report.measure_verte_height")
+
+    def split(masks):
+        masks["vertebrae_L2"][41:80] = False
+
+    raw, request, masks, affine, texts = run_spine(tmp_path, False, ("L2",), edit=split)
+    assert (raw["upstream"], texts) == upstream_spine(request, masks, affine, tmp_path / "upstream", monkeypatch)
+    assert raw["files"] == [] and not (Path(request["output"]) / "spine.png").exists()
+    (l2,) = spine_report.shape(raw)["vertebrae"]
+    assert l2["available"] and [height["mm"] for height in l2["heights"]] == [None] * 3 and l2["height_difference_percent"] is None
+    assert l2["small_body"] and l2["volume_ml"] < 2 and l2["median_hu"] is None
+    assert "nothing was left inside L2, so no density is given there." in raw["warnings"][-1]

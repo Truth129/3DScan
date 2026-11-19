@@ -1,7 +1,7 @@
-"""A measurement report as a new DICOM series in its source study: a page of the result, then its curved view.
+"""A measurement report as a new DICOM series in its source study: a page of the result, then its overview picture.
 
 The view exporters own delivery, receipts and the checks on the source CT. A report differs in where
-its pictures come from: the server draws the page and holds the curved view, so any retry can run
+its pictures come from: the server draws the page and holds the overview, so any retry can run
 without a new capture. Both are retained by content at enqueue, as a capture is, and the export
 binds to a complete result, which it reads again before encoding. Each delivery has its own job
 kind, so the 3D view's listings never show a report.
@@ -32,7 +32,8 @@ REPORT_ENCODING_VERSION = 1
 _COMMENTS = (
     "3DScan research measurement report from TotalSegmentator. Not calibrated: do not measure on these images. Research use only. Not for diagnostic use."
 )
-_CURVED_VIEW = "cpr.png"
+# The picture after the page, whichever the result lists: the aorta's curved view or the spine picture.
+_OVERVIEWS = ("cpr.png", "spine.png")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +54,7 @@ class _ReportArtifact:
     source_kind: str
     series_instance_uid: DicomUID
     study_instance_uid: DicomUID
-    # In series order: the page, then the curved view when the result has one.
+    # In series order: the page, then the overview picture when the result has one.
     png_sha256s: Annotated[tuple[Digest, ...], Field(min_length=1, max_length=2)]
     created_at: str
     files: Annotated[tuple[_ViewFile, ...], Field(min_length=1, max_length=2)]
@@ -90,8 +91,8 @@ class _ReportImages:
         from .report_page import render
 
         images = [render(result, reports.definition(report_id).title)]
-        if _CURVED_VIEW in result["files"]:
-            images.append(reports.picture(self.service, case_id, revision_id, report_id, analysis_id, _CURVED_VIEW))
+        if overview := next((name for name in _OVERVIEWS if name in result["files"]), None):
+            images.append(reports.picture(self.service, case_id, revision_id, report_id, analysis_id, overview))
         return images
 
     def start(self, case_id, revision_id, report_id, analysis_id, destination=None, *, resend=False):

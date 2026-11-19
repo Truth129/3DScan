@@ -60,6 +60,8 @@ def test_bones_default_to_a_yellow_that_shows_on_bright_ct_bone(name, task):
         ("disc_L5_S", "totalspineseg", "Disc L5 S (TotalSpineSeg)"),
         ("disc_C7_T1", "totalspineseg", "Disc C7 T1 (TotalSpineSeg)"),
         ("vertebrae_body", "vertebrae_body", "Vertebrae body (TotalSegmentator)"),
+        ("vertebrae_L1", "vertebrae_pp_refined", "Vertebral body L1 (TotalSegmentator)"),
+        ("vertebrae_C7", "vertebrae_pp", "Vertebral body C7 (TotalSegmentator)"),
         ("coronary_arteries", "imagecasx_cas_net", "Coronary arteries (CAS-Net)"),
     ],
 )

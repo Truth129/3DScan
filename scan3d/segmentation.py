@@ -65,6 +65,9 @@ def _structure_name(name, task, legacy=False):
     label = name.replace("_", " ").capitalize()
     if legacy:
         return f"{label} ({nnunet_models.MODELS[task].name})" if task in nnunet_models.MODELS else label
+    if task in ("vertebrae_pp", "vertebrae_pp_refined") and name.startswith("vertebrae_"):
+        # A vertebral body, which sits beside Whole body's whole vertebra of the same label (segmentation_merge).
+        label = label.replace("Vertebrae", "Vertebral body", 1)
     if name.startswith(("vertebrae_", "disc_")):
         first, *levels = label.split(" ")
         label = " ".join((first, *(level.upper() if re.fullmatch(r"[ctls]\d*", level) else level for level in levels)))

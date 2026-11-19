@@ -10,7 +10,7 @@ from PIL import Image
 import pydicom
 import pytest
 
-from scan3d import aorta_report, pulmonary_report, report_page, reports
+from scan3d import aorta_report, pulmonary_report, report_page, reports, spine_report
 from scan3d.dicom_view import DicomViewError, ImageText, export_images, export_view
 from scan3d.store import identifier, now
 from test_dicom_seg import fixture  # noqa: F401
@@ -49,24 +49,44 @@ def pulmonary_raw():
     }
 
 
+def spine_raw():
+    """What the worker hands back for the spine report: L1 measured and flagged, L2 at the scan's edge."""
+    upstream = {f"vertebrae_L1_height_{name}_mm": value for name, value in (("posterior", 25.46), ("middle", 23.0), ("anterior", 19.62))}
+    upstream.update(
+        vertebrae_L1_height_difference=0.23, vertebrae_L1_volume_ml=1.94, vertebrae_L1_intensity=141.2, vertebrae_L1_intensity_median=86.5, LWS_max=0.23
+    )
+    ends = {name: [[0, y, 0], [0, y, 20]] for name, y in (("posterior", -10), ("middle", 0), ("anterior", 10))}
+    heights = {"posterior": 25.46, "middle": 23.0, "anterior": 19.62}
+    geometry = {"centre": [0, 0, 10], "normal": [1, 0, 0], "ends": ends, "heights": heights, "outline": [[0, -15, 0]], "height_flag": True, "small_body": True}
+    return {
+        "upstream": upstream,
+        "geometry": {"vertebrae_L1": geometry},
+        "unavailable": {"vertebrae_L2": "Its body touches the edge of the scan"},
+        "thresholds": {"native": 90.25, "arterial": 110.25, "portal_venous": 105.0},
+        "warnings": [],
+    }
+
+
 def report_result(case_id="synthetic-case", revision_id=REVISION, key="ab" * 32, analysis_id="synthetic-analysis", dissection=True, report="aorta"):
     engine = {"name": "TotalSegmentator", "version": "2.18.0", "report_version": "0.1.2"}
     fields = {"format": reports.FORMAT, "notice": reports.NOTICE, "report": report, "analysis_id": analysis_id, "case_id": case_id}
     fields.update(revision_id=revision_id, key=key, created_at="2026-11-18T00:00:00+00:00", engine=engine, inputs=[])
     if report == "pulmonary":
         return {**fields, **pulmonary_report.shape(pulmonary_raw()), "files": [], "summary": {}}
+    if report == "spine":
+        return {**fields, **spine_report.shape(spine_raw()), "files": ["spine.png"], "summary": {}}
     return {**fields, **aorta_report.shape(raw(dissection)), "files": ["cpr.png"], "summary": {}}
 
 
 def fake_report(service, case_id, revision_id, report="aorta"):
-    """A complete run of this revision, as `reports.run` leaves it, with no worker; only the aorta has a curved view."""
+    """A complete run of this revision, as `reports.run` leaves it, with no worker; the aorta has a curved view and the spine a picture."""
     analysis_id, key = identifier(), hashlib.sha256(revision_id.encode()).hexdigest()
     folder = reports._folder(service, case_id, reports.definition(report), key)
     folder.mkdir(parents=True)
     files = {}
-    if report == "aorta":
-        (folder / "cpr.png").write_bytes(CURVED)
-        files["cpr.png"] = hashlib.sha256(CURVED).hexdigest()
+    if picture := {"aorta": "cpr.png", "spine": "spine.png"}.get(report):
+        (folder / picture).write_bytes(CURVED)
+        files[picture] = hashlib.sha256(CURVED).hexdigest()
     body = json.dumps(report_result(case_id, revision_id, key, analysis_id, report=report))
     (folder / "result.json").write_text(body)
     marker = {"format": reports.FORMAT, "key": key, "result_sha256": hashlib.sha256(body.encode()).hexdigest(), "files": files}
@@ -201,3 +221,35 @@ def test_orthanc_archives_and_sends_the_report_as_one_series(view):  # noqa: F81
     # The 3D view's dialog lists its own exports only.
     assert view.http.get(view.url).json()["exports"] == []
     assert [item["id"] for item in view.http.get(url).json()["exports"]] == [job["id"]]
+
+
+def test_a_spine_report_saves_its_page_and_picture(tmp_path, fixture):  # noqa: F811
+    result = report_result(report="spine")
+    head, rows, _ = report_page._vertebrae(result)
+    assert head == ["Vertebra", "Posterior (mm)", "Middle (mm)", "Anterior (mm)", "Difference (%)", "Volume (ml)", "Median (HU)", "Note"]
+    assert rows == [
+        ["L1", "25.5", "23.0", "19.6", "23", "1.9", "87", "Height difference over 20%; Body under 2 ml"],
+        ["L2", "", "", "", "", "", "", "Its body touches the edge of the scan"],
+    ]
+    assert (
+        report_page._thresholds(result)
+        == "TotalSegmentator reads L1 to L5 as low density under 90 HU without contrast, 110 HU arterial and 105 HU portal venous."
+    )
+    with Image.open(BytesIO(report_page.render(result, "Spine fractures"))) as image:
+        assert image.width == 1600
+    # A body with fewer than two heights has no difference.
+    result["vertebrae"][0]["height_difference_percent"] = None
+    assert report_page._vertebrae(result)[1][0][4] == ""
+    folder = make_rig(tmp_path, fixture)
+    case_id, revision_id = folder.case["id"], folder.saved["id"]
+    analysis = fake_report(folder.service, case_id, revision_id, report="spine")
+    url = f"/api/cases/{case_id}/revisions/{revision_id}/reports/spine/{analysis}/dicom-file"
+    finished = execute(folder, folder.http.post(url, json={}).json())
+    assert finished["status"] == "completed", finished["error"]
+    exported = finished["result"]["dicom_report"]
+    with zipfile.ZipFile(BytesIO(folder.http.get(f"{url}/{exported['export_id']}/report.zip").content)) as archive:
+        assert archive.namelist() == ["spine-report-1.dcm", "spine-report-2.dcm"]
+        page, picture = (pydicom.dcmread(BytesIO(archive.read(name))) for name in archive.namelist())
+    assert page.SeriesDescription == f"3DScan spine report {revision_id[:8]}" and page.Columns == 1600
+    np.testing.assert_array_equal(picture.pixel_array, pixels(CURVED))
+    folder.http.close()

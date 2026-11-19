@@ -17,13 +17,14 @@ from pathlib import Path
 import re
 import shutil
 import sys
+import types
 
 import nibabel as nib
 import numpy as np
 from scipy import ndimage
 
 from .fileio import atomic_json
-from .imaging import _binary, _image
+from .imaging import _binary, _foreground_bounds, _image
 
 NATIVE_HU = 100  # median CT value in the aorta below which the scan counts as native, as no contrast reached it
 FALSE_LUMEN_ML = 5.0  # the dissection model leaves stray false lumen under 1 ml on normal aortas; a real one is far larger
@@ -52,6 +53,11 @@ _PULMONARY = {
     "pul_right_start": "start of the right pulmonary artery",
 }
 NO_LANDMARKS = "None of the five pulmonary landmarks was found"
+NO_BODY = "No vertebral body was found"
+SPINE_EDGE = "Its body touches the edge of the scan"
+# Kept around the vertebral bodies: along the axes nearest front-back and head-foot, past the 40 mm
+# upstream pads its picture by, and along the axis nearest left-right, past its 3 and 4 mm erosions.
+SPINE_MARGIN_MM = (45.0, 10.0)
 # Upstream's errors, said as what the reader can act on.
 _FAILURES = {
     "annulus mask is empty": "The aortic annulus mask is empty near the aorta",
@@ -472,7 +478,155 @@ def _numbers(landmark):
     return {key: value for key, value in landmark.items() if key != "roi"}
 
 
-WORKERS = {"aorta": aorta, "pulmonary": pulmonary}
+def spine(request, progress):
+    """TotalSegmentator's spine report from its vertebral heights through its combined picture, in upstream's
+    order, without its contrast phase classifier and front page, which change no measured number."""
+    work, output = Path(request["work"]), Path(request["output"])
+    output.mkdir(parents=True, exist_ok=True)
+    try:
+        from totalsegmentator.bin.totalseg_spine_report import ART_HU_ADDON, HU_THRESHOLD, PV_HU_ADDON, VERSION
+        from totalsegmentator.map_to_binary import class_map
+        from totalsegmentator.spine_report import measure_verte_height as upstream
+    except ImportError as error:
+        raise Failure(f"TotalSegmentator's spine report could not load: {error}") from error
+
+    progress("Cropping the scan")
+    image, affine = _image(Path(request["ct"]))
+    numbers = {name: number for number, name in class_map["vertebrae_pp"].items()}
+    needs = {mask["label"]: need for need, mask in request["masks"].items()}
+    # Each body's own box, so the scan-sized masks are read once and never held together.
+    boxes = {}
+    for label in sorted(needs, key=numbers.__getitem__):
+        values = _binary(Path(request["masks"][needs[label]]["path"]), image, affine)[0]
+        if (found := _foreground_bounds(values)) is not None:
+            low, high = found[0], found[1] + 1
+            # A copy, as a view would keep the whole mask.
+            boxes[label] = (low, values[tuple(slice(int(a), int(b)) for a, b in zip(low, high))].copy())
+        del values
+    if not boxes:
+        raise Failure(NO_BODY)
+    # The crop keeps the CT's own voxel lattice, so upstream measures the same voxels as on the whole scan.
+    # Clamped to the scan, a body touching its edge still touches the crop's, which upstream refuses to
+    # measure, and any other body stays SPINE_MARGIN_MM inside.
+    spacing = np.linalg.norm(affine[:3, :3], axis=0)
+    across = np.argmax(np.abs(affine[:3, :3] / spacing), axis=0) == 0  # the voxel axis nearest left-right
+    margin = np.ceil(np.where(across, SPINE_MARGIN_MM[1], SPINE_MARGIN_MM[0]) / spacing).astype(int)
+    low = np.maximum(np.min([box[0] for box in boxes.values()], axis=0) - margin, 0)
+    high = np.minimum(np.max([box[0] + box[1].shape for box in boxes.values()], axis=0) + margin, image.shape)
+    # Even offsets from both ends: upstream's fallback slice rounds a centroid's half to the even slice.
+    low, high = low - low % 2, high + (np.array(image.shape) - high) % 2
+    window = tuple(slice(int(a), int(b)) for a, b in zip(low, high))
+    cropped = affine.copy()
+    cropped[:3, 3] = _points(affine, [low])[0]
+    labels = np.zeros(tuple(high - low), dtype=np.uint8)
+    # C1 to L5, so the lower body keeps a voxel two corrected masks share.
+    for label, (start, values) in boxes.items():
+        labels[tuple(slice(int(a), int(a) + n) for a, n in zip(start - low, values.shape))][values] = numbers[label]
+    ct = np.asarray(image.dataobj[window], dtype=np.float64)
+    if np.array_equal(ct, np.round(ct)) and ct.min() >= -32768 and ct.max() <= 32767:
+        ct = ct.astype(np.int16)
+
+    def canonical(values):
+        crop = nib.Nifti1Image(values, cropped)
+        crop.header.set_xyzt_units("mm")
+        return nib.as_closest_canonical(crop)
+
+    ct_img, verte_img = canonical(ct), canonical(labels)
+    del ct
+    found = set(np.unique(labels).tolist())
+
+    # Upstream's only warnings on this path are prints starting "Warning:", which go to the log: an empty
+    # mask, printed for each absent body as in its own run, and "No vertebrae body mask found, using full
+    # vertebrae masks", which is how its own command runs.
+    progress("Measuring vertebrae")
+    # All 24 labels, as upstream's command reads them from its output's header, present or not: an absent
+    # body keeps an empty centroid, so a body beside a gap takes its height axis as upstream's command does.
+    processor = upstream.VertebraeProcessor(ct_img, verte_img, class_map["vertebrae_pp"], verte_img, {}, horizontal_mask_type="raw", spine_range="all")
+    info = processor.process_vertebrae()
+    work.mkdir(parents=True, exist_ok=True)
+    upstream.save_results(info, work / "heights.json")
+    results = json.loads((work / "heights.json").read_text())
+
+    files = []
+    if info:
+        progress("Drawing the picture")
+        # Upstream prints each body's slice number counted on the whole scan's canonical first axis, from
+        # ct_data.shape[0], the only thing it reads of ct_data there; the crop's would count from the crop.
+        axis = int(np.flatnonzero(nib.io_orientation(affine)[:, 0] == 0)[0])
+        flipped = nib.io_orientation(affine)[axis, 1] < 0
+        length = int(high[axis]) if flipped else image.shape[axis] - int(low[axis])
+        savefig, annotate = upstream.plt.savefig, upstream._add_combined_annotations
+        # Upstream saves at 600 dpi, about 4800 x 7200 pixels, far beyond a DICOM Secondary Capture's use.
+        upstream.plt.savefig = lambda *args, **kwargs: savefig(*args, **{**kwargs, "dpi": 200})
+        upstream._add_combined_annotations = lambda ax, ct_data, *args, **kwargs: annotate(ax, types.SimpleNamespace(shape=(length,)), *args, **kwargs)
+        try:
+            upstream.create_combined_spine_visualization(ct_img, processor.ct_data, info, list(info), output / "spine.png", False, "all")
+        finally:
+            upstream.plt.savefig, upstream._add_combined_annotations = savefig, annotate
+        # Upstream draws nothing when no measured body has a voxel on its slice.
+        if (output / "spine.png").is_file():
+            files.append("spine.png")
+
+    progress("Saving")
+    canon = np.asarray(ct_img.affine, dtype=float)
+    normal = canon[:3, 0] / np.linalg.norm(canon[:3, 0])  # the canonical first axis, toward the patient's right
+    # The coarser of the slice's two spacings: _ring closes gaps of a few of its pixels, so on the finer one
+    # rows a slice spacing apart stay apart and the outline stops at the first gap.
+    voxel = float(max(ct_img.header.get_zooms()[1:3]))
+    geometry, unavailable = {}, {}
+    for label, entry in info.items():
+        x = entry["x_slice"]
+        centre = _points(canon, [(x, entry["centroid"][1], entry["centroid"][2])])[0]
+        ends, heights = {}, {}
+        for key, measurement in entry["height_measurements"].items():
+            if measurement["height_start"] and measurement["height_end"]:
+                ends[upstream.POSITION_MAPPING[key]] = _points(canon, [(x, *measurement["height_start"]), (x, *measurement["height_end"])]).tolist()
+                # Unrounded, as the picture prints it: its two-decimal JSON rounded again can differ by 0.1 mm.
+                heights[upstream.POSITION_MAPPING[key]] = float(measurement["height_mm"])
+        section = np.argwhere(entry["body_mask"][x])
+        outline = _ring(_points(canon, np.column_stack((np.full(len(section), x), section))), centre, normal, voxel) if len(section) else np.empty((0, 3))
+        geometry[needs[label]] = {
+            "centre": centre.tolist(),
+            "normal": normal.tolist(),
+            "ends": ends,
+            "heights": heights,
+            "outline": outline.tolist(),
+            "height_flag": bool(upstream.detect_potential_fracture(entry["height_measurements"])["is_fracture"]),
+            "small_body": entry["body_volume_mm3"] / 1000 < upstream.BODY_VOLUME_YELLOW_THRESHOLD_ML,
+        }
+    for label, need in needs.items():
+        if label not in info:
+            body = labels == numbers[label]
+            edge = body.any() and any(body.take(index, axis=axis).any() for axis in range(3) for index in (0, -1))
+            unavailable[need] = SPINE_EDGE if edge else "Could not be measured"
+    warnings = []
+    # Upstream takes a body's height axis from its neighbours' centres, and the scan's own axis without either.
+    alone = [label.removeprefix("vertebrae_") for label in info if not {numbers[label] - 1, numbers[label] + 1} & (found - {0})]
+    if alone:
+        one = len(alone) == 1
+        warnings.append(
+            f"{' and '.join(alone)} {'has' if one else 'have'} no neighbouring body, so {'its height runs' if one else 'their heights run'} along the scan's own "
+            f"axis and {'its front and back' if one else 'their fronts and backs'} may be swapped."
+        )
+    hollow = [label.removeprefix("vertebrae_") for label, entry in info.items() if entry["mean_intensity"] == 0.0 and entry["median_intensity"] == 0.0]
+    if hollow:
+        warnings.append(
+            f"TotalSegmentator reads CT values 4 mm inside each body's edge, and nothing was left inside {' and '.join(hollow)}, so no density is given there."
+        )
+    return {
+        "engine_version": metadata.version("TotalSegmentator"),
+        "report_version": VERSION,
+        "upstream": _plain(results),
+        "geometry": geometry,
+        "unavailable": unavailable,
+        # Upstream's own command never reaches its arterial threshold, because its phase names are arterial_early and arterial_late.
+        "thresholds": {"native": HU_THRESHOLD, "arterial": HU_THRESHOLD + ART_HU_ADDON, "portal_venous": HU_THRESHOLD + PV_HU_ADDON},
+        "warnings": warnings,
+        "files": files,
+    }
+
+
+WORKERS = {"aorta": aorta, "pulmonary": pulmonary, "spine": spine}
 
 
 def run(request):

@@ -45,7 +45,7 @@ KIND = "report"
 FORMAT = "scan3d-report-v1"
 NOTICE = "Research use only. Not for diagnostic use."
 _KEY = re.compile(r"[0-9a-f]{64}")
-_FILE = re.compile(r"(cpr|plane-\d{1,2})\.png")
+_FILE = re.compile(r"(cpr|spine|plane-\d{1,2})\.png")
 _LOG_TAIL = 4000  # bytes of a failed worker's log kept in the service log
 # Upstream's report code measures with these; one that is absent (CI installs TotalSegmentator without
 # its dependencies) reads as None.
@@ -76,13 +76,14 @@ class Definition:
     summary: Callable[[dict], dict]  # a result's summary for the list of runs
     any_of: tuple[str, ...] = ()  # need ids of which at least one must be present; all are required until one is
     any_of_reason: str = ""  # said when the task ran and found none of `any_of`
+    any_of_title: str = ""  # when set, `status` shows the `any_of` needs as one row with this title
 
 
 @cache
 def _definitions():
-    from . import aorta_report, pulmonary_report
+    from . import aorta_report, pulmonary_report, spine_report
 
-    return {definition.id: definition for definition in (aorta_report.DEFINITION, pulmonary_report.DEFINITION)}
+    return {definition.id: definition for definition in (aorta_report.DEFINITION, pulmonary_report.DEFINITION, spine_report.DEFINITION)}
 
 
 @cache
@@ -216,7 +217,7 @@ def status(service, case_id, revision_id, report_id):
         "available": unavailable is None,
         "reason": reason,
         "ready": ready,
-        "needs": needs,
+        "needs": _shown(report, needs),
         "missing_tasks": missing_tasks,
         "can_segment": segment_reason is None,
         "segment_reason": segment_reason,
@@ -506,15 +507,24 @@ def _unavailable(service, revision, report):
 def _needs(revision, report):
     """Each need's state on this revision: present, missing (its task never ran on this line, or a run of
     another task after its last run may have replaced its mask) or not_found."""
-    from .segmentation_merge import _identity
+    from .nnunet_models import MODELS
+    from .segmentation_merge import REPLACEMENT_POLICY, _anatomical_name, _family
+
+    def _identity(structure):
+        # The merge's identity without its vertebral-body family: on revision lines from before that family,
+        # a body and the whole vertebra of its level took each other's mask.
+        return structure.get("task") if structure.get("task") in MODELS else None, _anatomical_name(structure)
 
     structures = {structure["id"]: structure for structure in revision["structures"]}
     # The tasks run on this revision's line of segmentations, with the index of each one's last run; a
     # structure kept from a task shows it ran on revisions from before runs were recorded.
-    last = {}
+    # `legacy` is the same for runs not recorded as merged under today's rule.
+    last, legacy = {}, {}
     for index, run in enumerate(revision.get("segmentation_runs") or ()):
         for task in run.get("tasks") or ():
             last[task] = index
+            if run.get("replacement_policy") != REPLACEMENT_POLICY:
+                legacy[task] = index
     ran = set(last) | {structure.get("task") for structure in revision["structures"]}
     # A later run of another task takes a same-named structure (segmentation_merge), which is not this
     # task finding nothing: running the task again brings the structure back. A hand-drawn one is not.
@@ -530,9 +540,14 @@ def _needs(revision, report):
         # Only a holder that ran after the need's task can have taken its mask. When the need's task ran
         # last, or in the same run, it found nothing itself, and offering it again would find nothing
         # again. Without a recorded order (revisions from before runs were recorded) it may have been.
-        if task not in last:
-            return bool(holders)
-        return any(holder not in last or last[holder] > last[task] for holder in holders)
+        # A holder of another merge family (a whole vertebra for a body) can have taken it only through a
+        # run merged before body masks had their own family; under today's rule it holds its own mask.
+        def took(holder):
+            if _family(holder) == _family(task):
+                return holder not in last or task not in last or last[holder] > last[task]
+            return holder not in last or (holder in legacy and (task not in last or legacy[holder] > last[task]))
+
+        return any(took(holder) for holder in holders)
 
     needs = []
     for need in report.needs:
@@ -565,6 +580,26 @@ def _needs(revision, report):
     return needs
 
 
+def _shown(report, needs):
+    """The needs as `status` returns them: with `any_of_title`, the `any_of` needs are one row, where the
+    first of them was, present once any is and not found once all are."""
+    group = [need for need in needs if need["id"] in report.any_of]
+    if not report.any_of_title or not group:
+        return needs
+    states = {need["state"] for need in group}
+    row = {
+        "id": "any_of",
+        "title": report.any_of_title,
+        "task": group[0]["task"],
+        "task_title": group[0]["task_title"],
+        "required": True,
+        "state": "present" if "present" in states else "not_found" if states == {"not_found"} else "missing",
+        "structure_id": None,
+    }
+    first = needs.index(group[0])
+    return [*needs[:first], row, *(need for need in needs[first:] if need["id"] not in report.any_of)]
+
+
 def _prepare(service, case_id, revision_id, report):
     """The revision, its inputs by need and the key, refusing anything that cannot run."""
     if revision_id.startswith("review-"):
@@ -573,11 +608,14 @@ def _prepare(service, case_id, revision_id, report):
     if reason := _unavailable(service, revision, report):
         raise ValueError(reason)
     needs = _needs(revision, report)
-    lost = [need["title"].lower() for need in needs if need["required"] and need["state"] != "present"]
+    lost = [need for need in needs if need["required"] and need["state"] != "present"]
     if report.any_of and all(need["state"] == "not_found" for need in needs if need["id"] in report.any_of):
         raise ValueError(report.any_of_reason)
+    # A titled `any_of` group is named once, and is plural.
+    named = list(dict.fromkeys((report.any_of_title if need["id"] in report.any_of and report.any_of_title else need["title"]).lower() for need in lost))
     if lost:
-        raise ValueError(f"The {' and the '.join(lost)} {'are' if len(lost) > 1 else 'is'} not in this revision. Run the missing segmentation first.")
+        plural = len(named) > 1 or len(named) < len(lost)
+        raise ValueError(f"The {' and the '.join(named)} {'are' if plural else 'is'} not in this revision. Run the missing segmentation first.")
     inputs = {need["id"]: need["structure_id"] for need in needs if need["state"] == "present"}
     structures = {structure["id"]: structure for structure in revision["structures"]}
     try:
