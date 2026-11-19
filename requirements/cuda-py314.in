@@ -12,6 +12,7 @@ scipy
 nibabel
 pydicom
 requests
+monai==1.6.2
 nnunetv2==2.8.1
 onnxruntime==1.31.1
 TotalSegmentator==2.18.0

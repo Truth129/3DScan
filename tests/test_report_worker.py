@@ -1,5 +1,6 @@
 """TotalSegmentator's aorta and pulmonary artery reports measuring synthetic vessels of known width, on a
-straight and an oblique grid, and its spine report measuring synthetic vertebral bodies of known height."""
+straight and an oblique grid, its spine report measuring synthetic vertebral bodies of known height, and
+its body stats command called as upstream's own generator, here a stand-in."""
 
 import contextlib
 import json
@@ -15,7 +16,7 @@ import pytest
 pytest.importorskip("totalsegmentator.aorta_report.pipeline")
 pytest.importorskip("totalsegmentator.pulmonary_report.pipeline")
 
-from scan3d import pulmonary_report, report_worker, spine_report  # noqa: E402
+from scan3d import body_stats_report, pulmonary_report, report_worker, spine_report  # noqa: E402
 
 RADIUS = 8.0  # mm; the tube is 16 mm across everywhere
 # Upstream dilates each cut plane by one 0.8 mm voxel before measuring and rounds to 1 mm, so its
@@ -496,3 +497,67 @@ def test_a_body_with_nothing_on_its_slice_draws_no_picture(tmp_path, monkeypatch
     assert l2["small_body"] and l2["volume_ml"] < 2 and l2["median_hu"] is None
     assert "nothing was left inside L2, so no density is given there." in raw["warnings"][-1]
     assert "No height line was found on L2: the mask may be in pieces or cover more than one body." in raw["warnings"]
+
+
+@pytest.fixture
+def body_stats(tmp_path, monkeypatch):
+    """A body stats request on a stand-in for upstream's command, which records how it was called; the
+    model folder has its five folds for CT and none for MR."""
+    monkeypatch.setenv("TOTALSEG_WEIGHTS_PATH", str(tmp_path / "weights"))
+    for fold in range(5):
+        checkpoints = body_stats_report.folder("CT") / f"version_{fold}" / "checkpoints"
+        checkpoints.mkdir(parents=True)
+        (checkpoints / "last.ckpt").write_bytes(b"synthetic")
+    calls, behaviour = [], {}
+
+    def get_body_stats(img, modality, **options):
+        calls.append((img, modality, options))
+        if "raise" in behaviour:
+            raise behaviour["raise"]
+        yield {"id": 1, "progress": 2, "status": "Loading data"}
+        yield {"id": 2, "progress": 75, "status": "Predicting body stats with CNN"}
+        result = {"weight": {"value": 96.57, "unit": "kg", "min": np.float32(90.45), "max": 104.5, "stddev": 4.7341}, "sex": {"value": "M", "unit": None}}
+        yield {"id": 3, "progress": 100, "status": "Done", "result": result}
+
+    monkeypatch.setitem(sys.modules, "totalsegmentator.bin.totalseg_get_body_stats", types.SimpleNamespace(get_body_stats=get_body_stats))
+    request = {"report": "body_stats", "ct": str(tmp_path / "image.nii.gz"), "modality": "CT", "masks": {}}
+    request.update(work=str(tmp_path / "work"), output=str(tmp_path / "out"), progress=str(tmp_path / "progress.txt"))
+    return request, calls, behaviour
+
+
+def test_body_stats_runs_upstreams_generator_on_the_cpu(body_stats):
+    request, calls, _ = body_stats
+    steps = []
+    raw = report_worker.body_stats(request, steps.append)
+    assert steps == ["Loading data", "Predicting body stats with CNN", "Done"]
+    ((img, modality, options),) = calls
+    assert (img, modality) == (Path(request["ct"]), "ct")
+    assert options == {"f_type": "niigz", "device": "cpu", "model_type": "cnn", "quiet": True}
+    assert raw["upstream"]["weight"]["min"] == pytest.approx(90.45) and type(raw["upstream"]["weight"]["min"]) is float
+    assert raw["upstream"]["sex"] == {"value": "M", "unit": None}
+    assert (raw["modality"], raw["files"], raw["warnings"], raw["report_version"]) == ("CT", [], [], raw["engine_version"])
+
+
+@pytest.mark.parametrize(
+    ("modality", "error", "sentence"),
+    [
+        ("MR", None, "The body stats model for MR is not installed on this server"),
+        ("CT", SystemExit(1), "Body stats needs a TotalSegmentator license configured on this workstation"),
+        (
+            "CT",
+            ImportError("CNN body-stats inference requires monai to load the pretrained checkpoints."),
+            "This server has no monai, which TotalSegmentator body stats needs",
+        ),
+    ],
+    ids=["no-model", "no-license", "no-monai"],
+)
+def test_body_stats_fails_with_a_sentence(body_stats, modality, error, sentence):
+    request, calls, behaviour = body_stats
+    request["modality"] = modality
+    if error is not None:
+        behaviour["raise"] = error
+    with pytest.raises(SystemExit):
+        report_worker.run(request)
+    assert json.loads((Path(request["output"]) / "error.json").read_text()) == {"error": sentence}
+    # Without its model upstream is never called, so it cannot download one.
+    assert len(calls) == (0 if error is None else 1)

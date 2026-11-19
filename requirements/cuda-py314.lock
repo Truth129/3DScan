@@ -1837,6 +1837,12 @@ mdurl==0.1.2 \
     # via
     #   -c requirements/constraints.txt
     #   markdown-it-py
+monai==1.6.2 \
+    --hash=sha256:3244f9f243aa43aa2eb37ee1f00ad5e25708511e906131f425f72ed2dd631cbc \
+    --hash=sha256:f9b9cf191b2d34c771875a2858453d2d1b68847040c003fae3f6dfaa205d942a
+    # via
+    #   -c requirements/constraints.txt
+    #   -r requirements/cuda-py314.in
 mpmath==1.3.0 \
     --hash=sha256:7a28eb2a9774d00c7bc92411c19a89209d5da7c4c9a9e227be8330a23a25b91f \
     --hash=sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c
@@ -2376,6 +2382,7 @@ numpy==2.3.5 \
     #   imagecodecs
     #   imageio
     #   matplotlib
+    #   monai
     #   nibabel
     #   nninteractive
     #   nninteractive-client
@@ -3534,6 +3541,7 @@ torch==2.14.0 \
     #   acvl-utils
     #   batchgeneratorsv2
     #   dynamic-network-architectures
+    #   monai
     #   nninteractive
     #   nnunetv2
     #   timm

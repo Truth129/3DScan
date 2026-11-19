@@ -241,6 +241,15 @@ statistics. Some subtasks need a [license from the
 provider](https://backend.totalsegmentator.com/license-academic/): enter a key under **Segment CT →
 TotalSegmentator license**.
 
+**Body stats** in the Analysis tab needs that license, the `monai` package (in the `ai` extra and
+both locks) and two models under the weights folder's `lightning_models/`, which it never downloads
+itself. TotalSegmentator's own body stats command downloads them with the license, as does:
+
+```bash
+TOTALSEG_HOME_DIR=.runtime/totalsegmentator .venv/bin/totalseg_download_weights -t body_stats_ct
+TOTALSEG_HOME_DIR=.runtime/totalsegmentator .venv/bin/totalseg_download_weights -t body_stats_mr
+```
+
 **nnInteractive** powers assisted corrections. `scripts/download_interactive_model.py` fetches the
 pinned `nnInteractive_v1.0` model into `.runtime/nninteractive/` and checks its SHA-256.
 

@@ -189,12 +189,14 @@ class _ReportImages:
         else:
             self.service.stage(job, "Encoding report as DICOM")
             report, revision_id = payload["report"], job["revision_id"]
+            # The report's id in words, as its page says it: "body stats", not "body_stats".
+            words = report.replace("_", " ")
             text = ImageText(
                 502,
-                f"3DScan {report} report {revision_id[:8]}",
+                f"3DScan {words} report {revision_id[:8]}",
                 "Measurement report export",
                 _COMMENTS,
-                f"TotalSegmentator {report} report of 3DScan revision {revision_id}",
+                f"TotalSegmentator {words} report of 3DScan revision {revision_id}",
             )
             try:
                 result = export_images(

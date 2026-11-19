@@ -6,7 +6,8 @@ so a corrected mask gives corrected numbers. The job runs `report_worker` in a c
 measures with TotalSegmentator's own report code, and never makes a revision. Its result lives in
 `cases/<case>/reports/<report>/<key>/`: the pictures, `result.json`, then `complete.json` last. The
 key covers the code, the image and the masks, so a later revision with the same masks reuses the
-folder, and every read checks the folder again.
+folder, and every read checks the folder again. A report with no needs, as body stats, which predicts
+from the image alone, has no recipe and is ready on any revision of a modality it reads.
 
 Adding a report is one `Definition` in its own module, registered here, and one function in
 `report_worker.WORKERS`.
@@ -50,6 +51,7 @@ _LOG_TAIL = 4000  # bytes of a failed worker's log kept in the service log
 # Upstream's report code measures with these; one that is absent (CI installs TotalSegmentator without
 # its dependencies) reads as None.
 _LIBRARIES = ("TotalSegmentator", "numpy", "scipy", "scikit-image", "nibabel", "networkx")
+_ARTICLES = {"CT": "a CT", "MR": "an MR"}
 
 
 @dataclass(frozen=True)
@@ -77,13 +79,19 @@ class Definition:
     any_of: tuple[str, ...] = ()  # need ids of which at least one must be present; all are required until one is
     any_of_reason: str = ""  # said when the task ran and found none of `any_of`
     any_of_title: str = ""  # when set, `status` shows the `any_of` needs as one row with this title
+    modalities: tuple[str, ...] = ("CT",)  # the reference image modalities the report reads
+    # Given the modality, why the report cannot run on this server at all, after the checks every report has, or None.
+    unavailable: Callable[[str], str | None] | None = None
+    # Given the modality, a JSON-ready value in the key, say a model's files, so a changed one is run again.
+    identity: Callable[[str], object] | None = None
 
 
 @cache
 def _definitions():
-    from . import aorta_report, pulmonary_report, spine_report
+    from . import aorta_report, body_stats_report, pulmonary_report, spine_report
 
-    return {definition.id: definition for definition in (aorta_report.DEFINITION, pulmonary_report.DEFINITION, spine_report.DEFINITION)}
+    reports = (aorta_report.DEFINITION, pulmonary_report.DEFINITION, spine_report.DEFINITION, body_stats_report.DEFINITION)
+    return {definition.id: definition for definition in reports}
 
 
 @cache
@@ -198,6 +206,8 @@ def status(service, case_id, revision_id, report_id):
     case = service.store.get("cases", case_id)
     if unavailable:
         segment_reason = unavailable
+    elif not report.recipe:
+        segment_reason = "This report needs no segmentation"
     elif case.get("active_revision_id") != revision_id:
         segment_reason = "Segmentation runs only on the case's current revision"
     elif not missing:
@@ -379,7 +389,9 @@ def _measure(service, job, report, revision, inputs, key, folder):
     labels = {need.id: need for need in report.needs}
     request = {
         "report": report.id,
+        # The reference image's file and modality, an MR's too.
         "ct": revision["ct_file"],
+        "modality": service.store.resolve_reference(revision)["modality"],
         "masks": {need: {"path": structures[sid]["mask_file"], "task": labels[need].task, "label": labels[need].label} for need, sid in inputs.items()},
         "work": str(work / "scratch"),
         "output": str(work / "out"),
@@ -488,8 +500,11 @@ def _complete(service, case_id, revision_id, report_id, analysis_id):
 
 def _unavailable(service, revision, report):
     """Why the report cannot apply to this revision at all, or None."""
-    if service.store.resolve_reference(revision)["modality"] != "CT":
-        return f"The {report.title.lower()} report needs a CT"
+    modality = service.store.resolve_reference(revision)["modality"]
+    if reason := service.settings.modality_unavailable(modality):
+        return reason
+    if modality not in report.modalities:
+        return f"The {report.title.lower()} report needs {' or '.join(_ARTICLES.get(name, name) for name in report.modalities)}"
     # Upstream measures with each axis's voxel spacing, which a sheared grid does not have.
     matrix = np.asarray(revision["geometry"]["affine_ras"], dtype=float)[:3, :3]
     direction = matrix / np.linalg.norm(matrix, axis=0)
@@ -501,7 +516,7 @@ def _unavailable(service, revision, report):
         found = False
     if not found:
         return f"This server has no {report.engine}"
-    return None
+    return report.unavailable(modality) if report.unavailable else None
 
 
 def _needs(revision, report):
@@ -635,6 +650,8 @@ def _prepare(service, case_id, revision_id, report):
         "code": _code(report.id),
         "libraries": {name: _version(name) for name in _LIBRARIES},
     }
+    if report.identity:
+        basis["identity"] = report.identity(asset["modality"])
     key = hashlib.sha256(json.dumps(basis, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
     return revision, inputs, key
 

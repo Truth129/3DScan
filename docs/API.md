@@ -1187,9 +1187,9 @@ A later revision with the same masks reuses it.
 
 Research use only, not for diagnostic use. A report measures a saved revision's masks with
 TotalSegmentator's own report code. Its masks come from a recipe of TotalSegmentator tasks saved
-as a normal revision, so a corrected mask gives corrected numbers. There are three, from
-TotalSegmentator 2.18.0: `aorta`, `pulmonary` (pulmonary arteries) and `spine` (spine fractures).
-Routes are relative to
+as a normal revision, so a corrected mask gives corrected numbers. There are four, from
+TotalSegmentator 2.18.0: `aorta`, `pulmonary` (pulmonary arteries), `spine` (spine fractures) and
+`body_stats`, which predicts from the image alone and reads no mask. Routes are relative to
 `.../revisions/{rid}/reports`.
 
 **`GET .../reports`** returns `{reports: [ReportStatus]}`, and **`GET .../reports/{report}`**
@@ -1197,7 +1197,7 @@ returns `{report: ReportStatus, analyses: [...]}`, this revision's runs newest f
 `{analysis_id, state, stage, created_at, finished_at, error, summary}`.
 
 ```text
-{id: "aorta" | "pulmonary" | "spine", title, engine, available, reason, ready,
+{id: "aorta" | "pulmonary" | "spine" | "body_stats", title, engine, available, reason, ready,
  needs: [{id, title, task, task_title, required, state: "present" | "missing" | "not_found", structure_id}],
  missing_tasks: [{id, title, license_required}], can_segment, segment_reason}
 ```
@@ -1209,8 +1209,9 @@ returns `{report: ReportStatus, analyses: [...]}`, this revision's runs newest f
   vertebra of its level count as same-named only through runs from before body masks were kept
   apart, which swapped them. `not_found`: it ran and
   kept nothing, or the kept mask is empty.
-- `available` is false, with `reason`, for a candidate alias, a non-CT image, a sheared grid, or a
-  TotalSegmentator without the report's code. `reason` also names a required need not found.
+- `available` is false, with `reason`, for a candidate alias, an image of another modality (body
+  stats reads CT and MR, the others CT only), a sheared grid, or a TotalSegmentator without the
+  report's code. `reason` also names a required need not found.
 - `ready`: every required need is present, so a start is accepted.
 - `pulmonary` needs the pulmonary artery and at least one of its five landmarks. Until one landmark
   is present, all five have `required` true. When its task ran and found none, `reason` is
@@ -1219,6 +1220,10 @@ returns `{report: ReportStatus, analyses: [...]}`, this revision's runs newest f
   one need `{id: "any_of", title: "Vertebral bodies", required: true, structure_id: null}`: `present`
   once any body is, `not_found` once the task ran and found none (`reason` is `No vertebral body was
   found`), else `missing`.
+- `body_stats` has `needs: []`, `missing_tasks: []` and `can_segment` false (`This report needs no
+  segmentation`), and is `ready` once `available`. Its `reason` is also `Body stats needs a
+  TotalSegmentator license configured on this workstation`, `This server has no TotalSegmentator body
+  stats` without `monai`, or `The body stats model for CT is not installed on this server` (or MR).
 - `missing_tasks` are the recipe tasks with a missing need. `can_segment` is false, with
   `segment_reason`, unless the revision is the case's active one, something is missing, no required
   need was looked for and not found, the case is not the synthetic demo, and any license they need
@@ -1345,8 +1350,30 @@ The spine result:
 - `files` holds `spine.png`, upstream's sagittal picture of the measured slices, or is empty when
   upstream drew none (no measured body has a voxel on its slice).
 
+The body stats result:
+
+```text
+{format: "scan3d-report-v1", notice, report: "body_stats", analysis_id, case_id, revision_id, key,
+ created_at, engine: {name: "TotalSegmentator", version, report_version}, inputs: [], modality,
+ stats: [{id, name, value, unit?, min?, max?, stddev?, probability?}],
+ scan: [{id, name, value, unit?, min?, max?, probability?}],
+ upstream, files: [], warnings,
+ summary: {weight_kg, height_cm, bmi, age_years, sex}}
+```
+
+- It is TotalSegmentator's body stats command (`totalseg_get_body_stats`, its CNN) on the image, on
+  the CPU, in seconds. `report_version` is TotalSegmentator's version; `modality` is `CT` or `MR`.
+- `stats` ids in order: `weight` (kg), `height` (cm), `bmi` (kg/m²), `bsa` (body surface area, m²),
+  `age` (years), `sex` (`M` or `F`). `scan` ids: `contrast` (`yes` or `no`), `injection_time` (s, CT
+  only), `top_vertebra` and `bottom_vertebra` (in view, such as `C7`), `sequence` (MR only).
+- Values are upstream's. `min` and `max` are the lowest and highest of its five models, and
+  `probability` is that of the value given. An entry upstream did not give is left out.
+- `upstream` is upstream's whole result, with the scanner settings it also predicts.
+- A summary value is null when missing.
+
 The result is saved in `cases/<case>/reports/<report>/<key>/`, keyed by the report and its code,
 the image, its grid, the masks used and the versions of TotalSegmentator and the numeric libraries.
+Body stats is also keyed by its model's file names and sizes and the monai and torch versions.
 A later revision with the same masks reuses it, unless a picture there no longer matches.
 
 ## Exports
@@ -1623,7 +1650,8 @@ complete.
 
 The page shows the result's tables as the panel's Copy table does, the notice, the engine and the
 revision, and no case name or patient detail. The instances follow the view's encoding with
-`SeriesNumber` 502, `SeriesDescription` `3DScan <report> report <rev8>` and `InstanceNumber` from 1.
+`SeriesNumber` 502, `SeriesDescription` `3DScan <report> report <rev8>`, with the id's underscores
+as spaces (`3DScan body stats report <rev8>`; the ZIP entry keeps the id), and `InstanceNumber` from 1.
 The export is keyed on the result's key and each PNG's hash. `result.dicom_report` has the view's
 fields, with `instance_count` 2, or 1 without a second picture.
 

@@ -453,7 +453,8 @@ Research use only. A report (`scan3d/reports.py`) is a recipe of TotalSegmentato
 `report` job on the CPU lane that measures a saved revision's masks with TotalSegmentator's own
 report code. A corrected mask therefore gives corrected numbers. Adding a report is one
 `Definition` in its own module, registered in `reports._definitions`, and one function in
-`report_worker.WORKERS`. The reports are the aorta, the pulmonary arteries and spine fractures.
+`report_worker.WORKERS`. The reports are the aorta, the pulmonary arteries, spine fractures and
+body stats.
 
 1. A definition names its needs, each a structure `task:label` with whether it is required, and its
    recipe tasks. A need is present, missing (its task never ran on this revision's line of
@@ -487,6 +488,9 @@ report code. A corrected mask therefore gives corrected numbers. Adding a report
    600, with upstream's slice numbers of the whole scan. No usage statistics are sent.
 6. Upstream's landmark points are mapped through its grid's affine to RAS mm. Each landmark's outline
    is its cut plane's voxels projected into the plane, filled and cut by 72 rays from the centre.
+7. Body stats has no needs or recipe and reads a CT or an MR. Its worker calls upstream's
+   `get_body_stats` generator (the CNN) on the CPU, and first refuses when a model fold is missing,
+   so a job never downloads. Its key also covers the model's files and the monai and torch versions.
 
 Sheared grids are refused, because upstream measures with per-axis voxel spacings. The folder's key
 covers the report code (`reports.py`, `report_worker.py` and the report's own module), the image,

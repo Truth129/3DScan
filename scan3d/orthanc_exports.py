@@ -300,9 +300,12 @@ class OrthancExports:
                 raise ValueError()
             paths = tuple(series_files(self.service, case_id, case, metadata, reference["modality"]))
         except (KeyError, OSError, ValueError):
+            from .reports import _ARTICLES
+
             modality = reference["modality"]
             raise ExportUnavailable(
-                f"This saved revision has no verified original DICOM {modality} series. {self.label} needs a {modality} imported and prepared from DICOM."
+                f"This saved revision has no verified original DICOM {modality} series. "
+                f"{self.label} needs {_ARTICLES.get(modality, f'a {modality}')} imported and prepared from DICOM."
             ) from None
         return _SegSource(paths, digest, digest, metadata["study_uid"], metadata["frame_of_reference_uid"])
 

@@ -10,7 +10,7 @@ from PIL import Image
 import pydicom
 import pytest
 
-from scan3d import aorta_report, pulmonary_report, report_page, reports, spine_report
+from scan3d import aorta_report, body_stats_report, pulmonary_report, report_page, reports, spine_report
 from scan3d.dicom_view import DicomViewError, ImageText, export_images, export_view
 from scan3d.store import identifier, now
 from test_dicom_seg import fixture  # noqa: F401
@@ -18,6 +18,7 @@ from test_dicom_seg_file_export import make_rig
 from test_dicom_view import REVISION, noise, png_bytes, write_sources
 from test_orthanc_exports import execute, rig  # noqa: F401
 from test_orthanc_view_exports import view  # noqa: F401
+from test_reports import BODY_STATS_CT, BODY_STATS_MR
 
 CURVED = png_bytes(noise(40, 30, seed=7))
 
@@ -75,6 +76,9 @@ def report_result(case_id="synthetic-case", revision_id=REVISION, key="ab" * 32,
         return {**fields, **pulmonary_report.shape(pulmonary_raw()), "files": [], "summary": {}}
     if report == "spine":
         return {**fields, **spine_report.shape(spine_raw()), "files": ["spine.png"], "summary": {}}
+    if report == "body_stats":
+        engine["report_version"] = "2.18.0"
+        return {**fields, **body_stats_report.shape({"modality": "CT", "upstream": BODY_STATS_CT, "warnings": []}), "files": [], "summary": {}}
     return {**fields, **aorta_report.shape(raw(dissection)), "files": ["cpr.png"], "summary": {}}
 
 
@@ -252,4 +256,70 @@ def test_a_spine_report_saves_its_page_and_picture(tmp_path, fixture):  # noqa: 
         page, picture = (pydicom.dcmread(BytesIO(archive.read(name))) for name in archive.namelist())
     assert page.SeriesDescription == f"3DScan spine report {revision_id[:8]}" and page.Columns == 1600
     np.testing.assert_array_equal(picture.pixel_array, pixels(CURVED))
+    folder.http.close()
+
+
+class Drawn:
+    """Records the text a page draws, with its font."""
+
+    def __init__(self):
+        self.texts = []
+
+    def text(self, xy, text, font, fill):
+        self.texts.append((text, font))
+
+    def line(self, *args, **kwargs):
+        pass
+
+    rectangle = line
+
+
+def test_the_body_stats_page_has_a_glyph_for_every_character_and_rounds_half_up():
+    result = report_result(report="body_stats")
+    mr = {**result, **body_stats_report.shape({"modality": "MR", "upstream": BODY_STATS_MR, "warnings": []})}
+    for shown in (result, mr):
+        drawn = Drawn()
+        report_page._layout(drawn, shown, "Body stats")
+        for text, font in drawn.texts:
+            missing = font.getmask("\uffff")
+            for character in text:
+                mask = font.getmask(character)
+                assert (mask.size, bytes(mask)) != (missing.size, bytes(missing)), (character, text)
+    assert report_page._number(22.25, 1) == "22.3" and report_page._number(-0.31, 0) == "0"
+
+
+def test_a_body_stats_report_saves_its_page_alone(tmp_path, fixture):  # noqa: F811
+    result = report_result(report="body_stats")
+    assert report_page._body_stats(result["stats"]) == (
+        ["Measure", "Value", "Range"],
+        [
+            ["Weight", "97 kg", "90–105 kg"],
+            ["Height", "180 cm", "177–184 cm"],
+            ["Body mass index", "29.7 kg/m²", ""],
+            ["Body surface area", "2.20 m²", ""],
+            ["Age", "32 years", "30–36 years"],
+            ["Sex", "M (86%)", ""],
+        ],
+        {1, 2},
+    )
+    assert report_page._body_stats(result["scan"])[1] == [
+        ["Contrast", "yes (99%)", ""],
+        ["Time since injection", "38 s", "35–42 s"],
+        ["Highest vertebra in view", "C7", ""],
+        ["Lowest vertebra in view", "L3", ""],
+    ]
+    with Image.open(BytesIO(report_page.render(result, "Body stats"))) as image:
+        assert image.width == 1600
+    folder = make_rig(tmp_path, fixture)
+    case_id, revision_id = folder.case["id"], folder.saved["id"]
+    analysis = fake_report(folder.service, case_id, revision_id, report="body_stats")
+    url = f"/api/cases/{case_id}/revisions/{revision_id}/reports/body_stats/{analysis}/dicom-file"
+    finished = execute(folder, folder.http.post(url, json={}).json())
+    assert finished["status"] == "completed", finished["error"]
+    assert finished["result"]["dicom_report"]["instance_count"] == 1
+    export_id = finished["result"]["dicom_report"]["export_id"]
+    with zipfile.ZipFile(BytesIO(folder.http.get(f"{url}/{export_id}/report.zip").content)) as archive:
+        assert archive.namelist() == ["body_stats-report-1.dcm"]
+        page = pydicom.dcmread(BytesIO(archive.read("body_stats-report-1.dcm")))
+    assert page.SeriesDescription == f"3DScan body stats report {revision_id[:8]}" and page.Columns == 1600
     folder.http.close()

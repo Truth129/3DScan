@@ -1,9 +1,10 @@
 """One measurement report in a child process, measured by TotalSegmentator's own report code.
 
 Research use only, not for diagnostic use. `python -P -m scan3d.report_worker REQUEST` reads a JSON
-request naming the report, the CT, the revision's masks by need, a scratch folder and an output
-folder. It writes `worker.json` and the pictures there, or `error.json` with one plain sentence. The
-API process never imports this module: upstream's report code pulls in PyTorch.
+request naming the report, the reference image (`ct`, an MR's too) and its modality, the revision's
+masks by need, a scratch folder and an output folder. It writes `worker.json` and the pictures
+there, or `error.json` with one plain sentence. The API process never imports this module:
+upstream's report code pulls in PyTorch.
 """
 
 from __future__ import annotations
@@ -634,7 +635,44 @@ def spine(request, progress):
     }
 
 
-WORKERS = {"aorta": aorta, "pulmonary": pulmonary, "spine": spine}
+def body_stats(request, progress):
+    """TotalSegmentator's body stats command, its default CNN, on the reference image and always the CPU.
+
+    Only upstream's generator is called, not its command's main(), which would also send usage statistics."""
+    from .body_stats_report import NO_LICENSE, installed, missing_model
+
+    modality = request["modality"]
+    # Upstream downloads a missing model, which a job must never do.
+    if not installed(modality):
+        raise Failure(missing_model(modality))
+    try:
+        from totalsegmentator.bin.totalseg_get_body_stats import get_body_stats
+
+        result = None
+        for step in get_body_stats(Path(request["ct"]), modality.lower(), f_type="niigz", device="cpu", model_type="cnn", quiet=True):
+            progress(step["status"])
+            result = step.get("result", result)
+    except SystemExit as error:
+        # Upstream's show_license_info() ends the process without a license.
+        raise Failure(NO_LICENSE) from error
+    except ImportError as error:
+        if error.name == "monai" or "monai" in str(error):
+            raise Failure("This server has no monai, which TotalSegmentator body stats needs") from error
+        raise Failure(f"TotalSegmentator's body stats could not load: {error}") from error
+    if result is None:
+        raise Failure("TotalSegmentator's body stats gave no result")
+    return {
+        "engine_version": metadata.version("TotalSegmentator"),
+        # The command has no version of its own.
+        "report_version": metadata.version("TotalSegmentator"),
+        "modality": modality,
+        "upstream": _plain(result),
+        "warnings": [],
+        "files": [],
+    }
+
+
+WORKERS = {"aorta": aorta, "pulmonary": pulmonary, "spine": spine, "body_stats": body_stats}
 
 
 def run(request):

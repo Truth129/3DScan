@@ -1,8 +1,9 @@
 """A measurement report's result drawn as one page, for a DICOM series beside its overview picture.
 
 Research use only. The page carries only what the result holds, never a case name or patient
-detail, and the same result always draws the same bytes: no clock, no PNG metadata. Its tables
-match the panel's Copy table (web/src/lib/reports.ts landmarkTable and spineTable), column for column.
+detail, and the same result always draws the same bytes: no clock, no PNG metadata. Its tables match
+the panel's Copy table (web/src/lib/reports.ts landmarkTable, spineTable and bodyStatsTable), column
+for column.
 """
 
 from __future__ import annotations
@@ -21,6 +22,9 @@ _CONTENT = WIDTH - 2 * _MARGIN
 _PAD = 12
 _INK, _MUTED, _WARNING, _RULE, _STRIPE = (26, 26, 26), (85, 85, 85), (180, 35, 24), (200, 200, 200), (242, 244, 245)
 _WIDER = "Diameters read about 2 mm wider than the mask, as TotalSegmentator measures them."
+_PREDICTED = "Predicted from the image by TotalSegmentator. The range is the lowest and highest of its five models."
+# Decimals of a body stats value; any other number is whole.
+_DECIMALS = {"bmi": 1, "bsa": 2}
 # The second image of the series, by the picture the result holds.
 _SECOND = {
     "cpr.png": "Image 2 of this series: the curved view along the aorta and its diameter profile.",
@@ -52,14 +56,17 @@ def _one(value):
 
 
 def _length(text, font):
-    parts = text.split("²")
+    parts = text.replace("–", "-").split("²")
     return sum(font.getlength(part) for part in parts) + (len(parts) - 1) * _font(round(font.size * 0.6)).getlength("2")
 
 
 def _put(draw, x, y, text, font, colour):
-    """Pillow's own font has no superscript two, so cm² gets a smaller 2 set at the cap height."""
+    """Pillow's own font has no superscript two, so cm² gets a smaller 2 set at the cap height.
+
+    Nor has it an en dash, so a range's dash is drawn as a hyphen; the text stays the copied table's.
+    """
     small = _font(round(font.size * 0.6))
-    for index, part in enumerate(text.split("²")):
+    for index, part in enumerate(text.replace("–", "-").split("²")):
         if index:
             draw.text((x, y), "2", font=small, fill=colour)
             x += small.getlength("2")
@@ -123,6 +130,28 @@ def _thresholds(result):
     return f"TotalSegmentator reads L1 to L5 as low density under {native} HU without contrast, {arterial} HU arterial and {venous} HU portal venous."
 
 
+def _number(value, decimals):
+    # Half up, as the panel's Math.round, never an f-string's half to even.
+    return _whole(value) if not decimals else f"{math.floor(value * 10**decimals + 0.5) / 10**decimals:.{decimals}f}"
+
+
+def _body_stats(entries):
+    """Measure, Value with its unit or probability, and Range where upstream gave the lowest and highest."""
+    rows = []
+    for entry in entries:
+        unit = f" {entry['unit']}" if entry.get("unit") else ""
+        value = entry["value"]
+        if "probability" in entry:
+            shown = f"{value} ({_whole(entry['probability'] * 100)}%)"
+        elif isinstance(value, str):
+            shown = value
+        else:
+            shown = _number(value, _DECIMALS.get(entry["id"], 0)) + unit
+        spread = f"{_whole(entry['min'])}–{_whole(entry['max'])}{unit}" if "min" in entry and "max" in entry else ""
+        rows.append([entry["name"], shown, spread])
+    return ["Measure", "Value", "Range"], rows, {1, 2}
+
+
 class _Page:
     def __init__(self, draw):
         self.draw, self.y = draw, _MARGIN
@@ -170,7 +199,7 @@ def _layout(draw, result, title):
     engine = result["engine"]
     page.text(f"{title} report", size=44, gap=12)
     page.text(NOTICE, colour=_WARNING)
-    page.text(f"{engine['name']} {engine['version']}, {result['report']} report {engine['report_version']}", colour=_MUTED, gap=0)
+    page.text(f"{engine['name']} {engine['version']}, {result['report'].replace('_', ' ')} report {engine['report_version']}", colour=_MUTED, gap=0)
     page.text(f"3DScan revision {result['revision_id'][:8]} · measured {result['created_at'][:10]}", colour=_MUTED, gap=24)
     contrast = result.get("contrast") or {}
     if contrast.get("native"):
@@ -186,6 +215,12 @@ def _layout(draw, result, title):
         head, rows, right = _vertebrae(result)
         page.table(head, rows, right, wrap_last=True)
         page.text(_thresholds(result), colour=_MUTED, gap=24)
+    if result["report"] == "body_stats":
+        page.table(*_body_stats(result["stats"]))
+        if result["scan"]:
+            page.text("Scan", size=28, gap=4)
+            page.table(*_body_stats(result["scan"]))
+        page.text(_PREDICTED, colour=_MUTED, gap=24)
     if warnings := result.get("warnings"):
         page.text("Warnings", size=28, gap=4)
         for warning in warnings:

@@ -1,16 +1,20 @@
 """Measurement reports over HTTP: status, the recipe segmentation, runs and pictures, with a canned worker."""
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
 import sys
+
+from importlib.machinery import ModuleSpec
+import types
 
 from fastapi.testclient import TestClient
 import nibabel as nib
 import numpy as np
 import pytest
 
-from scan3d import imaging, reports, segmentation, segmentation_merge, segmentation_options, spine_report
+from scan3d import body_stats_report, imaging, reports, segmentation, segmentation_merge, segmentation_options, spine_report
 from scan3d.api import create_app
 from scan3d.config import Settings
 from scan3d.store import identifier
@@ -30,6 +34,37 @@ OUTPUTS = {
     "vertebrae_pp_refined": {},
 }
 PNG = b"\x89PNG\r\n\x1a\n synthetic"
+# Upstream's body stats result as its command gives it, in its order, for a CT and an MR.
+BODY_STATS_CT = {
+    "weight": {"value": 96.57, "unit": "kg", "min": 90.45, "max": 104.5, "stddev": 4.7341},
+    "size": {"value": 180.46, "unit": "cm", "min": 176.99, "max": 183.65, "stddev": 2.3644},
+    "age": {"value": 32.04, "unit": "years", "min": 29.93, "max": 36.01, "stddev": 2.1781},
+    "sex": {"value": "M", "unit": None, "probability": 0.8629, "stddev": 0.1246},
+    "manufacturer": {"value": "siemens", "unit": None, "stddev": 0.2},
+    "kvp": {"value": 118.4, "unit": "kV", "min": 112.0, "max": 121.3, "stddev": 3.1},
+    "xray_tube_current": {"value": 240.1, "unit": "mA", "min": 200.2, "max": 270.9, "stddev": 25.0},
+    "convolution_kernel": {"value": 1.3, "unit": None, "min": 1.0, "max": 1.6, "stddev": 0.2},
+    "contrast": {"value": "yes", "unit": None, "probability": 0.9895, "stddev": 0.0101},
+    "pi_time": {"value": 38.26, "unit": "seconds", "min": 35.17, "max": 42.25, "stddev": 2.5},
+    "verte_upper": {"value": "C7", "unit": None, "stddev": 0.3},
+    "verte_lower": {"value": "L3", "unit": None, "stddev": 0.4},
+    "noise": {"value": 12.5, "unit": None, "min": 11.0, "max": 14.0, "stddev": 1.0},
+    "bmi": {"value": 29.65, "unit": "kg/m^2"},
+    "bsa": {"value": 2.2, "unit": "m^2"},
+}
+BODY_STATS_MR = {
+    "weight": {"value": 61.2, "unit": "kg", "min": 55.4, "max": 66.0, "stddev": 3.9},
+    "size": {"value": 165.03, "unit": "cm", "min": 160.1, "max": 170.2, "stddev": 3.3},
+    "age": {"value": 54.5, "unit": "years", "min": 50.2, "max": 60.0, "stddev": 3.5},
+    "sex": {"value": "F", "unit": None, "probability": 0.91, "stddev": 0.05},
+    "contrast": {"value": "no", "unit": None, "probability": 0.7, "stddev": 0.2},
+    "verte_upper": {"value": "T10", "unit": None, "stddev": 0.5},
+    "verte_lower": {"value": None, "unit": None, "stddev": 4.0},
+    "noise": {"value": 3.1, "unit": None, "min": 2.9, "max": 3.3, "stddev": 0.1},
+    "mr_sequence": {"value": "t1", "unit": None, "stddev": 0.4},
+    "bmi": {"value": 22.47, "unit": "kg/m^2"},
+    "bsa": {"value": 1.67, "unit": "m^2"},
+}
 
 
 def canned(request):
@@ -87,6 +122,12 @@ def canned_pulmonary(request):
         "warnings": ["pul_annulus is empty!"],
         "files": ["plane-3.png"],
     }
+
+
+def canned_body_stats(request):
+    """The body stats worker's output: upstream's result for the request's modality, unchanged."""
+    upstream = BODY_STATS_CT if request["modality"] == "CT" else BODY_STATS_MR
+    return {"engine_version": "2.18.0", "report_version": "2.18.0", "modality": request["modality"], "upstream": upstream, "warnings": [], "files": []}
 
 
 def canned_spine(request):
@@ -150,7 +191,7 @@ def rig(tmp_path, monkeypatch):
 
     def launch(service, job, request, work):
         launched.append(request)
-        return {"aorta": canned, "pulmonary": canned_pulmonary, "spine": canned_spine}[request["report"]](request)
+        return {"aorta": canned, "pulmonary": canned_pulmonary, "spine": canned_spine, "body_stats": canned_body_stats}[request["report"]](request)
 
     monkeypatch.setattr(segmentation, "model_fingerprint", fingerprint)
     monkeypatch.setattr(segmentation, "segment", segment)
@@ -193,7 +234,7 @@ def test_the_recipe_segments_then_measures_and_reuses_the_run(rig):
     http, service, case_id, image_id, launched = rig
     base = f"/api/cases/{case_id}/revisions/{image_id}/reports"
     statuses = http.get(base).json()["reports"]
-    assert [status["id"] for status in statuses] == ["aorta", "pulmonary", "spine"]
+    assert [status["id"] for status in statuses] == ["aorta", "pulmonary", "spine", "body_stats"]
     status = statuses[0]
     assert (status["id"], status["available"], status["ready"], status["can_segment"]) == ("aorta", True, False, True)
     assert {need["state"] for need in status["needs"]} == {"missing"}
@@ -483,6 +524,7 @@ def test_each_reports_key_covers_its_own_definition_module():
     assert reports._code("aorta") == digests("reports.py", "report_worker.py", "aorta_report.py")
     assert reports._code("pulmonary") == digests("reports.py", "report_worker.py", "pulmonary_report.py")
     assert reports._code("spine") == digests("reports.py", "report_worker.py", "spine_report.py")
+    assert reports._code("body_stats") == digests("reports.py", "report_worker.py", "body_stats_report.py")
 
 
 def test_the_spine_report_shows_its_bodies_as_one_input_row(rig, monkeypatch):
@@ -624,3 +666,106 @@ def test_a_body_or_vertebra_taken_under_the_old_merge_rule_is_offered_again(rig,
     assert {need["id"]: need["state"] for need in needs}["vertebrae_L5"] == "not_found"
     spine = http.get(f"/api/cases/{case['id']}/revisions/{revision_id}/reports/spine").json()["report"]
     assert spine["missing_tasks"] == [] and spine["ready"]
+
+
+def body_stats_model(weights, modality, folds=5):
+    """A stand-in for upstream's body stats model folder: one checkpoint and hparams.yaml in each fold."""
+    for fold in range(folds):
+        version = weights / "lightning_models" / body_stats_report.FOLDERS[modality] / f"version_{fold}"
+        (version / "checkpoints").mkdir(parents=True)
+        (version / "checkpoints" / "epoch=9-step=10.ckpt").write_bytes(b"synthetic checkpoint")
+        (version / "hparams.yaml").write_text("nr_slices: 3\n")
+
+
+def test_body_stats_needs_no_segmentation_and_reads_a_ct_or_an_mr(rig, monkeypatch, tmp_path):
+    http, service, case_id, image_id, launched = rig
+    monkeypatch.setenv("TOTALSEG_WEIGHTS_PATH", str(tmp_path / "weights"))
+    body_stats_model(tmp_path / "weights", "CT")
+    body_stats_model(tmp_path / "weights", "MR")
+
+    def status(case, revision_id, report_id="body_stats"):
+        return http.get(f"/api/cases/{case}/revisions/{revision_id}/reports/{report_id}").json()["report"]
+
+    # Without monai, as on this test's server.
+    assert status(case_id, image_id)["reason"] == "This server has no TotalSegmentator body stats"
+    monkeypatch.setitem(sys.modules, "monai", types.ModuleType("monai"))
+    sys.modules["monai"].__spec__ = ModuleSpec("monai", None)
+    state = status(case_id, image_id)
+    assert (state["available"], state["reason"], state["ready"], state["can_segment"]) == (True, None, True, False)
+    assert (state["needs"], state["missing_tasks"], state["segment_reason"]) == ([], [], "This report needs no segmentation")
+    assert http.post(f"/api/cases/{case_id}/revisions/{image_id}/reports/body_stats/segment", json={}).status_code == 400
+
+    # A revision with no structure at all is measured, on the CPU lane, from the image alone.
+    base = f"/api/cases/{case_id}/revisions/{image_id}/reports/body_stats"
+    job = http.post(base, json={}).json()
+    run(service, job["id"], "cpu")
+    assert (launched[0]["modality"], launched[0]["masks"], launched[0]["ct"]) == ("CT", {}, service.store.revision(case_id, image_id)["ct_file"])
+    result = http.get(f"{base}/{job['id']}").json()
+    assert (result["report"], result["modality"], result["inputs"], result["files"], result["upstream"]) == ("body_stats", "CT", [], [], BODY_STATS_CT)
+    assert [entry["id"] for entry in result["stats"]] == ["weight", "height", "bmi", "bsa", "age", "sex"]
+    (row,) = http.get(base).json()["analyses"]
+    assert row["summary"] == {"weight_kg": 96.57, "height_cm": 180.46, "bmi": 29.65, "age_years": 32.04, "sex": "M"}
+    assert http.post(base, json={}).json()["id"] == job["id"]
+    # A changed model is predicted again.
+    (tmp_path / "weights" / "lightning_models" / body_stats_report.FOLDERS["CT"] / "version_0" / "hparams.yaml").write_text("nr_slices: 15\n")
+    again = http.post(base, json={}).json()["id"]
+    assert again != job["id"]
+    run(service, again, "cpu")
+
+    # An MR is read with its own model; the CT-only reports still say so.
+    case, image = new_image(service, "Synthetic MR body stats")
+    mr = service.build_ct_revision(case["id"], Path(image["ct_file"]), modality="MR")
+    service.store.commit_revision(mr)
+    assert status(case["id"], mr["id"])["ready"]
+    assert status(case["id"], mr["id"], "aorta")["reason"] == "The aorta report needs a CT"
+    run(service, http.post(f"/api/cases/{case['id']}/revisions/{mr['id']}/reports/body_stats", json={}).json()["id"], "cpu")
+    assert launched[-1]["modality"] == "MR"
+    # Not on a workstation with MR switched off, as anywhere else in the app.
+    enabled = service.settings
+    monkeypatch.setattr(service, "settings", dataclasses.replace(enabled, modalities=("CT",)))
+    state = status(case["id"], mr["id"])
+    assert not state["available"] and state["reason"] == "MR images are not enabled on this workstation" and status(case_id, image_id)["ready"]
+    assert http.post(f"/api/cases/{case['id']}/revisions/{mr['id']}/reports/body_stats", json={}).status_code == 400
+    service.settings = enabled
+
+    # A model without its five folds, then no license.
+    for path in (tmp_path / "weights" / "lightning_models" / body_stats_report.FOLDERS["MR"] / "version_4" / "checkpoints").iterdir():
+        path.unlink()
+    state = status(case["id"], mr["id"])
+    assert not state["available"] and state["reason"] == "The body stats model for MR is not installed on this server" and status(case_id, image_id)["ready"]
+    monkeypatch.setattr(segmentation_options, "license_configured", lambda: False)
+    assert status(case_id, image_id)["reason"] == "Body stats needs a TotalSegmentator license configured on this workstation"
+    assert http.post(base, json={}).status_code == 400
+
+
+def test_body_stats_shape_and_summary_from_upstreams_result():
+    raw = {"modality": "CT", "upstream": BODY_STATS_CT, "warnings": []}
+    result = body_stats_report.shape(raw)
+    assert result["stats"] == [
+        {"id": "weight", "name": "Weight", "value": 96.57, "unit": "kg", "min": 90.45, "max": 104.5, "stddev": 4.7341},
+        {"id": "height", "name": "Height", "value": 180.46, "unit": "cm", "min": 176.99, "max": 183.65, "stddev": 2.3644},
+        {"id": "bmi", "name": "Body mass index", "value": 29.65, "unit": "kg/m²"},
+        {"id": "bsa", "name": "Body surface area", "value": 2.2, "unit": "m²"},
+        {"id": "age", "name": "Age", "value": 32.04, "unit": "years", "min": 29.93, "max": 36.01, "stddev": 2.1781},
+        {"id": "sex", "name": "Sex", "value": "M", "probability": 0.8629, "stddev": 0.1246},
+    ]
+    assert result["scan"] == [
+        {"id": "contrast", "name": "Contrast", "value": "yes", "probability": 0.9895},
+        {"id": "injection_time", "name": "Time since injection", "value": 38.26, "unit": "s", "min": 35.17, "max": 42.25},
+        {"id": "top_vertebra", "name": "Highest vertebra in view", "value": "C7"},
+        {"id": "bottom_vertebra", "name": "Lowest vertebra in view", "value": "L3"},
+    ]
+    assert (result["modality"], result["upstream"], result["warnings"]) == ("CT", BODY_STATS_CT, [])
+
+    # An MR has its sequence and no injection time; a vertebra upstream could not place is left out.
+    mr = body_stats_report.shape({"modality": "MR", "upstream": BODY_STATS_MR, "warnings": []})
+    assert [entry["id"] for entry in mr["scan"]] == ["contrast", "top_vertebra", "sequence"] and mr["scan"][-1]["value"] == "t1"
+    assert body_stats_report.summary(mr) == {"weight_kg": 61.2, "height_cm": 165.03, "bmi": 22.47, "age_years": 54.5, "sex": "F"}
+    # Only weight, as upstream's only_weight gives it.
+    assert body_stats_report.summary({"stats": body_stats_report.shape({**raw, "upstream": {"weight": BODY_STATS_CT["weight"]}})["stats"]}) == {
+        "weight_kg": 96.57,
+        "height_cm": None,
+        "bmi": None,
+        "age_years": None,
+        "sex": None,
+    }
