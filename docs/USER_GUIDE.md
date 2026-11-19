@@ -184,6 +184,10 @@ Every model's segments are named with the model in brackets, such as **Vertebrae
 (TotalSegmentator)**, and sorted into the same anatomical groups; **Spine** holds the vertebrae, discs,
 sacrum, cord and canal from every model. Scans segmented before this keep their names and groups.
 
+The two **Vertebrae C1–L5** tasks mark vertebral bodies, named such as **Vertebral body L1
+(TotalSegmentator)**; they sit beside the whole vertebrae from **Whole body** rather than replacing
+them.
+
 Each run creates a revision that replaces that task's results **and** any segments with matching
 anatomical names, including manual corrections. Matching ignores capitalization, underscores and
 whitespace. Other segments are kept, and the earlier revision stays in **Revision history**.
@@ -714,9 +718,9 @@ mask it took voxels from.
 ## Analysis
 
 The **Analysis** tab shows on any saved CT revision, a scan with no segments included. Choose
-**Coronary FFR**, **Aorta** or **Pulmonary arteries** at its top; your browser remembers the
-choice. Each analysis measures from the masks of the revision shown, so a corrected mask gives
-corrected numbers once you measure again.
+**Coronary FFR**, **Aorta**, **Pulmonary arteries** or **Spine fractures** at its top; your browser
+remembers the choice. Each analysis measures from the masks of the revision shown, so a corrected
+mask gives corrected numbers once you measure again.
 
 ## Aorta report
 
@@ -812,6 +816,38 @@ diameters read about 2 mm wider than the mask, as the aorta's do: a synthetic 24
 The proximal main pulmonary artery is measured on the landmark model's own valve-plane mask. On
 five public scans that mask lay 1 to 3 mm inside the contrast edge all round, so this landmark can
 read 2 to 5 mm narrow.
+
+## Spine fractures report
+
+> **Research use only · not for diagnostic use.** These numbers are measured by TotalSegmentator's
+> spine report from this revision's masks. They have not been checked here against hand
+> measurements.
+
+The report needs the vertebral bodies from **Vertebrae C1–L5, body-refined (TotalSegmentator)**, which
+needs no license. **Segment and measure** runs that one task; **Measure** and **Measure again** work as
+for the aorta.
+
+Each body in the revision gets a row: its posterior, middle and anterior heights (**Post.**,
+**Mid.**, **Ant.**), the difference between the smallest and largest height (**Diff.**), its volume
+and its median CT value (**HU**) inside the body shrunk by 4 mm. A dash means not measured; a body that
+could not be measured at all has the reason in its row.
+
+A difference over 20% shows in the warning colour, as does a body under 2 ml. **Contrast** chooses
+the scan's phase: **None** (90 HU), **Arterial** (110 HU) or **Portal venous** (105 HU). An L1 to L5
+body whose HU is under that threshold shows in the warning colour. The choice is not kept.
+
+Each body is measured on one sagittal slice of the scan's own grid: the slice where its three heights
+spread most.
+
+A click on a body's row moves the crosshair to it. In the native 3D view each body's outline is a
+ring, and the chosen body shows its three height lines; on the slices the chosen body's outline and
+lines are solid on the slice it was measured on.
+
+**Labels in 3D** names each body and adds the difference when it is over 20%.
+
+Below the table is TotalSegmentator's sagittal picture with the measured heights; click it to open it
+large, or download it. **Copy table** and **DICOM…** work as for the aorta, and the series holds the
+report page and this picture.
 
 ## Coronary CT-FFR
 

@@ -11,7 +11,7 @@ export const DICOM_DIRECT_VIEW_KIND = 'direct_view_export';
 /** The kinds that deliver a view somewhere, which a file does not. */
 export const DELIVERED_VIEW_KINDS = [DICOM_VIEW_KIND, DICOM_ARCHIVE_VIEW_KIND, DICOM_DIRECT_VIEW_KIND];
 /**
- * A measurement report as DICOM images: the report page and its curved view, in one series. Its
+ * A measurement report as DICOM images: the report page and its overview picture, in one series. Its
  * kinds are its own, so the 3D view's listings never show one.
  */
 export const DICOM_REPORT_KIND = 'orthanc_report_export';
@@ -112,8 +112,8 @@ export interface ReportExportRequest {
   report: string;
   analysisId: string;
   title: string;
-  /** Whether the series holds the result's curved view after the report page. */
-  curvedView: boolean;
+  /** The result's overview picture that follows the report page in the series, if it has one. */
+  picture: 'curved view' | 'spine picture' | null;
 }
 export interface ReportExportSource extends Readonly<ReportExportRequest> {
   readonly id: string;

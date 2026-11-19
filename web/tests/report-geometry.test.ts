@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { landmarkOnSlice, measuredInPlane, offsetRing, projectToPane, type ReportLandmark } from '../src/lib/reports';
+import { landmarkMarks, markOnSlice, measuredInPlane, offsetRing, projectToPane, type ReportLandmark } from '../src/lib/reports';
 import type { Point, SliceMeta } from '../src/types';
 
 const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -77,10 +77,12 @@ describe('report geometry', () => {
       picture: null,
     };
     // Five millimetres off the pane: projected, so dashed.
-    const drawing = landmarkOnSlice(oblique, mark)!;
+    const drawing = markOnSlice(oblique, landmarkMarks([mark])[0])!;
     expect(drawing.solid).toBe(false);
-    expect(drawing.max![1][0] - drawing.max![0][0]).toBeCloseTo(30 / 0.6, 6);
-    expect(drawing.perpendicular![1][1] - drawing.perpendicular![0][1]).toBeCloseTo(28 / 0.8, 6);
-    expect(landmarkOnSlice(oblique, { ...mark, available: false })).toBeUndefined();
+    const [max, perpendicular] = drawing.lines;
+    expect([max.id, perpendicular.id]).toEqual(['max', 'perpendicular']);
+    expect(max.ends[1][0] - max.ends[0][0]).toBeCloseTo(30 / 0.6, 6);
+    expect(perpendicular.ends[1][1] - perpendicular.ends[0][1]).toBeCloseTo(28 / 0.8, 6);
+    expect(landmarkMarks([{ ...mark, available: false }]), 'a landmark not measured has no mark').toEqual([]);
   });
 });

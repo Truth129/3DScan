@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { REPORT_COLOURS, landmarkOnSlice, type ReportOverlay } from '../lib/reports';
+import { REPORT_COLOURS, markOnSlice, type ReportOverlay } from '../lib/reports';
 import type { SliceMeta } from '../types';
 /**
- * The selected landmark's measured cross-section on one slice pane. It is solid where the pane shows
- * that cross-section, and dashed and dimmer where it is only projected onto the pane (foreshortened
- * when the planes differ). A MIP or MinIP slab pane is dashed too: its picture is a projection through
- * the slab, not the slice.
+ * The selected mark's measured outline and lines on one slice pane. It is solid where the pane shows
+ * the plane they were measured in, and dashed and dimmer where it is only projected onto the pane
+ * (foreshortened when the planes differ). A MIP or MinIP slab pane is dashed too: its picture is a
+ * projection through the slab, not the slice.
  */
 const props = defineProps<{
   meta: SliceMeta;
@@ -15,21 +15,14 @@ const props = defineProps<{
   slab?: boolean;
 }>();
 const drawing = computed(() =>
-  landmarkOnSlice(
+  markOnSlice(
     props.meta,
-    props.overlay.result.landmarks.find(mark => mark.number === props.overlay.selected),
+    props.overlay.result.marks.find(mark => mark.number === props.overlay.selected),
   ),
 );
 const solid = computed(() => !!drawing.value?.solid && !props.slab);
 const outline = computed(() => drawing.value?.outline.map(point => point.join(',')).join(' ') ?? '');
-const lines = computed(() =>
-  drawing.value
-    ? [
-        { id: 'max', ends: drawing.value.max, colour: REPORT_COLOURS.max },
-        { id: 'perpendicular', ends: drawing.value.perpendicular, colour: REPORT_COLOURS.perpendicular },
-      ].filter(line => line.ends)
-    : [],
-);
+const lines = computed(() => drawing.value?.lines ?? []);
 </script>
 
 <template>
@@ -47,10 +40,10 @@ const lines = computed(() =>
       <line
         v-for="line in lines"
         :key="line.id"
-        :x1="line.ends![0][0]"
-        :y1="line.ends![0][1]"
-        :x2="line.ends![1][0]"
-        :y2="line.ends![1][1]"
+        :x1="line.ends[0][0]"
+        :y1="line.ends[0][1]"
+        :x2="line.ends[1][0]"
+        :y2="line.ends[1][1]"
         vector-effect="non-scaling-stroke"
       />
     </g>
@@ -59,10 +52,10 @@ const lines = computed(() =>
       v-for="line in lines"
       :key="line.id"
       :class="line.id"
-      :x1="line.ends![0][0]"
-      :y1="line.ends![0][1]"
-      :x2="line.ends![1][0]"
-      :y2="line.ends![1][1]"
+      :x1="line.ends[0][0]"
+      :y1="line.ends[0][1]"
+      :x2="line.ends[1][0]"
+      :y2="line.ends[1][1]"
       :stroke="line.colour"
       vector-effect="non-scaling-stroke"
     />

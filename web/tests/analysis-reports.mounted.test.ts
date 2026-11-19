@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reactive } from 'vue';
 import AnalysisPanel from '../src/components/AnalysisPanel.vue';
 import LandmarkReport from '../src/components/LandmarkReport.vue';
+import SpineReport from '../src/components/SpineReport.vue';
 import { api } from '../src/lib/api';
 import { coronaryApi } from '../src/lib/coronary';
 import {
+  landmarkMarks,
   landmarkTable,
   reportsApi,
   type AortaLandmark,
@@ -12,6 +14,8 @@ import {
   type PulmonaryResult,
   type ReportAnalysis,
   type ReportStatus,
+  type SpineResult,
+  type SpineVertebra,
 } from '../src/lib/reports';
 import type { Job, Revision, SegmentationCatalog, Structure } from '../src/types';
 import { click, mount, settled, type MountedElement } from './mounted';
@@ -131,6 +135,13 @@ const pulmonary: PulmonaryResult = {
   files: ['plane-1.png'],
   summary: { max_diameter_mm: 35.4, max_landmark: 5, landmarks_available: 4, landmarks_total: 5 },
 };
+/** What a landmark report hands the 3D view and slices. */
+const drawn = (shown: AortaResult | PulmonaryResult) => ({
+  analysis_id: shown.analysis_id,
+  revision_id: shown.revision_id,
+  marks: landmarkMarks(shown.landmarks),
+  centreline: shown.report === 'aorta' ? shown.centreline : undefined,
+});
 const segmenting: Job = { id: 'seg', case_id: 'c1', kind: 'segment', status: 'queued', stage: 'Queued', created_at: '' };
 const measuring: Job = { id: 'm1', case_id: 'c1', kind: 'report', status: 'queued', stage: 'Queued', created_at: '' };
 const choose = (select: MountedElement | undefined, value: string) => {
@@ -302,7 +313,7 @@ describe('Landmark report', () => {
     click(view.labelled('Show Landmark 1'));
     await settled();
     expect(onSelect).toHaveBeenCalledWith('total:aorta', [1, 2, 3]);
-    expect(onOverlay).toHaveBeenLastCalledWith({ result, selected: 1, labels: true });
+    expect(onOverlay).toHaveBeenLastCalledWith({ result: drawn(result), selected: 1, labels: true });
     expect(reportsApi.picture).toHaveBeenCalledWith('c1', 'r2', 'aorta', 'm1', 'plane-1.png', expect.anything());
     expect(view.text()).not.toContain('TL');
   });
@@ -325,12 +336,12 @@ describe('Landmark report', () => {
     expect(view.button('Copied')).toBeDefined();
     expect(view.all(element => element.getAttribute('role') === 'status')[0].textContent).toBe('Copied');
 
-    expect(onOverlay).toHaveBeenLastCalledWith({ result, selected: undefined, labels: true });
+    expect(onOverlay).toHaveBeenLastCalledWith({ result: drawn(result), selected: undefined, labels: true });
     const box = view.all(element => element.tagName === 'INPUT' && element.getAttribute('type') === 'checkbox')[0] as unknown as HTMLInputElement;
     box.checked = false;
     box.dispatchEvent(new Event('change'));
     await settled();
-    expect(onOverlay).toHaveBeenLastCalledWith({ result, selected: undefined, labels: false });
+    expect(onOverlay).toHaveBeenLastCalledWith({ result: drawn(result), selected: undefined, labels: false });
     expect(localStorage.getItem('scan3d-report-labels-v1')).toBe('off');
   });
   it('asks again for a picture that failed to load', async () => {
@@ -379,7 +390,7 @@ describe('Landmark report', () => {
     expect(view.text()).toContain('Labels in 3D');
     expect(view.button('Copy table')).toBeDefined();
     expect(view.all(element => element.tagName === 'BUTTON' && element.textContent.trim() === 'DICOM…')).toHaveLength(1);
-    expect(onOverlay).toHaveBeenLastCalledWith({ result: pulmonary, selected: undefined, labels: true });
+    expect(onOverlay).toHaveBeenLastCalledWith({ result: drawn(pulmonary), selected: undefined, labels: true });
     click(view.button('DICOM…'));
     await settled();
     expect(onDicom).toHaveBeenCalledWith({
@@ -389,7 +400,98 @@ describe('Landmark report', () => {
       report: 'pulmonary',
       analysisId: 'p1',
       title: 'Pulmonary arteries',
-      curvedView: false,
+      picture: null,
     });
+  });
+});
+
+const body = (number: number, name: string, more: Partial<SpineVertebra> = {}): SpineVertebra => ({
+  number,
+  id: `vertebrae_${name}`,
+  name,
+  available: true,
+  unavailable_reason: null,
+  heights: (['posterior', 'middle', 'anterior'] as const).map(id => ({
+    id,
+    mm: 25,
+    ends: [
+      [0, 0, number],
+      [0, 0, number + 25],
+    ],
+  })),
+  height_difference_percent: 4,
+  height_flag: false,
+  volume_ml: 25,
+  small_body: false,
+  mean_hu: 100,
+  median_hu: 100,
+  centre: [0, 0, number],
+  normal: [1, 0, 0],
+  outline: [],
+  ...more,
+});
+// L1 is flagged and small, and at 100 HU under the arterial and portal venous thresholds; T12 at 100 HU is never marked.
+const spine: SpineResult = {
+  format: 'scan3d-report-v1',
+  report: 'spine',
+  analysis_id: 's1',
+  revision_id: 'r2',
+  key: 'k',
+  engine: { ...result.engine, report_version: '0.1.0' },
+  inputs: [
+    { need: 'vertebrae_T12', structure_id: 'vertebrae_pp_refined:vertebrae_T12' },
+    { need: 'vertebrae_L1', structure_id: 'vertebrae_pp_refined:vertebrae_L1' },
+  ],
+  files: ['spine.png'],
+  warnings: [],
+  // T12 found fewer than two height lines, so it has no difference.
+  vertebrae: [
+    body(19, 'T12', { height_difference_percent: null }),
+    body(20, 'L1', { height_difference_percent: 31, height_flag: true, volume_ml: 1.5, small_body: true }),
+    body(21, 'L2', { available: false, unavailable_reason: 'Its body touches the edge of the scan', centre: null, normal: null, outline: null }),
+  ],
+  lumbar_max_difference_percent: 31,
+  density_thresholds_hu: { native: 90.25, arterial: 110.25, portal_venous: 105 },
+  summary: { vertebrae_measured: 2, vertebrae_total: 2, flagged: ['L1'], max_difference_percent: 31, max_vertebra: 'L1', lumbar_max_difference_percent: 31 },
+};
+
+describe('Spine report', () => {
+  it('marks flagged cells, marks low lumbar density for the chosen phase, and selects a body', async () => {
+    vi.spyOn(reportsApi, 'dicomFileAvailability').mockResolvedValue({ available: true });
+    const onSelect = vi.fn(),
+      onOverlay = vi.fn(),
+      onDicom = vi.fn();
+    const view = mount(SpineReport, () => ({ caseId: 'c1', result: spine, title: 'Spine fractures', onSelect, onOverlay, onDicom }));
+    await settled();
+    expect(view.text(), 'the counts are the server summary’s, not the rows’').toContain('1 of 2 bodies differs in height by over 20%: L1 · largest 31% at L1');
+    expect(view.all(element => element.tagName === 'TD').map(cell => cell.textContent.trim())[3], 'T12 has no difference').toBe('—');
+    const reason = view.all(element => element.tagName === 'TD' && element.getAttribute('colspan') === '6');
+    expect(
+      reason.map(cell => cell.textContent.trim()),
+      'a body that was not measured shows its reason in place of numbers',
+    ).toEqual(['Its body touches the edge of the scan']);
+    expect(reportsApi.picture).toHaveBeenCalledWith('c1', 'r2', 'spine', 's1', 'spine.png', expect.anything());
+    const flagged = () => view.all(element => element.tagName === 'TD' && element.className.split(' ').includes('flag')).map(cell => cell.textContent.trim());
+    expect(flagged(), 'the difference and volume of L1').toEqual(['31', '1.5']);
+    const phase = view.labelled('Contrast phase');
+    expect(view.all(element => element.tagName === 'OPTION').map(option => option.textContent.trim())).toEqual([
+      'None (90 HU)',
+      'Arterial (110 HU)',
+      'Portal venous (105 HU)',
+    ]);
+    choose(phase, 'arterial');
+    await settled();
+    expect(flagged(), 'L1 at 100 HU is under 110 HU; T12 is not lumbar').toEqual(['31', '1.5', '100']);
+    const lowHu = view.all(element => element.tagName === 'TD' && element.className.split(' ').includes('flag') && element.textContent.trim() === '100');
+    expect(lowHu[0].getAttribute('title'), 'the exact threshold the mark compares').toBe('Under 110.25 HU');
+
+    click(view.labelled('Show L1'));
+    await settled();
+    expect(onSelect).toHaveBeenCalledWith('vertebrae_pp_refined:vertebrae_L1', [0, 0, 20]);
+    const overlay = onOverlay.mock.lastCall![0];
+    expect(overlay).toMatchObject({ selected: 20, labels: true, result: { analysis_id: 's1', revision_id: 'r2' } });
+    expect(overlay.result.marks.map((mark: { label: string }) => mark.label)).toEqual(['T12', 'L1 · −31%']);
+    click(view.button('DICOM…'));
+    expect(onDicom).toHaveBeenCalledWith(expect.objectContaining({ report: 'spine', analysisId: 's1', picture: 'spine picture' }));
   });
 });

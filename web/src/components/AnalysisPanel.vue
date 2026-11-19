@@ -3,8 +3,9 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import CoronaryPanel from './CoronaryPanel.vue';
 import ReportPanel from './ReportPanel.vue';
 import LandmarkReport from './LandmarkReport.vue';
+import SpineReport from './SpineReport.vue';
 import { hasCoronaryLumen, type CoronaryTube } from '../lib/coronary';
-import { ANALYSIS_STORAGE_KEY, type AortaResult, type PulmonaryResult, type ReportOverlay, type ReportResult } from '../lib/reports';
+import { ANALYSIS_STORAGE_KEY, type AortaResult, type PulmonaryResult, type ReportOverlay, type ReportResult, type SpineResult } from '../lib/reports';
 import type { ReportExportRequest } from '../lib/dicom-view';
 import type { Job, Point, Revision } from '../types';
 
@@ -22,6 +23,7 @@ const ANALYSES = [
   { id: 'coronary', label: 'Coronary FFR' },
   { id: 'aorta', label: 'Aorta' },
   { id: 'pulmonary', label: 'Pulmonary arteries' },
+  { id: 'spine', label: 'Spine fractures' },
 ] as const;
 type AnalysisId = (typeof ANALYSES)[number]['id'];
 
@@ -37,10 +39,11 @@ const lumen = computed(() => hasCoronaryLumen(props.revision.structures));
 // Until someone chooses, the default follows the revision: FFR where there is a lumen to analyse.
 const stored = ref(remembered());
 const choice = computed<AnalysisId>(() => stored.value ?? (lumen.value ? 'coronary' : 'aorta'));
-/** Every analysis but Coronary FFR is a measurement report, drawn with the one landmark view under its chooser label. */
+/** Every analysis but Coronary FFR is a measurement report, drawn with its result view under its chooser label. */
 const report = computed(() => (choice.value === 'coronary' ? undefined : ANALYSES.find(item => item.id === choice.value)));
 // The panel checks the result's report before drawing it, so it is that report's own shape.
 const landmarkResult = (result: ReportResult) => result as AortaResult | PulmonaryResult;
+const spineResult = (result: ReportResult) => result as SpineResult;
 function choose(event: Event) {
   const id = ANALYSES.find(item => item.id === (event.target as HTMLSelectElement).value)?.id;
   if (!id) return;
@@ -98,8 +101,17 @@ onBeforeUnmount(() => {
       @job="emit('job', $event)"
     >
       <template #default="{ result }">
+        <SpineReport
+          v-if="result.report === 'spine' && report.id === 'spine'"
+          :case-id="caseId"
+          :result="spineResult(result)"
+          :title="report.label"
+          @select="(id, at) => emit('select', id, at)"
+          @overlay="emit('overlay', $event)"
+          @dicom="emit('dicom', $event)"
+        />
         <LandmarkReport
-          v-if="result.report === report.id"
+          v-else-if="result.report === report.id"
           :case-id="caseId"
           :result="landmarkResult(result)"
           :title="report.label"

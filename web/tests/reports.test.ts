@@ -3,16 +3,22 @@ import {
   absentOptional,
   formatOne,
   formatWhole,
-  landmarkLabels,
+  landmarkMarks,
   landmarkTable,
+  markLabels,
   missingNeeds,
   reportFileUrl,
   reportView,
+  spineTable,
+  vertebraMarks,
   type AortaLandmark,
   type AortaResult,
   type PulmonaryResult,
   type ReportAnalysis,
+  type ReportOverlay,
   type ReportStatus,
+  type SpineResult,
+  type SpineVertebra,
 } from '../src/lib/reports';
 import type { Point } from '../src/types';
 
@@ -135,10 +141,16 @@ const aorta = (more: Partial<AortaResult> = {}): AortaResult => ({
 });
 /** Looking down the axis: x stays x and z climbs the screen, 1 px per mm, from (100, 400). */
 const front = (ras: Point): [number, number] => [100 + ras[0], 400 - ras[2]];
+/** What a landmark report hands the 3D view. */
+const shown = (result: AortaResult | PulmonaryResult, selected: number | undefined): ReportOverlay => ({
+  result: { analysis_id: result.analysis_id, revision_id: result.revision_id, marks: landmarkMarks(result.landmarks) },
+  selected,
+  labels: true,
+});
 
 describe('aorta labels', () => {
   it('labels each measured ring at its rightmost point, the selected one with all three values', () => {
-    const labels = landmarkLabels({ result: aorta(), selected: 3, labels: true }, front, { width: 800, height: 600 });
+    const labels = markLabels(shown(aorta(), 3), front, { width: 800, height: 600 });
     expect(
       labels.map(label => label.number),
       'selected first; landmark 2 was not measured',
@@ -152,9 +164,9 @@ describe('aorta labels', () => {
   });
   it('leaves out a label that would cover one already placed, and one whose ring is off the canvas', () => {
     const close = aorta({ landmarks: [landmark(1), landmark(2, { centre: [0, 0, 40], outline: landmark(2).outline!.map(([x, y]) => [x, y, 40] as Point) })] });
-    expect(landmarkLabels({ result: close, selected: 2, labels: true }, front, { width: 800, height: 600 }).map(label => label.number)).toEqual([2]);
-    expect(landmarkLabels({ result: aorta(), selected: undefined, labels: true }, front, { width: 800, height: 350 }).map(label => label.number)).toEqual([3]);
-    expect(landmarkLabels({ result: aorta(), selected: undefined, labels: true }, () => [Number.NaN, 0], { width: 800, height: 600 })).toEqual([]);
+    expect(markLabels(shown(close, 2), front, { width: 800, height: 600 }).map(label => label.number)).toEqual([2]);
+    expect(markLabels(shown(aorta(), undefined), front, { width: 800, height: 350 }).map(label => label.number)).toEqual([3]);
+    expect(markLabels(shown(aorta(), undefined), () => [Number.NaN, 0], { width: 800, height: 600 })).toEqual([]);
   });
 });
 
@@ -228,7 +240,168 @@ describe('pulmonary report', () => {
     expect(html.match(/<table>/g)).toHaveLength(1);
   });
   it('labels its rings in the 3D view', () => {
-    const labels = landmarkLabels({ result: pulmonary(), selected: 5, labels: true }, front, { width: 800, height: 600 });
+    const labels = markLabels(shown(pulmonary(), 5), front, { width: 800, height: 600 });
     expect(labels.map(label => label.number)).toEqual([5, 1, 2, 4]);
+  });
+});
+
+// Three bodies on sagittal slices: T12 normal, L1 flagged with no anterior line, L2 at the scan's edge.
+const vertebra = (number: number, name: string, more: Partial<SpineVertebra> = {}): SpineVertebra => {
+  const z = (24 - number) * 30;
+  return {
+    number,
+    id: `vertebrae_${name}`,
+    name,
+    available: true,
+    unavailable_reason: null,
+    heights: [
+      {
+        id: 'posterior',
+        mm: 25.46,
+        ends: [
+          [0, -10, z - 12],
+          [0, -10, z + 12],
+        ],
+      },
+      {
+        id: 'middle',
+        mm: 26,
+        ends: [
+          [0, 0, z - 13],
+          [0, 0, z + 13],
+        ],
+      },
+      {
+        id: 'anterior',
+        mm: 24.1,
+        ends: [
+          [0, 10, z - 12],
+          [0, 10, z + 12],
+        ],
+      },
+    ],
+    height_difference_percent: 7,
+    height_flag: false,
+    volume_ml: 25.94,
+    small_body: false,
+    mean_hu: 140.2,
+    median_hu: 142.6,
+    centre: [0, 0, z],
+    normal: [1, 0, 0],
+    outline: [
+      [0, 15, z],
+      [0, 0, z + 14],
+      [0, -15, z],
+      [0, 0, z - 14],
+    ],
+    ...more,
+  };
+};
+const spine = (): SpineResult => ({
+  format: 'scan3d-report-v1',
+  report: 'spine',
+  analysis_id: 's1',
+  revision_id: 'r2',
+  key: 'k',
+  engine: { name: 'TotalSegmentator', version: '2.18.0', report_version: '0.1.0' },
+  inputs: [],
+  files: ['spine.png'],
+  warnings: ['Only one\nline.'],
+  vertebrae: [
+    vertebra(19, 'T12'),
+    vertebra(20, 'L1', {
+      heights: [
+        {
+          id: 'posterior',
+          mm: 25.5,
+          ends: [
+            [0, -10, 108],
+            [0, -10, 132],
+          ],
+        },
+        {
+          id: 'middle',
+          mm: 26,
+          ends: [
+            [0, 0, 107],
+            [0, 0, 133],
+          ],
+        },
+        { id: 'anterior', mm: null, ends: null },
+      ],
+      height_difference_percent: 23,
+      height_flag: true,
+      small_body: true,
+      volume_ml: 1.84,
+      median_hu: null,
+      mean_hu: null,
+    }),
+    vertebra(21, 'L2', {
+      available: false,
+      unavailable_reason: 'Its body touches the edge of the scan',
+      heights: (['posterior', 'middle', 'anterior'] as const).map(id => ({ id, mm: null, ends: null })),
+      height_difference_percent: null,
+      height_flag: null,
+      volume_ml: null,
+      small_body: null,
+      mean_hu: null,
+      median_hu: null,
+      centre: null,
+      normal: null,
+      outline: null,
+    }),
+  ],
+  lumbar_max_difference_percent: 23,
+  density_thresholds_hu: { native: 90.25, arterial: 110.25, portal_venous: 105 },
+  summary: { vertebrae_measured: 2, vertebrae_total: 3, flagged: ['L1'], max_difference_percent: 23, max_vertebra: 'L1', lumbar_max_difference_percent: 23 },
+});
+const text = (lines: { text: string }[][]) => lines.map(line => line.map(part => part.text).join(''));
+
+describe('spine report', () => {
+  it('marks each measured body with its outline and three heights, and labels a flagged one with its difference', () => {
+    const marks = vertebraMarks(spine());
+    expect(
+      marks.map(mark => mark.number),
+      'L2 was not measured',
+    ).toEqual([19, 20]);
+    expect(marks[0].label).toBe('T12');
+    expect(marks[1].label).toBe('L1 · −23%');
+    expect(marks[1].lines.map(line => [line.id, line.colour])).toEqual([
+      ['posterior', '#ff4fd8'],
+      ['middle', '#ff4fd8'],
+    ]);
+    expect(text(marks[0].detail)).toEqual(['T12', 'Post. 25.5 · Mid. 26.0 · Ant. 24.1 mm · −7%']);
+    expect(text(marks[1].detail)).toEqual(['L1', 'Post. 25.5 · Mid. 26.0 · Ant. — mm · −23%']);
+    const overlay: ReportOverlay = { result: { analysis_id: 's1', revision_id: 'r2', marks }, selected: 20, labels: true };
+    // Sagittal outlines seen from the front: each body's label sits right of its outline.
+    expect(text(markLabels(overlay, front, { width: 800, height: 600 }).flatMap(label => label.lines))).toEqual([
+      'L1',
+      'Post. 25.5 · Mid. 26.0 · Ant. — mm · −23%',
+      'T12',
+    ]);
+    // A body with fewer than two height lines has no difference, so no percent anywhere.
+    const [noDifference] = vertebraMarks({ ...spine(), vertebrae: [vertebra(19, 'T12', { height_difference_percent: null, height_flag: true })] });
+    expect([noDifference.label, ...text(noDifference.detail)]).toEqual(['T12', 'T12', 'Post. 25.5 · Mid. 26.0 · Ant. 24.1 mm']);
+  });
+  it('copies the table as the report page has it, with notes, the density line and warnings', () => {
+    const { text: copied, html } = spineTable(spine(), 'Spine fractures');
+    expect(copied.split('\n')).toEqual([
+      'Spine fractures · TotalSegmentator 2.18.0, spine report 0.1.0. Research use only. Not for diagnostic use.',
+      '',
+      'Vertebra\tPosterior (mm)\tMiddle (mm)\tAnterior (mm)\tDifference (%)\tVolume (ml)\tMedian (HU)\tNote',
+      'T12\t25.5\t26.0\t24.1\t7\t25.9\t143\t',
+      'L1\t25.5\t26.0\t\t23\t1.8\t\tHeight difference over 20%; Body under 2 ml',
+      'L2\t\t\t\t\t\t\tIts body touches the edge of the scan',
+      '',
+      'TotalSegmentator reads L1 to L5 as low density under 90 HU without contrast, 110 HU arterial and 105 HU portal venous.',
+      '',
+      'Warnings',
+      'Only one line.',
+    ]);
+    expect(spineTable({ ...spine(), vertebrae: [vertebra(19, 'T12', { height_difference_percent: null })] }, 'Spine fractures').text.split('\n')[3]).toBe(
+      'T12\t25.5\t26.0\t24.1\t\t25.9\t143\t',
+    );
+    expect(html.match(/<table>/g)).toHaveLength(1);
+    expect(html).toContain('<p>TotalSegmentator reads L1 to L5 as low density under 90 HU');
   });
 });

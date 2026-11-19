@@ -241,11 +241,11 @@ onBeforeUnmount(() => {
       </button>
     </header>
     <h2 :id="titleId">Export this {{ noun }}.</h2>
-    <p v-if="reportSource?.curvedView" :id="descriptionId">
+    <p v-if="reportSource?.picture" :id="descriptionId">
       {{
         showOrthanc
-          ? 'The report page and the curved view join the original study as one new series.'
-          : `Save the report page and the curved view as DICOM files, in one ZIP, in the original patient and study${sends ? ', or send them to a configured DICOM node' : ''}.`
+          ? `The report page and the ${reportSource.picture} join the original study as one new series.`
+          : `Save the report page and the ${reportSource.picture} as DICOM files, in one ZIP, in the original patient and study${sends ? ', or send them to a configured DICOM node' : ''}.`
       }}
       They are pictures: not calibrated, and not for measurement. Research use only.
     </p>

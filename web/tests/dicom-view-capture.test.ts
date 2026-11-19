@@ -431,7 +431,7 @@ describe('Cornerstone export capture', () => {
   it('keeps the tube and report drawing out of a capture that a presentation sync interrupts', async () => {
     const shown = await view({
       tube: { result: { analysis_id: 'a1', branches: [], inputs: {} }, colouring: 'ffr' },
-      reportOverlay: { result: { analysis_id: 'm1', landmarks: [], centreline: [] }, selected: undefined },
+      reportOverlay: { result: { analysis_id: 'm1', marks: [], centreline: [] }, selected: undefined },
     });
     const [tube, report] = fake.viewer.nativeRenderer.addViewProp.mock.calls
       .map(([actor]: [any]) => actor)

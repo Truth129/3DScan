@@ -31,17 +31,16 @@ const unit = (a: Vec): Vec | undefined => {
 const perpendicular = (tangent: Vec): Vec => unit(cross(tangent, Math.abs(tangent[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]))!;
 
 /**
- * What the 3D view draws for a shown report result: every measured landmark's ring, set just outside
- * its outline so it shows on an opaque vessel surface; the selected one brighter and thicker with its
- * two diameters, which reach that ring; and the centreline, for a report that has one. Never a
- * measurement.
+ * What the 3D view draws for a shown report result: every mark's outline as a ring, set just outside
+ * it so it shows on an opaque surface; the selected one brighter and thicker with its measured lines,
+ * which reach that ring; and the centreline, for a report that has one. Never a measurement.
  */
 export function reportOverlayLines({ result, selected }: ReportOverlay): OverlayLine[] {
   const lines: OverlayLine[] = [];
   if (result.centreline && result.centreline.length > 1)
     lines.push({ points: result.centreline, closed: false, radius: 0.35, colour: rgb(REPORT_COLOURS.centreline, 0.85) });
-  for (const mark of result.landmarks) {
-    if (!mark.available || !mark.centre || !mark.outline || mark.outline.length < 3) continue;
+  for (const mark of result.marks) {
+    if (mark.outline.length < 3) continue;
     const chosen = mark.number === selected;
     lines.push({
       points: offsetRing(mark.outline, mark.centre, mark.normal),
@@ -50,12 +49,8 @@ export function reportOverlayLines({ result, selected }: ReportOverlay): Overlay
       colour: rgb(REPORT_COLOURS.ring, chosen ? 1 : 0.6),
     });
     if (!chosen) continue;
-    const centre = mark.centre;
-    for (const [ends, colour] of [
-      [mark.ends, REPORT_COLOURS.max],
-      [mark.perpendicular_ends, REPORT_COLOURS.perpendicular],
-    ] as const)
-      if (ends) lines.push({ points: offsetRing(ends, centre, mark.normal), closed: false, radius: 0.6, colour: rgb(colour) });
+    for (const line of mark.lines)
+      lines.push({ points: offsetRing(line.ends, mark.centre, mark.normal), closed: false, radius: 0.6, colour: rgb(line.colour) });
   }
   return lines;
 }
@@ -133,7 +128,7 @@ export class VTKReportOverlay {
     property.setSpecular(0.1);
   }
 
-  /** Rebuilds only when the analysis or the selected landmark changes. */
+  /** Rebuilds only when the analysis or the selected mark changes. */
   setOverlay(overlay: ReportOverlay | undefined) {
     const key = overlay ? `${overlay.result.analysis_id}:${overlay.selected ?? ''}` : '';
     if (key !== this.key) {

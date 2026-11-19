@@ -121,13 +121,73 @@ export interface PulmonaryResult extends ReportResult {
   landmarks: ReportLandmark[];
   summary: LandmarkSummary;
 }
+export interface SpineHeight {
+  id: 'posterior' | 'middle' | 'anterior';
+  /** Null where upstream found no line. */
+  mm: number | null;
+  ends: [Point, Point] | null;
+}
+/** One vertebral body, measured on one sagittal slice of the scan's own grid. */
+export interface SpineVertebra {
+  /** Upstream's label: C1 is 1, T1 8, L1 20, L5 24. */
+  number: number;
+  id: string;
+  name: string;
+  available: boolean;
+  unavailable_reason: string | null;
+  /** Always posterior, middle, anterior. */
+  heights: SpineHeight[];
+  height_difference_percent: number | null;
+  /** The smallest height is under 80% of the largest. */
+  height_flag: boolean | null;
+  volume_ml: number | null;
+  /** Under 2 ml. */
+  small_body: boolean | null;
+  /** Of the body eroded by 4 mm; null when nothing is left after the erosion. */
+  mean_hu: number | null;
+  median_hu: number | null;
+  centre: Point | null;
+  normal: Point | null;
+  outline: Point[] | null;
+}
+export interface SpineSummary {
+  vertebrae_measured: number;
+  vertebrae_total: number;
+  flagged: string[];
+  max_difference_percent: number | null;
+  max_vertebra: string | null;
+  lumbar_max_difference_percent: number | null;
+}
+export interface SpineResult extends ReportResult {
+  report: 'spine';
+  /** Only the bodies in the revision, C1 to L5. */
+  vertebrae: SpineVertebra[];
+  lumbar_max_difference_percent: number | null;
+  /** TotalSegmentator's low-density threshold for L1 to L5, per contrast phase. */
+  density_thresholds_hu: { native: number; arterial: number; portal_venous: number };
+  summary: SpineSummary;
+}
+
+/** One drawn mark of a shown report: a closed outline in its own plane, and the lines measured on it. */
+export interface OverlayMark {
+  /** What `selected` holds. */
+  number: number;
+  centre: Point;
+  normal: Point | null;
+  outline: readonly Point[];
+  /** Drawn for the selected mark only, in the 3D view and on the slices. */
+  lines: readonly { id: string; ends: [Point, Point]; colour: string }[];
+  /** The 3D label beside the outline, and the selected mark's fuller lines. */
+  label: string;
+  detail: ReportLabelPart[][];
+}
 /**
- * What the 3D view and slices draw for a shown report result; `selected` is a landmark number. Only
- * the drawn fields are named, so any landmark report draws, and one without a centreline draws none.
- * `labels` adds the text labels beside the rings in the native 3D view and changes nothing else.
+ * What the 3D view and slices draw for a shown report result; `selected` is a mark's number. A report
+ * without a centreline draws none. `labels` adds the text labels beside the outlines in the native 3D
+ * view and changes nothing else.
  */
 export interface ReportOverlay {
-  result: { analysis_id: string; revision_id: string; landmarks: readonly ReportLandmark[]; centreline?: readonly Point[] };
+  result: { analysis_id: string; revision_id: string; marks: readonly OverlayMark[]; centreline?: readonly Point[] };
   selected: number | undefined;
   labels: boolean;
 }
@@ -255,12 +315,11 @@ export function measuredInPlane(meta: SliceMeta, centre: Point, normal: Point | 
 }
 
 type PanePoint = [number, number];
-export interface SliceLandmarkDrawing {
+export interface SliceMarkDrawing {
   solid: boolean;
   centre: PanePoint;
   outline: PanePoint[];
-  max?: [PanePoint, PanePoint];
-  perpendicular?: [PanePoint, PanePoint];
+  lines: { id: string; ends: [PanePoint, PanePoint]; colour: string }[];
 }
 /**
  * A point projected straight onto the pane, in its canvas pixels. Pixel (0, 0) is the centre of the
@@ -270,19 +329,78 @@ export function projectToPane(meta: SliceMeta, ras: Point): PanePoint {
   const [x, y] = rasToPixel(meta.pixel_to_ras, ras);
   return [x + 0.5, y + 0.5];
 }
-/** The selected landmark as one pane draws it, or nothing when it was not measured. */
-export function landmarkOnSlice(meta: SliceMeta, landmark: ReportLandmark | undefined): SliceLandmarkDrawing | undefined {
-  if (!landmark?.available || !landmark.centre) return undefined;
+/** The selected mark as one pane draws it, or nothing when there is none. */
+export function markOnSlice(meta: SliceMeta, mark: OverlayMark | undefined): SliceMarkDrawing | undefined {
+  if (!mark) return undefined;
   const project = (ras: Point) => projectToPane(meta, ras),
-    pair = (ends: [Point, Point] | null) => (ends ? (ends.map(project) as [PanePoint, PanePoint]) : undefined),
     drawing = {
-      solid: measuredInPlane(meta, landmark.centre, landmark.normal),
-      centre: project(landmark.centre),
-      outline: (landmark.outline ?? []).map(project),
-      max: pair(landmark.ends),
-      perpendicular: pair(landmark.perpendicular_ends),
+      solid: measuredInPlane(meta, mark.centre, mark.normal),
+      centre: project(mark.centre),
+      outline: mark.outline.map(project),
+      lines: mark.lines.map(line => ({ id: line.id, ends: line.ends.map(project) as [PanePoint, PanePoint], colour: line.colour })),
     };
-  return [drawing.centre, ...drawing.outline, ...(drawing.max ?? []), ...(drawing.perpendicular ?? [])].flat().every(Number.isFinite) ? drawing : undefined;
+  return [drawing.centre, ...drawing.outline, ...drawing.lines.flatMap(line => line.ends)].flat().every(Number.isFinite) ? drawing : undefined;
+}
+
+/** The aorta's and pulmonary report's marks: each measured landmark's ring, with its two diameters. */
+export function landmarkMarks(landmarks: readonly ReportLandmark[]): OverlayMark[] {
+  return landmarks.flatMap(mark => {
+    if (!mark.available || !mark.centre) return [];
+    const max = formatWhole(mark.diameter_mm),
+      lines = (
+        [
+          ['max', mark.ends, REPORT_COLOURS.max],
+          ['perpendicular', mark.perpendicular_ends, REPORT_COLOURS.perpendicular],
+        ] as const
+      ).flatMap(([id, ends, colour]) => (ends ? [{ id, ends, colour }] : []));
+    return [
+      {
+        number: mark.number,
+        centre: mark.centre,
+        normal: mark.normal,
+        outline: mark.outline ?? [],
+        lines,
+        label: max === DASH ? String(mark.number) : `${mark.number} · ${max} mm`,
+        detail: [
+          [{ text: `${mark.number} · ${mark.name}` }],
+          [
+            { text: 'Max', colour: REPORT_COLOURS.max },
+            { text: ` ${max} · ` },
+            { text: 'Perp.', colour: REPORT_COLOURS.perpendicular },
+            { text: ` ${formatWhole(mark.perpendicular_mm)} mm · ${formatOne(mark.area_cm2)} cm²` },
+          ],
+        ],
+      },
+    ];
+  });
+}
+
+const HEIGHT_NAMES = { posterior: 'Post.', middle: 'Mid.', anterior: 'Ant.' } as const;
+const height = (vertebra: SpineVertebra, id: SpineHeight['id']) => vertebra.heights.find(row => row.id === id);
+/** The spine report's marks: each measured body's outline on its sagittal slice, with its three heights. */
+export function vertebraMarks(result: SpineResult): OverlayMark[] {
+  return result.vertebrae.flatMap(vertebra => {
+    if (!vertebra.available || !vertebra.centre) return [];
+    const difference = vertebra.height_difference_percent,
+      less = finite(difference) && difference > 0 ? ` · −${Math.round(difference)}%` : '';
+    return [
+      {
+        number: vertebra.number,
+        centre: vertebra.centre,
+        normal: vertebra.normal,
+        outline: vertebra.outline ?? [],
+        lines: vertebra.heights.flatMap(row => (row.ends ? [{ id: row.id, ends: row.ends, colour: REPORT_COLOURS.max }] : [])),
+        label: vertebra.height_flag ? `${vertebra.name}${less}` : vertebra.name,
+        detail: [
+          [{ text: vertebra.name }],
+          (['posterior', 'middle', 'anterior'] as const).flatMap((id, index) => [
+            { text: HEIGHT_NAMES[id], colour: REPORT_COLOURS.max },
+            { text: ` ${formatOne(height(vertebra, id)?.mm)}${index < 2 ? ' · ' : ` mm${less}`}` },
+          ]),
+        ],
+      },
+    ];
+  });
 }
 
 export interface ReportLabelPart {
@@ -303,45 +421,29 @@ const LABEL_CHAR_PX = 6.2,
   LABEL_LINE_PX = 13,
   LABEL_PAD_PX = 2;
 
-function labelLines(mark: ReportLandmark, selected: boolean): ReportLabelPart[][] {
-  const max = formatWhole(mark.diameter_mm);
-  if (!selected) return [[{ text: max === DASH ? String(mark.number) : `${mark.number} · ${max} mm` }]];
-  return [
-    [{ text: `${mark.number} · ${mark.name}` }],
-    [
-      { text: 'Max', colour: REPORT_COLOURS.max },
-      { text: ` ${max} · ` },
-      { text: 'Perp.', colour: REPORT_COLOURS.perpendicular },
-      { text: ` ${formatWhole(mark.perpendicular_mm)} mm · ${formatOne(mark.area_cm2)} cm²` },
-    ],
-  ];
-}
-
 /**
- * The labels the 3D view places beside each drawn ring, at the ring's rightmost point on screen. The
- * selected landmark goes first, then by number; a label that would cover one already placed is left
- * out, since the table carries every number. `project` gives a RAS point's canvas pixels.
+ * The labels the 3D view places beside each drawn outline, at its rightmost point on screen. The
+ * selected mark goes first, then by number; a label that would cover one already placed is left out,
+ * since the table carries every number. `project` gives a RAS point's canvas pixels.
  */
-export function landmarkLabels(
+export function markLabels(
   overlay: ReportOverlay,
   project: (ras: Point) => readonly [number, number] | undefined,
   canvas: { width: number; height: number },
 ): ReportLabel[] {
-  const chosen = (mark: ReportLandmark) => mark.number === overlay.selected;
-  const marks = overlay.result.landmarks
-    .filter(mark => mark.available && mark.centre && mark.outline && mark.outline.length >= 3)
-    .sort((a, b) => Number(chosen(b)) - Number(chosen(a)) || a.number - b.number);
+  const chosen = (mark: OverlayMark) => mark.number === overlay.selected;
+  const marks = overlay.result.marks.filter(mark => mark.outline.length >= 3).sort((a, b) => Number(chosen(b)) - Number(chosen(a)) || a.number - b.number);
   const boxes: { left: number; top: number; right: number; bottom: number }[] = [],
     labels: ReportLabel[] = [];
   for (const mark of marks) {
     let anchor: readonly [number, number] | undefined;
-    for (const point of offsetRing(mark.outline!, mark.centre!, mark.normal)) {
+    for (const point of offsetRing(mark.outline, mark.centre, mark.normal)) {
       const at = project(point);
       if (at && Number.isFinite(at[0]) && Number.isFinite(at[1]) && (!anchor || at[0] > anchor[0])) anchor = at;
     }
     if (!anchor || anchor[0] < 0 || anchor[1] < 0 || anchor[0] > canvas.width || anchor[1] > canvas.height) continue;
     const selected = chosen(mark),
-      lines = labelLines(mark, selected),
+      lines = selected ? mark.detail : [[{ text: mark.label }]],
       x = anchor[0] + LABEL_GAP_PX,
       y = anchor[1],
       width = Math.max(...lines.map(line => line.reduce((sum, part) => sum + part.text.length, 0))) * LABEL_CHAR_PX + 2 * LABEL_PAD_PX,
@@ -393,10 +495,16 @@ export function landmarkTable(result: AortaResult | PulmonaryResult, title: stri
         return [section.name, ...values.map(text => (section.available ? value(text) : ''))];
       }),
     });
-  const warnings = result.warnings.map(oneLine);
+  return copiedTables(notes, tables, [], result.warnings);
+}
+
+/** Notes, then the tables, then lines that read with the tables, then the warnings: as text and as HTML. */
+function copiedTables(notes: string[], tables: { head: string[]; rows: string[][] }[], after: string[], rawWarnings: readonly string[]) {
+  const warnings = rawWarnings.map(oneLine);
   const text = [
     ...notes,
     ...tables.flatMap(table => ['', ...[table.head, ...table.rows].map(row => row.map(oneLine).join('\t'))]),
+    ...(after.length ? ['', ...after] : []),
     ...(warnings.length ? ['', 'Warnings', ...warnings] : []),
   ].join('\n');
   const paragraph = (line: string) => `<p>${escapeHtml(line)}</p>`,
@@ -404,7 +512,36 @@ export function landmarkTable(result: AortaResult | PulmonaryResult, title: stri
   const html = [
     ...notes.map(paragraph),
     ...tables.map(table => `<table><thead>${cells(table.head, 'th')}</thead><tbody>${table.rows.map(row => cells(row, 'td')).join('')}</tbody></table>`),
+    ...after.map(paragraph),
     ...(warnings.length ? ['Warnings', ...warnings].map(paragraph) : []),
   ].join('');
   return { text, html };
+}
+
+/** The lumbar low-density line under the spine table, from the result's own thresholds. */
+export const densityNote = ({ density_thresholds_hu: hu }: SpineResult) =>
+  `TotalSegmentator reads L1 to L5 as low density under ${formatWhole(hu.native)} HU without contrast, ${formatWhole(hu.arterial)} HU arterial and ${formatWhole(hu.portal_venous)} HU portal venous.`;
+/** A spine row's note: what it is marked for, or why it was not measured. */
+export const vertebraNote = (vertebra: SpineVertebra) =>
+  vertebra.available
+    ? [vertebra.height_flag ? 'Height difference over 20%' : '', vertebra.small_body ? 'Body under 2 ml' : ''].filter(Boolean).join('; ')
+    : vertebra.unavailable_reason || 'Not measured.';
+
+/** The spine table as the report page has it, tab-separated and as HTML, as `landmarkTable`. */
+export function spineTable(result: SpineResult, title: string): { text: string; html: string } {
+  const { engine } = result,
+    notes = [`${title} · ${engine.name} ${engine.version}, ${result.report} report ${engine.report_version}. ${REPORT_NOTICE}`];
+  const table = {
+    head: ['Vertebra', 'Posterior (mm)', 'Middle (mm)', 'Anterior (mm)', 'Difference (%)', 'Volume (ml)', 'Median (HU)', 'Note'],
+    rows: result.vertebrae.map(vertebra => {
+      const values = [
+        ...(['posterior', 'middle', 'anterior'] as const).map(id => formatOne(height(vertebra, id)?.mm)),
+        formatWhole(vertebra.height_difference_percent),
+        formatOne(vertebra.volume_ml),
+        formatWhole(vertebra.median_hu),
+      ];
+      return [vertebra.name, ...values.map(text => (vertebra.available ? value(text) : '')), vertebraNote(vertebra)];
+    }),
+  };
+  return copiedTables(notes, [table], [densityNote(result)], result.warnings);
 }

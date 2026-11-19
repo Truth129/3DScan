@@ -3,9 +3,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import {
   DASH,
   REPORT_COLOURS,
-  REPORT_LABELS_STORAGE_KEY,
   formatOne,
   formatWhole,
+  landmarkMarks,
   landmarkTable,
   nonContrastNote,
   reportsApi,
@@ -16,6 +16,7 @@ import {
   type ReportOverlay,
 } from '../lib/reports';
 import type { ReportExportRequest } from '../lib/dicom-view';
+import { useReportTools } from '../lib/use-report-tools';
 import type { Point } from '../types';
 
 /**
@@ -101,7 +102,7 @@ function exportDicom() {
     report,
     analysisId: analysis_id,
     title: props.title,
-    curvedView: hasCurvedView.value,
+    picture: hasCurvedView.value ? 'curved view' : null,
   });
 }
 function release() {
@@ -134,77 +135,19 @@ function openLarge() {
   large.value?.showModal();
 }
 
-function rememberedLabels() {
-  try {
-    return localStorage.getItem(REPORT_LABELS_STORAGE_KEY) !== 'off';
-  } catch {
-    return true;
-  }
-}
-const labels = ref(rememberedLabels());
-function setLabels(event: Event) {
-  labels.value = (event.target as HTMLInputElement).checked;
-  try {
-    localStorage.setItem(REPORT_LABELS_STORAGE_KEY, labels.value ? 'on' : 'off');
-  } catch {
-    /* The choice still holds for this page. */
-  }
-}
+const { labels, setLabels, copied, copyError, copyTable: copy } = useReportTools();
+const copyTable = () => copy(landmarkTable(props.result, props.title));
 
-const copied = ref(false),
-  copyError = ref('');
-let copyTimer: ReturnType<typeof setTimeout> | undefined;
-/** The textarea route for a browser, or a page served over plain HTTP, that has no async clipboard. */
-function copyThroughSelection(text: string) {
-  const field = document.createElement('textarea');
-  field.value = text;
-  field.setAttribute('readonly', '');
-  field.style.cssText = 'position: fixed; top: 0; left: 0; opacity: 0;';
-  document.body.appendChild(field);
-  try {
-    field.select();
-    return document.execCommand('copy');
-  } finally {
-    document.body.removeChild(field);
-  }
-}
-/** Rich HTML where the browser takes it, so a document gets a table; plain text otherwise. */
-async function copyTable() {
-  const { text, html } = landmarkTable(props.result, props.title),
-    clipboard = typeof navigator === 'undefined' ? undefined : navigator.clipboard;
-  let done = false;
-  try {
-    if (!clipboard?.write || typeof ClipboardItem === 'undefined') throw new Error('No rich clipboard.');
-    await clipboard.write([
-      new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) }),
-    ]);
-    done = true;
-  } catch {
-    try {
-      if (!clipboard?.writeText) throw new Error('No clipboard.');
-      await clipboard.writeText(text);
-      done = true;
-    } catch {
-      try {
-        done = copyThroughSelection(text);
-      } catch {
-        /* Nothing left to try; the message below says so. */
-      }
-    }
-  }
-  clearTimeout(copyTimer);
-  copied.value = done;
-  copyError.value = done ? '' : 'Copying is blocked in this browser.';
-  // The error stays until the next try; Copied goes back to the button's name.
-  if (done) copyTimer = setTimeout(() => (copied.value = false), 2000);
-}
-
-watch([() => props.result, selected, labels], () => emit('overlay', { result: props.result, selected: selected.value, labels: labels.value }), {
+/** One drawing per result, so a new selection reuses the same marks. */
+const drawn = computed<ReportOverlay['result']>(() => {
+  const { analysis_id, revision_id } = props.result;
+  return { analysis_id, revision_id, marks: landmarkMarks(props.result.landmarks), centreline: aorta.value?.centreline };
+});
+watch([drawn, selected, labels], () => emit('overlay', { result: drawn.value, selected: selected.value, labels: labels.value }), {
   immediate: true,
 });
 onBeforeUnmount(() => {
   release();
-  clearTimeout(copyTimer);
   emit('overlay', undefined);
 });
 </script>

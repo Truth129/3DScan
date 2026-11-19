@@ -233,7 +233,7 @@ describe('the upload', () => {
 describe('a report source', () => {
   it('posts JSON to the report route, with no upload, and saves its series as report.zip', async () => {
     const source = freezeReportSource(
-        { kind: 'report', caseId: 'case-a', revisionId: 'revision-a', report: 'aorta', analysisId: 'analysis-a', title: 'Aorta', curvedView: true },
+        { kind: 'report', caseId: 'case-a', revisionId: 'revision-a', report: 'aorta', analysisId: 'analysis-a', title: 'Aorta', picture: 'curved view' },
         'Synthetic A',
       ),
       base = '/api/cases/case-a/revisions/revision-a/reports/aorta/analysis-a',
@@ -297,7 +297,7 @@ describe('a report source', () => {
         report: 'pulmonary',
         analysisId: 'analysis-p',
         title: 'Pulmonary arteries',
-        curvedView: false,
+        picture: null,
       },
       'Synthetic A',
     );
