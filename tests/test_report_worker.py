@@ -495,3 +495,4 @@ def test_a_body_with_nothing_on_its_slice_draws_no_picture(tmp_path, monkeypatch
     assert l2["available"] and [height["mm"] for height in l2["heights"]] == [None] * 3 and l2["height_difference_percent"] is None
     assert l2["small_body"] and l2["volume_ml"] < 2 and l2["median_hu"] is None
     assert "nothing was left inside L2, so no density is given there." in raw["warnings"][-1]
+    assert "No height line was found on L2: the mask may be in pieces or cover more than one body." in raw["warnings"]

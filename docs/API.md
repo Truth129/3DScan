@@ -1330,7 +1330,8 @@ The spine result:
 - Upstream reads three heights on one sagittal slice of the scan's own grid, the one where they
   differ most, along the line between the neighbouring bodies' centres. `mm` is null, with no
   `ends`, where it found no line. A body with no body on either side is measured along the scan's
-  own axis, and a warning names it.
+  own axis, and a warning names it. Slices often tie for the widest difference, and rounding then
+  decides which is read, so the same masks can give heights 1 to 2 mm apart between runs.
 - `mm` is upstream's height rounded once to 0.1 mm, as its picture prints it.
 - `height_difference_percent` is upstream's whole percent between the smallest and largest height,
   null with fewer than two heights; `height_flag` is true when the smallest is under 80% of the

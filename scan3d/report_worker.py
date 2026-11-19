@@ -608,6 +608,14 @@ def spine(request, progress):
             f"{' and '.join(alone)} {'has' if one else 'have'} no neighbouring body, so {'its height runs' if one else 'their heights run'} along the scan's own "
             f"axis and {'its front and back' if one else 'their fronts and backs'} may be swapped."
         )
+    # A label in pieces, or left over two bodies by the model, has its centre outside the mask, and upstream draws no line.
+    lineless = [
+        label.removeprefix("vertebrae_")
+        for label, entry in info.items()
+        if not any(measurement["height_start"] and measurement["height_end"] for measurement in entry["height_measurements"].values())
+    ]
+    if lineless:
+        warnings.append(f"No height line was found on {' and '.join(lineless)}: the mask may be in pieces or cover more than one body.")
     hollow = [label.removeprefix("vertebrae_") for label, entry in info.items() if entry["mean_intensity"] == 0.0 and entry["median_intensity"] == 0.0]
     if hollow:
         warnings.append(

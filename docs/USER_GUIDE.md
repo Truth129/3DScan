@@ -837,7 +837,11 @@ the scan's phase: **None** (90 HU), **Arterial** (110 HU) or **Portal venous** (
 body whose HU is under that threshold shows in the warning colour. The choice is not kept.
 
 Each body is measured on one sagittal slice of the scan's own grid: the slice where its three heights
-spread most.
+spread most. That makes the 20% mark sensitive: on five public scans TotalSegmentator's own command
+marked one to six bodies on every scan, two young adults included. Treat a mark as a place to look.
+
+Where several slices tie for the widest spread, a run on the same masks can read another one, as
+TotalSegmentator's own command can, and a height then moves by 1 to 2 mm.
 
 A click on a body's row moves the crosshair to it. In the native 3D view each body's outline is a
 ring, and the chosen body shows its three height lines; on the slices the chosen body's outline and
