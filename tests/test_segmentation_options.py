@@ -273,6 +273,7 @@ def test_auxiliary_checkpoint_changes_invalidate_cache_identity(tmp_path, monkey
         ),
         ("liver_vessels", {"robust_crop": True, "remove_small_blobs": True}, {"--robust_crop", "--remove_small_blobs"}, ["liver_vessels", "liver_tumor"]),
         ("lung_vessels", {"robust_crop": False}, {"--robust_crop"}, sorted(segmentation._LUNG)),
+        ("vertebrae_pp_refined", {}, set(), ["vertebrae_L1", "vertebrae_L2"]),
     ],
 )
 def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, monkeypatch, task, flags, expected_flags, names):
@@ -323,6 +324,9 @@ def test_selected_task_flags_and_masks_keep_native_patient_geometry(tmp_path, mo
     actual_flags = {flag for flag in command if flag in {"--body_seg", "--robust_crop", "--remove_small_blobs", "--high_order_resampling"}}
     assert actual_flags == expected_flags
     assert not {"--fast", "--fastest", "--save_lowres"} & set(command)
+    # One saver thread only for the task whose refinement upstream's saver threads would drop.
+    saving = command[command.index("--nr_thr_saving") + 1] if "--nr_thr_saving" in command else None
+    assert saving == ("1" if task == "vertebrae_pp_refined" else None)
     assert {entry["id"] for entry in structures} == {f"{task}:{name}" for name in names}
     for structure in structures:
         image = nib.load(structure["mask_file"])

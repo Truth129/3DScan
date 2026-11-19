@@ -647,6 +647,10 @@ def segment(
             for option in ("robust_crop", "body_seg", "remove_small_blobs", "high_order_resampling"):
                 if options[option]:
                     command.append("--" + option)
+            if task == "vertebrae_pp_refined":
+                # TotalSegmentator's saver threads write each body from the prediction before its refinement
+                # by the vertebral-body mask (2.18.0). One thread saves the refined labels, as its spine report does.
+                command += ["--nr_thr_saving", "1"]
             if inference_path and not model:
                 command.append("--verbose")  # Only prints more, and upstream hides nnU-Net's output without it.
             capabilities = task_capabilities(task)
