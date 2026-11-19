@@ -827,6 +827,9 @@ The report needs the vertebral bodies from **Vertebrae C1–L5, body-refined (To
 needs no license. **Segment and measure** runs that one task; **Measure** and **Measure again** work as
 for the aorta.
 
+Bodies saved by an earlier version of 3DScan are the unrefined, smaller ones. Run the task again from
+the Task list before measuring them.
+
 Each body in the revision gets a row: its posterior, middle and anterior heights (**Post.**,
 **Mid.**, **Ant.**), the difference between the smallest and largest height (**Diff.**), its volume
 and its median CT value (**HU**) inside the body shrunk by 4 mm. A dash means not measured; a body that
