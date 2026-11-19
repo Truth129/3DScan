@@ -335,7 +335,7 @@ onBeforeUnmount(() => {
           : 'This image has already been sent there. Send again starts a new delivery of the same DICOM instance.'
       }}
     </p>
-    <p v-if="fileReady" class="help">A saved file carries the CT's patient details, so handle it like the study.</p>
+    <p v-if="fileReady" class="help">A saved file carries the scan's patient details, so handle it like the study.</p>
     <p v-if="error" class="export-error" role="alert">{{ error }}</p>
     <p v-if="statusError" class="export-error" role="alert">{{ statusError }}</p>
     <button v-if="statusError" class="button secondary compact" type="button" :disabled="checking || submitting" @click="load">Refresh export status</button>

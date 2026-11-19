@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reactive } from 'vue';
 import AnalysisPanel from '../src/components/AnalysisPanel.vue';
+import BodyStats from '../src/components/BodyStats.vue';
 import LandmarkReport from '../src/components/LandmarkReport.vue';
 import SpineReport from '../src/components/SpineReport.vue';
 import { api } from '../src/lib/api';
 import { coronaryApi } from '../src/lib/coronary';
 import {
+  bodyStatsTable,
   landmarkMarks,
   landmarkTable,
   reportsApi,
   type AortaLandmark,
   type AortaResult,
+  type BodyStatsResult,
   type PulmonaryResult,
   type ReportAnalysis,
   type ReportStatus,
@@ -294,6 +297,25 @@ describe('Report panel', () => {
     expect(view.text()).not.toContain('This revision has no');
     expect(view.text()).toContain('the result will go without: True lumen.');
   });
+
+  it('offers an MR only body stats, which needs no segments: Measure alone, nothing about segmenting', async () => {
+    // A CT-only choice remembered from another scan neither shows here nor is forgotten.
+    localStorage.setItem('scan3d-analysis-choice-v1', 'aorta');
+    const noNeeds = status({ id: 'body_stats', title: 'Body stats', engine: 'TotalSegmentator body stats', needs: [] });
+    const detail = vi.spyOn(reportsApi, 'detail').mockResolvedValue({ report: noNeeds, analyses: [] });
+    const view = mount(AnalysisPanel, () => ({ caseId: 'c1', revision: scanAlone, native: true, modality: 'MR' }));
+    await settled();
+    expect(view.all(element => element.tagName === 'OPTION').map(option => option.textContent.trim())).toEqual(['Body stats']);
+    expect(detail).toHaveBeenLastCalledWith('c1', 'r1', 'body_stats', expect.anything());
+    expect(view.button('Measure')).toBeDefined();
+    expect(view.button('Segment and measure')).toBeUndefined();
+    expect(view.text()).not.toContain('This revision has no');
+    expect(view.text()).not.toContain('will go without');
+    expect(view.text()).toContain('No measurement of this revision yet.');
+    expect(api.segmentationOptions).not.toHaveBeenCalled();
+    expect(detail).not.toHaveBeenCalledWith('c1', 'r1', 'aorta', expect.anything());
+    expect(localStorage.getItem('scan3d-analysis-choice-v1')).toBe('aorta');
+  });
 });
 
 describe('Landmark report', () => {
@@ -493,5 +515,71 @@ describe('Spine report', () => {
     expect(overlay.result.marks.map((mark: { label: string }) => mark.label)).toEqual(['T12', 'L1 · −31%']);
     click(view.button('DICOM…'));
     expect(onDicom).toHaveBeenCalledWith(expect.objectContaining({ report: 'spine', analysisId: 's1', picture: 'spine picture' }));
+  });
+});
+
+const bodyStats: BodyStatsResult = {
+  format: 'scan3d-report-v1',
+  report: 'body_stats',
+  analysis_id: 'b1',
+  revision_id: 'r2',
+  key: 'k',
+  engine: { ...result.engine, report_version: '2.18.0' },
+  inputs: [],
+  files: [],
+  warnings: ['The scan covers only the head.'],
+  modality: 'CT',
+  stats: [
+    { id: 'weight', name: 'Weight', value: 96.57, unit: 'kg', min: 90.45, max: 104.5, stddev: 4.7341 },
+    { id: 'bmi', name: 'Body mass index', value: 29.66, unit: 'kg/m²' },
+    { id: 'bsa', name: 'Body surface area', value: 2.2, unit: 'm²' },
+    { id: 'sex', name: 'Sex', value: 'F', probability: 0.7, stddev: 0.2 },
+  ],
+  scan: [{ id: 'injection_time', name: 'Time since injection', value: 38.26, unit: 's', min: 35.17, max: 42.25 }],
+  upstream: {},
+  summary: { weight_kg: 96.57, height_cm: null, bmi: 29.66, age_years: null, sex: 'F' },
+};
+
+describe('Body stats', () => {
+  it('shows each value with its unit and range, copies the tables and asks for a page-only DICOM export', async () => {
+    vi.spyOn(reportsApi, 'dicomFileAvailability').mockResolvedValue({ available: true });
+    const written: Record<string, Blob>[] = [];
+    vi.stubGlobal(
+      'ClipboardItem',
+      class {
+        constructor(readonly items: Record<string, Blob>) {}
+      },
+    );
+    vi.stubGlobal('navigator', { clipboard: { write: vi.fn(async (items: { items: Record<string, Blob> }[]) => void written.push(items[0].items)) } });
+    const onDicom = vi.fn();
+    const view = mount(BodyStats, () => ({ caseId: 'c1', result: bodyStats, title: 'Body stats', onDicom }));
+    await settled();
+    const rows = view
+      .all(element => element.tagName === 'TR' && (element.parentNode as HTMLElement | null)?.tagName === 'TBODY')
+      .map(row => row.children.map(cell => cell.textContent.trim()));
+    expect(rows).toEqual([
+      ['Weight', '97 kg', '90–105 kg'],
+      ['Body mass index', '29.7 kg/m²', ''],
+      ['Body surface area', '2.20 m²', ''],
+      ['Sex', 'F (70%)', ''],
+      ['Time since injection', '38 s', '35–42 s'],
+    ]);
+    expect(view.labelled('Body stats scan')).toBeDefined();
+    expect(view.text()).not.toContain('Labels in 3D');
+    expect(view.text()).toContain('1 warning');
+
+    click(view.button('Copy table'));
+    await settled();
+    expect(await written[0]['text/plain'].text()).toBe(bodyStatsTable(bodyStats, 'Body stats').text);
+    click(view.button('DICOM…'));
+    expect(onDicom).toHaveBeenCalledWith({
+      kind: 'report',
+      caseId: 'c1',
+      revisionId: 'r2',
+      report: 'body_stats',
+      analysisId: 'b1',
+      title: 'Body stats',
+      picture: null,
+    });
   });
 });

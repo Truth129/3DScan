@@ -4,13 +4,25 @@ import CoronaryPanel from './CoronaryPanel.vue';
 import ReportPanel from './ReportPanel.vue';
 import LandmarkReport from './LandmarkReport.vue';
 import SpineReport from './SpineReport.vue';
+import BodyStats from './BodyStats.vue';
 import { hasCoronaryLumen, type CoronaryTube } from '../lib/coronary';
-import { ANALYSIS_STORAGE_KEY, type AortaResult, type PulmonaryResult, type ReportOverlay, type ReportResult, type SpineResult } from '../lib/reports';
+import {
+  ANALYSIS_STORAGE_KEY,
+  type AortaResult,
+  type BodyStatsResult,
+  type PulmonaryResult,
+  type ReportOverlay,
+  type ReportResult,
+  type SpineResult,
+} from '../lib/reports';
 import type { ReportExportRequest } from '../lib/dicom-view';
 import type { Job, Point, Revision } from '../types';
 
-/** The side panel's Analysis tab: one chooser, then the chosen analysis. A later report adds one entry here. */
-const props = defineProps<{ caseId: string; revision: Revision; point?: Point; native: boolean; busy?: boolean }>();
+/**
+ * The side panel's Analysis tab: one chooser, then the chosen analysis. A later report adds one entry here.
+ * `modality` is the revision's image's: an MR offers only what runs on MR.
+ */
+const props = defineProps<{ caseId: string; revision: Revision; point?: Point; native: boolean; busy?: boolean; modality?: string }>();
 const emit = defineEmits<{
   select: [id: string, point: Point];
   tube: [tube: CoronaryTube | undefined];
@@ -20,10 +32,11 @@ const emit = defineEmits<{
 }>();
 
 const ANALYSES = [
-  { id: 'coronary', label: 'Coronary FFR' },
-  { id: 'aorta', label: 'Aorta' },
-  { id: 'pulmonary', label: 'Pulmonary arteries' },
-  { id: 'spine', label: 'Spine fractures' },
+  { id: 'coronary', label: 'Coronary FFR', mr: false },
+  { id: 'aorta', label: 'Aorta', mr: false },
+  { id: 'pulmonary', label: 'Pulmonary arteries', mr: false },
+  { id: 'spine', label: 'Spine fractures', mr: false },
+  { id: 'body_stats', label: 'Body stats', mr: true },
 ] as const;
 type AnalysisId = (typeof ANALYSES)[number]['id'];
 
@@ -35,15 +48,21 @@ function remembered(): AnalysisId | undefined {
     return undefined;
   }
 }
+const mr = computed(() => props.modality === 'MR');
+const offered = computed(() => ANALYSES.filter(item => !mr.value || item.mr));
 const lumen = computed(() => hasCoronaryLumen(props.revision.structures));
-// Until someone chooses, the default follows the revision: FFR where there is a lumen to analyse.
+// Until someone chooses, the default follows the revision: FFR where there is a lumen to analyse. A
+// choice this modality does not offer is kept for the next CT.
 const stored = ref(remembered());
-const choice = computed<AnalysisId>(() => stored.value ?? (lumen.value ? 'coronary' : 'aorta'));
+const choice = computed<AnalysisId>(() =>
+  offered.value.some(item => item.id === stored.value) ? stored.value! : mr.value ? 'body_stats' : lumen.value ? 'coronary' : 'aorta',
+);
 /** Every analysis but Coronary FFR is a measurement report, drawn with its result view under its chooser label. */
 const report = computed(() => (choice.value === 'coronary' ? undefined : ANALYSES.find(item => item.id === choice.value)));
 // The panel checks the result's report before drawing it, so it is that report's own shape.
 const landmarkResult = (result: ReportResult) => result as AortaResult | PulmonaryResult;
 const spineResult = (result: ReportResult) => result as SpineResult;
+const bodyStatsResult = (result: ReportResult) => result as BodyStatsResult;
 function choose(event: Event) {
   const id = ANALYSES.find(item => item.id === (event.target as HTMLSelectElement).value)?.id;
   if (!id) return;
@@ -75,7 +94,7 @@ onBeforeUnmount(() => {
   <section class="analysis-panel" aria-label="Analysis">
     <label class="field analysis-choice"
       >Analysis<select :value="choice" aria-label="Choose analysis" @change="choose">
-        <option v-for="item in ANALYSES" :key="item.id" :value="item.id">{{ item.label }}</option>
+        <option v-for="item in offered" :key="item.id" :value="item.id">{{ item.label }}</option>
       </select></label
     >
     <CoronaryPanel
@@ -108,6 +127,13 @@ onBeforeUnmount(() => {
           :title="report.label"
           @select="(id, at) => emit('select', id, at)"
           @overlay="emit('overlay', $event)"
+          @dicom="emit('dicom', $event)"
+        />
+        <BodyStats
+          v-else-if="result.report === 'body_stats' && report.id === 'body_stats'"
+          :case-id="caseId"
+          :result="bodyStatsResult(result)"
+          :title="report.label"
           @dicom="emit('dicom', $event)"
         />
         <LandmarkReport

@@ -275,9 +275,12 @@ const sidebarTab = computed<SidebarTab>({
 });
 // The 3D view docks its volume settings in the 3D tab. It reports whether it has any, and errors.
 const volumeSettings = ref({ shown: false, error: false });
-// Research analyses (CT-FFR and the measurement reports): the tab shows for any saved CT revision, a
-// scan alone included, and the panel owns what it draws: the FFR tube and a report's overlay.
-const analysisAvailable = computed(() => !!revision.value && activeModality.value === 'CT'),
+// The workstation lists the modalities it offers; MRI is opt-in through SCAN3D_MODALITIES.
+const mrEnabled = computed(() => Array.isArray(health.value.modalities) && health.value.modalities.includes('MR'));
+// Research analyses (CT-FFR and the measurement reports): the tab shows for any saved CT revision, or an MR
+// one while MR is enabled, a scan alone included, and the panel owns what it draws: the FFR tube and a
+// report's overlay. An MR is offered only body stats.
+const analysisAvailable = computed(() => !!revision.value && (activeModality.value === 'CT' || (activeModality.value === 'MR' && mrEnabled.value))),
   coronaryTube = shallowRef<CoronaryTube>(),
   reportOverlay = shallowRef<ReportOverlay>(),
   nativeView = ref(false);
@@ -622,8 +625,6 @@ const segImportPlace = computed(() => (place('seg-import') === 'segment' && synt
 const reviewLabels: Record<ReviewStatus, string> = { unreviewed: 'Unreviewed', reviewed: 'Reviewed', corrected: 'Corrected' };
 // The bundled models are research tools without regulatory clearance.
 const researchNotice = 'Research use only · not for diagnostic use';
-// The workstation lists the modalities it offers; MRI is opt-in through SCAN3D_MODALITIES.
-const mrEnabled = computed(() => Array.isArray(health.value.modalities) && health.value.modalities.includes('MR'));
 const sourceKinds = computed(() => (mrEnabled.value ? 'CT or static MR' : 'CT'));
 
 function fail(reason: unknown) {
@@ -2293,6 +2294,7 @@ onBeforeUnmount(() => {
                 :point="point"
                 :native="nativeView"
                 :busy="busy"
+                :modality="activeModality"
                 @select="picked"
                 @tube="coronaryTube = $event"
                 @overlay="reportOverlay = $event"

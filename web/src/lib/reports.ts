@@ -167,6 +167,39 @@ export interface SpineResult extends ReportResult {
   density_thresholds_hu: { native: number; arterial: number; portal_venous: number };
   summary: SpineSummary;
 }
+/**
+ * One value TotalSegmentator's body stats predicts from the image. `min`, `max` and `stddev` are over
+ * its five models, and only where upstream gives them; a category (sex, contrast) has a probability.
+ */
+export interface BodyStat {
+  id: string;
+  name: string;
+  value: number | string | null;
+  unit?: string | null;
+  min?: number;
+  max?: number;
+  stddev?: number;
+  probability?: number;
+}
+export interface BodyStatsSummary {
+  weight_kg: number | null;
+  height_cm: number | null;
+  bmi: number | null;
+  age_years: number | null;
+  sex: string | null;
+}
+/** No masks and no pictures: what the image alone predicts of the person, and what it reads of the scan. */
+export interface BodyStatsResult extends ReportResult {
+  report: 'body_stats';
+  modality: 'CT' | 'MR';
+  /** Weight, height, body mass index, body surface area, age and sex, in that order; one upstream left out is missing. */
+  stats: BodyStat[];
+  /** Contrast, time since injection, the vertebrae in view, and the MR sequence, each where upstream gave it. */
+  scan: BodyStat[];
+  /** Upstream's whole result, as it rounds it. */
+  upstream: Record<string, unknown>;
+  summary: BodyStatsSummary;
+}
 
 /** One drawn mark of a shown report: a closed outline in its own plane, and the lines measured on it. */
 export interface OverlayMark {
@@ -498,12 +531,15 @@ export function landmarkTable(result: AortaResult | PulmonaryResult, title: stri
   return copiedTables(notes, tables, [], result.warnings);
 }
 
-/** Notes, then the tables, then lines that read with the tables, then the warnings: as text and as HTML. */
-function copiedTables(notes: string[], tables: { head: string[]; rows: string[][] }[], after: string[], rawWarnings: readonly string[]) {
+/**
+ * Notes, then the tables, each under its heading line if it has one, then lines that read with the
+ * tables, then the warnings: as text and as HTML.
+ */
+function copiedTables(notes: string[], tables: { head: string[]; rows: string[][]; heading?: string }[], after: string[], rawWarnings: readonly string[]) {
   const warnings = rawWarnings.map(oneLine);
   const text = [
     ...notes,
-    ...tables.flatMap(table => ['', ...[table.head, ...table.rows].map(row => row.map(oneLine).join('\t'))]),
+    ...tables.flatMap(table => ['', ...(table.heading ? [table.heading] : []), ...[table.head, ...table.rows].map(row => row.map(oneLine).join('\t'))]),
     ...(after.length ? ['', ...after] : []),
     ...(warnings.length ? ['', 'Warnings', ...warnings] : []),
   ].join('\n');
@@ -511,7 +547,10 @@ function copiedTables(notes: string[], tables: { head: string[]; rows: string[][
     cells = (row: string[], tag: 'th' | 'td') => `<tr>${row.map(cell => `<${tag}>${escapeHtml(cell)}</${tag}>`).join('')}</tr>`;
   const html = [
     ...notes.map(paragraph),
-    ...tables.map(table => `<table><thead>${cells(table.head, 'th')}</thead><tbody>${table.rows.map(row => cells(row, 'td')).join('')}</tbody></table>`),
+    ...tables.map(
+      table =>
+        `${table.heading ? paragraph(table.heading) : ''}<table><thead>${cells(table.head, 'th')}</thead><tbody>${table.rows.map(row => cells(row, 'td')).join('')}</tbody></table>`,
+    ),
     ...after.map(paragraph),
     ...(warnings.length ? ['Warnings', ...warnings].map(paragraph) : []),
   ].join('');
@@ -544,4 +583,37 @@ export function spineTable(result: SpineResult, title: string): { text: string; 
     }),
   };
   return copiedTables(notes, [table], [densityNote(result)], result.warnings);
+}
+
+/** Decimals of a body stat; the rest are whole, since the five models differ by more than that. */
+const BODY_DECIMALS: Record<string, number> = { bmi: 1, bsa: 2 };
+/** Rounded half up, as the report page rounds, so the panel, the copied table and the page agree; never `-0`. */
+function roundHalfUp(value: number, decimals: number): string {
+  const scale = 10 ** decimals,
+    rounded = Math.round(value * scale) / scale;
+  return (rounded || 0).toFixed(decimals);
+}
+/** A body stat's value with its unit, and a category's probability: `97 kg`, `29.7 kg/m²`, `M (86%)`. */
+export function bodyStatValue(stat: BodyStat): string {
+  let text: string;
+  if (typeof stat.value === 'number' && finite(stat.value)) text = roundHalfUp(stat.value, BODY_DECIMALS[stat.id] ?? 0);
+  else if (typeof stat.value === 'string' && stat.value) text = stat.value;
+  else return DASH;
+  if (stat.unit) text += ` ${stat.unit}`;
+  return finite(stat.probability) ? `${text} (${Math.round(stat.probability * 100)}%)` : text;
+}
+/** The lowest and highest of the five models, whole: `90–105 kg`; empty where upstream gave none. */
+export const bodyStatRange = (stat: BodyStat) =>
+  finite(stat.min) && finite(stat.max) ? `${Math.round(stat.min)}–${Math.round(stat.max)}${stat.unit ? ` ${stat.unit}` : ''}` : '';
+
+/** The body stats tables as the report page has them, tab-separated and as HTML, as `landmarkTable`. */
+export function bodyStatsTable(result: BodyStatsResult, title: string): { text: string; html: string } {
+  const { engine } = result,
+    notes = [`${title} · ${engine.name} ${engine.version}, ${result.report.replace(/_/g, ' ')} report ${engine.report_version}. ${REPORT_NOTICE}`];
+  const table = (stats: readonly BodyStat[], heading?: string) => ({
+    heading,
+    head: ['Measure', 'Value', 'Range'],
+    rows: stats.map(stat => [stat.name, value(bodyStatValue(stat)), bodyStatRange(stat)]),
+  });
+  return copiedTables(notes, [table(result.stats), ...(result.scan.length ? [table(result.scan, 'Scan')] : [])], [], result.warnings);
 }

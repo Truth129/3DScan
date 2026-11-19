@@ -336,7 +336,7 @@ Icon buttons name themselves on hover. An arrow after a link means it opens in a
   mark.
 
 The side panel on the left shows one tab at a time: **Segments**, **3D**, **Refine** and
-**History**, with **Analysis** last on a saved CT revision. At its widest, 480 px, the panel
+**History**, with **Analysis** last on a saved CT or MR revision. At its widest, 480 px, the panel
 spells them out, such as **Revision history**, while four tabs or fewer show. Your browser
 remembers the tab. The stage tiles the 3D view and **CT review**.
 
@@ -717,10 +717,10 @@ mask it took voxels from.
 
 ## Analysis
 
-The **Analysis** tab shows on any saved CT revision, a scan with no segments included. Choose
-**Coronary FFR**, **Aorta**, **Pulmonary arteries** or **Spine fractures** at its top; your browser
-remembers the choice. Each analysis measures from the masks of the revision shown, so a corrected
-mask gives corrected numbers once you measure again.
+The **Analysis** tab shows on any saved CT or MR revision, a scan with no segments included. Choose
+**Coronary FFR**, **Aorta**, **Pulmonary arteries**, **Spine fractures** or **Body stats** at its
+top; your browser remembers the choice. All but **Body stats** measure from the masks of the
+revision shown, so a corrected mask gives corrected numbers once you measure again.
 
 ## Aorta report
 
@@ -855,6 +855,22 @@ lines are solid on the slice it was measured on.
 Below the table is TotalSegmentator's sagittal picture with the measured heights; click it to open it
 large, or download it. **Copy table** and **DICOM…** work as for the aorta, and the series holds the
 report page and this picture.
+
+## Body stats
+
+> **Research use only · not for diagnostic use.** These are TotalSegmentator's predictions from the
+> image alone. They are no substitute for the patient's recorded weight and height.
+
+**Body stats** predicts weight, height, age and sex, the body mass index and body surface area those
+give, and what the model reads of the scan: contrast, the highest and lowest vertebrae in view, the
+time since injection on CT and the sequence on MR. It works on CT and MR, and is the only analysis an
+MR revision offers. It needs no segments: **Measure** takes a few seconds. It needs the
+[TotalSegmentator license](#totalsegmentator-license).
+
+Each value comes from five models. **Range** is the lowest and highest of them; sex and contrast show
+how sure the models are. Predictions are best when the scan covers the chest and abdomen.
+
+**Copy table** and **DICOM…** work as for the aorta; the series holds the report page only.
 
 ## Coronary CT-FFR
 

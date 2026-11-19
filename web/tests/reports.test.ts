@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   absentOptional,
+  bodyStatValue,
+  bodyStatsTable,
   formatOne,
   formatWhole,
   landmarkMarks,
@@ -13,6 +15,7 @@ import {
   vertebraMarks,
   type AortaLandmark,
   type AortaResult,
+  type BodyStatsResult,
   type PulmonaryResult,
   type ReportAnalysis,
   type ReportOverlay,
@@ -403,5 +406,89 @@ describe('spine report', () => {
     );
     expect(html.match(/<table>/g)).toHaveLength(1);
     expect(html).toContain('<p>TotalSegmentator reads L1 to L5 as low density under 90 HU');
+  });
+});
+
+const bodyStats = (more: Partial<BodyStatsResult> = {}): BodyStatsResult => ({
+  format: 'scan3d-report-v1',
+  report: 'body_stats',
+  analysis_id: 'b1',
+  revision_id: 'r2',
+  key: 'k',
+  engine: { name: 'TotalSegmentator', version: '2.18.0', report_version: '2.18.0' },
+  inputs: [],
+  files: [],
+  warnings: [],
+  modality: 'CT',
+  stats: [
+    { id: 'weight', name: 'Weight', value: 96.57, unit: 'kg', min: 90.45, max: 104.5, stddev: 4.7341 },
+    { id: 'height', name: 'Height', value: 180.46, unit: 'cm', min: 176.99, max: 183.65, stddev: 2.3644 },
+    { id: 'bmi', name: 'Body mass index', value: 29.66, unit: 'kg/m²' },
+    { id: 'bsa', name: 'Body surface area', value: 2.2, unit: 'm²' },
+    { id: 'age', name: 'Age', value: 32.04, unit: 'years', min: 29.93, max: 36.01, stddev: 2.1781 },
+    { id: 'sex', name: 'Sex', value: 'M', probability: 0.8629, stddev: 0.1246 },
+  ],
+  scan: [
+    { id: 'contrast', name: 'Contrast', value: 'yes', probability: 0.9895 },
+    { id: 'injection_time', name: 'Time since injection', value: 38.26, unit: 's', min: 35.17, max: 42.25 },
+    { id: 'top_vertebra', name: 'Highest vertebra in view', value: 'C7' },
+    { id: 'bottom_vertebra', name: 'Lowest vertebra in view', value: 'L3' },
+  ],
+  upstream: {},
+  summary: { weight_kg: 96.57, height_cm: 180.46, bmi: 29.66, age_years: 32.04, sex: 'M' },
+  ...more,
+});
+
+describe('body stats report', () => {
+  it('copies the predictions and the scan table, each value formatted with its range', () => {
+    const { text: copied, html } = bodyStatsTable(bodyStats({ warnings: ['Only one\nline.'] }), 'Body stats');
+    expect(copied.split('\n')).toEqual([
+      'Body stats · TotalSegmentator 2.18.0, body stats report 2.18.0. Research use only. Not for diagnostic use.',
+      '',
+      'Measure\tValue\tRange',
+      'Weight\t97 kg\t90–105 kg',
+      'Height\t180 cm\t177–184 cm',
+      'Body mass index\t29.7 kg/m²\t',
+      'Body surface area\t2.20 m²\t',
+      'Age\t32 years\t30–36 years',
+      'Sex\tM (86%)\t',
+      '',
+      'Scan',
+      'Measure\tValue\tRange',
+      'Contrast\tyes (99%)\t',
+      'Time since injection\t38 s\t35–42 s',
+      'Highest vertebra in view\tC7\t',
+      'Lowest vertebra in view\tL3\t',
+      '',
+      'Warnings',
+      'Only one line.',
+    ]);
+    expect(html.match(/<table>/g)).toHaveLength(2);
+    expect(html).toContain('<p>Scan</p><table>');
+    // Half up, as the report page rounds, and a negative that rounds to zero reads 0, not -0.
+    expect(bodyStatValue({ id: 'bmi', name: 'Body mass index', value: 20.25, unit: 'kg/m²' })).toBe('20.3 kg/m²');
+    expect(bodyStatValue({ id: 'injection_time', name: 'Time since injection', value: -0.3, unit: 's' })).toBe('0 s');
+  });
+  it('copies an MR result with its sequence, leaving out what upstream did not give', () => {
+    const result = bodyStats({
+      modality: 'MR',
+      stats: bodyStats().stats.filter(stat => stat.id !== 'age'),
+      scan: [
+        { id: 'top_vertebra', name: 'Highest vertebra in view', value: 'T10' },
+        { id: 'sequence', name: 'Sequence', value: 't1' },
+      ],
+    });
+    expect(bodyStatsTable(result, 'Body stats').text.split('\n').slice(3)).toEqual([
+      'Weight\t97 kg\t90–105 kg',
+      'Height\t180 cm\t177–184 cm',
+      'Body mass index\t29.7 kg/m²\t',
+      'Body surface area\t2.20 m²\t',
+      'Sex\tM (86%)\t',
+      '',
+      'Scan',
+      'Measure\tValue\tRange',
+      'Highest vertebra in view\tT10\t',
+      'Sequence\tt1\t',
+    ]);
   });
 });
