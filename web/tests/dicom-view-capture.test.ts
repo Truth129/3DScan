@@ -30,6 +30,8 @@ vi.mock('../src/lib/cornerstone-volume-3d', () => ({
         camera: {},
         nativeRenderer: { addViewProp: vi.fn(), removeViewProp() {} },
         nativeViewport: {},
+        canvas: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) },
+        isDisposed: false,
         sourceImageData: {},
         sourceVoxelValue: () => 0,
         render: vi.fn(() => fake.firstFrame),
@@ -103,12 +105,21 @@ vi.mock('../src/lib/vtk-review-plane', () => ({
 }));
 vi.mock('../src/lib/vtk-review-input', () => ({
   VTKReviewInput: class {
-    setState() {}
+    state: unknown;
+    setState(state: unknown) {
+      this.state = state;
+    }
     updateOverlay() {}
     dispose() {}
     diagnostics() {}
-    compositePNG = async (image: string) => `${image}+review`;
+    freezeOverlay = () => (this.state ? 'review' : undefined);
   },
+}));
+// The fake DOM has no layout, so the capture's painting is spelled out: each layer it paints, in order.
+vi.mock('../src/lib/capture-overlay', () => ({
+  snapshotOverlay: (elements: Element[]) => elements.map(element => ({ kind: 'text', text: element.className })),
+  paintOverCapture: async (frame: string, _box: unknown, layers: ({ ops: { text: string }[] } | { image: string })[]) =>
+    layers.reduce((url, layer) => `${url}+${'image' in layer ? layer.image : layer.ops.map(op => op.text).join(',')}`, frame),
 }));
 vi.mock('../src/lib/vtk-surface-scene', () => ({
   VTKSurfaceScene: class {
@@ -426,9 +437,14 @@ describe('Cornerstone export capture', () => {
     fake.masks.labels = () => deferred<unknown>().promise;
     shown.state.colors = { ...colors, ids: ['liver'] };
     await settled();
-    await expect(shown.exposed.capturePNG()).resolves.toBe('data:image/png;base64,frame+review');
+    await expect(shown.exposed.capturePNG()).resolves.toBe('data:image/png;base64,frame');
   });
-  it('keeps the tube and report drawing out of a capture that a presentation sync interrupts', async () => {
+  it('paints the review marks, then what the parent shows above them, over a PNG', async () => {
+    const shown = await view({ review: { tool: 'navigate', mode: 'surface', prompts: [] } }),
+      legend = { className: 'legend' } as Element;
+    await expect(shown.exposed.capturePNG([legend])).resolves.toBe('data:image/png;base64,frame+review+legend');
+  });
+  it('keeps the tube and the report drawing in a capture, as the view shows them', async () => {
     const shown = await view({
       tube: { result: { analysis_id: 'a1', branches: [], inputs: {} }, colouring: 'ffr' },
       reportOverlay: { result: { analysis_id: 'm1', marks: [], centreline: [] }, selected: undefined },
@@ -442,11 +458,10 @@ describe('Cornerstone export capture', () => {
     fake.viewer.capturePNG.mockReturnValueOnce(frame.promise);
     const capture = shown.exposed.capturePNG();
     await settled();
-    shown.state.display = { heart: { visible: true, opacity: 0.5 } };
-    await settled();
-    expect(visible(), 'hidden while the frame is drawn').toEqual([false, false]);
+    expect(visible(), 'shown while the frame is drawn').toEqual([true, true]);
     frame.resolve('data:image/png;base64,frame');
-    await capture;
+    // No labels or legend to paint, so the frame is returned as read.
+    await expect(capture).resolves.toBe('data:image/png;base64,frame');
     expect(visible()).toEqual([true, true]);
   });
 });
@@ -551,6 +566,12 @@ describe('viewport capture through Cornerstone', () => {
   });
   it('returns the view component’s evidence', async () => {
     await expect((await open()).capture()).resolves.toEqual({ url: 'data:image/png;base64,frame', referenceImageId: 'image-a', surfaceRevisionId: '' });
+  });
+  it('paints the FFR legend it shows onto the exported frame', async () => {
+    const tube = { result: { analysis_id: 'a1', branches: [], inputs: {} }, colouring: 'ffr' },
+      shown = await viewport({ localSession: session(), coronaryTube: tube });
+    expect(shown.text()).toContain('CT-FFR · research');
+    await expect(shown.capture()).resolves.toMatchObject({ url: 'data:image/png;base64,frame+coronary-legend' });
   });
   // ModelViewport refuses these for either renderer before it asks for a frame.
   it.each<[string, string, (shown: Viewport) => unknown]>([

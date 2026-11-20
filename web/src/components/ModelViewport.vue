@@ -156,8 +156,8 @@ const emit = defineEmits<{
   focusTile: [focused: boolean];
 }>();
 interface VolumePreview {
-  capturePNG(): Promise<string>;
-  captureExportPNG(expected: ViewCaptureRequest): Promise<ViewportCapture>;
+  capturePNG(over?: readonly Element[]): Promise<string>;
+  captureExportPNG(expected: ViewCaptureRequest, over?: readonly Element[]): Promise<ViewportCapture>;
   resetView(): void;
   retry(): Promise<void>;
   retryMask(): Promise<void>;
@@ -165,6 +165,9 @@ interface VolumePreview {
   prepareReviewPlane(): Promise<boolean>;
 }
 const volumePreview = ref<VolumePreview>();
+/** The FFR legend sits over the native view, so a capture paints it on where it is shown. */
+const legendBox = ref<HTMLElement>(),
+  shownOver = () => (legendBox.value ? [legendBox.value] : []);
 const preferCornerstone =
   !!props.volumeViewComponent && !props.initialSnapshot && (props.imageContext?.modality ?? props.localSession?.descriptor?.modality ?? 'CT') === 'CT';
 const vtkReady = ref(false),
@@ -359,7 +362,7 @@ const vtkSelected = computed(
 );
 const vtkSession = computed(() => (props.localReady && props.fullResolution ? props.localSession : undefined));
 watch(vtkSelected, active => emit('nativeView', active), { immediate: true });
-// The native view fades the lumen under the tube itself, so captures can draw it as set.
+// The native view fades the lumen under the tube itself.
 const tube = computed(() => (vtkSelected.value ? props.coronaryTube : undefined)),
   tubeError = ref(''),
   legend = computed(() => tube.value && tubeLegend(tube.value.colouring));
@@ -1728,7 +1731,7 @@ function facePlane() {
 async function screenshot() {
   if (!vtkSelected.value) return scene?.screenshot(props.label);
   try {
-    const url = await volumePreview.value?.capturePNG();
+    const url = await volumePreview.value?.capturePNG(shownOver());
     if (!url) return;
     const link = document.createElement('a');
     link.href = url;
@@ -1786,7 +1789,7 @@ async function captureView(expected: ViewCaptureRequest): Promise<ViewportCaptur
   if (vtkSelected.value) {
     const preview = volumePreview.value;
     if (!preview) throw new Error(VIEW_NOT_READY_MESSAGE);
-    const frame = await preview.captureExportPNG(expected);
+    const frame = await preview.captureExportPNG(expected, shownOver());
     check();
     if (!vtkSelected.value || volumePreview.value !== preview) throw new Error(VIEW_NOT_READY_MESSAGE);
     return frame;
@@ -2095,11 +2098,13 @@ defineExpose({
       @tube-error="tubeError = $event"
       @report-error="reportError = $event"
     />
-    <div v-if="legend" class="coronary-legend" role="img" :aria-label="`${legend.title} colour scale`">
+    <div v-if="legend" ref="legendBox" class="coronary-legend" role="img" :aria-label="`${legend.title} colour scale`">
       <span class="coronary-legend-title">{{ legend.title }}</span>
       <span class="coronary-legend-bar" :style="{ background: legend.gradient }"></span>
       <span class="coronary-legend-ticks">
-        <span v-for="tick in legend.ticks" :key="tick.label" :class="{ strong: tick.strong }" :style="{ left: `${tick.at}%` }">{{ tick.label }}</span>
+        <span v-for="tick in legend.ticks" :key="tick.label" :class="{ strong: tick.strong }" :style="{ left: `${tick.at}%` }"
+          ><i v-if="tick.strong" class="coronary-legend-mark"></i>{{ tick.label }}</span
+        >
       </span>
       <span v-if="legend.notReported" class="coronary-legend-grey"><i :style="{ background: NOT_REPORTED }"></i>Not reported</span>
       <span v-if="tubeError" class="coronary-legend-error" role="alert">Tube hidden: {{ tubeError }}</span>
@@ -2618,7 +2623,7 @@ defineExpose({
   gap: 5px;
   white-space: nowrap;
 }
-/* Drawn over the black 3D view, so it keeps its own dark backing. Captures leave it and the tube out. */
+/* Drawn over the black 3D view, so it keeps its own dark backing. Captures paint it on where it is shown. */
 .coronary-legend {
   position: absolute;
   left: 8px;
@@ -2664,8 +2669,8 @@ defineExpose({
   color: var(--white);
   font-weight: 600;
 }
-.coronary-legend-ticks span.strong::before {
-  content: '';
+/* An element, not a pseudo-element, so a capture can read its box. */
+.coronary-legend-mark {
   position: absolute;
   left: 50%;
   top: -13px;

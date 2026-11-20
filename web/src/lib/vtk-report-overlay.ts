@@ -102,15 +102,13 @@ export function overlayGeometry(lines: readonly OverlayLine[], sides = SIDES) {
   return { positions, normals, colours, polys, triangles };
 }
 
-/** A report's drawing in the native 3D view: its own opaque actor, never pickable, never in a capture. */
+/** A report's drawing in the native 3D view: its own opaque actor, never pickable. */
 export class VTKReportOverlay {
   readonly actor = vtkActor.newInstance();
   private readonly mapper = vtkMapper.newInstance();
   private data = vtkPolyData.newInstance();
   private key = '';
   private shown = false;
-  /** A capture is in progress: a presentation sync during it must not show the drawing again. */
-  private hidden = false;
 
   constructor(private reserveMemory?: (bytes: number) => void) {
     this.mapper.setInputData(this.data);
@@ -137,17 +135,7 @@ export class VTKReportOverlay {
       this.key = key;
     }
     this.shown = !!overlay;
-    this.actor.setVisibility(this.shown && !this.hidden);
-  }
-  /** Captures leave the drawing out, then put it back as it now is. Overlapping captures share one frame. */
-  hideFor<T>(work: () => Promise<T>): Promise<T> {
-    if (!this.shown) return work();
-    this.hidden = true;
-    this.actor.setVisibility(false);
-    return work().finally(() => {
-      this.hidden = false;
-      this.actor.setVisibility(this.shown);
-    });
+    this.actor.setVisibility(this.shown);
   }
   get visible() {
     return this.shown;

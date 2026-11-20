@@ -16,8 +16,6 @@ export class VTKCoronaryTube {
   private data = vtkPolyData.newInstance();
   private key = '';
   private shown = false;
-  /** A capture is in progress: a presentation sync during it must not show the tube again. */
-  private hidden = false;
 
   constructor(private reserveMemory?: (bytes: number) => void) {
     this.mapper.setInputData(this.data);
@@ -45,17 +43,7 @@ export class VTKCoronaryTube {
       this.key = key;
     }
     this.shown = !!tube;
-    this.actor.setVisibility(this.shown && !this.hidden);
-  }
-  /** Captures leave the tube out, then put it back as it now is. Overlapping captures share one frame. */
-  hideFor<T>(work: () => Promise<T>): Promise<T> {
-    if (!this.shown) return work();
-    this.hidden = true;
-    this.actor.setVisibility(false);
-    return work().finally(() => {
-      this.hidden = false;
-      this.actor.setVisibility(this.shown);
-    });
+    this.actor.setVisibility(this.shown);
   }
   get visible() {
     return this.shown;

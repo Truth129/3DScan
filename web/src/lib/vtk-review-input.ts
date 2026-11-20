@@ -738,9 +738,13 @@ export class VTKReviewInput {
   diagnostics() {
     return { ready: this.ready, markers: this.state?.prompts.length ?? 0, gestureActive: !!this.gesture, contextKey: this.state?.contextKey ?? '' };
   }
-  async compositePNG(baseURL: string): Promise<string> {
+  /**
+   * The review marks as an image of the canvas box, for a capture to paint over its frame, or nothing.
+   * Read when called, so a later camera or candidate change cannot join two review moments.
+   */
+  freezeOverlay(): string | undefined {
     this.updateOverlay();
-    if (!this.state || !this.overlay.childElementCount) return baseURL;
+    if (!this.state || !this.overlay.childElementCount) return undefined;
     const svg = this.overlay.cloneNode(true) as SVGSVGElement;
     const bounds = this.viewport.canvas.getBoundingClientRect();
     svg.setAttribute('xmlns', svgNS);
@@ -748,25 +752,7 @@ export class VTKReviewInput {
     svg.setAttribute('height', String(bounds.height));
     svg.style.width = `${bounds.width}px`;
     svg.style.height = `${bounds.height}px`;
-    // Freeze the current overlay before asynchronous image decoding. A later
-    // camera/candidate change must not combine two different review moments.
-    const overlayURL = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
-    const load = (url: string) =>
-      new Promise<HTMLImageElement>((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error('The native review PNG could not be assembled.'));
-        image.src = url;
-      });
-    const [base, overlay] = await Promise.all([load(baseURL), load(overlayURL)]),
-      canvas = document.createElement('canvas');
-    canvas.width = base.naturalWidth;
-    canvas.height = base.naturalHeight;
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('PNG capture is unavailable in this browser.');
-    context.drawImage(base, 0, 0);
-    context.drawImage(overlay, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/png');
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
   }
   dispose() {
     this.disposed = true;

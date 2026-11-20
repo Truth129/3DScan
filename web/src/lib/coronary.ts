@@ -275,7 +275,7 @@ export const splitTrees = (result: CoronaryResult) =>
 /** The flag the server raises when a flow share scaled more than one tree. */
 export const shareFlag = (result: CoronaryResult) => result.flags.find(flag => flag.startsWith('flow share') && flag.includes('applied to'));
 
-// Tube colours. The tube is drawn on the black 3D view and hidden from every capture.
+// Tube colours. The tube is drawn on the black 3D view, and captures show it as the view does.
 export type TubeColouring = 'ffr' | 'diameter';
 export interface CoronaryTube {
   result: CoronaryResult;

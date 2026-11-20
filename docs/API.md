@@ -1587,7 +1587,8 @@ review status, adds a revision or activates one.
 **Encoding.** One uncompressed Secondary Capture instance in a new series: Explicit VR Little
 Endian, `Modality` OT, `ConversionType` WSD, `ImageType` `DERIVED\SECONDARY\OTHER`, `SeriesNumber`
 501, `InstanceNumber` 1 and `SeriesDescription` `3DScan view <rev8>`, where `rev8` starts the
-revision ID. Text is UTF-8, alpha blends over black, and nothing is burned in.
+revision ID. Text is UTF-8 and alpha blends over black. The server adds nothing to the picture,
+which is the view as shown, analysis drawings and their labels included.
 
 - Uncalibrated: no pixel spacing, image position, image orientation or frame of reference, and an
   empty `PatientOrientation`. `ImageComments` says it is not calibrated, has no orientation labels

@@ -22,6 +22,7 @@ import { isVolumeLabelUnion } from '../lib/gpu-volume-data';
 import type { VolumeColorRequest } from '../lib/volume-colors';
 import { revisionUrl } from '../lib/api';
 import { VIEW_NOT_READY_MESSAGE, type ViewCaptureRequest, type ViewportCapture } from '../lib/dicom-view';
+import { paintOverCapture, snapshotOverlay, type CaptureLayer } from '../lib/capture-overlay';
 import { apiFetch } from '../lib/api-fetch';
 import { inverseAffine, transformPoint } from '../lib/ct-reslice';
 import { rasToLps } from '../lib/cornerstone-frame';
@@ -58,9 +59,9 @@ const props = defineProps<{
   reviewLevel?: number;
   reviewOverlayCount?: number;
   reviewCompare?: boolean;
-  /** The research centreline tube, or nothing. It never reaches a capture. */
+  /** The research centreline tube, or nothing. A capture shows it as the view does. */
   tube?: CoronaryTube;
-  /** A measurement report's rings, diameters and centreline, or nothing. It never reaches a capture either. */
+  /** A measurement report's rings, diameters and centreline, or nothing. A capture shows them as the view does. */
   reportOverlay?: ReportOverlay;
 }>();
 const emit = defineEmits<{
@@ -84,7 +85,7 @@ const emit = defineEmits<{
 }>();
 const host = ref<HTMLDivElement>(),
   labelLayer = ref<HTMLDivElement>();
-/** The report's text labels, in the label layer's pixels. HTML, so no capture reads them. */
+/** The report's text labels, in the label layer's pixels. HTML, so a capture paints them on from their boxes. */
 const reportLabels = shallowRef<ReportLabel[]>([]);
 let labelFrame = 0;
 const ready = ref(false),
@@ -119,8 +120,7 @@ let reviewInput: VTKReviewInput | undefined, reviewPlaneLayer: VTKReviewPlane | 
 let tubeLayer: VTKCoronaryTube | undefined,
   tubeError = '',
   reportLayer: VTKReportOverlay | undefined,
-  reportError = '',
-  capturing = false;
+  reportError = '';
 const LUMEN_UNDER_TUBE = 0.15;
 let reserveReviewFrames: ((bytes: number) => void) | undefined, reserveSurfaceLayers: ((bytes: number) => void) | undefined;
 let presentationVersion = 0,
@@ -728,13 +728,13 @@ function syncSurfaces(instance: CornerstoneVolume3D) {
 }
 /**
  * Coronary lumen surfaces would tint the tube inside them, so they fade while the tube shows. Solid
- * surfaces over the CT ignore opacity, so there they are hidden instead. A capture has no tube, so it
- * gets the lumens as set. Loading reads `props.display`, so the fade never reloads a surface.
+ * surfaces over the CT ignore opacity, so there they are hidden instead. Loading reads `props.display`,
+ * so the fade never reloads a surface.
  */
 function surfaceDisplay(mode: NativeSurfaceLayerStatus['mode']) {
   const display = props.display ?? {},
     lumen = props.tube?.result.inputs.lumen;
-  if (!lumen || capturing || !tubeLayer?.visible) return display;
+  if (!lumen || !tubeLayer?.visible) return display;
   return fadeUnderTube(display, lumen, mode === 'solid', LUMEN_UNDER_TUBE);
 }
 /** A tube that cannot be drawn, such as one refused memory, leaves the rest of the view alone. */
@@ -819,27 +819,25 @@ function syncOtherPlaneCut() {
   for (const layer of otherPlaneLayers.values()) layer.setCut(cut);
 }
 /**
- * The research tube and report drawings stay out of every saved image, and the lumen the tube faded
- * is drawn as set. The view draws them and the fade again once the capture is read, whether or not it
- * succeeded.
+ * A saved image is the view as shown: the tube, the report drawing and the lumens as faded are in the
+ * frame, and the HTML over the canvas is painted on in the page's stacking order: the labels, the
+ * review marks (z-index 2), then `over`, which the parent draws above them, such as the FFR legend.
+ * The labels are placed again for the frame's camera; everything is read before the first await that
+ * waits on another task, so it all shows the frame's moment.
  */
-async function withoutTube(instance: CornerstoneVolume3D) {
-  const layer = tubeLayer,
-    report = reportLayer,
-    capture = () => (report ? report.hideFor(() => instance.capturePNG()) : instance.capturePNG());
-  if (!layer?.visible && !report?.visible) return instance.capturePNG();
-  capturing = true;
-  try {
-    syncSurfaces(instance);
-    return await (layer ? layer.hideFor(capture) : capture());
-  } finally {
-    capturing = false;
-    if (!disposed && viewer === instance) syncSurfaces(instance);
-    const id = generation;
-    void renderFeatures(instance, id).catch(reason => {
-      if (!disposed && id === generation && viewer === instance) fail(reason);
-    });
-  }
+async function captureShown(instance: CornerstoneVolume3D, over: readonly Element[] = []) {
+  const frame = await instance.capturePNG();
+  placeLabels();
+  await nextTick();
+  // A view torn down meanwhile has no canvas box; the caller's own checks refuse its frame.
+  if (instance.isDisposed) return frame;
+  const layers: CaptureLayer[] = [],
+    review = reviewInput?.freezeOverlay();
+  if (reportLabels.value.length && labelLayer.value) layers.push({ ops: snapshotOverlay([labelLayer.value]) });
+  if (review) layers.push({ image: review });
+  if (over.length) layers.push({ ops: snapshotOverlay(over) });
+  if (!layers.length) return frame;
+  return paintOverCapture(frame, instance.canvas.getBoundingClientRect(), layers);
 }
 function retryPlane() {
   if (viewer) {
@@ -1127,16 +1125,16 @@ defineExpose({
     ready: ready.value,
     error: error.value,
   }),
-  capturePNG: async () => {
+  /** `over` is HTML the parent shows above the canvas, such as the FFR legend, painted on as shown. */
+  capturePNG: async (over?: readonly Element[]) => {
     if (!viewer || !ready.value) throw new Error('Wait for the Cornerstone viewer to finish rendering.');
-    const image = await withoutTube(viewer);
-    return reviewInput ? reviewInput.compositePNG(image) : image;
+    return captureShown(viewer, over);
   },
   /** The frame is checked on both sides of the render, and its pixels are read with no task between them. */
-  captureExportPNG: async (expected: ViewCaptureRequest): Promise<ViewportCapture> => {
+  captureExportPNG: async (expected: ViewCaptureRequest, over?: readonly Element[]): Promise<ViewportCapture> => {
     if (!presents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
     const instance = viewer!,
-      url = await withoutTube(instance);
+      url = await captureShown(instance, over);
     if (viewer !== instance || !presents(expected)) throw new Error(VIEW_NOT_READY_MESSAGE);
     return { url, referenceImageId: lease!.source.descriptor.reference_image_id!, surfaceRevisionId: surfacePresentedRevision.value };
   },

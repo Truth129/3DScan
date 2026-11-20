@@ -784,7 +784,8 @@ The drawings use the swatch colours above **Max** and **Perp.**:
   onto a slice that does not show the measured cross-section, shorter when seen at an angle. Review
   leaves them off the slices.
 - The drawings show while the **Analysis** tab is open, or the **3D** or **Segments** tab opened
-  from it, and only over the revision measured. PNG and DICOM view exports leave them out.
+  from it, and only over the revision measured. PNG and DICOM view exports show them as the view
+  does, labels included.
 
 ## Pulmonary arteries report
 
@@ -939,8 +940,8 @@ segment fades behind it, or hides where surfaces are drawn solid. Colour by **FF
 and below, amber at 0.80, blue from 0.90, grey where FFR is not reported. Or by **Diameter**, dark
 to light blue from 1 to 5 mm. The legend sits at the lower left. The tube shows while
 **Coronary FFR** is open under **Analysis**, or the **3D** or **Segments** tab opened from it.
-PNG and DICOM view exports leave the tube out and draw the lumens as set. The Three.js view (MR,
-sheared grids) shows the table only.
+PNG and DICOM view exports show the tube, its legend and the faded lumens as the view does. The
+Three.js view (MR, sheared grids) shows the table only.
 
 Limits:
 
