@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scan3d"
-version = "0.4.0.dev0"
+version = "0.4.0"
 description = "Local, AI-assisted CT case-analysis workbench for research use"
 readme = "README.md"
 # scan3d/totalspineseg.py is adapted from LGPL-3.0 code and keeps that licence.

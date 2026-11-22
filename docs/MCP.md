@@ -18,7 +18,7 @@ It has been tested on Linux only.
 Run it straight from a release, using the tag of the 3DScan version the server runs:
 
 ```bash
-claude mcp add scan3d -- uv run https://raw.githubusercontent.com/Truth129/3DScan/v0.3.0/scripts/scan3d_mcp.py --url https://3dscan.example
+claude mcp add scan3d -- uv run https://raw.githubusercontent.com/Truth129/3DScan/v0.4.0/scripts/scan3d_mcp.py --url https://3dscan.example
 ```
 
 A tag never changes, so neither does the code this runs. To read the script first, download it and
